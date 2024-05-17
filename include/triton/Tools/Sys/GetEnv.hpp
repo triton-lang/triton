@@ -1,26 +1,5 @@
-/*
- * Copyright (c) 2015, PHILIPPE TILLET. All rights reserved.
- *
- * This file is part of ISAAC.
- *
- * ISAAC is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
- */
-
-#ifndef TDL_TOOLS_SYS_GETENV_HPP
-#define TDL_TOOLS_SYS_GETENV_HPP
+#ifndef TRITON_TOOLS_SYS_GETENV_HPP
+#define TRITON_TOOLS_SYS_GETENV_HPP
 
 #include <algorithm>
 #include <assert.h>
@@ -31,34 +10,53 @@
 
 namespace mlir::triton {
 
-inline const std::set<std::string> ENV_VARS = {
+inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
+    // clang-format off
     "AMDGCN_ENABLE_DUMP",
     "DISABLE_FAST_REDUCTION",
     "DISABLE_LLVM_OPT",
     "DISABLE_MMA_V3",
     "DISABLE_PTXAS_OPT",
     "LLVM_IR_ENABLE_DUMP",
+    "MLIR_ENABLE_DIAGNOSTICS",
     "MLIR_ENABLE_DUMP",
     "TRITON_DISABLE_LINE_INFO",
     "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE",
-    "MLIR_ENABLE_DIAGNOSTICS",
     "TRITON_ENABLE_LLVM_DEBUG",
+    "TRITON_LLVM_DEBUG_ONLY",
     "USE_TTGIR_LOC",
+    "NVPTX_ENABLE_DUMP",
+    // clang-format on
+};
+
+inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
+    "TRITON_REPRODUCER_PATH",
 };
 
 namespace tools {
 
-inline std::string getenv(const char *name) {
-  const char *cstr = std::getenv(name);
+inline void assertIsRecognized(const std::string &env) {
+  bool is_invalidating = CACHE_INVALIDATING_ENV_VARS.find(env.c_str()) !=
+                         CACHE_INVALIDATING_ENV_VARS.end();
+  bool is_neutral =
+      CACHE_NEUTRAL_ENV_VARS.find(env.c_str()) != CACHE_NEUTRAL_ENV_VARS.end();
+  std::string errmsg = env + "is not recognized. "
+                             "Please add it to triton/tools/sys/getenv.hpp";
+  assert((is_invalidating || is_neutral) && errmsg.c_str());
+}
+
+inline std::string getStrEnv(const std::string &env) {
+  assertIsRecognized(env);
+  const char *cstr = std::getenv(env.c_str());
   if (!cstr)
     return "";
   std::string result(cstr);
   return result;
 }
 
+// return value of a cache-invalidating boolean environment variable
 inline bool getBoolEnv(const std::string &env) {
-  assert(ENV_VARS.find(env.c_str()) != ENV_VARS.end() &&
-         "envvar is not recognized");
+  assertIsRecognized(env);
   const char *s = std::getenv(env.c_str());
   std::string str(s ? s : "");
   std::transform(str.begin(), str.end(), str.begin(),
@@ -66,6 +64,15 @@ inline bool getBoolEnv(const std::string &env) {
   return str == "on" || str == "true" || str == "1";
 }
 
+inline std::optional<bool> isEnvValueBool(std::string str) {
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  if (str == "on" || str == "true" || str == "1")
+    return true;
+  if (str == "off" || str == "false" || str == "0")
+    return false;
+  return std::nullopt;
+}
 } // namespace tools
 } // namespace mlir::triton
 

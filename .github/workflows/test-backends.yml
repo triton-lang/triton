@@ -16,7 +16,7 @@ jobs:
       - name: Prepare runner matrix
         id: set-matrix
         run: |
-          if [ x"${{ github.repository }}" == x"openai/triton" ]; then
+          if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-optional::[["self-hosted", "gfx90a"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'

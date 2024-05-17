@@ -1,16 +1,18 @@
 #include "triton/Analysis/Allocation.h"
-#include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Analysis/Liveness.h"
-#include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "triton/Analysis/Alias.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <limits>
 #include <numeric>
+
+#include "mlir/Analysis/DataFlowFramework.h"
+#include "mlir/Analysis/Liveness.h"
+#include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Alias.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/SmallVector.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
@@ -37,10 +39,10 @@ constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
-  auto srcMmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>();
-  auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
-  auto dstMmaLayout = dstLayout.dyn_cast<NvidiaMmaEncodingAttr>();
-  auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
+  auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout);
+  auto srcDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(srcLayout);
+  auto dstMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout);
+  auto dstDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(dstLayout);
 
   assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere()) &&
          "mma -> mma layout conversion is only supported on Ampere");
@@ -67,13 +69,13 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   }
 
   // MmaToDotShortcut and MmaToMmaShortcut doesn't use shared mem
-  if (auto srcMmaLayout = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-    if (dstLayout.isa<DotOperandEncodingAttr>()) {
+  if (auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
+    if (mlir::isa<DotOperandEncodingAttr>(dstLayout)) {
       if (isMmaToDotShortcut(srcTy, dstTy)) {
         return {};
       }
     } else if (auto dstMmaLayout =
-                   dstLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+                   mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout)) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
         return {};
       }
@@ -109,9 +111,9 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
-  if (srcLayout.isa<AMDMfmaEncodingAttr>() &&
-      srcLayout.dyn_cast<AMDMfmaEncodingAttr>().getIsTransposed() &&
-      dstLayout.isa<DotOperandEncodingAttr>())
+  if (mlir::isa<AMDMfmaEncodingAttr>(srcLayout) &&
+      mlir::dyn_cast<AMDMfmaEncodingAttr>(srcLayout).getIsTransposed() &&
+      mlir::isa<DotOperandEncodingAttr>(dstLayout))
     if (isMfmaToDotShortcut(srcTy, dstTy))
       return {};
 
@@ -130,10 +132,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 
   // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
   // codegen.
-  if (auto mma = srcLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
     if (mma.getVersionMajor() == 1) {
       inVec = srcContigPerThread;
-    } else if (dstLayout.isa<BlockedEncodingAttr>()) {
+    } else if (mlir::isa<BlockedEncodingAttr>(dstLayout)) {
       // when storing from mma layout and loading in blocked layout vectorizing
       // the load back gives better performance even if there is a
       // transposition.
@@ -145,7 +147,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
     return repShape;
   // pad the last dimension
   unsigned paddedDim = rank - 1;
-  if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
+  if (auto dstBlockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(dstLayout)) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
   unsigned pad = std::max(inVec, outVec);
@@ -269,8 +271,8 @@ private:
       auto dstTy = cvtLayout.getType();
       auto srcEncoding = srcTy.getEncoding();
       auto dstEncoding = dstTy.getEncoding();
-      if (srcEncoding.isa<SharedEncodingAttr>() ||
-          dstEncoding.isa<SharedEncodingAttr>()) {
+      if (mlir::isa<SharedEncodingAttr>(srcEncoding) ||
+          mlir::isa<SharedEncodingAttr>(dstEncoding)) {
         // Conversions from/to shared memory do not need scratch memory.
         return;
       }
@@ -481,8 +483,7 @@ private:
       buffers.emplace_back(bufferIter.first);
     }
 
-    DenseMap<BufferT *, size_t> bufferStart;
-    calculateStarts(buffers, bufferStart);
+    calculateStarts(buffers);
 
     // NOTE: The original paper doesn't consider interference between
     // the bumped ranges. Buffers that previously do not interfere with
@@ -492,16 +493,15 @@ private:
     // increase the buffer offset and keep reducing conflicts, we will
     // eventually reach a fixed point.
     GraphT interference;
-    buildInterferenceGraph(buffers, bufferStart, interference);
+    buildInterferenceGraph(buffers, interference);
     do {
-      allocate(buffers, interference, bufferStart);
-      buildInterferenceGraph(buffers, bufferStart, interference);
+      allocate(buffers, interference);
+      buildInterferenceGraph(buffers, interference);
     } while (!interference.empty());
   }
 
   /// Computes the initial shared memory offsets.
-  void calculateStarts(const SmallVector<BufferT *> &buffers,
-                       DenseMap<BufferT *, size_t> &bufferStart) {
+  void calculateStarts(const SmallVector<BufferT *> &buffers) {
     //  v = values in shared memory
     //  t = triplet of (size, start, end)
     //  shared memory space
@@ -525,7 +525,7 @@ private:
     SmallVector<BufferT *> xBuffers = buffers;
     while (!xBuffers.empty()) {
       auto tripleIt = tripleMap.begin();
-      auto size = tripleIt->first;
+      auto offset = tripleIt->first;
       auto range = tripleIt->second;
       tripleMap.erase(tripleIt);
       auto bufferIt =
@@ -543,10 +543,8 @@ private:
         auto xRange = bufferRange.lookup(buffer);
         // TODO(Keren): A buffer's size shouldn't be determined here, have to
         // clean it up
-        size_t alignment = buffer->alignment;
-        size_t alignSize = ((size + alignment - 1) / alignment) * alignment;
-        bufferStart[buffer] = alignSize;
-        tripleMap.insert({alignSize + xSize,
+        size_t alignOffset = buffer->setOffsetAligned(offset);
+        tripleMap.insert({alignOffset + xSize,
                           Interval{std::max(range.start(), xRange.start()),
                                    std::min(range.end(), xRange.end())}});
         // We could either insert (range.start, xRange.start) or (range.start,
@@ -554,9 +552,9 @@ private:
         // offset, and the graph coloring algorithm will solve the interference,
         // if any
         if (range.start() < xRange.start())
-          tripleMap.insert({size, Interval{range.start(), xRange.end()}});
+          tripleMap.insert({offset, Interval{range.start(), xRange.end()}});
         if (xRange.end() < range.end())
-          tripleMap.insert({size, Interval{xRange.start(), range.end()}});
+          tripleMap.insert({offset, Interval{xRange.start(), range.end()}});
         xBuffers.erase(bufferIt);
       }
     }
@@ -565,7 +563,6 @@ private:
   /// Builds a graph of all shared memory values. Edges are created between
   /// shared memory values that are overlapping.
   void buildInterferenceGraph(const SmallVector<BufferT *> &buffers,
-                              const DenseMap<BufferT *, size_t> &bufferStart,
                               GraphT &interference) {
     // Reset interference graph
     interference.clear();
@@ -573,8 +570,8 @@ private:
       for (auto y : buffers) {
         if (x == y)
           continue;
-        auto xStart = bufferStart.lookup(x);
-        auto yStart = bufferStart.lookup(y);
+        auto xStart = x->offset;
+        auto yStart = y->offset;
         auto xSize = x->size;
         auto ySize = y->size;
         Interval xSizeRange = {xStart, xStart + xSize};
@@ -591,8 +588,7 @@ private:
 
   /// Finalizes shared memory offsets considering interference.
   void allocate(const SmallVector<BufferT *> &buffers,
-                const GraphT &interference,
-                DenseMap<BufferT *, size_t> &bufferStart) {
+                const GraphT &interference) {
     // Reset shared memory size
     allocation->sharedMemorySize = 0;
     // First-fit graph coloring
@@ -623,12 +619,12 @@ private:
     // TODO(Keren): We are wasting memory here.
     // Nodes with color2 can actually start with 24.
     for (auto x : buffers) {
-      size_t adj = 0;
+      size_t newOffset = 0;
       for (auto y : interference.lookup(x)) {
-        adj = std::max(adj, bufferStart.lookup(y) + y->size);
+        newOffset = std::max(newOffset, y->offset + y->size);
       }
-      x->offset = bufferStart.lookup(x) + colors.lookup(x) * adj;
-      bufferStart[x] = x->offset;
+      if (colors.lookup(x) != 0)
+        x->setOffsetAligned(newOffset);
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }

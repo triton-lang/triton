@@ -1,6 +1,5 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, nvidia
-from triton.backends.nvidia.driver import CudaUtils
 
 from dataclasses import dataclass
 import functools
@@ -234,22 +233,34 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ptx(src, metadata, opt, capability):
+        ptx_version = opt.ptx_version
+        if ptx_version is None:
+            _, cuda_version = _path_to_binary("ptxas")
+            ptx_version = ptx_get_version(cuda_version)
+
+        # PTX 8.3 is the max version supported by llvm 3a83162168.
+        #
+        # To check if a newer PTX version is supported, increase this value
+        # and run a test.  If it's not supported, LLVM will print a warning
+        # like "+ptx8.4 is not a recognized feature for this target".
+        llvm_ptx_version = min(83, ptx_version)
+
+        triple = 'nvptx64-nvidia-cuda'
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        ret = llvm.translate_to_asm(src, 'nvptx64-nvidia-cuda', proc, '', ['nvptx-short-ptr'], opt.enable_fp_fusion,
-                                    False)
+        features = f'+ptx{llvm_ptx_version}'
+        ret = llvm.translate_to_asm(src, triple, proc, features, ['nvptx-short-ptr'], opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1
         metadata["name"] = names[0]
         # post-process
-        ptx_version = opt.ptx_version
-        if ptx_version is None:
-            _, cuda_version = _path_to_binary("ptxas")
-            ptx_version = ptx_get_version(cuda_version)
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         # Remove the debug flag that prevents ptxas from optimizing the code
         ret = re.sub(r",\s*debug|debug,\s*", "", ret)
+        if os.environ.get("NVPTX_ENABLE_DUMP", "0") == "1":
+            print("// -----// NVPTX Dump //----- //")
+            print(ret)
         return ret
 
     @staticmethod

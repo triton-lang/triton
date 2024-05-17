@@ -190,6 +190,17 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
   createStoreDSmem(loc, rewriter, addr, ctaId, values, pred);
 }
 
+/// Create a predicate with just single active thread.
+Value createElectPredicate(Location loc, PatternRewriter &rewriter) {
+  PTXBuilder ptxBuilder;
+  auto &elect = *ptxBuilder.create<>("elect.sync _|$0, 0xffffffff;");
+  elect({ptxBuilder.newOperand("=b")}, /*onlyAttachMLIRArgs=*/true);
+  // The instruction is technically not pure as it depends on simt control flow
+  // however since we it outside of simt control flow in triton we can consider
+  // it as pure to allow cse to work on it.
+  return ptxBuilder.launch(rewriter, loc, i1_ty, /*hasSideEffect=*/false);
+}
+
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

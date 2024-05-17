@@ -21,13 +21,20 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-
-#include "DumpLayout.h"
-
+#include "gtest/gtest.h"
 #include <fstream>
 #include <gtest/gtest.h>
+
+#include "DumpLayout.h"
+#include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
 namespace triton {
@@ -37,15 +44,22 @@ namespace gpu {
 // EmitIndicesTest
 //===----------------------------------------------------------------------===//
 
-class EmitIndicesTest : public ::testing::Test {
-public:
-  void SetUp() {
-    context.getOrLoadDialect<TritonGPUDialect>();
-    context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-    context.getOrLoadDialect<mlir::gpu::GPUDialect>();
-  }
+MLIRContext *getContext() {
+  static MLIRContext *context = [] {
+    MLIRContext *context = new MLIRContext();
+    context->getOrLoadDialect<TritonGPUDialect>();
+    context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+    context->getOrLoadDialect<mlir::gpu::GPUDialect>();
+    context->getOrLoadDialect<mlir::triton::nvgpu::NVGPUDialect>();
+    return context;
+  }();
+  return context;
+}
 
+class EmitIndicesTest : public ::testing::Test {
 protected:
+  EmitIndicesTest() : context(*getContext()) {}
+
   void runBlocked1dSingleCTA(int size, unsigned sizePerThread,
                              unsigned warpsPerCTA, const std::string &refStr) {
     // If we pass initializer lists to the constructor of BlockedEncodingAttr,
@@ -221,7 +235,7 @@ private:
   }
 
 protected:
-  MLIRContext context;
+  MLIRContext &context;
 };
 
 //===----------------------------------------------------------------------===//
@@ -718,6 +732,728 @@ TEST_F(EmitIndicesTest, LayoutVisualizer_Wmma) {
   std::ofstream ofs("WmmaLayout.csv");
   ofs << dumpDistributedLayout(wmmaLayout, shape, /*multiCTA=*/false);
 }
+
+// This is only for "distributed" layouts, i.e. layouts whose values are stored
+// in registers distributed among threads in blocks.
+template <typename LayoutT, typename ParamsT>
+class DistributedLegacyVsLinearLayoutsTest
+    : public EmitIndicesTest,
+      public ::testing::WithParamInterface<ParamsT> {
+protected:
+  void DoIt();
+};
+
+template <typename LayoutT, typename ParamsT>
+void DistributedLegacyVsLinearLayoutsTest<LayoutT, ParamsT>::DoIt() {
+  ParamsT params = this->GetParam();
+  LayoutT legacyLayout = params.getEncoding();
+  auto type = RankedTensorType::get(params.shape, FloatType::getF16(&context),
+                                    legacyLayout);
+
+  int threadsPerWarp = product(triton::gpu::getThreadsPerWarp(legacyLayout));
+  int numThreads = product(triton::gpu::getThreadsPerWarp(legacyLayout)) *
+                   product(triton::gpu::getWarpsPerCTA(legacyLayout));
+
+  // Can't call getCTAsPerCGA on a SliceEncodingAttr.  But all we care about is
+  // the total number of CTAs, which we can just as easily get from the slice
+  // layout's parent.
+  Attribute nonSliceLayout = legacyLayout;
+  while (auto sliceLayout = dyn_cast<SliceEncodingAttr>(nonSliceLayout)) {
+    nonSliceLayout = sliceLayout.getParent();
+  }
+  int numCTAs = product(triton::gpu::getCTAsPerCGA(nonSliceLayout));
+
+  mlir::OpBuilder builder(&context);
+  Location loc = UnknownLoc::get(&context);
+  auto mlirModule = mlir::ModuleOp::create(loc);
+  auto func = builder.create<mlir::triton::FuncOp>(
+      loc, "test_func", builder.getFunctionType({}, {}));
+  mlirModule.push_back(func);
+  auto *block = func.addEntryBlock();
+  IRRewriter rewriter(&context);
+  rewriter.setInsertionPointToStart(block);
+
+  NVIDIA::TargetInfo target(90);
+  auto llIndices = emitIndicesUsingLinearLayouts(
+      loc, rewriter, target, legacyLayout, type, /*withCTAOffset=*/true);
+  auto legacyIndices = emitIndices(loc, rewriter, target, legacyLayout, type,
+                                   /*withCTAOffset=*/true, /*allowLL=*/false);
+
+  // This test takes a long time if we check all indices.  But for linear
+  // layouts, we really should only need to check powers of 2.  We wrap the
+  // loops in this `iterate` function so we can easily change between checking
+  // all indices and just the powers of 2.
+  constexpr bool checkAllElems = false;
+  bool stopIterating = false;
+  auto iterate = [&](int n, auto fn) {
+    if (checkAllElems) {
+      for (int i = 0; i < n && !stopIterating; i++) {
+        fn(i);
+      }
+    } else {
+      if (n > 0) {
+        fn(0);
+      }
+      for (int i = 0; (1 << i) < n && !stopIterating; i++) {
+        fn(1 << i);
+      }
+    }
+  };
+
+  // We don't need to print a lot of failures because we also print our guess as
+  // to the correct linear layout at the end.
+  constexpr int kMaxFailures = 4;
+  int64_t numFailures = 0;
+  bool passedInitialChecks = false;
+
+  // Wrap these tests in a lambda so failed ASSERTs exit the loop but don't exit
+  // the whole test.
+  [&] {
+    ASSERT_TRUE(llIndices.has_value());
+    ASSERT_EQ(llIndices->size(), legacyIndices.size());
+    passedInitialChecks = true;
+
+    iterate(llIndices->size(), [&](int i) {
+      SCOPED_TRACE("Register " + std::to_string(i));
+      ASSERT_EQ((*llIndices)[i].size(), legacyIndices[i].size());
+      iterate((*llIndices)[i].size(), [&](int j) {
+        SCOPED_TRACE("Dimension " + std::to_string(j));
+        iterate(numCTAs, [&](int ctaId) {
+          SCOPED_TRACE("CTA " + std::to_string(ctaId));
+          iterate(numThreads, [&](int tid) {
+            SCOPED_TRACE("Thread " + std::to_string(tid));
+            int llValue = evalValue((*llIndices)[i][j], ctaId, tid);
+            int legacyValue = evalValue(legacyIndices[i][j], ctaId, tid);
+            EXPECT_EQ(llValue, legacyValue);
+            if (llValue != legacyValue) {
+              ++numFailures;
+            }
+            if (numFailures > kMaxFailures) {
+              llvm::errs() << "Too many failures, aborting\n";
+              stopIterating = true;
+            }
+          });
+        });
+      });
+    });
+  }();
+
+  // If there was a failure, try to infer what the correct linear layout should
+  // have been.  This assumes that the legacy layout itself is linear, of
+  // course!
+  if (!passedInitialChecks || numFailures > 0) {
+    llvm::errs() << "Linear layout was\n"
+                 << toLinearLayout(params.shape, params.getEncoding()) << "\n";
+
+    llvm::errs() << "But based on the legacy layout, the LL should be:\n\n";
+
+    llvm::errs() << "LinearLayout({\n";
+    llvm::errs() << "  {S(\"register\"), {\n";
+    for (int reg = 1; reg < legacyIndices.size(); reg *= 2) {
+      llvm::errs() << "    {" << join(legacyIndices[reg], ", ", [](Value v) {
+        return evalValue(v, /*ctaId=*/0, /*tid=*/0);
+      }) << "},\n";
+    }
+    llvm::errs() << "  }},\n";
+
+    llvm::errs() << "  {S(\"lane\"), {\n";
+    for (int tid = 1; tid < numThreads; tid *= 2) {
+      if (tid == threadsPerWarp) {
+        llvm::errs() << "  }},\n";
+        llvm::errs() << "  {S(\"warp\"), {\n";
+      }
+      llvm::errs() << "    {" << join(legacyIndices[0], ", ", [&](Value v) {
+        return evalValue(v, /*ctaId=*/0, tid);
+      }) << "},\n";
+    }
+    llvm::errs() << "  }},\n";
+    llvm::errs() << "  {S(\"block\"), {\n";
+    for (int ctaId = 1; ctaId < numCTAs; ctaId *= 2) {
+      llvm::errs() << "    {" << join(legacyIndices[0], ", ", [&](Value v) {
+        return evalValue(v, ctaId, /*tid=*/0);
+      }) << "},\n";
+    }
+    llvm::errs() << "  }}\n";
+    llvm::errs() << "}, {"
+                 << triton::join(llvm::seq(type.getRank()), ", ",
+                                 [](int dim) {
+                                   return "S(\"dim" + std::to_string(dim) +
+                                          "\")";
+                                 })
+                 << "})\n";
+  }
+}
+
+struct BlockedLegacyVsLinearLayoutsTestParams {
+  std::vector<int64_t> shape;
+  std::vector<unsigned> sizePerThread;
+  std::vector<unsigned> threadsPerWarp;
+  std::vector<unsigned> warpsPerCTA;
+  std::vector<unsigned> order;
+  std::vector<unsigned> CTAsPerCGA;
+  std::vector<unsigned> CTASplitNum;
+  std::vector<unsigned> CTAOrder;
+
+  BlockedEncodingAttr getEncoding() const {
+    return BlockedEncodingAttr::get(
+        getContext(), sizePerThread, threadsPerWarp, warpsPerCTA, order,
+        CTALayoutAttr::get(getContext(), CTAsPerCGA, CTASplitNum, CTAOrder));
+  }
+};
+
+std::ostream &operator<<(std::ostream &os,
+                         const BlockedLegacyVsLinearLayoutsTestParams &params) {
+  std::string str;
+  llvm::raw_string_ostream llvm_os(str);
+  llvm_os << "shape=" << triton::join(params.shape, "x")
+          << ", encoding=" << params.getEncoding();
+  os << str;
+  return os;
+}
+
+class BlockedLegacyVsLinearLayoutsTest
+    : public DistributedLegacyVsLinearLayoutsTest<
+          BlockedEncodingAttr, BlockedLegacyVsLinearLayoutsTestParams> {};
+
+TEST_P(BlockedLegacyVsLinearLayoutsTest, DoIt) { DoIt(); }
+
+INSTANTIATE_TEST_SUITE_P(
+    TestCases, BlockedLegacyVsLinearLayoutsTest,
+    ::testing::ValuesIn(std::vector<BlockedLegacyVsLinearLayoutsTestParams>({
+        {
+            .shape = {128, 16},
+            .sizePerThread = {1, 4},
+            .threadsPerWarp = {8, 4},
+            .warpsPerCTA = {4, 1},
+            .order = {1, 0},
+            .CTAsPerCGA = {2, 2},
+            .CTASplitNum = {2, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {1, 128},
+            .sizePerThread = {8, 1},
+            .threadsPerWarp = {8, 4},
+            .warpsPerCTA = {1, 4},
+            .order = {0, 1},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 2},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {64, 1},
+            .sizePerThread = {8, 1},
+            .threadsPerWarp = {8, 4},
+            .warpsPerCTA = {1, 4},
+            .order = {0, 1},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 2},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {128, 1},
+            .sizePerThread = {1, 8},
+            .threadsPerWarp = {4, 8},
+            .warpsPerCTA = {4, 1},
+            .order = {1, 0},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {1, 64},
+            .sizePerThread = {1, 8},
+            .threadsPerWarp = {4, 8},
+            .warpsPerCTA = {4, 1},
+            .order = {1, 0},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {128, 1},
+            .sizePerThread = {1, 1},
+            .threadsPerWarp = {1, 32},
+            .warpsPerCTA = {2, 2},
+            .order = {1, 0},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 2},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {1, 128},
+            .sizePerThread = {1, 1},
+            .threadsPerWarp = {1, 32},
+            .warpsPerCTA = {2, 2},
+            .order = {1, 0},
+            .CTAsPerCGA = {1, 2},
+            .CTASplitNum = {1, 2},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {1},
+            .sizePerThread = {1},
+            .threadsPerWarp = {32},
+            .warpsPerCTA = {4},
+            .order = {0},
+            .CTAsPerCGA = {2},
+            .CTASplitNum = {2},
+            .CTAOrder = {0},
+        },
+        {
+            .shape = {128, 128},
+            .sizePerThread = {2, 2},
+            .threadsPerWarp = {4, 8},
+            .warpsPerCTA = {2, 2},
+            .order = {0, 1},
+            .CTAsPerCGA = {2, 2},
+            .CTASplitNum = {2, 2},
+            .CTAOrder = {0, 1},
+        },
+        {
+            .shape = {1024, 128},
+            .sizePerThread = {2, 2},
+            .threadsPerWarp = {4, 8},
+            .warpsPerCTA = {2, 2},
+            .order = {1, 0},
+            .CTAsPerCGA = {2, 2},
+            .CTASplitNum = {2, 2},
+            .CTAOrder = {1, 0},
+        },
+    })));
+
+struct NvidiaMmaVsLinearLayoutsTestParams {
+  std::vector<int64_t> shape;
+  unsigned versionMajor;
+  unsigned versionMinor;
+  std::vector<unsigned> warpsPerCTA;
+  std::vector<unsigned> instrShape;
+  std::vector<unsigned> CTAsPerCGA;
+  std::vector<unsigned> CTASplitNum;
+  std::vector<unsigned> CTAOrder;
+
+  NvidiaMmaEncodingAttr getEncoding() const {
+    return NvidiaMmaEncodingAttr::get(
+        getContext(), versionMajor, versionMinor, warpsPerCTA,
+        CTALayoutAttr::get(getContext(), CTAsPerCGA, CTASplitNum, CTAOrder),
+        instrShape);
+  }
+};
+
+std::ostream &operator<<(std::ostream &os,
+                         const NvidiaMmaVsLinearLayoutsTestParams &params) {
+  std::string str;
+  llvm::raw_string_ostream llvm_os(str);
+  llvm_os << "shape=" << triton::join(params.shape, "x")
+          << ", encoding=" << params.getEncoding();
+  os << str;
+  return os;
+}
+
+class NvidiaMmaVsLinearLayoutsTest
+    : public DistributedLegacyVsLinearLayoutsTest<
+          NvidiaMmaEncodingAttr, NvidiaMmaVsLinearLayoutsTestParams> {};
+
+TEST_P(NvidiaMmaVsLinearLayoutsTest, DoIt) { DoIt(); }
+
+INSTANTIATE_TEST_SUITE_P(
+    MMAv2, NvidiaMmaVsLinearLayoutsTest,
+    ::testing::ValuesIn(std::vector<NvidiaMmaVsLinearLayoutsTestParams>({
+        {
+            .shape = {16, 8},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {1, 1},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {32, 32},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {1, 1},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {128, 8},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {1, 1},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {16, 128},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {1, 1},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {32, 32},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {2, 2},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {16, 8},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {2, 2},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {16, 512},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {2, 2},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {512, 8},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {2, 2},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            .shape = {512, 512},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {2, 2},
+            .instrShape = {16, 8},
+            .CTAsPerCGA = {1, 1},
+            .CTASplitNum = {1, 1},
+            .CTAOrder = {1, 0},
+        },
+        {
+            // Legacy emitIndices seems to do implicit duplication in the last
+            // two dims, but not in the others.  That is, this test works
+            // because shape[0] == warpsPerCTA[0] * CTASplitNum[0], but if you
+            // increase shape[0] to 32, then the legacy layout will not increase
+            // its size, whereas the linear layout will.  I think this is a bug
+            // in the legacy layout.
+            .shape = {16, 128, 128},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {16, 1, 1},
+            .instrShape = {1, 16, 8},
+            .CTAsPerCGA = {1, 1, 1},
+            .CTASplitNum = {1, 1, 1},
+            .CTAOrder = {2, 1, 0},
+        },
+        {
+            .shape = {16 * 4, 128, 128},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {16, 1, 1},
+            .instrShape = {1, 16, 8},
+            .CTAsPerCGA = {4, 1, 1},
+            .CTASplitNum = {4, 1, 1},
+            .CTAOrder = {2, 1, 0},
+        },
+        {
+            .shape = {16 * 4, 128, 128},
+            .versionMajor = 2,
+            .versionMinor = 0,
+            .warpsPerCTA = {16, 1, 1},
+            .instrShape = {1, 16, 8},
+            .CTAsPerCGA = {4, 2, 2},
+            .CTASplitNum = {4, 2, 1},
+            .CTAOrder = {2, 1, 0},
+        },
+    })));
+
+std::vector<NvidiaMmaVsLinearLayoutsTestParams> makeNvidiaMmaV3TestCases() {
+  std::vector<NvidiaMmaVsLinearLayoutsTestParams> testCases;
+  auto addTests = [&](ArrayRef<unsigned> instrShape, unsigned warpsPerCGA_dim0,
+                      ArrayRef<std::vector<int64_t>> shapes) {
+    for (const auto &shape : shapes) {
+      for (unsigned wpc0 : {4, 8}) {
+        for (unsigned wpc1 : {1, 2, 4, 8}) {
+          testCases.push_back({
+              .shape = shape,
+              .versionMajor = 3,
+              .versionMinor = 0,
+              .warpsPerCTA = {wpc0, wpc1},
+              .instrShape = instrShape,
+              .CTAsPerCGA = {1, 1},
+              .CTASplitNum = {1, 1},
+              .CTAOrder = {1, 0},
+          });
+        }
+      }
+    }
+  };
+
+  // These shapes were captured from grep'ing the TTGIR generated by Triton unit
+  // tests.
+  addTests({16, 16, 8}, 4, {{16, 16}, {32, 16}, {32, 32}, {64, 64}});
+  addTests({16, 16, 16}, 4, {{64, 16}, {128, 16}, {128, 128}});
+  addTests({16, 16, 32}, 4, {{64, 16}, {128, 16}});
+  addTests({16, 32, 8}, 4, {{64, 32}, {128, 32}});
+  addTests({16, 32, 16}, 4, {{64, 32}, {64, 64}, {256, 64}});
+  addTests({16, 64, 8}, 4, {{64, 64}, {128, 64}});
+  addTests({16, 64, 16}, 4, {{64, 64}, {128, 64}});
+  addTests({16, 64, 32}, 4, {{64, 64}});
+  addTests({16, 128, 8}, 4, {{64, 128}, {128, 128}});
+  addTests({16, 128, 16}, 4, {{64, 128}, {128, 128}});
+  addTests({16, 128, 16}, 8, {{64, 128}, {128, 128}});
+  addTests({16, 128, 32}, 8, {{64, 128}, {128, 128}});
+  addTests({16, 256, 8}, 8, {{128, 256}});
+  addTests({16, 256, 16}, 8, {{128, 256}});
+  addTests({16, 256, 32}, 8, {{128, 256}});
+
+  // Shapes 1xN and Nx1 appear in IR, but legacy emitIndices cannot handle them.
+  // They appear in IR like the following.
+  //
+  //   #mma = #nvidia_mma<{versionMajor=3, versionMinor=0,
+  //                       warpsPerCTA=[4, 1], instrShape=[16, 64, 16]}>
+  //   %a : tensor<64xf16, #slice<dim=0, parent=#mma>>
+  //   %b = tt.expand_dims %a : tensor<1x64xf16, #mma>
+  //   %c = arith.extf %b : tensor<1x64xf32, #mma>
+  //   %d = tt.broadcast %c : tensor<64x64xf32, #mma>
+  //
+  // TODO(jlebar): For now we don't test these layouts.  Once we have slice
+  // layout working, we can add support, since their layouts should match that
+  // of emitIndices for the corresponding slice layout.
+
+  return testCases;
+}
+
+INSTANTIATE_TEST_SUITE_P(MMAv3, NvidiaMmaVsLinearLayoutsTest,
+                         ::testing::ValuesIn(makeNvidiaMmaV3TestCases()));
+
+struct SliceVsLinearLayoutsTestParams {
+  std::vector<int64_t> shape;
+  int64_t sliceDim;
+  std::variant<BlockedLegacyVsLinearLayoutsTestParams,
+               NvidiaMmaVsLinearLayoutsTestParams>
+      parent;
+
+  SliceEncodingAttr getEncoding() const {
+    return std::visit(
+        [&](const auto &parentParams) {
+          return SliceEncodingAttr::get(getContext(), sliceDim,
+                                        parentParams.getEncoding());
+        },
+        parent);
+  }
+};
+
+std::ostream &operator<<(std::ostream &os,
+                         const SliceVsLinearLayoutsTestParams &params) {
+  std::string str;
+  llvm::raw_string_ostream llvm_os(str);
+  llvm_os << "shape=" << triton::join(params.shape, "x")
+          << ", encoding=" << params.getEncoding();
+  os << str;
+  return os;
+}
+
+class SliceVsLinearLayoutsTest
+    : public DistributedLegacyVsLinearLayoutsTest<
+          SliceEncodingAttr, SliceVsLinearLayoutsTestParams> {};
+
+TEST_P(SliceVsLinearLayoutsTest, DoIt) { DoIt(); }
+
+INSTANTIATE_TEST_SUITE_P(TestCases, SliceVsLinearLayoutsTest,
+                         ::testing::ValuesIn(
+                             std::vector<SliceVsLinearLayoutsTestParams>({
+                                 {
+                                     .shape = {128},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {2, 4},
+                                             .threadsPerWarp = {4, 2},
+                                             .warpsPerCTA = {2, 2},
+                                             .order = {1, 0},
+                                             .CTAsPerCGA = {2, 2},
+                                             .CTASplitNum = {2, 2},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {128},
+                                     .sliceDim = 1,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {2, 4},
+                                             .threadsPerWarp = {4, 2},
+                                             .warpsPerCTA = {2, 2},
+                                             .order = {1, 0},
+                                             .CTAsPerCGA = {2, 2},
+                                             .CTASplitNum = {2, 2},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+
+                                 {
+                                     .shape = {32},
+                                     .sliceDim = 1,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 1},
+                                             .threadsPerWarp = {32, 1},
+                                             .warpsPerCTA = {4, 1},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {32},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 1},
+                                             .threadsPerWarp = {32, 1},
+                                             .warpsPerCTA = {4, 1},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {32},
+                                     .sliceDim = 1,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 4},
+                                             .threadsPerWarp = {8, 4},
+                                             .warpsPerCTA = {2, 2},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {32},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 4},
+                                             .threadsPerWarp = {8, 4},
+                                             .warpsPerCTA = {2, 2},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {1},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         BlockedLegacyVsLinearLayoutsTestParams{
+                                             .sizePerThread = {1, 4},
+                                             .threadsPerWarp = {8, 4},
+                                             .warpsPerCTA = {2, 2},
+                                             .order = {0, 1},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+
+                                 {
+                                     .shape = {16},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         NvidiaMmaVsLinearLayoutsTestParams{
+                                             .versionMajor = 2,
+                                             .versionMinor = 0,
+                                             .warpsPerCTA = {2, 2},
+                                             .instrShape = {16, 8},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {128},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         NvidiaMmaVsLinearLayoutsTestParams{
+                                             .versionMajor = 2,
+                                             .versionMinor = 0,
+                                             .warpsPerCTA = {2, 2},
+                                             .instrShape = {16, 8},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {16},
+                                     .sliceDim = 1,
+                                     .parent =
+                                         NvidiaMmaVsLinearLayoutsTestParams{
+                                             .versionMajor = 2,
+                                             .versionMinor = 0,
+                                             .warpsPerCTA = {2, 2},
+                                             .instrShape = {16, 8},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {128},
+                                     .sliceDim = 1,
+                                     .parent =
+                                         NvidiaMmaVsLinearLayoutsTestParams{
+                                             .versionMajor = 2,
+                                             .versionMinor = 0,
+                                             .warpsPerCTA = {2, 2},
+                                             .instrShape = {16, 8},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                                 {
+                                     .shape = {128},
+                                     .sliceDim = 0,
+                                     .parent =
+                                         NvidiaMmaVsLinearLayoutsTestParams{
+                                             .versionMajor = 3,
+                                             .versionMinor = 0,
+                                             .warpsPerCTA = {4, 4},
+                                             .instrShape = {16, 16, 16},
+                                             .CTAsPerCGA = {1, 1},
+                                             .CTASplitNum = {1, 1},
+                                             .CTAOrder = {1, 0},
+                                         },
+                                 },
+                             })));
 
 } // namespace gpu
 } // namespace triton

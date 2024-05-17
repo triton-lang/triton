@@ -49,7 +49,9 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   // create a struct to hold device properties
   int max_shared_mem;
+  int max_num_regs;
   int multiprocessor_count;
+  int warp_size;
   int sm_clock_rate;
   int mem_clock_rate;
   int mem_bus_width;
@@ -57,7 +59,11 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
       &max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &max_num_regs, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device));
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
+  CUDA_CHECK_AND_RETURN_NULL(
+      cuDeviceGetAttribute(&warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &sm_clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
@@ -65,9 +71,10 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
-                       max_shared_mem, "multiprocessor_count",
-                       multiprocessor_count, "sm_clock_rate", sm_clock_rate,
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+                       max_shared_mem, "max_num_regs", max_num_regs,
+                       "multiprocessor_count", multiprocessor_count, "warpSize",
+                       warp_size, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
                        mem_bus_width);
 }
@@ -139,9 +146,9 @@ typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
 #define defineGetFunctionHandle(name, symbolName)                              \
   static symbolName##_t name() {                                               \
     /* Open the shared library */                                              \
-    void *libHandle = dlopen("libcuda.so", RTLD_LAZY);                         \
+    void *libHandle = dlopen("libcuda.so.1", RTLD_LAZY);                       \
     if (!libHandle) {                                                          \
-      PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");        \
+      PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so.1");      \
       return NULL;                                                             \
     }                                                                          \
     /* Clear any existing error */                                             \
@@ -151,7 +158,7 @@ typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
     const char *err = dlerror();                                               \
     if (err) {                                                                 \
       PyErr_SetString(PyExc_RuntimeError,                                      \
-                      "Failed to retrieve " #symbolName " from libcuda.so");   \
+                      "Failed to retrieve " #symbolName " from libcuda.so.1"); \
       dlclose(libHandle);                                                      \
       return NULL;                                                             \
     }                                                                          \
@@ -280,6 +287,7 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   default:
     PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
   }
+  assert((elementSize * tensorDim) >= 32 && "block size too small.");
   int rank = 1;
   CUresult result = cuTensorMapEncodeTiled(
       (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
@@ -322,10 +330,30 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
     PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
   }
   int rank = 2;
+  // Swizzling should be picked in codegen but since we need to set it on the
+  // descriptor we rely on a convention between this function and codegen.
+  CUtensorMapSwizzle swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
+  uint32_t contigDimSizeInByte = elementSize * tensorDims[0];
+  if (contigDimSizeInByte >= 128) {
+    swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
+  } else if (contigDimSizeInByte >= 64) {
+    swizzle = CU_TENSOR_MAP_SWIZZLE_64B;
+  } else if (contigDimSizeInByte >= 32) {
+    swizzle = CU_TENSOR_MAP_SWIZZLE_32B;
+  } else {
+    assert(false && "block size too small.");
+  }
+  // The bounding box inner dimension must be less than or equal to the swizzle
+  // size.
+  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
+  // We clamp the block size and the codegen will emit multiple copy operations.
+  if (contigDimSizeInByte > 128) {
+    tensorDims[0] = 128 / elementSize;
+  }
   CUresult result = cuTensorMapEncodeTiled(
       (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
       globalStrides, tensorDims, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
-      CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
+      swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
   assert(result == CUDA_SUCCESS);
   return Py_None;

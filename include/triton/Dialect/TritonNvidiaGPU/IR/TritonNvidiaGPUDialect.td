@@ -48,13 +48,13 @@ def TritonNvidiaGPU_Dialect : Dialect {
       if(!mod->hasAttr("triton_gpu.num-warps"))
         llvm::report_fatal_error(
             "TritonGPU module should contain a triton_gpu.num-warps attribute");
-      return mod->getAttr("triton_gpu.num-warps").cast<IntegerAttr>().getInt();
+      return cast<IntegerAttr>(mod->getAttr("triton_gpu.num-warps")).getInt();
     }
     static int getNumCTAs(ModuleOp mod) {
       if(!mod->hasAttr("triton_gpu.num-ctas"))
         llvm::report_fatal_error(
             "TritonGPU module should contain a triton_gpu.num-ctas attribute");
-      return mod->getAttr("triton_gpu.num-ctas").cast<IntegerAttr>().getInt();
+      return cast<IntegerAttr>(mod->getAttr("triton_gpu.num-ctas")).getInt();
     }
     void registerTypes();
   }];

@@ -15,8 +15,8 @@ void initProton(pybind11::module &&m) {
   using namespace pybind11::literals;
 
   m.def("start",
-        [](const std::string &path, const std::string &profilerName,
-           const std::string &contextSourceName, const std::string &dataName) {
+        [](const std::string &path, const std::string &contextSourceName,
+           const std::string &dataName, const std::string &profilerName) {
           auto sessionId = SessionManager::instance().addSession(
               path, profilerName, contextSourceName, dataName);
           SessionManager::instance().activateSession(sessionId);
@@ -62,28 +62,16 @@ void initProton(pybind11::module &&m) {
   m.def("add_metrics",
         [](size_t scopeId,
            const std::map<std::string, MetricValueType> &metrics) {
-          SessionManager::instance().addMetrics(scopeId, metrics);
+          SessionManager::instance().addMetrics(scopeId, metrics,
+                                                /*aggregable=*/true);
         });
 
-  m.def("device_info", [](int device_id) {
-    std::map<std::string, int> devAttrs;
-    CUdevice device;
-    CUcontext context;
-
-    cuda::init<true>(0);
-    cuda::ctxGetCurrent<true>(&context);
-    cuda::deviceGet<true>(&device, device_id);
-
-#define FILL_DEVICE_ATTRIBUTE(NAME)                                            \
-  cuda::deviceGetAttribute<true>(&devAttrs[#NAME], NAME, device)
-
-    FILL_DEVICE_ATTRIBUTE(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR);
-    FILL_DEVICE_ATTRIBUTE(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR);
-    FILL_DEVICE_ATTRIBUTE(CU_DEVICE_ATTRIBUTE_CLOCK_RATE);
-    FILL_DEVICE_ATTRIBUTE(CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE);
-#undef FILL_DEVICE_ATTRIBUTE
-    return devAttrs;
-  });
+  m.def("set_properties",
+        [](size_t scopeId,
+           const std::map<std::string, MetricValueType> &metrics) {
+          SessionManager::instance().addMetrics(scopeId, metrics,
+                                                /*aggregable=*/false);
+        });
 
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }

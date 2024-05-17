@@ -38,6 +38,7 @@ public:
 struct Scope : public Context {
   const static size_t DummyScopeId = std::numeric_limits<size_t>::max();
   static std::atomic<size_t> scopeIdCounter;
+
   static size_t getNewScopeId() { return scopeIdCounter++; }
 
   size_t scopeId{};
@@ -122,8 +123,8 @@ protected:
   }
 
 private:
-  inline const static int MAX_CACHE_OBJECTS = 10;
-  inline static thread_local std::map<InternalOpInterface *, bool> opInProgress;
+  inline static const int MAX_CACHE_OBJECTS = 10;
+  static thread_local std::map<InternalOpInterface *, bool> opInProgress;
 };
 
 } // namespace proton

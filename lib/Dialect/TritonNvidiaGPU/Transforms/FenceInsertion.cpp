@@ -49,9 +49,8 @@ public:
       OpBuilder builder(op);
       auto a = op->getOperand(0);
       auto b = op->getOperand(1);
-      auto mmaEncoding = cast<RankedTensorType>(op->getResult(0).getType())
-                             .getEncoding()
-                             .dyn_cast<ttg::NvidiaMmaEncodingAttr>();
+      auto mmaEncoding = dyn_cast<ttg::NvidiaMmaEncodingAttr>(
+          cast<RankedTensorType>(op->getResult(0).getType()).getEncoding());
       if (!mmaEncoding || !mmaEncoding.isHopper())
         return WalkResult::advance();
       bool aDependsOnShared = dependOnSharedEncOperand(a);

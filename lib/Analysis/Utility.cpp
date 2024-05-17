@@ -1,4 +1,7 @@
 #include "triton/Analysis/Utility.h"
+
+#include <deque>
+
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -6,12 +9,12 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include <deque>
 
 namespace mlir {
 namespace {
@@ -20,7 +23,7 @@ using namespace triton;
 using namespace triton::gpu;
 
 int getParentAxis(Attribute layout, int axis) {
-  if (auto sliceEncoding = layout.dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceEncoding = dyn_cast<SliceEncodingAttr>(layout)) {
     axis = axis < sliceEncoding.getDim() ? axis : axis + 1;
     return getParentAxis(sliceEncoding.getParent(), axis);
   }
@@ -28,7 +31,7 @@ int getParentAxis(Attribute layout, int axis) {
 }
 
 SmallVector<unsigned> getParentOrder(Attribute layout) {
-  if (auto sliceEncoding = layout.dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return getParentOrder(sliceEncoding.getParent());
   }
   return getOrder(layout);
@@ -64,7 +67,7 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   }
 
   unsigned threadOffset = 1;
-  if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
     auto parentLayout = sliceLayout.getParent();
     auto threadsPerWarp = getThreadsPerWarp(parentLayout);
     threadOffset = threadsPerWarp[sliceLayout.getDim()];
@@ -97,7 +100,7 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
 
   // Case where CTAsPerCGA of srcLayout in the sliced dim is not 1 is not
   // implemented yet
-  if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
     auto dim = sliceLayout.getDim();
     auto CTAsPerCGA = getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] != 1)
@@ -105,7 +108,7 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
   }
 
   // Case where CTAsPerCGA of dstLayout in the sliced dim is not 1 is supported
-  if (auto sliceLayout = dstLayout.dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(dstLayout)) {
     auto dim = sliceLayout.getDim();
     auto CTAsPerCGA = getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] != 1)
@@ -206,13 +209,13 @@ bool ReduceOpHelper::isSupportedLayout() {
   }
 
   auto srcLayout = getSrcLayout();
-  if (srcLayout.isa<BlockedEncodingAttr>()) {
+  if (isa<BlockedEncodingAttr>(srcLayout)) {
     return true;
   }
-  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingTrait>()) {
+  if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcLayout)) {
     return mmaLayout.supportReduction();
   }
-  if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(srcLayout)) {
     return true;
   }
   return false;
@@ -355,7 +358,7 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape,
 }
 
 BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
-  return srcEncoding.cast<BlockedEncodingAttr>();
+  return cast<BlockedEncodingAttr>(srcEncoding);
 }
 
 unsigned ScanLoweringHelper::getAxisElementStride() {
@@ -483,19 +486,20 @@ static bool supportWMMAGranularity(int m, int n, int k) {
 static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
   if (a != b || c != d)
     return false;
+  auto aWidth = a.getIntOrFloatBitWidth();
+  auto cWidth = c.getIntOrFloatBitWidth();
   if (a.isIntOrIndex()) {
     if (!c.isIntOrIndex())
       return false;
-    auto aWidth = a.getIntOrFloatBitWidth();
-    auto cWidth = c.getIntOrFloatBitWidth();
     bool aValid = a.isUnsignedInteger() && aWidth <= 8;
     bool cValid = cWidth <= 32;
     return aValid && cValid;
-  } else if (isa<FloatType>(a)) {
+  } else if (isa<FloatType>(a) && isa<FloatType>(c)) {
     if (a.isBF16())
       return c.isBF16() || c.isF32();
     if (a.isF16())
       return c.isF16() || c.isF32();
+    return aWidth <= cWidth;
   }
   return false;
 }
@@ -577,8 +581,8 @@ bool supportMMA(Value value, int version) {
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mfmaLayout = srcLayout.cast<AMDMfmaEncodingAttr>();
-  auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(srcLayout);
+  auto dotOperandLayout = cast<DotOperandEncodingAttr>(dstLayout);
   // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
   // improved. In addition, we can enable this shortcut for regular MFMA
   // layout when opIdx == 1.
@@ -591,8 +595,8 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
 }
 
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
-  auto src = srcEncoding.dyn_cast<NvidiaMmaEncodingAttr>();
-  auto dst = dstEncoding.dyn_cast<NvidiaMmaEncodingAttr>();
+  auto src = dyn_cast<NvidiaMmaEncodingAttr>(srcEncoding);
+  auto dst = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding);
   if (!src || !dst)
     return false;
   // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
@@ -610,8 +614,8 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = srcLayout.cast<NvidiaMmaEncodingAttr>();
-  auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
+  auto mmaLayout = cast<NvidiaMmaEncodingAttr>(srcLayout);
+  auto dotOperandLayout = cast<DotOperandEncodingAttr>(dstLayout);
   int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
   auto ans = mmaLayout.getVersionMajor() == 3 &&
              dotOperandLayout.getOpIdx() == 0 &&
@@ -627,8 +631,8 @@ bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = srcLayout.cast<NvidiaMmaEncodingAttr>();
-  auto dotOperandLayout = dstLayout.cast<DotOperandEncodingAttr>();
+  auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(srcLayout);
+  auto dotOperandLayout = mlir::cast<DotOperandEncodingAttr>(dstLayout);
   return mmaLayout.getVersionMajor() == 2 &&
          mmaLayout.getWarpsPerCTA()[1] == 1 &&
          dotOperandLayout.getOpIdx() == 0 &&
@@ -866,7 +870,7 @@ static MakeTensorPtrOp getMakeTensorPtrOpImpl(Operation *op, Value v) {
   }
 
   if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
-    auto idx = v.cast<OpResult>().getResultNumber();
+    auto idx = cast<OpResult>(v).getResultNumber();
     llvm::SmallVector<scf::YieldOp> yieldOps;
     op->walk([&](Operation *op) {
       if (auto yieldOp = dyn_cast<scf::YieldOp>(op))
@@ -904,7 +908,7 @@ MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
     return getMakeTensorPtrOpImpl(definingOp, v);
 
   // If there is no defining op, v must be a BlockArgument.
-  BlockArgument arg = v.cast<BlockArgument>();
+  BlockArgument arg = cast<BlockArgument>(v);
   unsigned argNum = arg.getArgNumber();
   Operation *argOwner = arg.getOwner()->getParentOp();
 

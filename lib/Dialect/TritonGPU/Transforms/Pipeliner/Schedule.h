@@ -21,6 +21,9 @@ bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
 bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,
                           mlir::triton::PipeliningOption &options);
 
+/// Pipeline the TMA stores in the loop.
+bool pipelineTMAStores(scf::ForOp forOp);
+
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
 // TODO: this should be included as part of the pipeline but currently the wgmma

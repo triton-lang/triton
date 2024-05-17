@@ -219,11 +219,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
           LLVMAArch64CodeGen
           LLVMAArch64AsmParser
       )
-  else()
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
       list(APPEND TRITON_LIBRARIES
           LLVMX86CodeGen
           LLVMX86AsmParser
       )
+  else()
+      message(FATAL_ERROR "LLVM codegen/ASM parser libs: This HW architecture is not configured in cmake lib dependencies.")
   endif()
 
   # Define triton library
@@ -253,6 +255,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 endif()
 
+if (UNIX AND NOT APPLE)
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
+endif()
+
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
 
@@ -270,6 +276,7 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   endforeach()
 endif()
 
+add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
 add_subdirectory(test)
 

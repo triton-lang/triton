@@ -1,3 +1,4 @@
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
@@ -92,7 +93,7 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
                Location loc, const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
   auto aTensorTy = cast<MemDescType>(A.getType());
-  auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto aLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto aShapePerCTA = getShapePerCTA(aTensorTy);
 
   auto aOrder = aLayout.getOrder();
@@ -158,7 +159,7 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
                Location loc, const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
   auto bTensorTy = cast<MemDescType>(B.getType());
-  auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto bLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
   auto bShapePerCTA = getShapePerCTA(bTensorTy);
 
   auto bOrder = bLayout.getOrder();

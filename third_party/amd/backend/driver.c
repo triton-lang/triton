@@ -129,12 +129,13 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   HIP_CHECK(hipSymbolTable.hipGetDeviceProperties(&props, device_id));
 
   // create a struct to hold device properties
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:s, s:i}", "max_shared_mem",
-                       props.sharedMemPerBlock, "multiprocessor_count",
-                       props.multiProcessorCount, "sm_clock_rate",
-                       props.clockRate, "mem_clock_rate", props.memoryClockRate,
-                       "mem_bus_width", props.memoryBusWidth, "arch",
-                       props.gcnArchName, "warpSize", props.warpSize);
+  return Py_BuildValue(
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i}", "max_shared_mem",
+      props.sharedMemPerBlock, "max_num_regs", props.regsPerBlock,
+      "multiprocessor_count", props.multiProcessorCount, "sm_clock_rate",
+      props.clockRate, "mem_clock_rate", props.memoryClockRate, "mem_bus_width",
+      props.memoryBusWidth, "arch", props.gcnArchName, "warpSize",
+      props.warpSize);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {

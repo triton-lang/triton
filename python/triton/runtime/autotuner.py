@@ -95,6 +95,8 @@ class Autotuner(KernelInterface):
         self.benchmarkig_stream = torch.cuda.Stream() if self.use_cuda_graph else None
 
     def _bench(self, *args, config, **meta):
+        from ..compiler.errors import CompileTimeAssertionFailure
+
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
         conflicts = meta.keys() & config.kwargs.keys()
@@ -133,7 +135,7 @@ class Autotuner(KernelInterface):
                     bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
                 return bench_res
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
-        except OutOfResources:
+        except (OutOfResources, CompileTimeAssertionFailure):
             return float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):

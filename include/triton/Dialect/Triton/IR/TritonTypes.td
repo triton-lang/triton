@@ -42,10 +42,10 @@ def TT_I64Like : AnyTypeOf<[I64, I64Tensor]>;
 // Pointer Type in TableGen
 class TT_PtrOf<list<Type> pointeeTypes> :
     DialectType<Triton_Dialect,
-                And<[CPred<"$_self.isa<::mlir::triton::PointerType>()">,
+                And<[CPred<"::mlir::isa<::mlir::triton::PointerType>($_self)">,
                      Concat<"[](::mlir::Type pointeeType) { return ",
                             SubstLeaves<"$_self", "pointeeType", AnyTypeOf<pointeeTypes>.predicate>,
-                                        "; }($_self.cast<::mlir::triton::PointerType>().getPointeeType())">]>,
+                                        "; }(::mlir::cast<::mlir::triton::PointerType>($_self).getPointeeType())">]>,
                 "ptr", "::mlir::triton::PointerType">;
 
 // Pointer Type in C++ (corresponding to `TT_PtrOf`)

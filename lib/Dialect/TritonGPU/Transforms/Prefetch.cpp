@@ -27,6 +27,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -190,14 +191,14 @@ LogicalResult Prefetcher::initialize() {
   };
 
   auto getIncomingOp = [this](Value v) -> Value {
-    if (auto arg = v.dyn_cast<BlockArgument>())
+    if (auto arg = mlir::dyn_cast<BlockArgument>(v))
       if (arg.getOwner()->getParentOp() == forOp.getOperation())
         return forOp.getTiedLoopInit(arg)->get();
     return Value();
   };
 
   auto getYieldOp = [this](Value v) -> Value {
-    auto arg = v.cast<BlockArgument>();
+    auto arg = mlir::cast<BlockArgument>(v);
     unsigned yieldIdx = arg.getArgNumber() - forOp.getNumInductionVars();
     return yieldOp.getOperand(yieldIdx);
   };
@@ -205,8 +206,10 @@ LogicalResult Prefetcher::initialize() {
   for (triton::DotOp dot : dotsInFor) {
     auto aType = dot.getA().getType();
     auto bType = dot.getB().getType();
-    auto aEnc = aType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
-    auto bEnc = bType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+    auto aEnc =
+        mlir::cast<triton::gpu::DotOperandEncodingAttr>(aType.getEncoding());
+    auto bEnc =
+        mlir::cast<triton::gpu::DotOperandEncodingAttr>(bType.getEncoding());
     int aKWidth = aEnc.getKWidth();
     int bKWidth = bEnc.getKWidth();
     assert(aKWidth == bKWidth);

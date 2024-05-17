@@ -3619,9 +3619,34 @@ def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
     torch.testing.assert_close(output, reference_out)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.parametrize("mask_val", [True, False])
+@pytest.mark.parametrize("other_val", [0, 1])
+def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
+    input_val = 4.0
+    size = 128
+    dtype = torch.float32
+    input = torch.full((size, ), input_val, dtype=dtype, device=device)
+    output = torch.zeros((size, ), dtype=dtype, device=device)
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, size: tl.constexpr, mask: tl.constexpr, other: tl.constexpr):
+        offsets = tl.arange(0, size)
+        x = tl.load(in_ptr + offsets, mask=mask, other=other)
+        tl.store(out_ptr + offsets, x)
+
+    kernel[(1, )](input, output, size, mask_val, other_val, num_ctas=num_ctas)
+
+    if mask_val:
+        reference_out = torch.full((size, ), input_val, dtype=dtype, device=device)
+    else:
+        reference_out = torch.full((size, ), other_val, dtype=dtype, device=device)
+
+    torch.testing.assert_close(output, reference_out)
+
+
 # Testing masked loads with an intermate copy to shared memory run.
-
-
 # FIXME: Shape too small for ldmatrix when num_ctas=4
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
@@ -5099,7 +5124,7 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
 def test_enable_fp_fusion(enable_fp_fusion, device):
     if is_hip():
         pytest.skip(
-            'test_enable_fp_fusion for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
+            'test_enable_fp_fusion for HIP currently broken in https://github.com/triton-lang/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
         )
 
     # Sequential multiply add can be fused by backend

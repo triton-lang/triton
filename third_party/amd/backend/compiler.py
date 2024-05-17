@@ -158,16 +158,16 @@ class HIPBackend(BaseBackend):
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
+        if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
+            passes.llvmir.add_di_scope(pm)
         # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
         # count caused by predicated loads/stores. In certain kernels, the addition of these blocks can cause the MLIR
         # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
         # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
         # for conditional branching around memory accesses.
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm)
-        passes.common.add_cse(pm)
-        passes.common.add_symbol_dce(pm)
-        if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
-            passes.llvmir.add_di_scope(pm)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
@@ -192,16 +192,12 @@ class HIPBackend(BaseBackend):
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         kernels[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
-        # Hint the compiler that we'd like the firmware to set the kernel arguments
-        # to user SGPRs so that the kernel does not need to s_load its arguments
-        # from memory.
-        amd.set_all_fn_arg_inreg(kernels[0])
 
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, amd.TARGET_TRIPLE)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")

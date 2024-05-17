@@ -111,7 +111,7 @@ jobs:
         id: set-matrix
         if: env.enable_integration == 'true'
         run: |
-          if [ x"${{ github.repository }}" == x"openai/triton" ]; then
+          if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
           else
@@ -288,7 +288,7 @@ jobs:
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
-          ctest
+          ctest -j32
 
       - name: Run Proton tests
         env:

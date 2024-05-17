@@ -5,6 +5,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
@@ -106,8 +107,8 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     // global control.
     if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
       return numStages;
-    return forOp->getAttr(mlir::triton::kNumStagesAttrName)
-        .cast<IntegerAttr>()
+    return mlir::cast<IntegerAttr>(
+               forOp->getAttr(mlir::triton::kNumStagesAttrName))
         .getInt();
   }
 
@@ -127,7 +128,7 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
       bool pipelined = pipelineLoop(forOp, loopNumStages);
-      if (pipelined && outerLoop)
+      if (pipelined && outerLoop && getNumStagesOrDefault(outerLoop) > 1)
         outerLoops.insert(outerLoop);
     }
 
@@ -148,6 +149,18 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     // the inner loop.
     for (scf::ForOp outerLoop : outerLoops)
       tryAndPipelineOuterLoop(outerLoop);
+
+    // Re-collect loop ops
+    loops.clear();
+    getOperation()->walk([&](scf::ForOp forOp) {
+      // Bail out for loops with num_stage <= 1.
+      if (getNumStagesOrDefault(forOp) > 1)
+        loops.push_back(forOp);
+    });
+
+    for (scf::ForOp forOp : loops) {
+      mlir::triton::pipelineTMAStores(forOp);
+    }
   }
 };
 } // anonymous namespace

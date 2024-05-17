@@ -23,5 +23,3 @@ add_triton_library(TritonAMDGPUToLLVM
     LINK_LIBS PUBLIC
     TritonGPUToLLVM
 )
-
-target_compile_definitions(TritonAMDGPUToLLVM PUBLIC USE_ROCM)

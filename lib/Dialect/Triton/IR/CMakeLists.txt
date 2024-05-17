@@ -1,8 +1,8 @@
 add_triton_library(TritonIR
   Dialect.cpp
   Ops.cpp
-  Types.cpp
   Traits.cpp
+  Types.cpp
 
   DEPENDS
   TritonTableGen

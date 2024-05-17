@@ -239,8 +239,8 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto intAttr = op.getValue().template dyn_cast<IntegerAttr>();
-    auto boolAttr = op.getValue().template dyn_cast<BoolAttr>();
+    auto intAttr = dyn_cast<IntegerAttr>(op.getValue());
+    auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
     if (intAttr || boolAttr) {
       int64_t value{};
       if (intAttr)
@@ -253,7 +253,7 @@ public:
                       /*knownConstantValue=*/{value});
     }
     // TODO: generalize to dense attr
-    auto splatAttr = op.getValue().template dyn_cast<SplatElementsAttr>();
+    auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
       int64_t value = splatAttr.template getSplatValue<APInt>().getZExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
@@ -1058,15 +1058,15 @@ void AxisInfoAnalysis::visitOperation(
   auto newDivisibility = curr.getDivisibility();
   auto newConstancy = curr.getConstancy();
   if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
-    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newContiguity = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
   if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
-    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newDivisibility = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
   if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
-    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
   curr = AxisInfo(newContiguity, newDivisibility, newConstancy,
@@ -1105,9 +1105,9 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   // initialize attributes one by one
   for (auto [vec, attrName] : retVecs) {
     Attribute attr = funcOp.getArgAttr(argNumber, attrName);
-    if (auto int_attr = attr.dyn_cast_or_null<IntegerAttr>())
+    if (auto int_attr = dyn_cast_or_null<IntegerAttr>(attr))
       *vec = DimVectorT(contiguity->size(), int_attr.getValue().getZExtValue());
-    if (auto dense_attr = attr.dyn_cast_or_null<DenseElementsAttr>()) {
+    if (auto dense_attr = dyn_cast_or_null<DenseElementsAttr>(attr)) {
       auto vals = dense_attr.getValues<int>();
       *vec = DimVectorT(vals.begin(), vals.end());
     }
@@ -1126,7 +1126,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   DimVectorT knownDivisibility(rank, 1);
   DimVectorT knownConstancy(rank, 1);
 
-  BlockArgument blockArg = value.dyn_cast<BlockArgument>();
+  BlockArgument blockArg = dyn_cast<BlockArgument>(value);
 
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
@@ -1152,15 +1152,15 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
     // Other operations are conservatively initialized with the lowest possible
     // divisibility, contiguity, and constancy unless they have specified.
     if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
       knownDivisibility = DimVectorT(vals.begin(), vals.end());
     }
     if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
       knownContiguity = DimVectorT(vals.begin(), vals.end());
     }
     if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
       knownConstancy = DimVectorT(vals.begin(), vals.end());
     }
   }

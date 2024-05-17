@@ -1,7 +1,9 @@
 #include "PipeliningUtility.h"
+
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -52,6 +54,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     loadOp.getMaskMutable().assign(mask);
     return op;
   }
+  if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+    rewriter.setInsertionPoint(copyOp);
+    Value mask = getPredMask(rewriter, copyOp.getPred().getType(),
+                             copyOp.getPred(), pred);
+    copyOp.getPredMutable().assign(mask);
+    return op;
+  }
 
   assert("don't know how to predicate this op" && false);
   return op;
@@ -67,7 +76,7 @@ void mlir::triton::addDep(Operation *op, DenseSet<Operation *> &deps,
   for (Value operand : op->getOperands()) {
     Value v = operand;
     llvm::SmallDenseSet<Value> seen;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
+    while (auto arg = mlir::dyn_cast<BlockArgument>(v)) {
       if (!includeArg)
         break;
       if (!seen.insert(v).second)

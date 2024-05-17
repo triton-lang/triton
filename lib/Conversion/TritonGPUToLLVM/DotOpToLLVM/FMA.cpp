@@ -1,3 +1,4 @@
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
@@ -45,7 +46,7 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto bShapePerCTA = getShapePerCTA(bTensorTy);
 
   BlockedEncodingAttr dLayout =
-      dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
+      cast<BlockedEncodingAttr>(dTensorTy.getEncoding());
   auto order = dLayout.getOrder();
   auto cc = unpackLLElements(loc, adaptor.getC(), rewriter);
 

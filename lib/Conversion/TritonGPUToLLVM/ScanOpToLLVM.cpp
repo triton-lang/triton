@@ -1,12 +1,12 @@
+#include <iterator>
+
 #include "ReduceScanCommon.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
 #include "llvm/ADT/STLExtras.h"
-
-#include <iterator>
 
 using namespace mlir;
 using namespace mlir::triton;

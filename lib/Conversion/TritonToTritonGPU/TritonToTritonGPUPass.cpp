@@ -58,7 +58,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = getTypeConverter()->convertType(op.getType());
     auto retShapedType = cast<ShapedType>(retType);
-    auto value = adaptor.getValue().dyn_cast<DenseElementsAttr>();
+    auto value = dyn_cast<DenseElementsAttr>(adaptor.getValue());
     if (dyn_cast<RankedTensorType>(retShapedType)) {
       assert(value);
       if (value.getElementType().isInteger(1) && value.isSplat())
@@ -151,7 +151,7 @@ struct TritonExpandDimsPattern
     Attribute _argEncoding = argType.getEncoding();
     if (!_argEncoding)
       return failure();
-    auto argEncoding = _argEncoding.cast<triton::gpu::BlockedEncodingAttr>();
+    auto argEncoding = cast<triton::gpu::BlockedEncodingAttr>(_argEncoding);
     // return shape
     auto retShape = argType.getShape().vec();
     retShape.insert(retShape.begin() + op.getAxis(), 1);
@@ -255,14 +255,14 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     Value a = adaptor.getA();
     Value b = adaptor.getB();
     Value c = adaptor.getC();
-    if (!aEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
+    if (!mlir::isa<triton::gpu::DotOperandEncodingAttr>(aEncoding)) {
       Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
           getContext(), 0, dEncoding, aEltType);
       auto dstType =
           RankedTensorType::get(aType.getShape(), aEltType, encoding);
       a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), dstType, a);
     }
-    if (!bEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
+    if (!mlir::isa<triton::gpu::DotOperandEncodingAttr>(bEncoding)) {
       Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
           getContext(), 1, dEncoding, bEltType);
       auto dstType =
@@ -294,7 +294,7 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     auto retType = cast<RankedTensorType>(
         this->getTypeConverter()->convertType(op.getType()));
     auto retEncoding =
-        retType.getEncoding().cast<triton::gpu::BlockedEncodingAttr>();
+        cast<triton::gpu::BlockedEncodingAttr>(retType.getEncoding());
     auto lhsType = adaptor.getLhs().getType();
     auto rhsType = adaptor.getRhs().getType();
     auto lhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(lhsType);
@@ -348,7 +348,7 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
                                 ConversionPatternRewriter &rewriter) const {
     auto src = adaptor.getSrc();
     auto srcTy = cast<RankedTensorType>(src.getType());
-    auto srcEnc = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
+    auto srcEnc = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
     int rank = srcEnc.getOrder().size();
     auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
 
@@ -550,6 +550,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
       GenericOpPattern<triton::ExperimentalDescriptorLoadOp>,
+      GenericOpPattern<triton::ExperimentalDescriptorStoreOp>,
       GenericOpPattern<triton::CallOp>, TritonFuncOpPattern>(typeConverter,
                                                              context);
 }

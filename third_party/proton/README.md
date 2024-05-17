@@ -9,7 +9,7 @@ Proton is a lightweight profiler for Triton, designed to be used for code writte
 The following command installs the latest version of Proton.
 
 ```bash
-git clone https://github.com/openai/triton
+git clone https://github.com/triton-lang/triton
 cd triton/python
 pip install .
 ```
@@ -115,7 +115,16 @@ bytes: int  # The number of bytes expected to be transferred
 
 ### Command Line
 
-Under development.
+Proton can be used as a command-line tool to profile Python scripts and Pytest tests.
+The following examples demonstrate how to use Proton command-line.
+
+```bash
+proton [options] script.py [script_args] [script_options]
+proton [options] pytest [pytest_args] [script_options]
+python -m triton.profiler.proton [options] script.py [script_args] [script_options]
+```
+
+When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported. Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
 
 ### Visualizing the profile data
 

@@ -41,15 +41,13 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     // TODO: do we need to check if src is shared ?
-    if (srcLayout.isa<SharedEncodingAttr>() &&
-        isaDistributedLayout(dstLayout)) {
+    if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
-    if (dstLayout.isa<DotOperandEncodingAttr>() &&
-        dstLayout.cast<DotOperandEncodingAttr>()
-            .getParent()
-            .isa<BlockedEncodingAttr>()) {
+    if (isa<DotOperandEncodingAttr>(dstLayout) &&
+        isa<BlockedEncodingAttr>(
+            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
       return lowerSharedToDotOpFMA(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
@@ -64,10 +62,9 @@ private:
     auto loc = op.getLoc();
     RankedTensorType dstTy = op.getType();
     Attribute dstLayout = dstTy.getEncoding();
-    auto dotLayout = dstLayout.cast<DotOperandEncodingAttr>();
-    auto blockedLayout = dstLayout.cast<DotOperandEncodingAttr>()
-                             .getParent()
-                             .cast<BlockedEncodingAttr>();
+    auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
+    auto blockedLayout = cast<BlockedEncodingAttr>(
+        cast<DotOperandEncodingAttr>(dstLayout).getParent());
     auto thread = getThreadId(rewriter, loc);
     Value res = SharedToDotOperandFMA::convertLayout(
         dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
@@ -86,7 +83,7 @@ private:
     auto dstShape = dstTy.getShape();
     assert(dstShape.size() <= 2 &&
            "Unexpected rank of ConvertLayout(shared->blocked)");
-    auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
+    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto dstLayout = dstTy.getEncoding();
     auto inOrd = getOrder(srcSharedLayout);
 

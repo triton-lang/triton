@@ -1,10 +1,10 @@
 import argparse
 from collections import namedtuple
 import json
+import pandas as pd
 
 import hatchet as ht
-import triton._C.libproton.proton as libproton
-from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
 
 def match_available_metrics(metrics, raw_metrics):
@@ -23,14 +23,57 @@ def match_available_metrics(metrics, raw_metrics):
 
 
 def get_raw_metrics(file):
-    gf = ht.GraphFrame.from_literal(json.load(file))
-    return gf, gf.show_metric_columns()
+    database = json.load(file)
+    device_info = database.pop(1)
+    gf = ht.GraphFrame.from_literal(database)
+    return gf, gf.show_metric_columns(), device_info
+
+
+def get_min_time_flops(df, device_info):
+    min_time_flops = pd.DataFrame(0.0, index=df.index, columns=["min_time"])
+    for device_type in device_info:
+        for device_index in device_info[device_type]:
+            arch = device_info[device_type][device_index]["arch"]
+            num_sms = device_info[device_type][device_index]["num_sms"]
+            clock_rate = device_info[device_type][device_index]["clock_rate"]
+            for width in TritonHook.flops_width:
+                idx = df["DeviceId"] == device_index
+                device_frames = df[idx]
+                if f"flops{width}" not in device_frames.columns:
+                    continue
+                max_flops = 0
+                if device_type == "CUDA":
+                    if arch == 80:
+                        max_flops = 624e12 / (width / 8)
+                    elif arch == 89:
+                        # TODO(Keren): Implement fp16 acc-> 660.6 fp8
+                        max_flops = (330.3 * 1e12) / (width / 8)
+                    elif arch == 90:
+                        # 114 sms and 1755mhz is the base number of sms and clock rate of H100 pcie
+                        max_flops = ((num_sms / 114 * clock_rate / (1755 * 1e3) * 1513) * 1e12) / (width / 8)
+                else:
+                    raise ValueError(f"Unsupported device type: {device_type}")
+                min_time_flops.loc[idx, "min_time"] += device_frames[f"flops{width}"].fillna(0) / max_flops
+    return min_time_flops
+
+
+def get_min_time_bytes(df, device_info):
+    min_time_bytes = pd.DataFrame(0.0, index=df.index, columns=["min_time"])
+    for device_type in device_info:
+        for device_index in device_info[device_type]:
+            idx = df["DeviceId"] == device_index
+            device_frames = df[idx]
+            memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]  # in khz
+            bus_width = device_info[device_type][device_index]["bus_width"]  # in bits
+            peak_bandwidth = 2 * bus_width * memory_clock_rate * 1e3 / 8
+            min_time_bytes.loc[idx, "min_time"] += device_frames["bytes"] / peak_bandwidth
+    return min_time_bytes
 
 
 FactorDict = namedtuple("FactorDict", ["name", "factor"])
 time_factor_dict = FactorDict("time", {"time/s": 1, "time/ms": 1e-3, "time/us": 1e-6, "time/ns": 1e-9})
-flops_factor_dict = FactorDict("flops", {"flop/s": 1, "tflop/s": 1e12, "gflop/s": 1e9})
-bytes_factor_dict = FactorDict("bytes", {"byte/s": 1, "tbyte/s": 1e12, "gbyte/s": 1e9})
+flops_factor_dict = FactorDict("flops", {"flop/s": 1, "gflop/s": 1e9, "tflop/s": 1e12})
+bytes_factor_dict = FactorDict("bytes", {"byte/s": 1, "gbyte/s": 1e9, "tbyte/s": 1e12})
 
 derivable_metrics = {
     **{key: flops_factor_dict
@@ -40,59 +83,32 @@ derivable_metrics = {
 }
 
 
-def max_flops(width):
-    device_info = libproton.device_info(0)
-    capability_major = device_info["CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR"]
-    capability_minor = device_info["CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR"]
-    capability = (capability_major, capability_minor)
-    # hardcoded, because we can't get max tensor core clock from cuDeviceGetAttribute
-    flops_8bits = {(8, 0): 610e12, (9, 0): 1960e12}[capability]
-    return flops_8bits / (width / 8)
-
-
-def max_bandwidth():
-    # XXX(Keren): It assumes that GPUs are availble, need to get device info from the input
-    # profiled at runtime
-    device_info = libproton.device_info(0)
-    capability_major = device_info["CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR"]
-    capability_minor = device_info["CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR"]
-    memory_clock_rate = device_info["CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE"]
-    capability = (capability_major, capability_minor)
-    memory_num_buses = {(8, 0): 5, (9, 0): 5}[capability]
-    memory_bus_width = {(8, 0): 128, (9, 0): 128}[capability]
-    return 2. * memory_num_buses * memory_bus_width * memory_clock_rate * 1e3
-
-
-def derive_metrics(gf, metrics, raw_metrics):
+def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
+    time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
+    time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
     for metric in metrics:
-        if metric == "util":
-            time = gf.dataframe["Time (ns) (inc)"] * 1e-9
-            min_time_bytes = gf.dataframe["bytes (inc)"] / max_bandwidth()
-            min_time_flops = 0
-            # XXX(Keren): Make it more general
-            for width in [16]:
-                min_time_flops += gf.dataframe[f"flops{width} (inc)"].fillna(0) / max_flops(width)
-            gf.dataframe["util (inc)"] = min_time_flops.combine(min_time_bytes, max) / time
+        if metric == "util":  # Tensor core only
+            min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
+            min_time_flops = get_min_time_flops(gf.dataframe, device_info)
+            time_sec = gf.dataframe[time_metric_name] * (time_factor_dict.factor[time_unit] /
+                                                         time_factor_dict.factor["time/s"])
+            gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
             derived_metrics.append("util (inc)")
         elif metric in derivable_metrics:
             deriveable_metric = derivable_metrics[metric]
             metric_name = deriveable_metric.name
             metric_factor_dict = deriveable_metric.factor
             matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
-            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
-            time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
             gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] /
                                                (gf.dataframe[time_metric_name] * time_factor_dict.factor[time_unit]) /
                                                metric_factor_dict[metric])
             derived_metrics.append(f"{metric} (inc)")
         elif metric in time_factor_dict.factor:
-            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
-            original_time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
             metric_time_unit = time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = gf.dataframe[time_metric_name] * (
-                time_factor_dict.factor[original_time_unit] / time_factor_dict.factor[metric_time_unit])
+                time_factor_dict.factor[time_unit] / time_factor_dict.factor[metric_time_unit])
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)
@@ -104,10 +120,10 @@ def derive_metrics(gf, metrics, raw_metrics):
 
 def parse(metrics, filename, include, exclude, threshold, depth):
     with open(filename, "r") as f:
-        gf, raw_metrics = get_raw_metrics(f)
+        gf, raw_metrics, device_info = get_raw_metrics(f)
         assert len(raw_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
-        metrics = derive_metrics(gf, metrics, raw_metrics)
+        metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
         if include or exclude:
             # make regex do negative match
             name_filter = f"^(?!{exclude}).*" if exclude else include
@@ -120,15 +136,17 @@ def parse(metrics, filename, include, exclude, threshold, depth):
             # TODO: generalize to support multiple metrics
             query = ["*", {metrics[0]: f">= {threshold}"}]
             gf = gf.filter(query, squash=True)
-        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth))
+        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
 
 
 def show_metrics(file_name):
     with open(file_name, "r") as f:
-        _, raw_metrics = get_raw_metrics(f)
+        _, raw_metrics, _ = get_raw_metrics(f)
         print("Available metrics:")
         if raw_metrics:
-            print("\n".join(raw_metrics))
+            for raw_metric in raw_metrics:
+                raw_metric_no_unit = raw_metric.split("(")[0].strip().lower()
+                print(f"- {raw_metric_no_unit}")
         return
 
 
@@ -144,8 +162,9 @@ def main():
         help="""List available metrics. Metric names are case insensitive and ignore units.
 Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
-- flop/s, tflop/s, gflop/s: flops / time
-- byte/s, tbyte/s, gbyte/s: bytes / time
+- flop/s, gflop/s, tflop/s: flops / time
+- byte/s, gbyte/s, tbyte/s: bytes / time
+- util: max(sum(flops<width>) / peak_flops<width>_time, bytes / peak_bandwidth_time))
 """,
     )
     argparser.add_argument(
@@ -206,3 +225,7 @@ There are two modes:
         show_metrics(file_name)
     elif metrics:
         parse(metrics, file_name, include, exclude, threshold, depth)
+
+
+if __name__ == "__main__":
+    main()

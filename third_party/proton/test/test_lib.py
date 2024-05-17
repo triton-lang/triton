@@ -1,6 +1,7 @@
 import triton._C.libproton.proton as libproton
 import tempfile
 import pathlib
+from triton.profiler.profile import _select_backend
 
 
 def test_record():
@@ -26,7 +27,7 @@ def test_op():
 
 def test_session():
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
-        session_id = libproton.start(f.name.split(".")[0], "cupti", "shadow", "tree")
+        session_id = libproton.start(f.name.split(".")[0], "shadow", "tree", _select_backend())
         libproton.deactivate(session_id)
         libproton.activate(session_id)
         libproton.finalize(session_id, "hatchet")
@@ -36,7 +37,7 @@ def test_session():
 
 def test_add_metrics():
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
-        libproton.start(f.name.split(".")[0], "cupti", "shadow", "tree")
+        libproton.start(f.name.split(".")[0], "shadow", "tree", _select_backend())
         id1 = libproton.record_scope()
         libproton.enter_scope(id1, "one")
         libproton.add_metrics(id1, {"a": 1.0, "b": 2.0})

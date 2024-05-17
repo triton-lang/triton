@@ -78,17 +78,17 @@ ValueTable getValuesFromDotOperandLayoutStruct(
 
 static WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
   auto aOperandTy = op.getA().getType();
-  auto aTensorTy = aOperandTy.cast<RankedTensorType>();
+  auto aTensorTy = cast<RankedTensorType>(aOperandTy);
   auto aElemTy = aTensorTy.getElementType();
   auto bOperandTy = op.getB().getType();
-  auto bTensorTy = bOperandTy.cast<RankedTensorType>();
+  auto bTensorTy = cast<RankedTensorType>(bOperandTy);
   auto bElemTy = bTensorTy.getElementType();
   assert(aElemTy == bElemTy);
   auto cOperandTy = op.getC().getType();
-  auto cTensorTy = cOperandTy.cast<RankedTensorType>();
+  auto cTensorTy = cast<RankedTensorType>(cOperandTy);
   auto cElemTy = cTensorTy.getElementType();
   auto dOperandTy = op.getD().getType();
-  auto dTensorTy = dOperandTy.cast<RankedTensorType>();
+  auto dTensorTy = cast<RankedTensorType>(dOperandTy);
   auto dElemTy = dTensorTy.getElementType();
   assert(cElemTy == dElemTy);
 
@@ -144,11 +144,8 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
 LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                          ConversionPatternRewriter &rewriter,
                          const LLVMTypeConverter *typeConverter) {
-  auto wmmaLayout = op.getResult()
-                        .getType()
-                        .cast<RankedTensorType>()
-                        .getEncoding()
-                        .cast<AMDWmmaEncodingAttr>();
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
+      cast<RankedTensorType>(op.getResult().getType()).getEncoding());
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
   auto wmmaInstrType = getWMMAInstrTypeFromDot(op);
@@ -157,13 +154,13 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   Value a = op.getA();
   Value b = op.getB();
   Value d = op.getD();
-  auto aTensorTy = a.getType().cast<RankedTensorType>();
-  auto bTensorTy = b.getType().cast<RankedTensorType>();
-  auto dTensorTy = d.getType().cast<RankedTensorType>();
+  auto aTensorTy = cast<RankedTensorType>(a.getType());
+  auto bTensorTy = cast<RankedTensorType>(b.getType());
+  auto dTensorTy = cast<RankedTensorType>(d.getType());
   auto elemTy = aTensorTy.getElementType();
 
-  auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-  auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+  auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   int kWidth = aEncoding.getKWidth();
 
   auto repA =
@@ -234,16 +231,16 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   auto rankedTType = [](Value tensor) {
-    return tensor.getType().cast<RankedTensorType>();
+    return cast<RankedTensorType>(tensor.getType());
   };
 
-  assert(rankedTType(op.getA()).getEncoding().isa<DotOperandEncodingAttr>() &&
-         rankedTType(op.getB()).getEncoding().isa<DotOperandEncodingAttr>() &&
+  assert(isa<DotOperandEncodingAttr>(rankedTType(op.getA()).getEncoding()) &&
+         isa<DotOperandEncodingAttr>(rankedTType(op.getB()).getEncoding()) &&
          "Both $a and %b should be DotOperand layout.");
 
   auto cTensorTy = rankedTType(op.getC());
   auto dTensorTy = rankedTType(op.getD());
-  assert(cTensorTy.getEncoding().isa<AMDWmmaEncodingAttr>() &&
+  assert(isa<AMDWmmaEncodingAttr>(cTensorTy.getEncoding()) &&
          "Currently, we only support $c with a wmma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&

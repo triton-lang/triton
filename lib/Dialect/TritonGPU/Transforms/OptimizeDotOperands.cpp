@@ -38,7 +38,7 @@ public:
     }
     auto sharedLoadTy = cast<RankedTensorType>(cvtOp.getType());
     auto cvtEncoding =
-        sharedLoadTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+        dyn_cast<DotOperandEncodingAttr>(sharedLoadTy.getEncoding());
     if (!cvtEncoding)
       return failure();
 
@@ -111,7 +111,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     // Only consider conversions to dot operand.
     auto cvtTy = cast<RankedTensorType>(cvt.getType());
-    if (!cvtTy.getEncoding().isa<DotOperandEncodingAttr>())
+    if (!isa<DotOperandEncodingAttr>(cvtTy.getEncoding()))
       return failure();
 
     auto src = cvt.getSrc().getDefiningOp();
@@ -214,9 +214,8 @@ public:
       return failure();
 
     auto dot = *allocOp->getUsers().begin();
-    auto dotEnc = cast<RankedTensorType>(dot->getResult(0).getType())
-                      .getEncoding()
-                      .dyn_cast<NvidiaMmaEncodingAttr>();
+    auto dotEnc = dyn_cast<NvidiaMmaEncodingAttr>(
+        cast<RankedTensorType>(dot->getResult(0).getType()).getEncoding());
     if (!dotEnc || dotEnc.getVersionMajor() != 3)
       return failure();
 
@@ -229,7 +228,7 @@ public:
       return failure();
 
     MemDescType allocType = allocOp.getType();
-    auto allocEncoding = allocType.getEncoding().cast<SharedEncodingAttr>();
+    auto allocEncoding = cast<SharedEncodingAttr>(allocType.getEncoding());
     TensorOrMemDesc srcTy = trans.getSrc().getType();
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
@@ -281,11 +280,11 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
       return cast<TensorOrMemDesc>(v.getType()).getEncoding();
     };
 
-    if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
+    if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
       return failure();
-    auto srcEnc = getEncoding(alloc.getSrc()).dyn_cast<NvidiaMmaEncodingAttr>();
+    auto srcEnc = dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(alloc.getSrc()));
     auto dstEnc =
-        getEncoding(dotOp.getResult()).dyn_cast<NvidiaMmaEncodingAttr>();
+        dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
     if (!srcEnc || srcEnc.getVersionMajor() != 3 || !dstEnc ||
         dstEnc.getVersionMajor() != 3)
       return failure();

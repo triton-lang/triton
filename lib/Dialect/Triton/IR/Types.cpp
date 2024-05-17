@@ -1,5 +1,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
+
 #include "mlir/IR/DialectImplementation.h" // required by `Types.cpp.inc`
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
 

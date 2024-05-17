@@ -1,12 +1,14 @@
+#include <memory>
+#include <numeric>
+
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include <memory>
-#include <numeric>
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
@@ -39,8 +41,8 @@ struct OptimizeReshapeLayoutPattern
     if (!reductionAxis)
       return failure();
     RankedTensorType tensorType = viewOp.getType();
-    if (auto blocked = tensorType.getEncoding()
-                           .dyn_cast<triton::gpu::BlockedEncodingAttr>()) {
+    if (auto blocked = mlir::dyn_cast<triton::gpu::BlockedEncodingAttr>(
+            tensorType.getEncoding())) {
       // If the layout already has all the elements along the reduction
       // dimension in the same thread we can skip.
       if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
@@ -112,7 +114,7 @@ class TritonGPUOptimizeThreadLocalityPass
               reductionOp.value()))
         return;
       // TODO: relax this restriction
-      if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank > 1))
+      if (!(isa<triton::gpu::BlockedEncodingAttr>(srcEncoding) && rank > 1))
         return;
       for (auto operand : reduce->getOperands()) {
         auto def = operand.getDefiningOp();
@@ -154,9 +156,9 @@ class TritonGPUOptimizeThreadLocalityPass
       auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
       auto srcShape = srcType.getShape();
       auto srcEncoding = srcType.getEncoding();
-      assert(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() &&
+      assert(isa<triton::gpu::BlockedEncodingAttr>(srcEncoding) &&
              "Thread locality optimization only supports blocked encoding");
-      auto blocked = srcEncoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+      auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(srcEncoding);
       auto elemsPerThread =
           triton::gpu::getElemsPerThread(srcType)[reduce.getAxis()];
       auto rank = srcShape.size();
@@ -175,8 +177,8 @@ class TritonGPUOptimizeThreadLocalityPass
       assert(oldUpdate->getNumOperands() == 2);
       auto accumOperandNumber = (operandNumber == 0) ? 1 : 0;
       auto accumOperand = oldUpdate->getOperand(accumOperandNumber);
-      assert(accumOperand.isa<BlockArgument>());
-      auto blockArg = accumOperand.dyn_cast<BlockArgument>();
+      assert(isa<BlockArgument>(accumOperand));
+      auto blockArg = dyn_cast<BlockArgument>(accumOperand);
       auto blockArgNum = blockArg.getArgNumber();
       auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
       // get oldAccum
@@ -388,7 +390,7 @@ private:
     auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
     auto rank = srcType.getShape().size();
     auto srcEncoding = srcType.getEncoding();
-    auto blocked = srcEncoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+    auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(srcEncoding);
     auto sizePerThread3d =
         insertValue(blocked.getSizePerThread(), rank,
                     blocked.getSizePerThread()[reduce.getAxis()]);

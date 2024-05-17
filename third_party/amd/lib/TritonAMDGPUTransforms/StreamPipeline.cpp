@@ -196,7 +196,7 @@ void LoopPipeliner::collectValueDep(Value v, int stage,
       for (Value opr : op->getOperands())
         collectValueDep(opr, stage, deps, args);
     }
-  } else if (auto arg = v.dyn_cast<BlockArgument>()) {
+  } else if (auto arg = dyn_cast<BlockArgument>(v)) {
     if (arg.getArgNumber() > 0) {
       args.insert(arg);
       collectValueDep(yieldOp->getOperand(arg.getArgNumber() - 1), stage - 1,
@@ -256,20 +256,19 @@ LogicalResult LoopPipeliner::checkOpUses() {
         if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
           break;
         auto tensorType =
-            use->getResult(0).getType().dyn_cast<RankedTensorType>();
+            dyn_cast<RankedTensorType>(use->getResult(0).getType());
         if (!tensorType ||
-            !tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
+            !isa<ttg::SharedEncodingAttr>(tensorType.getEncoding()))
           break;
         use = *use->getResult(0).getUsers().begin();
       }
 
       // TODO: handle fp_to_fp conversions in between
       if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use))
-        if (auto tensorType = convertLayout.getResult()
-                                  .getType()
-                                  .dyn_cast<RankedTensorType>())
-          if (auto dotOpEnc = tensorType.getEncoding()
-                                  .dyn_cast<ttg::DotOperandEncodingAttr>()) {
+        if (auto tensorType =
+                dyn_cast<RankedTensorType>(convertLayout.getResult().getType()))
+          if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
+                  tensorType.getEncoding())) {
             isCandidate = true;
             convertMapping[loadOp] = convertLayout;
           }
@@ -391,15 +390,13 @@ void LoopPipeliner::createBufferTypes() {
   for (auto loadCvt : convertMapping) {
     auto loadOp = loadCvt.first;
     Value cvt = loadCvt.second;
-    auto dotOpEnc = cvt.getType()
-                        .cast<RankedTensorType>()
-                        .getEncoding()
-                        .cast<ttg::DotOperandEncodingAttr>();
-    auto ty = loadOp.getType().cast<RankedTensorType>();
+    auto dotOpEnc = cast<ttg::DotOperandEncodingAttr>(
+        cast<RankedTensorType>(cvt.getType()).getEncoding());
+    auto ty = cast<RankedTensorType>(loadOp.getType());
     SmallVector<int64_t> bufferShape(ty.getShape().begin(),
                                      ty.getShape().end());
     Type eType = ty.getElementType();
-    auto blockedEnc = ty.getEncoding().cast<ttg::BlockedEncodingAttr>();
+    auto blockedEnc = cast<ttg::BlockedEncodingAttr>(ty.getEncoding());
     auto CTALayout = ttg::getCTALayout(ty.getEncoding());
     // unsigned bitWidth = dotOpEnc.getMMAv2kWidth()
     //                         ? 32 / dotOpEnc.getMMAv2kWidth()
@@ -445,7 +442,7 @@ void LoopPipeliner::createCurrentDeps() {
 int LoopPipeliner::getValueDefStage(Value v, int stage) {
   if (stage < 0)
     return -1;
-  if (auto arg = v.dyn_cast<BlockArgument>()) {
+  if (auto arg = dyn_cast<BlockArgument>(v)) {
     if (arg.getArgNumber() > 0)
       return getValueDefStage(yieldOp->getOperand(arg.getArgNumber() - 1),
                               stage - 1);
@@ -505,7 +502,7 @@ bool LoopPipeliner::isLoadChain(Operation *op) const {
     if (auto f2fOp = dyn_cast<triton::FpToFpOp>(op))
       loadVal = f2fOp.getSrc();
     if (validLoads.contains(loadVal.getDefiningOp())) {
-      if (cvtOp.getType().getEncoding().isa<ttg::DotOperandEncodingAttr>())
+      if (isa<ttg::DotOperandEncodingAttr>(cvtOp.getType().getEncoding()))
         return true;
     }
   }

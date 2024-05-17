@@ -280,7 +280,7 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "bool":$needTrans), [{
 
         // ---- begin GFX908/GFX90A ----
-        if (auto mfmaEnc = dotOpEnc.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
+        if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
           if (needTrans)
             kDimNum = 1 - kDimNum;
@@ -312,7 +312,7 @@ compared to 1*64 when the hasLeadingOffset is false.
         }
 
         // ---- begin GFX11 ----
-        if (dotOpEnc.getParent().isa<AMDWmmaEncodingAttr>()) {
+        if (mlir::isa<AMDWmmaEncodingAttr>(dotOpEnc.getParent())) {
           if (dotOpEnc.getOpIdx() == 0) {
             const int numBanks = 32;
             const int bankBitWidth = 32;
@@ -334,7 +334,7 @@ compared to 1*64 when the hasLeadingOffset is false.
         }
 
 
-        auto mmaEnc = dotOpEnc.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
+        auto mmaEnc = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
 
         if(!mmaEnc)
           return get(context, 1, 1, 1, order, CTALayout);
@@ -1142,6 +1142,9 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     // Here 5 bits can hold 32 IDs in a single module.
     static constexpr int numBitsToHoldMmaV1ID{5};
 
+    // For MMA v1, method `getMMAv1IsRow` returns whether e.g. the a operand is used
+    // in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
+    // section 9.7.13.4.1 for more details.
     bool getMMAv1IsRow(int opIdx) const;
     bool getMMAv1IsVec4(int opIdx) const;
     int getMMAv1NumOuter(ArrayRef<int64_t> shape, int opIdx) const;
@@ -1207,7 +1210,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
 
     SmallVector<unsigned> getContigPerThread() {
-      auto parentLayout = getParent().cast<DistributedEncodingTrait>();
+      auto parentLayout = mlir::cast<DistributedEncodingTrait>(getParent());
       return parentLayout.getContigPerThread();
     };
   }];
@@ -1228,16 +1231,16 @@ a's opIdx is 0, b's opIdx is 1.
 
 The parend field in DotOperandEncodingAttr is the layout of d.
 
-For MMA v1, an additional attribute `isMMAv1Row` determines whether e.g. the a operand is used
-in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
-section 9.7.13.4.1 for more details.
+kWidth defines number of consecutive elements stored by one thread along k dimension.
+Some layouts do not use this parameter, either because they have a fixed number of
+elements along the K dim, or they use all elements of the tensor along the K dim.
   }];
 
   let parameters = (
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    "unsigned":$kWidth
+    DefaultValuedParameter<"unsigned", "0">:$kWidth
   );
 
   let builders = [
@@ -1245,7 +1248,7 @@ section 9.7.13.4.1 for more details.
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
                      "Type":$eltTy), [{
-      NvidiaMmaEncodingAttr parentAttr = parent.dyn_cast<NvidiaMmaEncodingAttr>();
+      NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
       if (!parentAttr || !parentAttr.isAmpere())
         return $_get(context, opIdx, parent, 0);
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
@@ -1254,7 +1257,8 @@ section 9.7.13.4.1 for more details.
     }]>
   ];
 
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = "`<` `{` struct(params) `}` `>`";
+  let genVerifyDecl = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() {
       return getSizePerThread();

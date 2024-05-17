@@ -27,10 +27,7 @@ public:
                                 PatternRewriter &rewriter) const override {
 
     auto isF32 = [](Value operand) {
-      return operand.getType()
-          .cast<RankedTensorType>()
-          .getElementType()
-          .isF32();
+      return cast<RankedTensorType>(operand.getType()).getElementType().isF32();
     };
 
     if (!(dotOp.getInputPrecision() == tt::InputPrecision::TF32x3 &&

@@ -41,10 +41,9 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (dstLayout.isa<DotOperandEncodingAttr>() &&
-        dstLayout.cast<DotOperandEncodingAttr>()
-            .getParent()
-            .isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
+    if (isa<DotOperandEncodingAttr>(dstLayout) &&
+        isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(
+            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
@@ -61,15 +60,15 @@ private:
     Value src = op.getSrc();
     Value dst = op.getResult();
     auto llvmElemTy = typeConverter->convertType(
-        src.getType().cast<MemDescType>().getElementType());
+        cast<MemDescType>(src.getType()).getElementType());
 
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     Value res;
     auto dopOpParent = dotOperandLayout.getParent();
     if (!isOuter &&
-        dopOpParent.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
-      auto sharedToDotConvert = dopOpParent.isa<AMDMfmaEncodingAttr>()
+        isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dopOpParent)) {
+      auto sharedToDotConvert = isa<AMDMfmaEncodingAttr>(dopOpParent)
                                     ? SharedToDotOperandMFMA::convertLayout
                                     : SharedToDotOperandWMMA::convertLayout;
       res = sharedToDotConvert(dotOperandLayout.getOpIdx(), rewriter, loc, src,
@@ -90,11 +89,11 @@ private:
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
-    auto dstTensorTy = dst.getType().cast<RankedTensorType>();
-    auto srcTensorTy = src.getType().cast<MemDescType>();
+    auto dstTensorTy = cast<RankedTensorType>(dst.getType());
+    auto srcTensorTy = cast<MemDescType>(src.getType());
     auto dotOperandLayout =
-        dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
+        cast<DotOperandEncodingAttr>(dstTensorTy.getEncoding());
+    auto sharedLayout = cast<SharedEncodingAttr>(srcTensorTy.getEncoding());
 
     bool isOuter{};
     int K{};
@@ -121,13 +120,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Value src = op.getSrc();
     Value dst = op.getResult();
-    auto srcTy = src.getType().cast<RankedTensorType>();
-    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto srcTy = cast<RankedTensorType>(src.getType());
+    auto dstTy = cast<RankedTensorType>(dst.getType());
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    if (srcLayout.isa<AMDMfmaEncodingAttr>() &&
-        dstLayout.isa<DotOperandEncodingAttr>()) {
+    if (isa<AMDMfmaEncodingAttr>(srcLayout) &&
+        isa<DotOperandEncodingAttr>(dstLayout)) {
       return lowerMfmaToDotOperand(op, adaptor, rewriter);
     }
     return failure();

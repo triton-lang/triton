@@ -8,6 +8,7 @@
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
@@ -34,14 +35,14 @@ public:
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
       auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcEncoding = srcType.getEncoding();
-      if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
+      if (isa<triton::gpu::SharedEncodingAttr>(srcEncoding))
         return;
       auto dstDotOp =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
       if (auto srcMmaEncoding =
-              srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>()) {
+              dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcEncoding)) {
 
         if (srcMmaEncoding.getVersionMajor() != 2 ||
             (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
@@ -49,7 +50,7 @@ public:
           return;
       }
       if (auto srcMfmaEncoding =
-              srcEncoding.dyn_cast<triton::gpu::AMDMfmaEncodingAttr>()) {
+              dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcEncoding)) {
 
         if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
             srcMfmaEncoding.getIsTransposed() &&

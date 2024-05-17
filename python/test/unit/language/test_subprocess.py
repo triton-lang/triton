@@ -35,11 +35,13 @@ def is_interpreter():
     ("device_print_hex", "int16"),
     ("device_print_hex", "int32"),
     ("device_print_hex", "int64"),
+    ("device_print_pointer", "int32"),
 ])
 def test_print(func_type: str, data_type: str):
     proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, shell=False)
     outs, err = proc.communicate()
+    assert proc.returncode == 0
 
     if is_interpreter() and func_type != "static_assert":
         # Interpreter uses a different format for device_print
@@ -83,9 +85,14 @@ def test_print(func_type: str, data_type: str):
         for i in range(N):
             expected_lines[f"pid (0, 0, 0) idx ({i:3}): (operand 0) {i}"] = 1
             expected_lines[f"pid (0, 0, 0) idx ({i:3}): (operand 1) 1"] = 1
+    elif func_type == "device_print_pointer":
+        for i in range(N):
+            expected_lines[f"pid (0, 0, 0) idx ({i:3}) ptr: 0x"] = 1
 
     actual_lines = Counter()
     for line in outs:
+        # Trim the exact pointer address in the output--they can change per run.
+        line = (line.split(':')[0] + ": 0x") if func_type == "device_print_pointer" else line
         actual_lines[line] += 1
 
     diff = Counter(actual_lines)

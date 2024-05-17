@@ -1,8 +1,8 @@
-#include "triton/Target/LLVMIR/Passes.h"
-
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
+#include "triton/Target/LLVMIR/Passes.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Path.h"
@@ -88,7 +88,7 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
       distinctId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
       if (!compileUnitAttr) {
         compileUnitAttr = LLVM::DICompileUnitAttr::get(
-            context, distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
+            distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
             StringAttr::get(context, "triton"),
             /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
       }
@@ -120,8 +120,8 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
     auto lexicalBlockFileAttr = LLVM::DILexicalBlockFileAttr::get(
         context, scopeAttr, calleeFileAttr, /*discriminator=*/0);
     Location loc = calleeLoc;
-    if (calleeLoc.isa<CallSiteLoc>()) {
-      auto nestedLoc = calleeLoc.cast<CallSiteLoc>().getCallee();
+    if (mlir::isa<CallSiteLoc>(calleeLoc)) {
+      auto nestedLoc = mlir::cast<CallSiteLoc>(calleeLoc).getCallee();
       loc = getNestedLoc(op, lexicalBlockFileAttr, nestedLoc);
     }
     return FusedLoc::get(context, {loc}, lexicalBlockFileAttr);
@@ -136,8 +136,8 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
       // We assemble the full inline stack so the parent of this loc must be a
       // function
       auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-      auto funcOpLoc = funcOp.getLoc().cast<FusedLoc>();
-      scopeAttr = funcOpLoc.getMetadata().cast<LLVM::DISubprogramAttr>();
+      auto funcOpLoc = mlir::cast<FusedLoc>(funcOp.getLoc());
+      scopeAttr = mlir::cast<LLVM::DISubprogramAttr>(funcOpLoc.getMetadata());
       auto loc =
           CallSiteLoc::get(getNestedLoc(op, scopeAttr, calleeLoc), callerLoc);
       op->setLoc(loc);

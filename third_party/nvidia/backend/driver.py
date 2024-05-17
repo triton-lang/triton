@@ -24,11 +24,11 @@ def libcuda_dirs():
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
     # each line looks like the following:
     # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
-    locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so" in line]
+    locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so.1" in line]
     dirs = [os.path.dirname(loc) for loc in locs]
     env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
     if env_ld_library_path and not dirs:
-        dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libcuda.so"))]
+        dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libcuda.so.1"))]
     msg = 'libcuda.so cannot found!\n'
     if locs:
         msg += 'Possible files are located at %s.' % str(locs)
@@ -36,7 +36,7 @@ def libcuda_dirs():
     else:
         msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
         msg += ' (requires sudo) to refresh the linker cache.'
-    assert any(os.path.exists(os.path.join(path, 'libcuda.so')) for path in dirs), msg
+    assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
     return dirs
 
 
@@ -174,9 +174,9 @@ typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction 
 
 static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   // Open the shared library
-  void* handle = dlopen("libcuda.so", RTLD_LAZY);
+  void* handle = dlopen("libcuda.so.1", RTLD_LAZY);
   if (!handle) {{
-    PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");
+    PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so.1");
     return NULL;
   }}
   // Clear any existing error
@@ -185,7 +185,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   // Check for errors
   const char *dlsym_error = dlerror();
   if (dlsym_error) {{
-    PyErr_SetString(PyExc_RuntimeError, "Failed to retrieve cuLaunchKernelEx from libcuda.so");
+    PyErr_SetString(PyExc_RuntimeError, "Failed to retrieve cuLaunchKernelEx from libcuda.so.1");
     return NULL;
   }}
   return cuLaunchKernelExHandle;

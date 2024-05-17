@@ -14,7 +14,8 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 namespace {
 Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
-                          ConversionPatternRewriter &rewriter) {
+                          ConversionPatternRewriter &rewriter,
+                          int swizzleByteWidth) {
   Value rowInMat = urem(laneId, i32_val(8)); // row in the 8x8 matrix
   // linear index of the matrix in the 2x2 matrices
   // Decompose matIndex => s_0, s_1, that is the coordinate in 2x2 matrices in
@@ -22,6 +23,8 @@ Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
   Value matIndex = udiv(laneId, i32_val(8));
   Value s0 = urem(matIndex, i32_val(2));
   Value s1 = udiv(matIndex, i32_val(2));
+  if (swizzleByteWidth >= 32)
+    s1 = xor_(s1, and_(laneId, i32_val(1)));
   Value mIndex = add(rowInMat, mul(s0, i32_val(8)));
   int m8n8Stride = 8;
   Value offset =
@@ -51,9 +54,9 @@ void storeDistributedToSharedWithStMatrix(
     RankedTensorType tensorTy, Type elemTy, SmallVector<Value> &inVals,
     Value smemBase, ArrayRef<unsigned> paddedRepShape,
     ArrayRef<unsigned> origRepShape, Location loc,
-    ConversionPatternRewriter &rewriter) {
+    ConversionPatternRewriter &rewriter, int swizzlingByteWidth) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
-  auto mmaLayout = tensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+  auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   auto order = triton::gpu::getOrder(mmaLayout);
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto shapePerCTATile = getShapePerCTATile(mmaLayout);
@@ -64,7 +67,14 @@ void storeDistributedToSharedWithStMatrix(
   int instrM = mmaShape[0] * warpsPerCTA[0];
   std::array<int, 2> numRep = {ceil((int)origRepShape[0], instrM),
                                ceil((int)origRepShape[1], instrN)};
-
+  int numBoxes = 1;
+  if (swizzlingByteWidth == 128) {
+    int contigDimSizeInByte =
+        origRepShape[1] * elemTy.getIntOrFloatBitWidth() / 8;
+    numBoxes = ceil<int>(contigDimSizeInByte, 128);
+  }
+  SmallVector<unsigned> boxShape = {paddedRepShape[0], paddedRepShape[1]};
+  boxShape[1] = boxShape[1] / numBoxes;
   Value thread = getThreadId(rewriter, loc);
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
@@ -74,37 +84,57 @@ void storeDistributedToSharedWithStMatrix(
 
   // Compute the relative offset for each lane.
   Value stMatrixLaneOffset =
-      computeStMatrixAddr(lane, paddedRepShape[1], loc, rewriter);
+      computeStMatrixAddr(lane, boxShape[1], loc, rewriter, swizzlingByteWidth);
   multiDimWarpId[0] = mul(multiDimWarpId[0], i32_val(mmaShape[0]));
   multiDimWarpId[1] = mul(multiDimWarpId[1], i32_val(mmaShape[1]));
-  SmallVector<Value> multiDimOffsetWrapped =
-      getWrappedMultiDimOffset(rewriter, loc, multiDimWarpId, origRepShape,
-                               shapePerCTATile, shapePerCTA);
+  SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
+      rewriter, loc, multiDimWarpId, boxShape, shapePerCTATile, shapePerCTA);
   Value relativeOffset =
-      linearize(rewriter, loc, multiDimOffsetWrapped, paddedRepShape, order);
+      linearize(rewriter, loc, multiDimOffsetWrapped, boxShape, order);
   relativeOffset = add(relativeOffset, stMatrixLaneOffset);
   int indexOffset = 0;
   int m8n8x4Stride = 16;
   int numNChunk = mmaShape[1] / m8n8x4Stride;
+  unsigned totalNumElements = product(origRepShape);
+  numNChunk = numNChunk / numBoxes;
   for (int m = 0; m < numRep[0]; m++) {
     for (int n = 0; n < numRep[1]; n++) {
-      for (int k = 0; k < numNChunk; k++) {
-        Value addr =
-            add(relativeOffset, i32_val(k * m8n8x4Stride + n * instrN +
-                                        m * instrM * paddedRepShape[1]));
-        stMatrixm8n8x4(addr, inVals, indexOffset, smemBase, elemTy, loc,
-                       rewriter);
-        indexOffset += 8;
+      for (int box = 0; box < numBoxes; box++) {
+        for (int k = 0; k < numNChunk; k++) {
+          Value kOffset;
+          if (swizzlingByteWidth >= 64) {
+            int swizzleBits = swizzlingByteWidth == 128 ? 6 : 2;
+            Value o = lshr(and_(lane, i32_val(swizzleBits)), i32_val(1));
+            Value kV = xor_(o, i32_val(k));
+            kOffset = mul(kV, i32_val(m8n8x4Stride));
+          } else {
+            kOffset = i32_val(k * m8n8x4Stride);
+          }
+          Value addr = add(relativeOffset,
+                           i32_val(n * instrN + m * instrM * boxShape[1] +
+                                   box * (totalNumElements / numBoxes)));
+          addr = add(addr, kOffset);
+
+          stMatrixm8n8x4(addr, inVals, indexOffset, smemBase, elemTy, loc,
+                         rewriter);
+          indexOffset += 8;
+        }
       }
     }
   }
 }
 
-bool isStMatrixCompatible(RankedTensorType tensorTy) {
-  auto mmaLayout = tensorTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
+bool isStMatrixCompatible(RankedTensorType tensorTy, int swizzlingByteWidth) {
+  auto mmaLayout =
+      mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   if (!mmaLayout || !mmaLayout.isHopper())
     return false;
   if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
+    return false;
+  if (swizzlingByteWidth > 0 && mmaLayout.getInstrShape()[1] < 64)
+    return false;
+  if (swizzlingByteWidth != 0 && swizzlingByteWidth != 32 &&
+      swizzlingByteWidth != 64 && swizzlingByteWidth != 128)
     return false;
   return true;
 }
@@ -159,9 +189,11 @@ std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
 LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("__assertfail");
-  Operation *funcOp = moduleOp.lookupSymbol(funcName);
-  if (funcOp)
-    return cast<LLVM::LLVMFuncOp>(*funcOp);
+  {
+    Operation *funcOp = moduleOp.lookupSymbol(funcName);
+    if (funcOp)
+      return cast<LLVM::LLVMFuncOp>(*funcOp);
+  }
   // void __assert_fail(const char * assertion, const char * file, unsigned
   // int line, const char * function);
   auto *ctx = rewriter.getContext();
@@ -170,8 +202,12 @@ LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
   auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
   ConversionPatternRewriter::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
-  return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
-                                           funcType);
+  auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx),
+                                                  funcName, funcType);
+
+  funcOp.setPassthroughAttr(
+      ArrayAttr::get(ctx, StringAttr::get(ctx, "noreturn")));
+  return funcOp;
 }
 } // namespace
 
@@ -328,12 +364,13 @@ bool TargetInfo::processReplicaUsingStMatrix(
     ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
-  if (isStMatrixCompatible(srcTy) && accumNumReplicates == 1 &&
-      outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+    int swizzlingByteWidth) const {
+  if (isStMatrixCompatible(srcTy, swizzlingByteWidth) &&
+      accumNumReplicates == 1 && outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
     storeDistributedToSharedWithStMatrix(srcTy, elemTy, vals, smemBase,
                                          paddedRepShape, origRepShape, loc,
-                                         rewriter);
+                                         rewriter, swizzlingByteWidth);
     return true;
   }
   return false;
