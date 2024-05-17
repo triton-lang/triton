@@ -90,6 +90,13 @@ LogicalResult InvalBarrierOp::verify() {
   return success();
 }
 
+// -- BarrierExpectOp --
+LogicalResult BarrierExpectOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
