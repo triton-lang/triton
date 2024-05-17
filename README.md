@@ -197,6 +197,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   Loop strength reduction is known to cause up to 10% performance changes for
   certain kernels with register pressure.
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
+- `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
+- `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 
 # Changelog
 
