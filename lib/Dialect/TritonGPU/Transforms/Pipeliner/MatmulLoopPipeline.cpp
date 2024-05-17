@@ -960,7 +960,6 @@ static void createTMABarrierAndWait(
   }
   SmallVector<SmallVector<AsyncLoad *>> loadGroups;
   llvm::SmallDenseSet<Operation *> visited;
-  Block *forBlock = forOp.getBody();
   // Find groups of loads that can share the same barrier. We look consecutive
   // loads and check that there are uses in between.
   for (AsyncLoad &asyncLoad : asyncLoads) {
@@ -968,6 +967,7 @@ static void createTMABarrierAndWait(
       continue;
     llvm::SmallDenseSet<Operation *> users;
     SmallVector<AsyncLoad *> group;
+    Block *loadBlock = asyncLoad.loadOp->getBlock();
     auto addToGroup = [&](AsyncLoad *loadInfo) {
       group.push_back(loadInfo);
       visited.insert(loadInfo->loadOp);
@@ -979,13 +979,13 @@ static void createTMABarrierAndWait(
           if (it->second.loadIsMMAV3) {
             auto alloc = cast<ttg::LocalAllocOp>(
                 (*loadInfo->loadOp->getUsers().begin()));
-            if (alloc->getBlock() == forBlock) {
+            if (alloc->getBlock() == loadBlock) {
               users.insert(alloc->getUsers().begin(), alloc->getUsers().end());
               continue;
             }
           }
         }
-        Operation *userInBlock = forBlock->findAncestorOpInBlock(*user);
+        Operation *userInBlock = loadBlock->findAncestorOpInBlock(*user);
         if (userInBlock)
           users.insert(userInBlock);
       }
