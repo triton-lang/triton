@@ -1,6 +1,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -47,8 +48,11 @@ public:
     Value barrierAlloc =
         rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
-
+    int sizeInBytes = product(tensorType.getShape()) *
+                      tensorType.getElementType().getIntOrFloatBitWidth() / 8;
     Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
+    rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
+                                                         sizeInBytes, pred);
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
         loc, op.getDescPtr(), op.getIndices(), barrierAlloc, alloc, pred);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);

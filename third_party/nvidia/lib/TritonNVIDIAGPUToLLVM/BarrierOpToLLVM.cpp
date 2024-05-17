@@ -127,6 +127,40 @@ struct InvalBarrierOpConversion
   }
 };
 
+struct BarrierExpectConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::BarrierExpectOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::BarrierExpectOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getAlloc(),
+        typeConverter->convertType(op.getAlloc().getType().getElementType()),
+        rewriter);
+
+    auto id = getThreadId(rewriter, loc);
+    Value pred = icmp_eq(id, i32_val(0));
+    pred = and_(pred, adaptor.getPred());
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    const std::string ptx =
+        "@$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], " +
+        std::to_string(op.getSize()) + ";";
+    auto &barSyncOp = *ptxBuilder.create<>(ptx);
+    barSyncOp({ptxBuilder.newOperand(pred, "b"),
+               ptxBuilder.newOperand(smemObj.getBase(), "r")},
+              /*onlyAttachMLIRArgs=*/true);
+    auto voidTy = void_ty(op->getContext());
+    ptxBuilder.launch(rewriter, loc, voidTy);
+    // TODO: remove this barrier once membar pass implements tracking ops based
+    // on memory effects.
+    barrier();
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct WaitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::WaitBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -168,4 +202,5 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(typeConverter,
                                                                   benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<BarrierExpectConversion>(typeConverter, benefit);
 }

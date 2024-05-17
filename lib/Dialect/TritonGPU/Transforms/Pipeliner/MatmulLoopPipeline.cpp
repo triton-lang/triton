@@ -309,12 +309,11 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   loadOp.erase();
 }
 
-static void
-createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
-                   Value alloc, Value insertIdx, Value extractIdx,
-                   Value barrier, Value phase, CoarseSchedule &schedule,
-                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-                   int numStages) {
+static void createTMAAsyncCopy(
+    scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp, Value alloc,
+    Value insertIdx, Value extractIdx, Value barrier, Operation *waitOp,
+    Value phase, CoarseSchedule &schedule,
+    llvm::MapVector<Operation *, LoadInfo> &loadToInfo, int numStages) {
   assert(phase && "Phase value is required for TMA async copy.");
   OpBuilder builder(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
@@ -329,27 +328,16 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
   auto view =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
 
-  tt::MemDescType barrierTy = tt::MemDescType::get(
-      {1}, builder.getI64Type(),
-      cast<tt::MemDescType>(barrier.getType()).getEncoding(),
-      /*mutableMemory=*/true);
-  Value barrierViewCopy = builder.create<ttg::MemDescSubviewOp>(
-      loc, barrierTy, barrier, ArrayRef<Value>({insertIdx}));
   Value pred = builder.create<arith::ConstantIntOp>(loc, 1, 1);
   Operation *copy = builder.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-      loc, loadOp.getDescPtr(), loadOp.getIndices(), barrierViewCopy, view,
-      pred);
-
-  Value barrierViewWait = builder.create<ttg::MemDescSubviewOp>(
-      loc, barrierTy, barrier, ArrayRef<Value>({extractIdx}));
-  Operation *wait =
-      builder.create<ttng::WaitBarrierOp>(loc, barrierViewWait, phase);
+      loc, loadOp.getDescPtr(), loadOp.getIndices(), barrier, view, pred);
 
   bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
   auto [stage, cluster] = schedule[loadOp];
   schedule.erase(loadOp);
   schedule.insert(copy, stage, cluster);
 
+  builder.setInsertionPointAfter(waitOp);
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
@@ -950,18 +938,122 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   return barrierAlloc;
 }
 
+struct AsyncLoad {
+  AsyncLoad(Operation *loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
+  Operation *loadOp;
+  Value alloc;
+  Value barrier;
+  Operation *waitOp = nullptr;
+  bool isTMALoad = false;
+};
+
+// Create barriers and wait ops for the async loads. Barriers may be shared by
+// multiple loads is the schedule allows it.
+static void createTMABarrierAndWait(
+    scf::ForOp &forOp, SmallVector<AsyncLoad> &asyncLoads, Value insertIdx,
+    Value extractIdx, Value phase, int numBuffers, CoarseSchedule &schedule,
+    SmallVector<Value> &barriers,
+    const llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
+  llvm::SmallDenseMap<Operation *, AsyncLoad *> loadToAsyncLoad;
+  for (AsyncLoad &asyncLoad : asyncLoads) {
+    loadToAsyncLoad[asyncLoad.loadOp] = &asyncLoad;
+  }
+  SmallVector<SmallVector<AsyncLoad *>> loadGroups;
+  llvm::SmallDenseSet<Operation *> visited;
+  // Find groups of loads that can share the same barrier. We look consecutive
+  // loads and check that there are uses in between.
+  for (AsyncLoad &asyncLoad : asyncLoads) {
+    if (!asyncLoad.isTMALoad || visited.count(asyncLoad.loadOp))
+      continue;
+    llvm::SmallDenseSet<Operation *> users;
+    SmallVector<AsyncLoad *> group;
+    Block *loadBlock = asyncLoad.loadOp->getBlock();
+    auto addToGroup = [&](AsyncLoad *loadInfo) {
+      group.push_back(loadInfo);
+      visited.insert(loadInfo->loadOp);
+      for (Operation *user : loadInfo->loadOp->getUsers()) {
+        auto it = loadToInfo.find(loadInfo->loadOp);
+        if (it != loadToInfo.end()) {
+          // Special case for MMAv3 loads, we can ignore the alloc and only
+          // consider uses of the alloc op since it will be removed.
+          if (it->second.loadIsMMAV3) {
+            auto alloc = cast<ttg::LocalAllocOp>(
+                (*loadInfo->loadOp->getUsers().begin()));
+            if (alloc->getBlock() == loadBlock) {
+              users.insert(alloc->getUsers().begin(), alloc->getUsers().end());
+              continue;
+            }
+          }
+        }
+        Operation *userInBlock = loadBlock->findAncestorOpInBlock(*user);
+        if (userInBlock)
+          users.insert(userInBlock);
+      }
+    };
+    addToGroup(&asyncLoad);
+    Operation *nextOp = asyncLoad.loadOp->getNextNode();
+    while (nextOp) {
+      if (users.count(nextOp) || visited.count(nextOp))
+        break;
+      if (isa<tt::ExperimentalDescriptorLoadOp>(nextOp)) {
+        auto it = loadToAsyncLoad.find(nextOp);
+        if (it != loadToAsyncLoad.end() && it->second->isTMALoad) {
+          addToGroup(it->second);
+        }
+      }
+      nextOp = nextOp->getNextNode();
+    }
+    loadGroups.push_back(group);
+  }
+
+  // For each group calculate the size and insert the barrier after the last
+  // load.
+  for (SmallVector<AsyncLoad *> &group : loadGroups) {
+    int sizeInBytes = 0;
+    for (AsyncLoad *asyncLoad : group) {
+      auto tensorTy =
+          cast<RankedTensorType>(asyncLoad->loadOp->getResult(0).getType());
+      int loadSize = product(tensorTy.getShape());
+      sizeInBytes +=
+          loadSize * tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
+    }
+
+    Value barrierAlloc = createBarrierAlloc(forOp, numBuffers);
+    barriers.push_back(barrierAlloc);
+    Location loc = forOp.getLoc();
+    OpBuilder builder(forOp);
+    tt::MemDescType barrierTy = tt::MemDescType::get(
+        {1}, builder.getI64Type(),
+        cast<tt::MemDescType>(barrierAlloc.getType()).getEncoding(),
+        /*mutableMemory=*/true);
+    builder.setInsertionPoint(group[0]->loadOp);
+    Value barrier = builder.create<ttg::MemDescSubviewOp>(
+        loc, barrierTy, barrierAlloc, ArrayRef<Value>({insertIdx}));
+    Value pred = builder.create<arith::ConstantIntOp>(loc, 1, 1);
+    Operation *expect = builder.create<ttng::BarrierExpectOp>(
+        forOp.getLoc(), barrier, sizeInBytes, pred);
+    auto [stage, cluster] = schedule[asyncLoads[0].loadOp];
+    schedule.insert(expect, stage, cluster);
+
+    builder.setInsertionPointAfter(group.back()->loadOp);
+    Value barrierViewWait = builder.create<ttg::MemDescSubviewOp>(
+        loc, barrierTy, barrierAlloc, ArrayRef<Value>({extractIdx}));
+    Operation *wait =
+        builder.create<ttng::WaitBarrierOp>(loc, barrierViewWait, phase);
+    // Update the async loads info.
+    for (AsyncLoad *asyncLoad : group) {
+      asyncLoad->barrier = barrier;
+      asyncLoad->waitOp = wait;
+    }
+  }
+}
+
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the required number of buffers.
 static SmallVector<Value>
 createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
                llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                SmallVector<Value> &barriers, int numStages) {
-  struct AsyncLoad {
-    AsyncLoad(Operation *loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
-    Operation *loadOp;
-    Value alloc;
-    Value barrier;
-  };
   // Calculate the number of buffers needed for each load.
   // TODO pawel: we could do more fine-grained allocation here and
   // allocate only the number of buffers that specific loads need.
@@ -990,8 +1082,7 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     asyncLoads.emplace_back(loadOp, alloc);
     if (isa<tt::ExperimentalDescriptorLoadOp>(loadOp)) {
       hasTMALoad = true;
-      asyncLoads.back().barrier = createBarrierAlloc(forOp, numBuffers);
-      barriers.push_back(asyncLoads.back().barrier);
+      asyncLoads.back().isTMALoad = true;
     }
   }
 
@@ -1043,6 +1134,8 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, one);
     phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
   }
+  createTMABarrierAndWait(forOp, asyncLoads, insertIdx, extractIdx, phase,
+                          numBuffers, schedule, barriers, loadToInfo);
 
   // Create a cluster for the prefetches. It may end up being empty, but this
   // is OK.
@@ -1055,8 +1148,8 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     } else {
       auto descLoad = cast<tt::ExperimentalDescriptorLoadOp>(asyncLoad.loadOp);
       createTMAAsyncCopy(forOp, descLoad, asyncLoad.alloc, insertIdx,
-                         extractIdx, asyncLoad.barrier, phase, schedule,
-                         loadToInfo, numStages);
+                         extractIdx, asyncLoad.barrier, asyncLoad.waitOp, phase,
+                         schedule, loadToInfo, numStages);
     }
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
