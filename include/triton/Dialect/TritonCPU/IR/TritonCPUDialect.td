@@ -17,7 +17,6 @@ def TritonCPU_Dialect : Dialect {
   let dependentDialects = [
     "triton::TritonDialect",
     "tensor::TensorDialect",
-    "mlir::memref::MemRefDialect",
   ];
 
   let extraClassDeclaration = [{
@@ -25,8 +24,6 @@ def TritonCPU_Dialect : Dialect {
   }];
 
   let useDefaultTypePrinterParser = 1;
-  let useDefaultAttributePrinterParser = 1;
-  let usePropertiesForAttributes = 1;
 }
 
 #endif

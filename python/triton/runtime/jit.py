@@ -627,6 +627,13 @@ class JITFunction(KernelInterface[T]):
             sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
+            # The CPU launcher will provide the grid ids directly to the kernel.
+            # Note that this design is interim and subject to change.
+            if target.backend == 'cpu':
+                signature["__grid0"] = 'i32'
+                signature["__grid1"] = 'i32'
+                signature["__grid2"] = 'i32'
+
             configs = (self._get_config(*bound_vals), )
             constants = {
                 p.name: v
