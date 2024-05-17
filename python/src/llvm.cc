@@ -162,6 +162,9 @@ void init_triton_llvm(py::module &&m) {
       .def(
           "get_functions",
           [](llvm::Module *mod) -> llvm::Module::FunctionListType & {
+            // Note: Backends assume that we are compiling exactly one kernel
+            // (i.e. one function that's that's called by the CPU) and that it's
+            // the first function in this list.
             return mod->getFunctionList();
           },
           ret::reference_internal)
@@ -172,12 +175,60 @@ void init_triton_llvm(py::module &&m) {
            });
 
   py::class_<llvm::Function>(m, "function", py::module_local())
+      .def_property_readonly(
+          "name", [](llvm::Function *fn) { return fn->getName().str(); })
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
-      .def("has_public_visibility",
+
+      .def("is_nvvm_kernel",
            [](llvm::Function *fn) {
-             return fn->getVisibility() == llvm::GlobalValue::DefaultVisibility;
+             llvm::Module *mod = fn->getParent();
+             NamedMDNode *annotations =
+                 mod->getNamedMetadata("nvvm.annotations");
+             if (!annotations) {
+               return false;
+             }
+             // Look for metadata of the form `{ptr @fn, !"kernel", i32 1}`.
+             for (auto *op : annotations->operands()) {
+               if (!isa<MDTuple>(op) || op->getNumOperands() != 3) {
+                 continue;
+               }
+               auto elem0 = dyn_cast<ValueAsMetadata>(op->getOperand(0));
+               if (!elem0 || elem0->getValue() != fn) {
+                 continue;
+               }
+               auto elem1 = dyn_cast<MDString>(op->getOperand(1));
+               if (!elem1 || elem1->getString() != "kernel") {
+                 continue;
+               }
+               auto elem2 = dyn_cast<ConstantAsMetadata>(op->getOperand(2));
+               if (!elem2) {
+                 continue;
+               }
+               auto elem2Val = dyn_cast<ConstantInt>(elem2->getValue());
+               if (!elem2Val || elem2Val->getZExtValue() != 1) {
+                 continue;
+               }
+               return true;
+             }
+             return false;
+           })
+
+      // Sets the nvvm.maxreg property on the given function.
+      .def("set_nvvm_maxnreg",
+           [](llvm::Function *fn, int maxnreg) {
+             auto op = MDNode::get(
+                 fn->getContext(),
+                 {
+                     ValueAsMetadata::get(fn),
+                     MDString::get(fn->getContext(), "maxnreg"),
+                     ConstantAsMetadata::get(ConstantInt::get(
+                         Type::getInt32Ty(fn->getContext()), maxnreg)),
+                 });
+             fn->getParent()
+                 ->getOrInsertNamedMetadata("nvvm.annotations")
+                 ->addOperand(op);
            })
       .def("is_declaration", &llvm::Function::isDeclaration);
 
@@ -336,6 +387,7 @@ void init_triton_llvm(py::module &&m) {
       }
       libMod->setTargetTriple(dstMod->getTargetTriple());
       libMod->setDataLayout(dstMod->getDataLayout());
+
       if (linker.linkInModule(std::move(libMod),
                               llvm::Linker::Flags::LinkOnlyNeeded)) {
         std::string message = "Failed to link library at " + path;

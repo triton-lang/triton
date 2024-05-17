@@ -5302,3 +5302,38 @@ def test_tl_range(device):
             ptx = pgm.asm['ptx']
             # check that the loop got pipelined with the right number of stages.
             assert 'cp.async.wait_group 0x6' in ptx
+
+
+@triton.jit(noinline=True)
+def maxnreg_noinline1(X):
+    tl.store(X, 0)
+
+
+@triton.jit(noinline=True)
+def maxnreg_noinline2(X):
+    tl.store(X, 0)
+
+
+def test_maxnreg(device):
+    assert not is_interpreter(), "this test won't work with the interpreter"
+    check_cuda_only(device)
+
+    # triton kernel
+    @triton.jit
+    def kernel(X):
+        maxnreg_noinline1(X)
+        tl.store(X, 0)
+        maxnreg_noinline2(X)
+
+    X = torch.empty(1, dtype=torch.int32, device=device)
+    k = kernel[(1, )](X, maxnreg=42)
+    print(k.asm["ptx"])
+
+    # Ensure that .maxnreg is set on the kernel function (marked with .entry)
+    # and not on either of the noinline functions (marked with .func).
+    try:
+        assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
+        assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
+    except AssertionError:
+        print("Failing ptx:\n", k.asm["ptx"])
+        raise

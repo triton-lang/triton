@@ -3,7 +3,7 @@ from triton._C.libtriton import ir, passes, llvm, nvidia
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Tuple
+from typing import Any, Tuple, Optional
 import hashlib
 import re
 import tempfile
@@ -63,6 +63,9 @@ class CUDAOptions:
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 3
+    # maxnreg corresponds to the ptx parameter .maxnreg, which controls the
+    # maximum number of 32-bit registers used by one thread.
+    maxnreg: Optional[int] = None
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
     enable_fp_fusion: bool = True
@@ -216,15 +219,18 @@ class CUDABackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)
+
+        # Set maxnreg on all kernels, if it was provided.
+        if options.maxnreg is not None:
+            for k in llvm_mod.get_functions():
+                if k.is_nvvm_kernel():
+                    k.set_nvvm_maxnreg(options.maxnreg)
+
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
+
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
-        # Set kernel attributes
-        # kernels = [fn for fn in llvm_mod.get_functions() if fn.has_public_visibility() and not fn.is_declaration()]
-        # assert len(kernels) == 1
-        # kernels[0].add_fn_attr("nvvm.maxntid", f"1, {options.num_warps*32}")
-        # kernels[0].add_fn_attr("nvvm.kernel", "1")
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")

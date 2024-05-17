@@ -116,6 +116,7 @@ class Autotuner(KernelInterface):
                     *args,
                     num_warps=config.num_warps,
                     num_stages=config.num_stages,
+                    maxnreg=config.maxnreg,
                     num_ctas=config.num_ctas,
                     **current,
                 )
@@ -177,6 +178,7 @@ class Autotuner(KernelInterface):
             *args,
             num_warps=config.num_warps,
             num_stages=config.num_stages,
+            maxnreg=config.maxnreg,
             num_ctas=config.num_ctas,
             **kwargs,
             **config.kwargs,
@@ -200,6 +202,7 @@ class Autotuner(KernelInterface):
                         **kwargs,
                         **config.kwargs,
                         num_stages=config.num_stages,
+                        maxnreg=config.maxnreg,
                         num_warps=config.num_warps,
                         num_ctas=config.num_ctas,
                     )
@@ -218,6 +221,7 @@ class Autotuner(KernelInterface):
                     num_warps=config.num_warps,
                     num_ctas=config.num_ctas,
                     num_stages=config.num_stages,
+                    maxnreg=config.maxnreg,
                     **kwargs,
                     **config.kwargs,
                 ))
@@ -239,15 +243,19 @@ class Config:
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
     :type num_ctas: int
     :ivar num_ctas: number of blocks in a block cluster. SM90+ only.
+    :type maxnreg: Optional[int]
+    :ivar maxnreg: maximum number of registers one thread can use.  Corresponds
+                       to ptx .maxnreg directive.  Not supported on all platforms.
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, maxnreg=None, pre_hook=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
         self.num_stages = num_stages
+        self.maxnreg = maxnreg
         self.pre_hook = pre_hook
 
     def __str__(self):
@@ -257,6 +265,8 @@ class Config:
         res.append(f"num_warps: {self.num_warps}")
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
+        if self.maxnreg is not None:
+            res.append(f"maxnreg: {self.maxnreg}")
         return ", ".join(res)
 
 
