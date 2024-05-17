@@ -560,7 +560,7 @@ void LoopPipeliner::emitEpilogue(DenseMap<Value, Value> &newResults) {
   for (auto *loadOp : validLoads)
     epilogueMap.map(loadOp->getResult(0), loadsBuffer[loadOp]);
   // Map IV to original upper bound (ie. last iteration)
-  epilogueMap.map(forOp.getInductionVar(), forOp.getUpperBound());
+  epilogueMap.map(forOp.getInductionVar(), pplForOp.getUpperBound());
 
   const auto &yieldOprs = yieldOp.getOperands();
   // Clone the loop body after the new ForOp
