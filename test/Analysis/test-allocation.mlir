@@ -7,8 +7,8 @@
 #A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
-#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
-#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
+#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
+#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
 

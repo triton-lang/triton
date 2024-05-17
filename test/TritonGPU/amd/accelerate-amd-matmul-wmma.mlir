@@ -62,11 +62,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: %[[DOT2_OP_A_F8:.+]] = triton_gpu.convert_layout %[[DOT2_ARG_A]]
     // CHECK-SAME: -> tensor<32x128xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #[[WMMA_0]]
     // CHECK: %[[DOT2_OP_A_F16:.+]] = tt.fp_to_fp %[[DOT2_OP_A_F8]]
-    // CHECK-SAME: -> tensor<32x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #[[WMMA_0]]}>>
+    // CHECK-SAME: -> tensor<32x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #[[WMMA_0]], kWidth = 16}>>
     // CHECK: %[[DOT2_OP_B_F8:.+]] = triton_gpu.convert_layout %[[DOT2_ARG_B]]
     // CHECK-SAME: -> tensor<128x64xf8E5M2, #triton_gpu.dot_op<{opIdx = 1, parent = #[[WMMA_0]]
     // CHECK: %[[DOT2_OP_B_F16:.+]] = tt.fp_to_fp %[[DOT2_OP_B_F8]]
-    // CHECK-SAME: -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #[[WMMA_0]]}>>
+    // CHECK-SAME: -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #[[WMMA_0]], kWidth = 16}>>
     // CHECK: %[[DOT2_WMMA_RES:.+]] = tt.dot %[[DOT2_OP_A_F16]], %[[DOT2_OP_B_F16]], %[[DOT2_OP_C]]
     // CHECK-SAME: -> tensor<32x64xf16, #[[WMMA_0]]
     %4 = tt.dot %0, %1, %3 : tensor<32x128xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x64xf8E5M2, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x64xf16, #blocked>
