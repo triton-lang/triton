@@ -1453,12 +1453,16 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
         if (iterArg) {
           // The dot is used by the loop's yield, but we can't have any other
           // uses.
+          LDBG("Can't make dot async because dot is used by multiple ops in "
+               "the loop.");
           return std::nullopt;
         }
         iterArgIdx = argIdx;
         iterArg = forOp.getRegionIterArg(argIdx);
         continue;
       }
+      LDBG("Can't make dot async because dot is unconditionally used in the "
+           "loop.");
       return std::nullopt;
     }
     if (auto ifOp = dyn_cast<scf::IfOp>(user->getParentOp())) {
