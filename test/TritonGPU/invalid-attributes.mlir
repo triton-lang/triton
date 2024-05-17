@@ -6,7 +6,7 @@
 
 // -----
 
-// expected-error@+2 {{triton_gpu.dot_op kWidth parameter is not supported for Blocked layout}}
+// expected-error@+2 {{triton_gpu.dot_op kWidth parameter is not supported when the parent is a blocked layout}}
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dot_op = #triton_gpu.dot_op<{opIdx = 1, parent = #blocked, kWidth = 8}>
 

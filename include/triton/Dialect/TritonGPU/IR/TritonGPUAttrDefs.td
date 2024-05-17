@@ -1142,7 +1142,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     // Here 5 bits can hold 32 IDs in a single module.
     static constexpr int numBitsToHoldMmaV1ID{5};
 
-    // For MMA v1, method `getMMAv1IsRow` return whether e.g. the a operand is used
+    // For MMA v1, method `getMMAv1IsRow` returns whether e.g. the a operand is used
     // in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
     // section 9.7.13.4.1 for more details.
     bool getMMAv1IsRow(int opIdx) const;
@@ -1232,7 +1232,8 @@ a's opIdx is 0, b's opIdx is 1.
 The parend field in DotOperandEncodingAttr is the layout of d.
 
 kWidth defines number of consecutive elements stored by one thread along k dimension.
-Some layouts do not use this parameter, because they have fixes number or use all elements of tensor along K dim.
+Some layouts do not use this parameter, either because they have a fixed number of
+elements along the K dim, or they use all elements of the tensor along the K dim.
   }];
 
   let parameters = (

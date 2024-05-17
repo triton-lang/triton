@@ -1040,7 +1040,7 @@ LogicalResult DotOperandEncodingAttr::verify(
     if (kWidth != 0)
       return emitError()
              << "triton_gpu.dot_op kWidth parameter is not supported "
-                "for Blocked layout";
+                "when the parent is a blocked layout";
     return success();
   }
 
