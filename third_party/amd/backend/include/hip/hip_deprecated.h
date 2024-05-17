@@ -82,6 +82,7 @@ typedef struct hipDeviceProp_tR0000 {
                                                ///< page tables
 } hipDeviceProp_tR0000;
 
+
 #ifdef __cplusplus
 extern "C" {
 #endif
