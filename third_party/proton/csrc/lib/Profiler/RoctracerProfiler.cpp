@@ -65,7 +65,9 @@ convertActivityToMetric(const roctracer_record_t *activity) {
   case HIP_OP_DISPATCH_KIND_TASK_: {
     metric = std::make_shared<KernelMetric>(
         static_cast<uint64_t>(activity->begin_ns),
-        static_cast<uint64_t>(activity->end_ns), 1);
+        static_cast<uint64_t>(activity->end_ns), 1,
+        static_cast<uint64_t>(activity->device_id),
+        static_cast<uint64_t>(DeviceType::HIP));
     break;
   }
   default:
@@ -260,7 +262,7 @@ void RoctracerProfiler::api_callback(uint32_t domain, uint32_t cid,
             roctracer::op_string(ACTIVITY_DOMAIN_HIP_API, cid, 0);
         auto scopeId = Scope::getNewScopeId();
         auto scope = Scope(scopeId, name);
-        roctracerState.record(scope, profiler.getDataSetSnapshot());
+        roctracerState.record(scope, profiler.getDataSet());
         roctracerState.enterOp();
       }
       roctracerState.level++;

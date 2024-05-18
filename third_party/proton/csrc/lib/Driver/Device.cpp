@@ -9,7 +9,7 @@ namespace proton {
 Device getDevice(DeviceType type, uint64_t index) {
   if (type == DeviceType::CUDA) {
     return cuda::getDevice(index);
-  } else if (type == DeviceType::ROCM) {
+  } else if (type == DeviceType::HIP) {
     throw NotImplemented();
   }
   throw std::runtime_error("DeviceType not supported");
@@ -18,8 +18,8 @@ Device getDevice(DeviceType type, uint64_t index) {
 const std::string getDeviceTypeString(DeviceType type) {
   if (type == DeviceType::CUDA) {
     return DeviceTraits<DeviceType::CUDA>::name;
-  } else if (type == DeviceType::ROCM) {
-    return DeviceTraits<DeviceType::ROCM>::name;
+  } else if (type == DeviceType::HIP) {
+    return DeviceTraits<DeviceType::HIP>::name;
   }
   throw std::runtime_error("DeviceType not supported");
 }

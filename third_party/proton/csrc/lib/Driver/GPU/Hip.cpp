@@ -1,5 +1,7 @@
 #include "Driver/GPU/Hip.h"
 #include "Driver/Dispatch.h"
+#include <hip/hip_runtime_api.h>
+#include <string>
 
 namespace proton {
 
@@ -15,6 +17,24 @@ struct ExternLibHip : public ExternLibBase {
 void *ExternLibHip::lib = nullptr;
 
 DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
+
+DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
+                hipDeviceProp_tR0000 *, int)
+
+DEFINE_DISPATCH(ExternLibHip, deviceGet, hipDeviceGet, hipDevice_t *, int)
+
+Device getDevice(uint64_t index) {
+  hipDevice_t device;
+  (void)hip::deviceGet<true>(&device, index);
+  hipDeviceProp_tR0000 props;
+  (void)hip::getDeviceProperties<true>(&props, index);
+
+  // Parse the gfxNNN arch name to drop the prefix and potential suffix.
+  const char *archName = props.gcnArchName;
+  uint64_t arch = std::stoi(archName + /*gfx*/ 3);
+  return Device(DeviceType::HIP, index, props.clockRate, props.memoryClockRate,
+                props.memoryBusWidth, props.multiProcessorCount, arch);
+}
 
 } // namespace hip
 
