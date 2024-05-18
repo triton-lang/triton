@@ -14,6 +14,11 @@ def test_descriptor_load_ttgir():
     device = "cuda"
     SIZE = 128
 
+    x = torch.randn(SIZE, dtype=torch.float32, device=device)
+    desc = np.empty(SIZE, dtype=np.int8)
+    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size(), desc)
+    size_in_bytes = SIZE * x.element_size()
+
     ir = f"""
     #blocked = #triton_gpu.blocked<{{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}}>
     #shared = #triton_gpu.shared<{{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}}>
@@ -25,6 +30,7 @@ def test_descriptor_load_ttgir():
         %2 = triton_gpu.local_alloc  : () -> !tt.memdesc<1xi64, #shared, mutable>
         triton_nvidia_gpu.init_barrier %2, 1 : <1xi64, #shared, mutable>
         %true = arith.constant 1 : i1
+        triton_nvidia_gpu.barrier_expect %2, {size_in_bytes}, %true : <1xi64, #shared, mutable>
         triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0_i32] %1, %2, %true : <i8>, <1xi64, #shared, mutable> -> <{SIZE}xf32, #shared, mutable>
         triton_nvidia_gpu.wait_barrier %2, %c0_i32 : <1xi64, #shared, mutable>
         %3 = triton_gpu.local_load %1 : !tt.memdesc<{SIZE}xf32, #shared, mutable> -> tensor<{SIZE}xf32, #blocked>
@@ -40,9 +46,6 @@ def test_descriptor_load_ttgir():
         f.flush()
         kernel = triton.compile(f.name)
 
-    x = torch.randn(SIZE, dtype=torch.float32, device=device)
-    desc = np.empty(SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size(), desc)
     desc = torch.tensor(desc, device=device)
     z_tri = torch.empty_like(x)
     kernel[(1, 1, 1)](z_tri, desc)
