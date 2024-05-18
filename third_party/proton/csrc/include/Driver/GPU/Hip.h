@@ -15,9 +15,6 @@ namespace hip {
 template <bool CheckSuccess> hipError_t deviceSynchronize();
 
 template <bool CheckSuccess>
-hipError_t deviceGet(hipDevice_t *device, int ordinal);
-
-template <bool CheckSuccess>
 hipError_t getDeviceProperties(hipDeviceProp_tR0000 *properties, int ordinal);
 
 Device getDevice(uint64_t index);

@@ -1,8 +1,8 @@
 #include "Driver/Device.h"
 #include "Driver/GPU/Cuda.h"
+#include "Driver/GPU/Hip.h"
 
 #include "Utility/Errors.h"
-#include "Utility/String.h"
 
 namespace proton {
 
@@ -10,7 +10,7 @@ Device getDevice(DeviceType type, uint64_t index) {
   if (type == DeviceType::CUDA) {
     return cuda::getDevice(index);
   } else if (type == DeviceType::HIP) {
-    throw NotImplemented();
+    throw hip::getDevice(index);
   }
   throw std::runtime_error("DeviceType not supported");
 }

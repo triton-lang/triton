@@ -12,8 +12,6 @@
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <stdexcept>
-#include <string.h>
 
 #include <unistd.h>
 
@@ -21,8 +19,8 @@ namespace proton {
 
 namespace {
 
-// Local copy of hip op types.  These are public (and stable) in later rocm
-// releases
+// Local copy of public (and stable) HIP op kinds
+
 typedef enum {
   HIP_OP_COPY_KIND_UNKNOWN_ = 0,
   HIP_OP_COPY_KIND_DEVICE_TO_HOST_ = 0x11F3,
@@ -40,8 +38,9 @@ typedef enum {
   HIP_OP_DISPATCH_KIND_TASK_ = 0x11F1
 } hip_op_dispatch_kind_t_;
 
-typedef enum { HIP_OP_BARRIER_KIND_UNKNOWN_ = 0 } hip_op_barrier_kind_t_;
-// end hip op defines
+typedef enum {
+  HIP_OP_BARRIER_KIND_UNKNOWN_ = 0,
+} hip_op_barrier_kind_t_;
 
 // Track dispatched ops to ensure a complete flush
 class Flush {
@@ -134,7 +133,7 @@ bool RoctracerProfiler::isOpInProgress() { return roctracerState.isRecording; }
 void RoctracerProfiler::doStart() {
   // Inline Callbacks
   // roctracer::enable_domain_callback<true>(ACTIVITY_DOMAIN_HSA_API,
-  // api_callback, nullptr);
+  //                                         api_callback, nullptr);
   roctracer::enable_domain_callback<true>(ACTIVITY_DOMAIN_HIP_API, api_callback,
                                           nullptr);
 
@@ -153,8 +152,8 @@ void RoctracerProfiler::doFlush() {
   auto ret = hip::deviceSynchronize<true>();
   roctracer::flush_activity<true>();
   std::unique_lock<std::mutex> lock(s_flush.mutex_);
-  auto correlationId =
-      s_flush.maxCorrelationId_.load(); // load ending id from the running max
+  // Load ending id from the running max
+  auto correlationId = s_flush.maxCorrelationId_.load();
 
   // Poll on the worker finding the final correlation id
   int timeout = 500;
@@ -231,11 +230,6 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
     isRuntimeApi = true;
     break;
   }
-  // case NO_HSA_GO_FISH:
-  //{
-  //   isDriverApi = true;
-  //   break;
-  // }
   default:
     break;
   }

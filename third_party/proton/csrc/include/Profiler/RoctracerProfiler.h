@@ -2,10 +2,9 @@
 #define PROTON_PROFILER_ROCTRACER_PROFILER_H_
 
 #include "Context/Context.h"
-#include "Driver/GPU/Roctracer.h"
 #include "Profiler.h"
+#include <roctracer/roctracer.h>
 
-#include <atomic>
 #include <map>
 
 namespace proton {

@@ -21,11 +21,7 @@ DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
 DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
                 hipDeviceProp_tR0000 *, int)
 
-DEFINE_DISPATCH(ExternLibHip, deviceGet, hipDeviceGet, hipDevice_t *, int)
-
 Device getDevice(uint64_t index) {
-  hipDevice_t device;
-  (void)hip::deviceGet<true>(&device, index);
   hipDeviceProp_tR0000 props;
   (void)hip::getDeviceProperties<true>(&props, index);
 
