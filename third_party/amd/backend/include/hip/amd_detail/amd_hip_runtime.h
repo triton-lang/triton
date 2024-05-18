@@ -247,33 +247,6 @@ void hipLaunchKernelGGL(F kernel, const dim3& numBlocks, const dim3& dimBlocks,
 #include <hip/hip_runtime_api.h>
 #endif // !defined(__HIPCC_RTC__)
 
-extern "C" __device__ __attribute__((const)) size_t __ockl_get_local_id(unsigned int);
-extern "C" __device__ __attribute__((const)) size_t __ockl_get_group_id(unsigned int);
-extern "C" __device__ __attribute__((const)) size_t __ockl_get_local_size(unsigned int);
-extern "C" __device__ __attribute__((const)) size_t __ockl_get_num_groups(unsigned int);
-struct __HIP_BlockIdx {
-  __device__
-  std::uint32_t operator()(std::uint32_t x) const noexcept { return __ockl_get_group_id(x); }
-};
-struct __HIP_BlockDim {
-  __device__
-  std::uint32_t operator()(std::uint32_t x) const noexcept {
-    return __ockl_get_local_size(x);
-  }
-};
-struct __HIP_GridDim {
-  __device__
-  std::uint32_t operator()(std::uint32_t x) const noexcept {
-    return __ockl_get_num_groups(x);
-  }
-};
-struct __HIP_ThreadIdx {
-  __device__
-  std::uint32_t operator()(std::uint32_t x) const noexcept {
-    return __ockl_get_local_id(x);
-  }
-};
-
 #if defined(__HIPCC_RTC__)
 typedef struct dim3 {
     uint32_t x;  ///< x
@@ -285,110 +258,94 @@ typedef struct dim3 {
 } dim3;
 #endif // !defined(__HIPCC_RTC__)
 
-extern "C" __device__ __attribute__((const)) size_t __ockl_get_global_size(unsigned int);
-
-#ifdef __cplusplus
-template <typename F> struct __HIP_Coordinates {
-    using R = decltype(F{}(0));
-
-    struct __X {
-    __device__ operator R() const noexcept { return F{}(0); }
-    __device__ R operator+=(const R& rhs) { return F{}(0) + rhs; }
-    };
-    struct __Y {
-    __device__ operator R() const noexcept { return F{}(1); }
-    __device__ R operator+=(const R& rhs) { return F{}(1) + rhs; }
-    };
-    struct __Z {
-    __device__ operator R() const noexcept { return F{}(2); }
-    __device__ R operator+=(const R& rhs) { return F{}(2) + rhs; }
-    };
-
-#if !defined(_MSC_VER)
-    __attribute__((weak))
-#endif
-    __device__ static constexpr __X x{};
-#if !defined(_MSC_VER)
-    __attribute__((weak))
-#endif
-    __device__ static constexpr __Y y{};
-#if !defined(_MSC_VER)
-    __attribute__((weak))
-#endif
-    __device__ static constexpr __Z z{};
-
-    __device__ operator dim3() const { return dim3(x, y, z); }
-};
-
-template <typename F>
-constexpr typename __HIP_Coordinates<F>::__X __HIP_Coordinates<F>::x;
-template <typename F>
-constexpr typename __HIP_Coordinates<F>::__Y __HIP_Coordinates<F>::y;
-template <typename F>
-constexpr typename __HIP_Coordinates<F>::__Z __HIP_Coordinates<F>::z;
-
-inline
-__device__
-std::uint32_t operator*(__HIP_Coordinates<__HIP_GridDim>::__X,
-                        __HIP_Coordinates<__HIP_BlockDim>::__X) noexcept {
-  return __ockl_get_global_size(0);
-}
-inline
-__device__
-std::uint32_t operator*(__HIP_Coordinates<__HIP_BlockDim>::__X,
-                        __HIP_Coordinates<__HIP_GridDim>::__X) noexcept {
-  return __ockl_get_global_size(0);
-}
-inline
-__device__
-std::uint32_t operator*(__HIP_Coordinates<__HIP_GridDim>::__Y,
-                        __HIP_Coordinates<__HIP_BlockDim>::__Y) noexcept {
-  return __ockl_get_global_size(1);
-}
-inline
-__device__
-std::uint32_t operator*(__HIP_Coordinates<__HIP_BlockDim>::__Y,
-                        __HIP_Coordinates<__HIP_GridDim>::__Y) noexcept {
-  return __ockl_get_global_size(1);
-}
-inline
-__device__
-std::uint32_t operator*(__HIP_Coordinates<__HIP_GridDim>::__Z,
-                        __HIP_Coordinates<__HIP_BlockDim>::__Z) noexcept {
-  return __ockl_get_global_size(2);
-}
-inline
-__device__
-std::uint32_t operator*(__HIP_Coordinates<__HIP_BlockDim>::__Z,
-                        __HIP_Coordinates<__HIP_GridDim>::__Z) noexcept {
-  return __ockl_get_global_size(2);
-}
-
-static constexpr __HIP_Coordinates<__HIP_BlockDim> blockDim{};
-static constexpr __HIP_Coordinates<__HIP_BlockIdx> blockIdx{};
-static constexpr __HIP_Coordinates<__HIP_GridDim> gridDim{};
-static constexpr __HIP_Coordinates<__HIP_ThreadIdx> threadIdx{};
-#endif // __cplusplus
+#pragma push_macro("__DEVICE__")
+#define __DEVICE__ static __device__ __forceinline__
 
 extern "C" __device__ __attribute__((const)) size_t __ockl_get_local_id(unsigned int);
-#define hipThreadIdx_x (__ockl_get_local_id(0))
-#define hipThreadIdx_y (__ockl_get_local_id(1))
-#define hipThreadIdx_z (__ockl_get_local_id(2))
+__DEVICE__ unsigned int __hip_get_thread_idx_x() { return __ockl_get_local_id(0); }
+__DEVICE__ unsigned int __hip_get_thread_idx_y() { return __ockl_get_local_id(1); }
+__DEVICE__ unsigned int __hip_get_thread_idx_z() { return __ockl_get_local_id(2); }
 
 extern "C" __device__ __attribute__((const)) size_t __ockl_get_group_id(unsigned int);
-#define hipBlockIdx_x (__ockl_get_group_id(0))
-#define hipBlockIdx_y (__ockl_get_group_id(1))
-#define hipBlockIdx_z (__ockl_get_group_id(2))
+__DEVICE__ unsigned int __hip_get_block_idx_x() { return __ockl_get_group_id(0); }
+__DEVICE__ unsigned int __hip_get_block_idx_y() { return __ockl_get_group_id(1); }
+__DEVICE__ unsigned int __hip_get_block_idx_z() { return __ockl_get_group_id(2); }
 
 extern "C" __device__ __attribute__((const)) size_t __ockl_get_local_size(unsigned int);
-#define hipBlockDim_x (__ockl_get_local_size(0))
-#define hipBlockDim_y (__ockl_get_local_size(1))
-#define hipBlockDim_z (__ockl_get_local_size(2))
+__DEVICE__ unsigned int __hip_get_block_dim_x() { return __ockl_get_local_size(0); }
+__DEVICE__ unsigned int __hip_get_block_dim_y() { return __ockl_get_local_size(1); }
+__DEVICE__ unsigned int __hip_get_block_dim_z() { return __ockl_get_local_size(2); }
 
 extern "C" __device__ __attribute__((const)) size_t __ockl_get_num_groups(unsigned int);
-#define hipGridDim_x (__ockl_get_num_groups(0))
-#define hipGridDim_y (__ockl_get_num_groups(1))
-#define hipGridDim_z (__ockl_get_num_groups(2))
+__DEVICE__ unsigned int __hip_get_grid_dim_x() { return __ockl_get_num_groups(0); }
+__DEVICE__ unsigned int __hip_get_grid_dim_y() { return __ockl_get_num_groups(1); }
+__DEVICE__ unsigned int __hip_get_grid_dim_z() { return __ockl_get_num_groups(2); }
+
+#define __HIP_DEVICE_BUILTIN(DIMENSION, FUNCTION)               \
+  __declspec(property(get = __get_##DIMENSION)) unsigned int DIMENSION; \
+  __DEVICE__ unsigned int __get_##DIMENSION(void) {                     \
+    return FUNCTION;                                            \
+  }
+
+struct __hip_builtin_threadIdx_t {
+  __HIP_DEVICE_BUILTIN(x,__hip_get_thread_idx_x());
+  __HIP_DEVICE_BUILTIN(y,__hip_get_thread_idx_y());
+  __HIP_DEVICE_BUILTIN(z,__hip_get_thread_idx_z());
+#ifdef __cplusplus
+  __device__ operator dim3() const { return dim3(x, y, z); }
+#endif
+};
+
+struct __hip_builtin_blockIdx_t {
+  __HIP_DEVICE_BUILTIN(x,__hip_get_block_idx_x());
+  __HIP_DEVICE_BUILTIN(y,__hip_get_block_idx_y());
+  __HIP_DEVICE_BUILTIN(z,__hip_get_block_idx_z());
+#ifdef __cplusplus
+  __device__ operator dim3() const { return dim3(x, y, z); }
+#endif
+};
+
+struct __hip_builtin_blockDim_t {
+  __HIP_DEVICE_BUILTIN(x,__hip_get_block_dim_x());
+  __HIP_DEVICE_BUILTIN(y,__hip_get_block_dim_y());
+  __HIP_DEVICE_BUILTIN(z,__hip_get_block_dim_z());
+#ifdef __cplusplus
+  __device__ operator dim3() const { return dim3(x, y, z); }
+#endif
+};
+
+struct __hip_builtin_gridDim_t {
+  __HIP_DEVICE_BUILTIN(x,__hip_get_grid_dim_x());
+  __HIP_DEVICE_BUILTIN(y,__hip_get_grid_dim_y());
+  __HIP_DEVICE_BUILTIN(z,__hip_get_grid_dim_z());
+#ifdef __cplusplus
+  __device__ operator dim3() const { return dim3(x, y, z); }
+#endif
+};
+
+#undef __HIP_DEVICE_BUILTIN
+#pragma pop_macro("__DEVICE__")
+
+extern const __device__ __attribute__((weak)) __hip_builtin_threadIdx_t threadIdx;
+extern const __device__ __attribute__((weak)) __hip_builtin_blockIdx_t blockIdx;
+extern const __device__ __attribute__((weak)) __hip_builtin_blockDim_t blockDim;
+extern const __device__ __attribute__((weak)) __hip_builtin_gridDim_t gridDim;
+
+#define hipThreadIdx_x threadIdx.x
+#define hipThreadIdx_y threadIdx.y
+#define hipThreadIdx_z threadIdx.z
+
+#define hipBlockIdx_x blockIdx.x
+#define hipBlockIdx_y blockIdx.y
+#define hipBlockIdx_z blockIdx.z
+
+#define hipBlockDim_x blockDim.x
+#define hipBlockDim_y blockDim.y
+#define hipBlockDim_z blockDim.z
+
+#define hipGridDim_x gridDim.x
+#define hipGridDim_y gridDim.y
+#define hipGridDim_z gridDim.z
 
 #if !defined(__HIPCC_RTC__)
 #include <hip/amd_detail/amd_math_functions.h>

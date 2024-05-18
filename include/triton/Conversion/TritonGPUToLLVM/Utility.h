@@ -615,7 +615,7 @@ emitOffsetForMmaLayoutV1(const NvidiaMmaEncodingAttr &mmaLayout,
   auto [isARow, isBRow, isAVec4, isBVec4, _] =
       mmaLayout.decodeVoltaLayoutStates();
 
-  // TODO: seems like the apttern below to get `rep`/`spw` appears quite often
+  // TODO: seems like the pattern below to get `rep`/`spw` appears quite often
   // A info
   auto aRep = mmaLayout.getMMAv1Rep(0);
   auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
