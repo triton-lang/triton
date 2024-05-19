@@ -5316,10 +5316,8 @@ def maxnreg_noinline2(X):
 
 def test_maxnreg(device):
     assert not is_interpreter(), "this test won't work with the interpreter"
-    check_cuda_only(device)
-    print("XXX device", device)
-    print("XXX is_hip:", is_hip())
-    print("XXX current_target:", triton.runtime.driver.active.get_current_target())
+    if is_hip():
+        pytest.skip('maxnreg only works on CUDA')
 
     # triton kernel
     @triton.jit
