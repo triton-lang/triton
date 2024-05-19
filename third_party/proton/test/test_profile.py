@@ -23,7 +23,13 @@ def test_torch(context):
             assert data[0]["children"][0]["frame"]["name"] == "test"
         elif context == "python":
             assert len(data[0]["children"]) == 1
-            assert ".py" in data[0]["children"][0]["frame"]["name"]
+            # The last frame is the torch kernel
+            prev_frame = data
+            curr_frame = data[0]["children"]
+            while len(curr_frame) > 0:
+                prev_frame = curr_frame
+                curr_frame = curr_frame[0]["children"]
+            assert "elementwise_kernel" in prev_frame[0]["frame"]["name"]
 
 
 def test_triton():
