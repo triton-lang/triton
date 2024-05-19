@@ -130,12 +130,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   // create a struct to hold device properties
   return Py_BuildValue(
-      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i}", "max_shared_mem",
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i, s:i}", "max_shared_mem",
       props.sharedMemPerBlock, "max_num_regs", props.regsPerBlock,
       "multiprocessor_count", props.multiProcessorCount, "sm_clock_rate",
       props.clockRate, "mem_clock_rate", props.memoryClockRate, "mem_bus_width",
       props.memoryBusWidth, "arch", props.gcnArchName, "warpSize",
-      props.warpSize);
+      props.warpSize, "L2_cache_size", props.l2CacheSize);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
