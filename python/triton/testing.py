@@ -1,4 +1,5 @@
 import functools
+import functools
 import os
 import subprocess
 import sys
@@ -14,6 +15,18 @@ def nvsmi(attrs):
     ret = out.decode(sys.stdout.encoding).split(',')
     ret = [int(x) for x in ret]
     return ret
+
+
+@functools.lru_cache(None)
+def get_L2_cache_size(device=None):
+    ''' return L2 cache size in bytes '''
+    import torch
+
+    from .runtime import driver
+    if not device:
+        device = torch.cuda.current_device()
+    L2_cache_size = driver.active.utils.get_device_properties(device)["L2_cache_size"] # in bytes
+    return L2_cache_size
 
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, return_mode="mean"):
@@ -103,13 +116,15 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     fn()
     torch.cuda.synchronize()
 
-    # We maintain a buffer of 256 MB that we clear
+    # We maintain a buffer equivalent to the L2 cache
+    # size specified by the active driver that we clear
     # before each kernel call to make sure that the L2
-    # doesn't contain any input data before the run
+    # cache doesn't contain any input data before the run.
+    cache_size = get_L2_cache_size()
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
+        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
+        cache = torch.empty(int(cache_size), dtype=torch.int8, device='cuda')
 
     # Estimate the runtime of the function
     start_event = torch.cuda.Event(enable_timing=True)
