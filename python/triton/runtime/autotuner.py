@@ -104,7 +104,7 @@ class Autotuner(KernelInterface):
             raise ValueError(f"Conflicting meta-parameters: {', '.join(conflicts)}."
                              " Make sure that you don't re-define auto-tuned symbols.")
         # augment meta-parameters with tunable ones
-        current = dict(meta, **config.kwargs)
+        current = dict(meta, **config.all_kwargs())
         full_nargs = {**self.nargs, **current}
 
         def kernel_call():
@@ -114,10 +114,6 @@ class Autotuner(KernelInterface):
             try:
                 self.fn.run(
                     *args,
-                    num_warps=config.num_warps,
-                    num_stages=config.num_stages,
-                    maxnreg=config.maxnreg,
-                    num_ctas=config.num_ctas,
                     **current,
                 )
             except Exception as e:
@@ -171,17 +167,12 @@ class Autotuner(KernelInterface):
         if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
             print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
-        full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
         if config.pre_hook is not None:
-            config.pre_hook(full_nargs)
+            config.pre_hook({**self.nargs, **kwargs, **config.all_kwargs()})
         ret = self.fn.run(
             *args,
-            num_warps=config.num_warps,
-            num_stages=config.num_stages,
-            maxnreg=config.maxnreg,
-            num_ctas=config.num_ctas,
             **kwargs,
-            **config.kwargs,
+            **config.all_kwargs(),
         )
         self.nargs = None
         return ret
@@ -196,15 +187,10 @@ class Autotuner(KernelInterface):
                 top_k = int(len(self.configs) * top_k)
             if len(pruned_configs) > top_k:
                 est_timing = {
-                    config:
-                    self.perf_model(
+                    config: self.perf_model(
                         **self.nargs,
                         **kwargs,
-                        **config.kwargs,
-                        num_stages=config.num_stages,
-                        maxnreg=config.maxnreg,
-                        num_warps=config.num_warps,
-                        num_ctas=config.num_ctas,
+                        **config.all_kwargs(),
                     )
                     for config in pruned_configs
                 }
@@ -215,16 +201,11 @@ class Autotuner(KernelInterface):
         self.nargs = dict(zip(self.arg_names, args))
         ret = []
         for config in self.prune_configs(kwargs):
-            ret.append(
-                self.fn.warmup(
-                    *args,
-                    num_warps=config.num_warps,
-                    num_ctas=config.num_ctas,
-                    num_stages=config.num_stages,
-                    maxnreg=config.maxnreg,
-                    **kwargs,
-                    **config.kwargs,
-                ))
+            ret.append(self.fn.warmup(
+                *args,
+                **kwargs,
+                **config.all_kwargs(),
+            ))
         self.nargs = None
         return ret
 
@@ -258,6 +239,18 @@ class Config:
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
 
+    def all_kwargs(self):
+        return self.kwargs | {
+            k: v
+            for (k, v) in (
+                ("num_warps", self.num_warps),
+                ("num_ctas", self.num_ctas),
+                ("num_stages", self.num_stages),
+                ("maxnreg", self.maxnreg),
+            )
+            if v is not None
+        }
+
     def __str__(self):
         res = []
         for k, v in self.kwargs.items():
@@ -265,8 +258,7 @@ class Config:
         res.append(f"num_warps: {self.num_warps}")
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
-        if self.maxnreg is not None:
-            res.append(f"maxnreg: {self.maxnreg}")
+        res.append(f"maxnreg: {self.maxnreg}")
         return ", ".join(res)
 
 
