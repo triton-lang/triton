@@ -55,6 +55,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int sm_clock_rate;
   int mem_clock_rate;
   int mem_bus_width;
+  int L2_cache_size;
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
@@ -70,13 +71,15 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
       &mem_clock_rate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &L2_cache_size, CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, device));
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
                        max_shared_mem, "max_num_regs", max_num_regs,
                        "multiprocessor_count", multiprocessor_count, "warpSize",
                        warp_size, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width);
+                       mem_bus_width, "L2_cache_size", L2_cache_size);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
