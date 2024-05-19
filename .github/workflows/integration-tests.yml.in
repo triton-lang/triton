@@ -232,6 +232,13 @@ jobs:
           mkdir -p ~/.triton
           ls -alh ~/.triton
 
+      - &set-github-env
+        name: Set up $GITHUB_ENVVAR
+        run: |
+            # $VVV is "-vvv" if debug logging is enabled, otherwise it's "".
+            # https://docs.github.com/en/actions/monitoring-and-troubleshooting-workflows/enabling-debug-logging
+            echo "VVV=$([[ ${{ runner.debug }} == 'true' ]] && echo '-vvv' || echo '')" >> $GITHUB_ENV
+
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -248,7 +255,7 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          python3 -m pip install --no-build-isolation $VVV '.[tests]'
 
       - &run-lit-tests-step
         name: Run lit tests
@@ -263,12 +270,12 @@ jobs:
       - name: Run python tests on CUDA
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-          python3 -m pytest -vvv -n 8 language/test_subprocess.py
+          python3 -m pytest $VVV -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest $VVV -n 8 language/test_subprocess.py
           # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -vvv runtime/
+          python3 -m pytest $VVV runtime/
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest $VVV language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -vs hopper/test_flashattention.py
 
@@ -278,7 +285,7 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+          python3 -m pytest $VVV -n 16 -m interpreter language/test_core.py language/test_standard.py \
            language/test_random.py language/test_block_pointer.py language/test_subprocess.py \
            operators/test_flash_attention.py::test_op \
            ../../tutorials/06-fused-attention.py::test_op --device cpu
@@ -295,7 +302,7 @@ jobs:
           LD_LIBRARY_PATH: "/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
         run: |
           cd third_party/proton
-          python3 -m pytest -vvv test
+          python3 -m pytest $VVV test
 
       # If we're on branch `main`, save the ccache Triton compilation artifacts
       # to the cache so they can be used by other (non-main) CI runs.
@@ -346,6 +353,7 @@ jobs:
       - *cache-build-dependencies-step
       - *restore-build-artifacts-step
       - *inspect-cache-directory-step
+      - *set-github-env
 
       - name: Update PATH
         run: |
@@ -367,19 +375,19 @@ jobs:
 
       - name: Run python tests on HIP
         run: |
-          pytest --capture=tee-sys -rfs -vvv python/tutorials/06-fused-attention.py
+          pytest --capture=tee-sys -rfs $VVV python/tutorials/06-fused-attention.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -vvv -n 32 language operators \
+          pytest --capture=tee-sys -rfs $VVV -n 32 language operators \
                  hopper/test_mixed_io.py \
                  hopper/test_gemm.py \
                  hopper/test_tma_store_gemm.py \
                  hopper/test_persistent_warp_specialized_fused-attention.py \
                  --ignore=language/test_line_info.py
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv -n 8 language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest $VVV -n 8 language/test_line_info.py
 
           # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -vvv runtime
+          python3 -m pytest $VVV runtime
 
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
