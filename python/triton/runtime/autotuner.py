@@ -24,8 +24,8 @@ class Autotuner(KernelInterface):
         pre_hook=None,
         post_hook=None,
         prune_configs_by: Dict = None,
-        warmup=25,
-        rep=100,
+        warmup=15,
+        rep=60,
         use_cuda_graph=False,
     ):
         """
@@ -261,7 +261,7 @@ class Config:
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
-             warmup=25, rep=100, use_cuda_graph=False):
+             warmup=15, rep=60, use_cuda_graph=False):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
