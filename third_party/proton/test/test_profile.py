@@ -23,7 +23,7 @@ def test_torch(context):
             assert data[0]["children"][0]["frame"]["name"] == "test"
         elif context == "python":
             assert len(data[0]["children"]) == 1
-            assert ".py" in data[0]["children"][0]["frame"]["name"]
+            assert "pytest:<module>" in data[0]["children"][0]["frame"]["name"]
 
 
 def test_triton():
