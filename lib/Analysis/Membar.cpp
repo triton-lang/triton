@@ -144,7 +144,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           }
       }
     }
-    // Scratch buffer
+    // Scratch buffer is considered as both shared memory write & read
     auto bufferId = allocation->getBufferId(op);
     if (bufferId != Allocation::InvalidBufferId) {
       curBlockInfo.syncWriteIntervals.insert(
