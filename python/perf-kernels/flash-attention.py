@@ -28,8 +28,6 @@ import torch
 import triton
 import triton.language as tl
 
-torch_dtype: tl.constexpr = torch.float16
-
 
 class MetaData():
     cu_seqlens_q = None
@@ -41,6 +39,7 @@ class MetaData():
     causal = False
     num_contexts = 0
     varlen = False
+    layout = None
     dropout_p, return_encoded_softmax = 0.0, False
 
     def __init__(self, sm_scale=1.0):
@@ -48,6 +47,7 @@ class MetaData():
 
     def set_varlen_params(self, cu_seqlens_q, cu_seqlens_k):
         self.varlen = True
+        self.layout = 'thd'
         self.cu_seqlens_q = cu_seqlens_q
         self.cu_seqlens_k = cu_seqlens_k
         # Without "varlen", there should still be one sequence.
@@ -81,10 +81,10 @@ class MetaData():
 
     def check_args(self, q, k, v, o):
         assert q.dim() == k.dim() and q.dim() == v.dim()
+
+        batch, nheads_q, nheads_k, head_size = get_shape_from_layout(q, k, self)
         if self.varlen:
             assert q.dim() == 3
-            total_q, nheads_q, head_size = q.shape
-            total_k, nheads_k, _ = k.shape
             assert self.cu_seqlens_q is not None
             assert self.cu_seqlens_k is not None
             assert len(self.cu_seqlens_q) == len(self.cu_seqlens_k)
@@ -95,8 +95,6 @@ class MetaData():
             assert not self.return_encoded_softmax
         else:
             assert q.dim() == 4
-            batch, nheads_q, seqlen_q, head_size = q.shape
-            _, nheads_k, seqlen_k, _ = k.shape
             assert self.max_seqlens_q > 0 and self.max_seqlens_k > 0
             assert self.cu_seqlens_q is None and self.cu_seqlens_k is None
         assert k.shape == v.shape
@@ -106,6 +104,8 @@ class MetaData():
         assert head_size <= 256
         assert o.shape == q.shape
         assert (nheads_q % nheads_k) == 0
+        assert self.layout is not None
+        assert self.layout == 'thd' or not self.varlen
 
 
 @triton.jit
@@ -326,60 +326,14 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
     use_cuda_graph=True,
 )
 @triton.jit
-def attn_fwd(
-    Q,
-    K,
-    V,
-    bias,
-    sm_scale,
-    L,
-    Out,
-    stride_qz,
-    stride_qh,
-    stride_qm,
-    stride_qk,
-    stride_kz,
-    stride_kh,
-    stride_kn,
-    stride_kk,
-    stride_vz,
-    stride_vh,
-    stride_vk,
-    stride_vn,
-    stride_oz,
-    stride_oh,
-    stride_om,
-    stride_on,
-    stride_bz,
-    stride_bh,
-    stride_bm,
-    stride_bn,
-    stride_az,
-    stride_ah,
-    cu_seqlens_q,
-    cu_seqlens_k,
-    dropout_p,
-    philox_seed,
-    philox_offset_base,
-    encoded_softmax,
-    alibi_slopes,
-    HQ: tl.constexpr,
-    HK: tl.constexpr,
-    ACTUAL_BLOCK_DMODEL: tl.constexpr,
-    MAX_SEQLENS_Q: tl.constexpr,
-    MAX_SEQLENS_K: tl.constexpr,
-    VARLEN: tl.constexpr,
-    IS_CAUSAL: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_DMODEL: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    PRE_LOAD_V: tl.constexpr,
-    USE_BIAS: tl.constexpr,
-    ENABLE_DROPOUT: tl.constexpr,
-    RETURN_ENCODED_SOFTMAX: tl.constexpr,
-    USE_ALIBI: tl.constexpr,
-    BATCH_SIZE: tl.constexpr,
-):
+def attn_fwd(Q, K, V, bias, sm_scale, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz, stride_kh,
+             stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh, stride_om,
+             stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, cu_seqlens_q, cu_seqlens_k,
+             dropout_p, philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, HQ: tl.constexpr,
+             HK: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr,
+             MAX_SEQLENS_K: tl.constexpr, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
+             BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
+             ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr):
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
     off_z = tl.program_id(2)
@@ -876,6 +830,44 @@ def _attn_bwd(Q, K, V, sm_scale, alibi_slopes, DO, DQ, DK, DV, M, D,
 empty = torch.empty(128, device="cuda")
 
 
+def get_shape_from_layout(q, k, metadata):
+    if metadata.layout == 'thd':
+        nheads_q, nheads_k = q.shape[1], k.shape[1]
+        head_size = q.shape[-1]
+        batch = metadata.num_contexts
+    elif metadata.layout == 'bhsd':
+        batch, nheads_q, _, head_size = q.shape
+        nheads_k = k.shape[1]
+    elif metadata.layout == 'bshd':
+        batch, _, nheads_q, head_size = q.shape
+        nheads_k = k.shape[2]
+    else:
+        assert False, "Got unsupported layout."
+    return batch, nheads_q, nheads_k, head_size
+
+
+# TODO: This can probably optimized to have fewer lines of code.
+def get_strides_from_layout(q, k, v, o, metadata):
+    if metadata.layout == 'thd':
+        q_strides = (0, q.stride(1), q.stride(0), q.stride(2))
+        k_strides = (0, k.stride(1), k.stride(0), k.stride(2))
+        v_strides = (0, v.stride(1), v.stride(0), v.stride(2))
+        o_strides = (0, o.stride(1), o.stride(0), o.stride(2))
+    elif metadata.layout == 'bhsd':
+        q_strides = (q.stride(0), q.stride(1), q.stride(2), q.stride(3))
+        k_strides = (k.stride(0), k.stride(1), k.stride(2), k.stride(3))
+        v_strides = (v.stride(0), v.stride(1), v.stride(2), v.stride(3))
+        o_strides = (o.stride(0), o.stride(1), o.stride(2), o.stride(3))
+    elif metadata.layout == 'bshd':
+        q_strides = (q.stride(0), q.stride(2), q.stride(1), q.stride(3))
+        k_strides = (k.stride(0), k.stride(2), k.stride(1), k.stride(3))
+        v_strides = (v.stride(0), v.stride(2), v.stride(1), v.stride(3))
+        o_strides = (o.stride(0), o.stride(2), o.stride(1), o.stride(3))
+    else:
+        assert False, 'Got unsupported layout.'
+    return q_strides, k_strides, v_strides, o_strides
+
+
 class _attention(torch.autograd.Function):
 
     @staticmethod
@@ -887,24 +879,14 @@ class _attention(torch.autograd.Function):
         if o is None:
             o = torch.empty_like(q, dtype=v.dtype)
         metadata.check_args(q, k, v, o)
-        if metadata.varlen:
-            total_q, nheads_q, head_size = q.shape
-            total_k, nheads_k, _ = k.shape
-            batch = metadata.num_contexts
-            q_strides = (0, q.stride(1), q.stride(0), q.stride(2))
-            k_strides = (0, k.stride(1), k.stride(0), k.stride(2))
-            v_strides = (0, v.stride(1), v.stride(0), v.stride(2))
-            o_strides = (0, o.stride(1), o.stride(0), o.stride(2))
-        else:
-            batch, nheads_q, seqlen_q, head_size = q.shape
-            _, nheads_k, seqlen_k, _ = k.shape
-            q_strides = (q.stride(0), q.stride(1), q.stride(2), q.stride(3))
-            k_strides = (k.stride(0), k.stride(1), k.stride(2), k.stride(3))
-            v_strides = (v.stride(0), v.stride(1), v.stride(2), v.stride(3))
-            o_strides = (o.stride(0), o.stride(1), o.stride(2), o.stride(3))
+
+        batch, nheads_q, nheads_k, head_size = get_shape_from_layout(q, k, metadata)
+        q_strides, k_strides, v_strides, o_strides = get_strides_from_layout(q, k, v, o, metadata)
 
         # Get closest power of 2 over or equal to 32.
         padded_d_model = 1 << (head_size - 1).bit_length()
+        # Smallest head_dim supported is 16. If smaller, the tile in the
+        # kernel is padded - there is no padding in memory for any dims.
         padded_d_model = max(padded_d_model, 16)
 
         grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
@@ -944,7 +926,7 @@ class _attention(torch.autograd.Function):
                        MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
                        BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
-                       > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, BATCH_SIZE=q.shape[0])
+                       > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -1036,30 +1018,41 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-def input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype):
+def input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout):
     torch.manual_seed(20)
 
     # Initialize q, k, v
-    q = torch.randn((Z, HQ, N_CTX_Q, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
-    k = torch.randn((Z, HK, N_CTX_K, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
-    v = torch.randn((Z, HK, N_CTX_K, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
+    if layout == 'bhsd':
+        q_tensor_shape = (Z, HQ, N_CTX_Q, D_HEAD)
+        k_tensor_shape = (Z, HK, N_CTX_K, D_HEAD)
+    elif layout == 'bshd':
+        q_tensor_shape = (Z, N_CTX_Q, HQ, D_HEAD)
+        k_tensor_shape = (Z, N_CTX_K, HK, D_HEAD)
+    else:
+        assert False, 'Got unsupported tensor layout'
+    q = torch.randn(q_tensor_shape, dtype=dtype, device="cuda", requires_grad=True)
+    k = torch.randn(k_tensor_shape, dtype=dtype, device="cuda", requires_grad=True)
+    v = torch.randn(k_tensor_shape, dtype=dtype, device="cuda", requires_grad=True)
     sm_scale = D_HEAD**-0.5
     input_metadata = MetaData(sm_scale=sm_scale)
     input_metadata.max_seqlens_q = N_CTX_Q
     input_metadata.max_seqlens_k = N_CTX_K
+    input_metadata.layout = layout
     return q, k, v, input_metadata
 
 
-def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype):
+def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlens=False):
     torch.manual_seed(20)
 
     # Random sequence lengths. Using N_CTX as kind of max of sum of individual seqs
-    max_seqlens_q = N_CTX_Q // Z
-    max_seqlens_k = N_CTX_K // Z
-    seqlens_q = torch.randint(1, max_seqlens_q + 1, (Z, ), dtype=torch.int32)
-    seqlens_k = torch.randint(1, max_seqlens_k + 1, (Z, ), dtype=torch.int32)
-    max_seqlens_q = torch.max(seqlens_q).item()
-    max_seqlens_k = torch.max(seqlens_k).item()
+    if not equal_seqlens:
+        max_seqlens_q = N_CTX_Q // Z
+        max_seqlens_k = N_CTX_K // Z
+        seqlens_q = torch.randint(1, max_seqlens_q + 1, (Z, ), dtype=torch.int32)
+        seqlens_k = torch.randint(1, max_seqlens_k + 1, (Z, ), dtype=torch.int32)
+    else:
+        seqlens_q = torch.full((Z, ), N_CTX_Q // Z)
+        seqlens_k = torch.full((Z, ), N_CTX_K // Z)
 
     # Calculate cumulative sequence lengths
     cu_seqlens_q = torch.cat([torch.tensor([0], dtype=torch.int32), seqlens_q.cumsum(dim=0, dtype=torch.int32)])
@@ -1099,9 +1092,10 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype):
 ])
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_alibi', [True, False])
-def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=torch.float16):
+@pytest.mark.parametrize('layout', ['bshd', 'bhsd'])
+def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, dtype=torch.float16):
     torch.manual_seed(20)
-    q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype)
+    q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
     if causal:
         input_metadata.need_causal()
 
@@ -1118,6 +1112,11 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=to
     # triton implementation
     tri_out, _ = attention(q, k, v, o, input_metadata)
 
+    # Transpose here if layout is bshd so we have same reference code for all layouts
+    if layout == 'bshd':
+        q = q.transpose(1, 2).clone()
+        k = k.transpose(1, 2).clone()
+        v = v.transpose(1, 2).clone()
     # Replicate K and V if using MQA/GQA
     if HQ != HK:
         k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
@@ -1141,6 +1140,8 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, dtype=to
         p[nan_mask == 1] = 0
     ref_out = torch.einsum('bhqk,bhkd->bhqd', p.half(), v)
     # compare
+    if layout == 'bshd':
+        ref_out = ref_out.transpose(1, 2).clone()
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
 
@@ -1169,8 +1170,7 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=tor
     torch.manual_seed(20)
     sm_scale = D_HEAD**-0.5
     input_metadata = MetaData(sm_scale=sm_scale)
-    input_metadata.max_seqlens_q = N_CTX_Q
-    input_metadata.max_seqlens_k = N_CTX_K
+    q, k, v, input_metadata = input_helper(Z, H, H, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout='bhsd')
     if causal:
         input_metadata.need_causal()
     if use_bias:
@@ -1178,9 +1178,6 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=tor
         input_metadata.need_bias(bias, Z, H, N_CTX_Q, N_CTX_K)
     else:
         bias = None
-    q = torch.randn((Z, H, N_CTX_Q, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    k = torch.randn((Z, H, N_CTX_K, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    v = torch.randn((Z, H, N_CTX_K, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     o = torch.empty_like(q)
 
     # triton implementation
@@ -1211,6 +1208,7 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype=tor
                                                  (4, 16, 1024, 128), (4, 16, 8192, 128), (32, 48, 8192, 128)])
 @pytest.mark.parametrize('causal', [True, False])
 def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
+
     q, k, v, input_metadata = varlen_input_helper(Z, H, H, N_CTX, N_CTX, D_HEAD, dtype)
 
     tri_out = torch.empty_like(q)
@@ -1401,9 +1399,8 @@ def varlen_benchmark_configs():
     return configs
 
 
-def run_benchmark(custom):
+def run_benchmark(custom, args):
 
-    args = parse_args()
     dtype = arg_to_torch_dtype[args.dtype]
     hk = args.hq if not args.hk else args.hk
     sk = args.sq if not args.sk else args.sk
@@ -1411,7 +1408,7 @@ def run_benchmark(custom):
     mode = 'fwd'
     x_names = ['BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
     causal = args.causal
-    varlen = args.varlen
+    varlen = args.layout == 'thd'
     configs = []
     if custom:
         x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
@@ -1425,7 +1422,7 @@ def run_benchmark(custom):
     configs.append(
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
                                  line_names=[line_names], styles=[('red', '-')], ylabel='ms',
-                                 plot_name=f'fused-attention-{mode}-d{head_size}{"-varlen" if varlen else ""}',
+                                 plot_name=f'fused-attention-{mode}-d{head_size}-layout{args.layout}',
                                  args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
 
     @triton.testing.perf_report(configs)
@@ -1447,14 +1444,15 @@ def run_benchmark(custom):
 
         flops_per_matmul = 0
         if varlen:
-            q, k, v, input_metadata = varlen_input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype)
+            q, k, v, input_metadata = varlen_input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype,
+                                                          args.equal_seqlens)
             for i in range(0, input_metadata.num_contexts):
                 seqlen_q = input_metadata.cu_seqlens_q[i + 1] - input_metadata.cu_seqlens_q[i]
                 seqlen_k = input_metadata.cu_seqlens_k[i + 1] - input_metadata.cu_seqlens_k[i]
                 # x2 for 2 GEMMs
                 flops_per_matmul += seqlen_q.item() * seqlen_k.item() * HQ * D_HEAD * 2
         else:
-            q, k, v, input_metadata = input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype)
+            q, k, v, input_metadata = input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, args.layout)
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
@@ -1479,6 +1477,15 @@ def run_benchmark(custom):
     bench_flash_attention.run(save_path=".", print_data=True)
 
 
+def supported_layouts():
+    layouts = \
+        'bhsd: Q, K, V are individual tensors of [batch, num_heads, seqlen_q/k, head_size]' \
+        'bshd: Q, K, V are individual tensors of [batch, seqlen_q/k, num_heads, head_size]' \
+        'thd: Q, K, V are individual tensors of [total_q/k, num_heads, head_size]' \
+        'This layout is sometimes called "varlen" or "grouped" layout.'
+    return layouts
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="Benchmark FlashAttention",
@@ -1489,11 +1496,14 @@ def parse_args():
     parser.add_argument("-hk", type=int, default=0)
     parser.add_argument("-sq", type=int, default=0)
     parser.add_argument("-sk", type=int, default=0)
+    parser.add_argument("-equal_seqlens", action='store_true', default=False,
+                        help='If specified, each context within the thd layout' \
+                            ' has same seqlen as sq and sk')
     parser.add_argument("-d", type=int, default=0)
     parser.add_argument("-causal", action='store_true', default=False)
-    parser.add_argument("-varlen", action='store_true', default=False)
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False)
+    parser.add_argument("-layout", type=str, default='bhsd', help=supported_layouts())
     return parser.parse_args()
 
 
@@ -1503,6 +1513,8 @@ arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': tor
 def main():
     args = parse_args()
     custom_config = False
+    assert args.layout == 'thd' or not args.equal_seqlens, \
+           "Equal sequence lengths arg must be used with the thd layout."
     if args.b or args.hq or args.hk or args.sq or args.sk or args.d:
         custom_config = True
         assert args.b and args.hq and args.sq and args.d, \
@@ -1513,7 +1525,7 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    run_benchmark(custom_config)
+    run_benchmark(custom_config, args)
 
 
 if __name__ == '__main__':
