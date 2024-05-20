@@ -3,9 +3,9 @@ from io import StringIO
 
 import triton
 import triton.language as tl
+import pytest
 
-
-def test_mma_remark():
+def test_mma_remark(capfd):
 
     # 32, 32, 128
     @triton.jit
@@ -21,29 +21,14 @@ def test_mma_remark():
         c = tl.dot(a, b)
         tl.store(c_block_ptr, c)
 
-    error_capture = StringIO()
-    out_capture = StringIO()
-    sys.stderr = error_capture
-    sys.stdout = out_capture
-    error_file = open('error.log', 'w')
-    out_file = open('out.log', 'w')
-    sys.stderr = error_file
-    sys.stdout = out_file
     triton.compile(
         triton.compiler.ASTSource(
             fn=matmul_kernel, signature={
                 0: '*fp32', 1: '*fp32', 2: '*fp32', 3: 'i32', 4: 'i32', 5: 'i32', 6: 'i32', 7: 'i32', 8: 'i32', 9:
                 'i32', 10: 'i32', 11: 'i32'
             }, constants={}))
-    error_messages = error_capture.getvalue()
-    out_messages = out_capture.getvalue()
-    sys.stderr = sys.__stderr__
-    sys.stdout = sys.__stdout__
-    print(error_messages)
-    print(out_messages)
+    captured = capfd.readouterr()
+    assert "test_warning.py:21:18: remark: Warning: can't use MMA V3 for the dot op" in captured.err, "expect MMA V3 remark"
+    assert "MMA V3" in captured.err
+    assert "test_warning.py:21:18: note: see current operation:" in captured.err
 
-    try:
-        assert "test_warning.py:24:16: remark: Warning: can't use MMA V3 for the dot op" in error_messages, "expect MMA V3 remark"
-        assert "test_warning.py:24:16: note: see current operation:" in error_messages, "expect MMA V3 note"
-    except AssertionError as assertion_err:
-        raise assertion_err from error_messages
