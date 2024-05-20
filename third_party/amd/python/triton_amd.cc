@@ -212,15 +212,20 @@ void init_triton_amd(py::module &&m) {
     for (llvm::Function &f : module->functions()) {
       if (f.hasExternalLinkage() && f.hasName() && !f.hasExactDefinition()) {
         llvm::StringRef funcName = f.getName();
-        // Rules for linking the extern lib:
-        // 1. if __nv_ is found in the module, we'll link all four libs:
-        //    cuda2gcn, opencl, ocml, and ockl. Note that opencl might
-        //    not be needed. But we add it here and will try to remove
-        //    it in the future.
-        // 2. if the function name includes ocml or ockl, only link
+        // The rule for linking the extern lib:
+        //    if the function name includes ocml or ockl, link
         //    ocml or ockl accordingly.
-        if (funcName.contains(lib) || funcName.contains("__nv_"))
+        if (funcName.contains(lib))
           return true;
+        if (funcName.contains("__nv_")) {
+          std::stringstream message;
+          message << "Implicit conversion of CUDA " << funcName.str()
+                  << " device function has been dropped; "
+                  << "please, update your source program to use "
+                     "triton.language.extra.<op> "
+                  << "to replace triton.language.extra.cuda.<op>";
+          throw std::runtime_error(message.str());
+        }
       }
     }
     return false;

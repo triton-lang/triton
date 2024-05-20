@@ -73,6 +73,7 @@ class CUDAOptions:
     max_num_imprecise_acc_default: bool = None
     extern_libs: dict = None
     debug: bool = False
+    backend_name: str = 'cuda'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
