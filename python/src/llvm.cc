@@ -81,7 +81,23 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   llvm::legacy::PassManager pm;
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
+
+  const bool enabledTiming = triton::tools::getBoolEnv("LLVM_ENABLE_TIMING");
+  if (enabledTiming) {
+    llvm::TimePassesIsEnabled = true;
+    llvm::TimePassesPerRun = true;
+  }
+
   pm.run(module);
+
+  SmallString<0> timePassesStr;
+  raw_svector_ostream reportStream(timePassesStr);
+
+  if (enabledTiming) {
+    reportAndResetTimings(&reportStream);
+    llvm::dbgs() << reportStream.str();
+    timePassesStr.clear();
+  }
   // module->print(llvm::outs(), nullptr);
 
   // create machine
@@ -116,6 +132,12 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                              : llvm::CodeGenFileType::AssemblyFile;
     machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
     pass.run(module);
+
+    if (enabledTiming) {
+      reportAndResetTimings(&reportStream);
+      llvm::dbgs() << reportStream.str();
+      timePassesStr.clear();
+    }
   }
   return result;
 }
