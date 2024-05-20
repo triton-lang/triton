@@ -5328,7 +5328,6 @@ def test_maxnreg(device):
 
     X = torch.empty(1, dtype=torch.int32, device=device)
     k = kernel[(1, )](X, maxnreg=42)
-    print(k.asm["ptx"])
 
     # Ensure that .maxnreg is set on the kernel function (marked with .entry)
     # and not on either of the noinline functions (marked with .func).

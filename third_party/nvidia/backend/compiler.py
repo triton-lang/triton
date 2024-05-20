@@ -223,7 +223,7 @@ class CUDABackend(BaseBackend):
         # Set maxnreg on all kernels, if it was provided.
         if options.maxnreg is not None:
             for k in llvm_mod.get_functions():
-                if k.is_nvvm_kernel():
+                if not k.is_declaration() and k.is_external_linkage():
                     k.set_nvvm_maxnreg(options.maxnreg)
 
         if options.extern_libs:

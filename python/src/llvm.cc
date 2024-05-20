@@ -181,40 +181,6 @@ void init_triton_llvm(py::module &&m) {
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
 
-      .def("is_nvvm_kernel",
-           [](llvm::Function *fn) {
-             llvm::Module *mod = fn->getParent();
-             NamedMDNode *annotations =
-                 mod->getNamedMetadata("nvvm.annotations");
-             if (!annotations) {
-               return false;
-             }
-             // Look for metadata of the form `{ptr @fn, !"kernel", i32 1}`.
-             for (auto *op : annotations->operands()) {
-               if (!isa<MDTuple>(op) || op->getNumOperands() != 3) {
-                 continue;
-               }
-               auto elem0 = dyn_cast<ValueAsMetadata>(op->getOperand(0));
-               if (!elem0 || elem0->getValue() != fn) {
-                 continue;
-               }
-               auto elem1 = dyn_cast<MDString>(op->getOperand(1));
-               if (!elem1 || elem1->getString() != "kernel") {
-                 continue;
-               }
-               auto elem2 = dyn_cast<ConstantAsMetadata>(op->getOperand(2));
-               if (!elem2) {
-                 continue;
-               }
-               auto elem2Val = dyn_cast<ConstantInt>(elem2->getValue());
-               if (!elem2Val || elem2Val->getZExtValue() != 1) {
-                 continue;
-               }
-               return true;
-             }
-             return false;
-           })
-
       // Sets the nvvm.maxreg property on the given function.
       .def("set_nvvm_maxnreg",
            [](llvm::Function *fn, int maxnreg) {
@@ -230,7 +196,12 @@ void init_triton_llvm(py::module &&m) {
                  ->getOrInsertNamedMetadata("nvvm.annotations")
                  ->addOperand(op);
            })
-      .def("is_declaration", &llvm::Function::isDeclaration);
+      // External functions that are definitions (i.e. not declarations) are
+      // kernel functions.
+      .def("is_declaration", &llvm::Function::isDeclaration)
+      .def("is_external_linkage", [](llvm::Function *fn) {
+        return fn->getLinkage() == llvm::GlobalValue::ExternalLinkage;
+      });
 
   // optimization levels
   py::class_<llvm::OptimizationLevel>(m, "optimization_level",
@@ -388,10 +359,24 @@ void init_triton_llvm(py::module &&m) {
       libMod->setTargetTriple(dstMod->getTargetTriple());
       libMod->setDataLayout(dstMod->getDataLayout());
 
+      std::unordered_set<std::string> externalFns;
+      for (llvm::Function &fn : libMod->functions()) {
+        if (!fn.isDeclaration())
+          externalFns.insert(fn.getName().str());
+      }
+
       if (linker.linkInModule(std::move(libMod),
                               llvm::Linker::Flags::LinkOnlyNeeded)) {
         std::string message = "Failed to link library at " + path;
         throw std::invalid_argument(message);
+      }
+
+      // Mark linked-in functions as internal because backends use external
+      // linkage as a signifier of kernel functions.
+      for (llvm::Function &fn : dstMod->functions()) {
+        if (externalFns.count(fn.getName().str())) {
+          fn.setLinkage(llvm::GlobalValue::InternalLinkage);
+        }
       }
     }
   });
