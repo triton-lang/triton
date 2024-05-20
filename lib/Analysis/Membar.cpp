@@ -131,7 +131,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           effectInstances;
       memoryEffectOpInterface.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
-        if (auto value = effectInstance.getValue())
+        if (auto value = effectInstance.getValue()) {
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
@@ -142,6 +142,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                     allocation->getAllocatedInterval(bufferId));
             }
           }
+        }
       }
     }
     // Scratch buffer is considered as both shared memory write & read
