@@ -144,7 +144,9 @@ def patch_kernel(template, to_replace):
         return kernel
 
 
-def check_cuda_only(device):
+def check_cuda_or_hip(device):
+    # CUDA and HIP both use pytorch device 'cuda'.  Other backends like Intel
+    # GPU do not.
     if device not in ['cuda']:
         pytest.skip("Only for cuda")
 
@@ -1346,7 +1348,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
         if dtype_x_str == 'float16':
             pytest.skip("Only test atomic float16 ops on GPU")
     else:
-        check_cuda_only(device)
+        check_cuda_or_hip(device)
 
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
@@ -3013,7 +3015,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
     else:
-        check_cuda_only(device)
+        check_cuda_or_hip(device)
 
         capability = torch.cuda.get_device_capability()
 
@@ -4218,7 +4220,7 @@ def test_unary_math(func_str, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm(num_ctas, device):
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
 
     if is_hip():
         pytest.skip("test_inline_asm is not supported in HIP")
@@ -4248,7 +4250,7 @@ def test_inline_asm(num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
 
     if is_hip():
         pytest.skip("test_inline_asm is not supported in HIP")
@@ -4277,7 +4279,7 @@ def test_inline_asm_packed(num_ctas, device):
 
 @pytest.mark.parametrize('num_ctas', num_ctas_list)
 def test_inline_asm_with_pointers(num_ctas, device):
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
 
     if is_hip():
         pytest.skip('test_inline_asm is not supported in HIP')
@@ -4304,7 +4306,7 @@ def test_inline_asm_with_pointers(num_ctas, device):
 
 
 def test_inline_asm_multiple_outputs(device):
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
     if is_hip():
         pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
 
@@ -4351,7 +4353,7 @@ def test_inline_asm_multiple_outputs(device):
 
 
 def test_inline_asm_packed_multiple_outputs(device):
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
     if is_hip():
         pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
 
@@ -4695,7 +4697,7 @@ def test_nested_while(device):
 def test_num_threads(device):
     if is_hip():
         pytest.skip("test_num_threads is not supported in HIP")
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out):
@@ -4712,7 +4714,7 @@ def test_num_threads(device):
 def test_globaltimer(device):
     if is_hip():
         pytest.skip("test_globaltimer is not supported in HIP")
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out1, Out2):
@@ -4733,7 +4735,7 @@ def test_globaltimer(device):
 def test_smid(device):
     if is_hip():
         pytest.skip("test_smid is not supported in HIP")
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out):
@@ -5086,7 +5088,7 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
     if not is_interpreter():
-        check_cuda_only(device)
+        check_cuda_or_hip(device)
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
