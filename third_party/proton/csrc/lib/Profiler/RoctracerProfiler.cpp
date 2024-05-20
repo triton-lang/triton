@@ -3,6 +3,7 @@
 #include "Data/Metric.h"
 #include "Driver/GPU/Hip.h"
 #include "Driver/GPU/Roctracer.h"
+#include <hip/amd_detail/hip_runtime_prof.h>
 
 #include <roctracer/roctracer_ext.h>
 #include <roctracer/roctracer_hip.h>
@@ -18,29 +19,6 @@
 namespace proton {
 
 namespace {
-
-// Local copy of public (and stable) HIP op kinds
-
-typedef enum {
-  HIP_OP_COPY_KIND_UNKNOWN_ = 0,
-  HIP_OP_COPY_KIND_DEVICE_TO_HOST_ = 0x11F3,
-  HIP_OP_COPY_KIND_HOST_TO_DEVICE_ = 0x11F4,
-  HIP_OP_COPY_KIND_DEVICE_TO_DEVICE_ = 0x11F5,
-  HIP_OP_COPY_KIND_DEVICE_TO_HOST_2D_ = 0x1201,
-  HIP_OP_COPY_KIND_HOST_TO_DEVICE_2D_ = 0x1202,
-  HIP_OP_COPY_KIND_DEVICE_TO_DEVICE_2D_ = 0x1203,
-  HIP_OP_COPY_KIND_FILL_BUFFER_ = 0x1207
-} hip_op_copy_kind_t_;
-
-typedef enum {
-  HIP_OP_DISPATCH_KIND_UNKNOWN_ = 0,
-  HIP_OP_DISPATCH_KIND_KERNEL_ = 0x11F0,
-  HIP_OP_DISPATCH_KIND_TASK_ = 0x11F1
-} hip_op_dispatch_kind_t_;
-
-typedef enum {
-  HIP_OP_BARRIER_KIND_UNKNOWN_ = 0,
-} hip_op_barrier_kind_t_;
 
 // Track dispatched ops to ensure a complete flush
 class Flush {
@@ -60,8 +38,7 @@ std::shared_ptr<Metric>
 convertActivityToMetric(const roctracer_record_t *activity) {
   std::shared_ptr<Metric> metric;
   switch (activity->kind) {
-  case HIP_OP_DISPATCH_KIND_KERNEL_:
-  case HIP_OP_DISPATCH_KIND_TASK_: {
+  case kHipVdiCommandKernel: {
     metric = std::make_shared<KernelMetric>(
         static_cast<uint64_t>(activity->begin_ns),
         static_cast<uint64_t>(activity->end_ns), 1,
@@ -199,8 +176,7 @@ void RoctracerProfiler::processActivity(std::map<uint32_t, size_t> &correlation,
                                         std::set<Data *> &dataSet,
                                         const roctracer_record_t *record) {
   switch (record->kind) {
-  case HIP_OP_DISPATCH_KIND_KERNEL_:
-  case HIP_OP_DISPATCH_KIND_TASK_: {
+  case kHipVdiCommandKernel: {
     processActivityKernel(correlation, dataSet, record);
     break;
   }
