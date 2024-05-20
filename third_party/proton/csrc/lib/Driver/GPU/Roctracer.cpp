@@ -14,10 +14,10 @@ struct ExternLibRoctracer : public ExternLibBase {
 
 void *ExternLibRoctracer::lib = nullptr;
 
-DEFINE_DISPATCH(ExternLibRoctracer, set_properties, roctracer_set_properties,
+DEFINE_DISPATCH(ExternLibRoctracer, setProperties, roctracer_set_properties,
                 roctracer_domain_t, void *)
 
-DEFINE_DISPATCH(ExternLibRoctracer, get_timestamp, roctracer_get_timestamp,
+DEFINE_DISPATCH(ExternLibRoctracer, getTimestamp, roctracer_get_timestamp,
                 roctracer_timestamp_t *)
 
 void start() {
@@ -44,7 +44,7 @@ void stop() {
     func();
 }
 
-char *op_string(uint32_t domain, uint32_t op, uint32_t kind) {
+char *getOpString(uint32_t domain, uint32_t op, uint32_t kind) {
   typedef char *(*roctracer_op_string_t)(uint32_t, uint32_t, uint32_t);
   static roctracer_op_string_t func = nullptr;
   Dispatch<ExternLibRoctracer>::init(ExternLibRoctracer::name,
@@ -55,48 +55,48 @@ char *op_string(uint32_t domain, uint32_t op, uint32_t kind) {
   return (func ? func(domain, op, kind) : NULL);
 }
 
-DEFINE_DISPATCH(ExternLibRoctracer, enable_domain_callback,
+DEFINE_DISPATCH(ExternLibRoctracer, enableDomainCallback,
                 roctracer_enable_domain_callback, activity_domain_t,
                 activity_rtapi_callback_t, void *)
 
-DEFINE_DISPATCH(ExternLibRoctracer, disable_domain_callback,
+DEFINE_DISPATCH(ExternLibRoctracer, disableDomainCallback,
                 roctracer_disable_domain_callback, activity_domain_t)
 
-DEFINE_DISPATCH(ExternLibRoctracer, enable_op_callback,
+DEFINE_DISPATCH(ExternLibRoctracer, enableOpCallback,
                 roctracer_enable_op_callback, activity_domain_t, uint32_t,
                 activity_rtapi_callback_t, void *)
 
-DEFINE_DISPATCH(ExternLibRoctracer, disable_op_callback,
+DEFINE_DISPATCH(ExternLibRoctracer, disableOpCallback,
                 roctracer_disable_op_callback, activity_domain_t, uint32_t)
 
-DEFINE_DISPATCH(ExternLibRoctracer, open_pool, roctracer_open_pool,
+DEFINE_DISPATCH(ExternLibRoctracer, openPool, roctracer_open_pool,
                 const roctracer_properties_t *)
 
-DEFINE_DISPATCH(ExternLibRoctracer, close_pool, roctracer_close_pool)
+DEFINE_DISPATCH(ExternLibRoctracer, closePool, roctracer_close_pool)
 
-DEFINE_DISPATCH(ExternLibRoctracer, enable_op_activity,
+DEFINE_DISPATCH(ExternLibRoctracer, enableOpActivity,
                 roctracer_enable_op_activity, activity_domain_t, uint32_t)
 
-DEFINE_DISPATCH(ExternLibRoctracer, enable_domain_activity,
+DEFINE_DISPATCH(ExternLibRoctracer, enableDomainActivity,
                 roctracer_enable_domain_activity, activity_domain_t)
 
-DEFINE_DISPATCH(ExternLibRoctracer, disable_op_activity,
+DEFINE_DISPATCH(ExternLibRoctracer, disableOpActivity,
                 roctracer_disable_op_activity, activity_domain_t, uint32_t)
 
-DEFINE_DISPATCH(ExternLibRoctracer, disable_domain_activity,
+DEFINE_DISPATCH(ExternLibRoctracer, disableDomainActivity,
                 roctracer_disable_domain_activity, activity_domain_t)
 
-DEFINE_DISPATCH(ExternLibRoctracer, flush_activity, roctracer_flush_activity)
+DEFINE_DISPATCH(ExternLibRoctracer, flushActivity, roctracer_flush_activity)
 
-DEFINE_DISPATCH(ExternLibRoctracer, activity_push_external_correlation_id,
+DEFINE_DISPATCH(ExternLibRoctracer, activityPushExternalCorrelationId,
                 roctracer_activity_push_external_correlation_id,
                 activity_correlation_id_t)
 
-DEFINE_DISPATCH(ExternLibRoctracer, activity_pop_external_correlation_id,
+DEFINE_DISPATCH(ExternLibRoctracer, activityPopExternalCorrelationId,
                 roctracer_activity_pop_external_correlation_id,
                 activity_correlation_id_t *)
 
-DEFINE_DISPATCH(ExternLibRoctracer, next_record, roctracer_next_record,
+DEFINE_DISPATCH(ExternLibRoctracer, getNextRecord, roctracer_next_record,
                 const activity_record_t *, const activity_record_t **)
 
 } // namespace roctracer

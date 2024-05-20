@@ -134,23 +134,23 @@ void RoctracerProfiler::doStart() {
   // Inline Callbacks
   // roctracer::enable_domain_callback<true>(ACTIVITY_DOMAIN_HSA_API,
   //                                         api_callback, nullptr);
-  roctracer::enable_domain_callback<true>(ACTIVITY_DOMAIN_HIP_API, api_callback,
-                                          nullptr);
+  roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_HIP_API, api_callback,
+                                        nullptr);
 
   // Activity Records
   roctracer_properties_t properties;
   memset(&properties, 0, sizeof(roctracer_properties_t));
   properties.buffer_size = 0x1000;
   properties.buffer_callback_fun = activity_callback;
-  roctracer::open_pool<true>(&properties);
-  roctracer::enable_domain_activity<true>(ACTIVITY_DOMAIN_HIP_OPS);
+  roctracer::openPool<true>(&properties);
+  roctracer::enableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
   roctracer::start();
 }
 
 void RoctracerProfiler::doFlush() {
   // Implement reliable flushing.  Wait for all dispatched ops to be reported
   auto ret = hip::deviceSynchronize<true>();
-  roctracer::flush_activity<true>();
+  roctracer::flushActivity<true>();
   std::unique_lock<std::mutex> lock(s_flush.mutex_);
   // Load ending id from the running max
   auto correlationId = s_flush.maxCorrelationId_.load();
@@ -159,7 +159,7 @@ void RoctracerProfiler::doFlush() {
   int timeout = 500;
   while ((s_flush.maxCompletedCorrelationId_ < correlationId) && --timeout) {
     lock.unlock();
-    roctracer::flush_activity<true>();
+    roctracer::flushActivity<true>();
     usleep(1000);
     lock.lock();
   }
@@ -168,9 +168,9 @@ void RoctracerProfiler::doFlush() {
 void RoctracerProfiler::doStop() {
   roctracer::stop();
   // roctracer::disable_domain_callback<true>(ACTIVITY_DOMAIN_HSA_API);
-  roctracer::disable_domain_callback<true>(ACTIVITY_DOMAIN_HIP_API);
-  roctracer::disable_domain_activity<true>(ACTIVITY_DOMAIN_HIP_OPS);
-  roctracer::close_pool<true>();
+  roctracer::disableDomainCallback<true>(ACTIVITY_DOMAIN_HIP_API);
+  roctracer::disableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
+  roctracer::closePool<true>();
 }
 
 void RoctracerProfiler::activity_callback(const char *begin, const char *end,
@@ -191,7 +191,7 @@ void RoctracerProfiler::activity_callback(const char *begin, const char *end,
       s_flush.maxCompletedCorrelationId_ = record->correlation_id;
     }
     processActivity(correlation, dataSet, record);
-    roctracer::next_record<true>(record, &record);
+    roctracer::getNextRecord<true>(record, &record);
   }
 }
 
@@ -253,7 +253,7 @@ void RoctracerProfiler::api_callback(uint32_t domain, uint32_t cid,
       {
         // Valid context and outermost level of the kernel launch
         const char *name =
-            roctracer::op_string(ACTIVITY_DOMAIN_HIP_API, cid, 0);
+            roctracer::getOpString(ACTIVITY_DOMAIN_HIP_API, cid, 0);
         auto scopeId = Scope::getNewScopeId();
         auto scope = Scope(scopeId, name);
         roctracerState.record(scope, profiler.getDataSet());
