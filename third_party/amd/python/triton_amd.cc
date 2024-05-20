@@ -1,4 +1,4 @@
-﻿#include "TritonAMDGPUToLLVM/Passes.h"
+#include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
@@ -188,11 +188,6 @@ void init_triton_amd(py::module &&m) {
             std::move(ce), *sti, mcOptions.MCRelaxAll,
             mcOptions.MCIncrementalLinkerCompatible,
             /*DWARFMustBeAtTheEnd=*/false));
-        // This was removed in https://github.com/llvm/llvm-project/pull/91082,
-        // but reverted in a later LLVM version.
-        // TODO(khasanovaa): uncomment the following line on the next LLVM
-        // update if it remains reverted.
-        // mcStreamer->setUseAssemblerInfoForParsing(true);
 
         std::unique_ptr<llvm::MCAsmParser> parser(
             createMCAsmParser(srcMgr, ctx, *mcStreamer, *mai));
