@@ -1,9 +1,6 @@
-import sys
-from io import StringIO
-
 import triton
 import triton.language as tl
-import pytest
+
 
 def test_mma_remark(capfd):
 
@@ -28,7 +25,7 @@ def test_mma_remark(capfd):
                 'i32', 10: 'i32', 11: 'i32'
             }, constants={}))
     captured = capfd.readouterr()
+
     assert "test_warning.py:21:18: remark: Warning: can't use MMA V3 for the dot op" in captured.err, "expect MMA V3 remark"
     assert "MMA V3" in captured.err
     assert "test_warning.py:21:18: note: see current operation:" in captured.err
-
