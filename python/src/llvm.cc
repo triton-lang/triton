@@ -304,15 +304,14 @@ void init_triton_llvm(py::module &&m) {
                        instrCbPtr);
 
         std::string pluginFile =
-            mlir::triton::tools::getStrEnv("AMDGCN_INSTRUMENTATION_LIB");
+            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN");
         if (!pluginFile.empty()) {
-          llvm::errs()
-              << "Adding AMDGCN instrumentation pass to Triton pipeline"
-              << "\n";
+          llvm::dbgs() << "Adding instrumentation pass to Triton pipeline"
+                       << "\n";
           auto passPlugin = llvm::PassPlugin::Load(pluginFile);
           if (!passPlugin) {
             llvm::Error Err = passPlugin.takeError();
-            llvm::errs() << "ERROR: " << Err << "\n";
+            llvm::errs() << "Pass Plugin Error: " << Err << "\n";
             consumeError(std::move(Err));
           }
           passPlugin->registerPassBuilderCallbacks(pb);

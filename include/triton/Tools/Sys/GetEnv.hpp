@@ -13,13 +13,13 @@ namespace mlir::triton {
 inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     // clang-format off
     "AMDGCN_ENABLE_DUMP",
-    "AMDGCN_INSTRUMENTATION_LIB",
     "DISABLE_FAST_REDUCTION",
     "DISABLE_LLVM_OPT",
     "DISABLE_MMA_V3",
     "DISABLE_PTXAS_OPT",
     "LLVM_IR_ENABLE_DUMP",
     "LLVM_ENABLE_TIMING",
+    "LLVM_PASS_PLUGIN",
     "MLIR_ENABLE_DIAGNOSTICS",
     "MLIR_ENABLE_DUMP",
     "MLIR_ENABLE_TIMING",
