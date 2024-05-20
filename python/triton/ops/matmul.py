@@ -109,8 +109,8 @@ def _kernel(A, B, C, M, N, K,  #
     # do matrix multiplication
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
-    rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
+    ram = tl.max_contiguous(tl.multiple_of(rm, BLOCK_M), BLOCK_M)
+    rbn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_N), BLOCK_N)
     rk = pid_z * BLOCK_K + tl.arange(0, BLOCK_K)
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
@@ -118,13 +118,15 @@ def _kernel(A, B, C, M, N, K,  #
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
     for k in range(0, tl.cdiv(K, BLOCK_K * SPLIT_K)):
         if EVEN_K:
-            a = tl.load(A)
-            b = tl.load(B)
+            a = tl.load(A, mask=rm[:, None] < M, other=0.)
+            b = tl.load(B, mask=rn[None, :] < N, other=0.)
         else:
             k_remaining = K - k * (BLOCK_K * SPLIT_K)
             _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
-            a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
-            b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
+            mask_a = (rm < M)[:, None] & (rk < k_remaining)[None, :]
+            mask_b = (rn < N)[None, :] & (rk < k_remaining)[:, None]
+            a = tl.load(A, mask=mask_a, other=_0)
+            b = tl.load(B, mask=mask_b, other=_0)
         if AB_DTYPE is not None:
             a = a.to(AB_DTYPE)
             b = b.to(AB_DTYPE)
