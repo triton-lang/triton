@@ -127,8 +127,6 @@ LogicalResult BarrierExpectOp::verify() {
 void BarrierExpectOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), getAlloc(),
-                       mlir::triton::gpu::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), getAlloc(),
                        mlir::triton::gpu::SharedMemory::get());
 }
