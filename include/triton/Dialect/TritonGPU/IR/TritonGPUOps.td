@@ -74,7 +74,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   AttrSizedOperandSegments,
-  MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   TypesMatchWith<"infer mask type from src type",
                  "src", "mask", "getI1SameShape($_self)",
                  "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
@@ -198,7 +198,7 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let hasVerifier = 1;
 }
 
-def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>]>]> {
+def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
   let description = [{
@@ -218,7 +218,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [MemoryEffects<[MemRead<SharedMemory>
   let results = (outs TT_Tensor:$result);
 }
 
-def TTG_LocalStoreOp : TTG_Op<"local_store", [MemoryEffects<[MemWrite<SharedMemory>]>]> {
+def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Store a distributed tensor into a buffer in local memory";
 
   let description = [{
