@@ -1,122 +1,67 @@
-# Triton Programming Language Contributor's Guide
+# Governance Structure
 
-First of all, thank you for considering contributing to the Triton programming language! We appreciate the time and effort you're willing to put into improving and expanding our project. In order to maintain a high standard of code and a welcoming atmosphere for collaboration, we kindly ask you to follow the guidelines outlined below.
+Triton adopts the following hierarchical technical governance structure:
+* A community of **contributors** who file issues and submit pull requests
+* A group of **module maintainers** who own parts of Triton and drive their development
+* A body of **core maintainers** who own Triton overall and drive its development
+* A **lead core maintainer** who is the catch-all decision maker when consensus cannot be reached by core maintainers
 
-## General Guidelines
+All contributions are expected to follow Triton’s design principles, as enforced by module and core maintainers. While high-quality pull requests are appreciated and encouraged, all maintainers reserve the right to prioritize their own work over code reviews at-will, hence contributors should not expect their work to be reviewed promptly.
 
-1. **Quality Contributions:** We value meaningful contributions that aim to improve the project and help it grow. Please refrain from submitting low-effort pull requests (PR) -- such as minor formatting/typo fixes -- solely for the purpose of appearing in the commit history. Maintainers have limited bandwidth, and may decline to review such work.
+Contributors can maximize the chances of their work being accepted by maintainers by meeting a high quality bar before sending a PR to maintainers.  We encourage maintainers who contribute to Triton on behalf of a company to get reviews from senior developers within their company before sending to maintainers.
+Module maintainers
+We aim to make the Triton codebase as modular as possible, such that different components (e.g., subdirectories) can be improved in parallel under the supervision of different module maintainers.
 
-2. **Code Formatting:** Our Continuous Integration (CI) pipeline uses autopep8, isort, and clang-format to check code formatting. To avoid failing the CI workflow due to formatting issues, please utilize the provided `.pre-commit-config.yaml` pre-commit configuration file.
+What constitutes (or not) a module is up to the core maintainers. Core maintainers also reserve the right to decide whether the development of a module should happen – or keep happening – in-tree or not.
 
-3. **Unit Testing:** When contributing new functionalities, please also include appropriate tests. We aim to continuously improve and expand our CI pipeline to ensure the robustness and reliability of the project. PRs that add a large amount of untested code will be rejected.
+**List of in-tree modules (as of 05/12/2024, alphabetical order):**
+* AMD backend (Lei Zhang)
+* Interpreter (Keren Zhou)
+* Profiler (Keren Zhou)
 
-4. **Respectful Communication:** In all discussions related to PRs or other contributions, please maintain a courteous and civil tone. We strive to foster a collaborative environment that is inclusive and respectful to all contributors.
+Note: Parts of Triton that are not listed above (e.g., Nvidia backend) are assumed to be owned by core maintainers.
 
+Note: Some important parts of the Triton eco-system (e.g., Intel XPU backend) may be maintained out-of-tree and advertised in our repository. The governance rules described in this document do not carry over to these modules.
 
-## Request for Comments (RFCs)
-
-RFCs are a crucial aspect of the collaborative development process, as they provide a structured way to propose and discuss significant changes or additions to the project. RFCs may encompass modifications to the language itself, extensive changes in the compiler backend, or other substantial updates that impact the Triton ecosystem.
-
-To ensure that RFCs are clear and easy to understand, consider the following guidelines when creating one:
-
-### Purpose
-
-The purpose of an RFC is to:
-
-- Clearly communicate your proposal to the Triton community
-- Collect feedback from maintainers and other contributors
-- Provide a platform for discussing and refining ideas
-- Reach a consensus on the best approach for implementing the proposed changes
-
-### Structure
-
-A well-structured RFC should include:
-
-1. **Title:** A concise and descriptive title that reflects the main topic of the proposal.
-
-2. **Summary:** A brief overview of the proposed changes, including the motivation behind them and their intended impact on the project.
-
-3. **Detailed Design:** A thorough description of the proposed changes, including:
-   - Technical details and implementation approach
-   - Any new or modified components, functions, or data structures
-   - Any potential challenges or limitations, as well as proposed solutions
-
-4. **Examples and Use Cases:** Provide examples of how the proposed changes would be used in real-world scenarios, as well as any use cases that demonstrate the benefits of the changes.
-
-5. **Performance Impact:** Discuss the expected performance impact of the proposed changes, including any potential bottlenecks or performance improvements.
-
-6. **Timeline and Milestones:** Outline a proposed timeline for implementing the changes, including any milestones or intermediate steps.
+__List of out-of-tree modules (as of 05/12/2024, alphabetical order):__
+* CPU backend (Bert Maher, Ilya Enkovich)
+* Intel backend (Ettore Tiotto, Whitney Tsang)
 
 
-## New backends
+## Core maintainers
+The core maintainers drive the development of Triton at large and set the roadmap for the project. As such, they have the following responsibilities:
+* Proposing, implementing and reviewing profound changes to user-facing APIs, IR specifications and/or pass infrastructures
+* Enforcing code quality standards and adherence to core design principles
+* Drawing module boundaries and resolving disputes between module maintainers
 
-Due to limited resources, we need to prioritize the number of targets we support. We are committed to providing upstream support for Nvidia and AMD GPUs. However, if you wish to contribute support for other backends, please start your project in a fork. If your backend proves to be useful and meets our performance requirements, we will discuss the possibility of upstreaming it.
 
+The core maintainers as a group have the power to veto any decision made at a Module maintainer level.
 
-## Project Structure
-```
-triton
-├── lib : C++ code for python library
-│   ├──Analysis
-│   │	Memory barrier analysis
-│   │	class to extract axis information from MLIR ops
-│   │	implementation of the shared memory allocation analysis for Triton dialect
-│   │
-│   ├──Conversion
-│   │	├──TritonGPUToLLVM:  Transforms TritonGPU  to LLVM;
-│   │	│
-│   │	├──TritonToTritonGPU: Transforms ops to TritonGPU ops; loading, storing, arithmetic, casting, and tensor operations.
-│   │	│
-│   │	│
-│   │	│
-│   ├──Dialect
-│   │	├──Triton
-│   │	│	Defines core IR for Triton compiler
-│   │	├──TritonGPU
-│   │	    Defines TritonGPU operation for IR
-│   │
-│   ├──Target: contains Triton targets for converting to PTX, LLVMIR and HSACO IR targets
-│   │
-├── bin
-├── cmake
-├── docs ├── Documentation regarding using triton
-├── include
-│   CMakelists.txt
-│   ├──triton
-│   │   ├──
-├── python
-│   ├──
-│   ├── MANIFEST.in
-│   ├── README.md
-│   ├── build
-│   ├── examples
-│   ├── pyproject.toml
-│   ├── setup.py: pip install for python package
-│   ├── src
-│   ├── test
-│   ├── triton
-│   │	├── _C: Includes header files and compiled .so file for C library
-│   │	│
-│   │	├──common: Has interface for CUDA hardware backend
-│   │	│
-│   │	├──compiler: contains code for compiling source code to IR and launching GPU kernels
-│   │	│
-│   │	├──interpreter: memory-map for tensors, converting primitives to tensors, and arethmetic ops for tensors
-│   │	│
-│   │	├──language: core of triton language, load tensors to SRAM, language logic, etc.
-│   │	│
-│   │	├──ops: contains functions for flash-attn, softmax, cross-entropy and other torch.nn.F functions
-│   │	├──runtime: contains impl jit compilation, autotuning, backend drivers, caching, error handles, etc.
-│   │	├──third_party
-│   │	├──tools
-│   ├── triton.egg-info
-│   ├── tutorials: contains tutorials for various use-cases
-├── test
-│   ├──Analysis
-│   ├──Conversion
-│   ├──Dialect
-│   ├──Target
-├── third_party
-├── unittest
-└── utils
-```
+The core maintainers should publicly articulate their decision-making, and share the reasoning behind their decisions, vetoes, and dispute resolution.
+
+__List of core maintainers (as of 05/12/2024, alphabetical order):__
+* Justin Lebar
+* Keren Zhou
+* Phil Tillet
+* Thomas Raoux
+* Zahi Moudallal
+
+## Lead core maintainer
+When core maintainers cannot come to a consensus, a publicly declared lead maintainer is expected to settle the debate and make executive decisions.
+
+The Lead Core Maintainer should publicly articulate their decision-making, and give a clear reasoning for their decisions.
+
+The Lead Core Maintainer is also responsible for confirming or removing core maintainers.
+
+**Lead maintainer (as of 05/12/2024)**
+* Phil Tillet
+
+# Decision Making
+
+## Uncontroversial Changes
+
+We are committed to accepting functional bug fixes that meet our quality standards – and include minimized unit tests to avoid future regressions. Performance improvements generally fall under the same category, with the caveat that they may be rejected if the trade-off between usefulness and complexity is deemed unfavorable by core maintainers (e.g., complex swizzling logic to improve the performance of non-tensor-cores matrix multiplications). Design changes that neither fix known functional nor performance issues are automatically considered controversial.
+
+## Controversial Changes
+
+More controversial design changes (e.g., changes in our IRs/APIs/Passes) are evaluated on a case-by-case basis under the subjective judgment of core maintainers. While it is possible for contributors to propose and land deep design changes upstream (see https://github.com/triton-lang/triton/pull/1305), the community should expect such occurrences to be relatively rare.

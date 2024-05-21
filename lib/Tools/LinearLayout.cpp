@@ -16,71 +16,69 @@ using BasesT = LinearLayout::BasesT;
 using llvm::Twine;
 
 BasesT makeBasesMap(
-    ArrayRef<std::pair<StringAttr,
-                       ArrayRef<std::pair<StringAttr, std::vector<int32_t>>>>>
-        bases) {
+    ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases) {
   BasesT ret;
-  for (const auto &[inDim, out] : bases) {
-    for (const auto &[outDim, basis] : out) {
-      ret[inDim][outDim] = basis;
-    }
+  for (const auto &[inDim, inDimBases] : bases) {
+    ret[inDim] = inDimBases;
   }
   return ret;
 }
 
-std::string stringifyBases(const BasesT &bases) {
+std::string stringifyBases(const BasesT &bases,
+                           ArrayRef<StringAttr> outDimNames) {
   std::string ret;
-  for (const auto &[inDim, outs] : bases) {
-    ret += " - " + inDim.str() + "\n";
-    for (const auto &[outDim, bs] : outs) {
-      ret += "   " + outDim.str() + ": [" + join(bs) + "]\n";
+
+  if (bases.empty())
+    return "(empty layout)\n";
+
+  // TODO: Add spaces for alignment.
+  for (const auto &[inDim, inDimBases] : bases) {
+    if (inDimBases.empty()) {
+      ret += " - " + inDim.str() + " is a size 1 dimension\n";
+      continue;
     }
+
+    ret += " - " +
+           join(llvm::seq(inDimBases.size()), "\n   ",
+                [&, &inDim = inDim, &inDimBases = inDimBases](int i) {
+                  return inDim.str() + "=" + std::to_string(1 << i) + " -> (" +
+                         join(inDimBases[i], ", ") + ")";
+                }) +
+           "\n";
   }
+  ret += "where out dims are: [" +
+         join(outDimNames, ", ", [](StringAttr s) { return s.str(); }) + "]\n";
   return ret;
 }
 
-BasesT validateBases(BasesT bases) {
+BasesT validateBases(BasesT bases, ArrayRef<StringAttr> outDimNames) {
   if (bases.empty())
     return bases;
 
-  for (const auto &[inDim, outs] : bases) {
-    for (const auto &[outDim, bs] : outs) {
-      if (llvm::any_of(bs, [](int32_t b) { return b < 0; })) {
+  for (const auto &[inDim, inDimBases] : bases) {
+    for (const auto &basis : inDimBases) {
+      if (llvm::any_of(basis, [](int32_t b) { return b < 0; })) {
         llvm::report_fatal_error(
             "Invalid bases passed to LinearLayout.  Expected all basis "
             "values to be non-negative, but found a negative value for "
             "in dimension '" +
-            Twine(inDim) + "', out dimension '" + Twine(outDim) +
-            "'.  Full list of bases:\n" + stringifyBases(bases));
+            Twine(inDim) + "'.  Full list of bases:\n" +
+            stringifyBases(bases, outDimNames));
       }
     }
   }
 
-  // Check that the bases for each `in` dim all have the same length.
-  for (const auto &[inDim, outs] : bases) {
-    int expectedSize = outs.front().second.size();
-    for (const auto &[outDim, bs] : outs) {
-      if (bs.size() != expectedSize) {
+  // Check that the bases all have length equal to outDimNames.size().
+  for (const auto &[inDim, inDimBases] : bases) {
+    for (const auto &basis : inDimBases) {
+      if (basis.size() != outDimNames.size()) {
         llvm::report_fatal_error(
-            "Invalid bases passed to LinearLayout.  For a given `in` "
-            "dimension, expected all basis lists to have the same "
-            "length.  But this failed for in dimension '" +
-            Twine(inDim) + "'.  Full list of bases:\n" + stringifyBases(bases));
+            "Invalid bases passed to LinearLayout.  Expect all bases to have "
+            "the same size, equal to outDimNames.size() (" +
+            Twine(outDimNames.size()) +
+            ").  But this failed for in dimension '" + Twine(inDim) +
+            "'.  Full list of bases:\n" + stringifyBases(bases, outDimNames));
       }
-    }
-  }
-
-  // Check that every `in` dim has the same set of `out` dims, in the same
-  // order.
-  auto expectedOuts =
-      llvm::to_vector(llvm::make_first_range(bases.front().second));
-  for (const auto &[inDim, outs] : bases) {
-    if (llvm::to_vector(llvm::make_first_range(outs)) != expectedOuts) {
-      llvm::report_fatal_error(
-          "Invalid bases passed to LinearLayout.  Expected all bases to have "
-          "the same out dimensions, in the same order.  But this failed for in "
-          "dimension '" +
-          Twine(inDim) + "'.  Full list of bases:\n" + stringifyBases(bases));
     }
   }
 
@@ -126,7 +124,7 @@ int getMatrixRank(const LinearLayout &layout, StringAttr outDim) {
   int c = 0;
   for (StringAttr inDim : layout.getInDimNames()) {
     for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
-      uint64_t basis = layout.getBasis(inDim, outDim, i);
+      uint64_t basis = layout.getBasis(inDim, i, outDim);
       for (int j = 0; j < numRows; j++) {
         m[j] |= ((basis >> j) & 1) << c;
       }
@@ -171,23 +169,35 @@ void validateSurjectivity(const LinearLayout &layout) {
           Twine(outDim) + ", where we got rank " + Twine(rank) +
           " instead of expected rank " + Twine(expectedRank) +
           ".  Full list of bases:\n" +
-          Twine(stringifyBases(layout.getBases())));
+          Twine(stringifyBases(layout.getBases(), layout.getOutDimNames())));
     }
+  }
+}
+
+template <typename T, typename U>
+void assertDimsEqualIgnoringOrder(T &&a, U &&b) {
+  llvm::DenseSet<StringAttr> as(a.begin(), a.end());
+  llvm::DenseSet<StringAttr> bs(b.begin(), b.end());
+  if (as != bs) {
+    llvm::report_fatal_error("Dimensions must match, ignoring order, but they "
+                             "don't.  Got dims: [" +
+                             Twine(triton::join(a, ", ")) + "] and [" +
+                             triton::join(b, ", ") + "]");
   }
 }
 
 } // anonymous namespace
 
-LinearLayout::LinearLayout(BasesT bases)
-    : bases(validateBases(std::move(bases))) {
+LinearLayout::LinearLayout(BasesT bases, ArrayRef<StringAttr> outDimNames)
+    : bases(validateBases(std::move(bases), outDimNames)),
+      outDimNames(outDimNames.begin(), outDimNames.end()) {
   validateSurjectivity(*this);
 }
 
 LinearLayout::LinearLayout(
-    ArrayRef<std::pair<StringAttr,
-                       ArrayRef<std::pair<StringAttr, std::vector<int32_t>>>>>
-        bases)
-    : LinearLayout(makeBasesMap(bases)) {}
+    ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases,
+    ArrayRef<StringAttr> outDimNames)
+    : LinearLayout(makeBasesMap(bases), outDimNames) {}
 
 /*static*/ LinearLayout LinearLayout::identity1D(int32_t size,
                                                  StringAttr inDimName,
@@ -196,12 +206,11 @@ LinearLayout::LinearLayout(
     return LinearLayout::empty();
 
   assert(llvm::isPowerOf2_32(size));
-  std::vector<int32_t> powersOf2;
+  std::vector<std::vector<int32_t>> powersOf2;
   for (int32_t i = 1; i < size; i *= 2) {
-    powersOf2.push_back(i);
+    powersOf2.emplace_back().push_back(i);
   }
-  return LinearLayout(
-      {{inDimName, std::pair(outDimName, std::move(powersOf2))}});
+  return LinearLayout({{inDimName, std::move(powersOf2)}}, {outDimName});
 }
 
 /*static*/ LinearLayout LinearLayout::zeros1D(int32_t size,
@@ -211,73 +220,73 @@ LinearLayout::LinearLayout(
     return LinearLayout::empty();
 
   assert(llvm::isPowerOf2_32(size));
-  return LinearLayout(
-      {{inDimName,
-        std::pair(outDimName, std::vector<int32_t>(llvm::Log2_32(size)))}});
+  std::vector<std::vector<int32_t>> zeros;
+  for (int i = 0; i < llvm::Log2_32(size); i++) {
+    zeros.emplace_back().push_back(0);
+  }
+  return LinearLayout({{inDimName, zeros}}, {outDimName});
 }
 
-bool LinearLayout::hasInDim(StringAttr inDim) const {
-  return bases.find(inDim) != bases.end();
-}
-
-bool LinearLayout::hasOutDim(StringAttr outDim) const {
-  if (bases.empty())
-    return false;
-  return bases.front().second.find(outDim) != bases.front().second.end();
+int32_t LinearLayout::getOutDimIndex(StringAttr outDim) const {
+  // Sadly SetVector doesn't provide an O(1) way to do this.
+  for (int i = 0; i < outDimNames.size(); ++i) {
+    if (outDimNames[i] == outDim) {
+      return i;
+    }
+  }
+  llvm::report_fatal_error("outDim " + Twine(outDim) + " is not in layout\n" +
+                           toString());
 }
 
 int32_t LinearLayout::getInDimSizeLog2(StringAttr inDim) const {
   auto it = bases.find(inDim);
   assert(it != bases.end());
-  return it->second.front().second.size();
+  return it->second.size();
 }
 
 int32_t LinearLayout::getOutDimSizeLog2(StringAttr outDim) const {
   // TODO(jlebar): Cache this?
+  int32_t outDimIdx = getOutDimIndex(outDim);
   int32_t max = 0;
-  for (const auto &[inDim, outs] : bases) {
-    auto it = outs.find(outDim);
-    assert(it != outs.end());
-    const std::vector<int32_t> &bs = it->second;
-    int32_t sizeLog2 =
-        bs.empty() ? 0 : llvm::Log2_32(*llvm::max_element(bs)) + 1;
-    max = std::max(max, sizeLog2);
+  for (const auto &[inDim, inDimBases] : bases) {
+    for (const auto &basis : inDimBases) {
+      max = std::max(max, basis[outDimIdx]);
+    }
   }
-  return max;
+  return max == 0 ? 0 : llvm::Log2_32(max) + 1;
 }
 
 LinearLayout LinearLayout::transposeIns(ArrayRef<StringAttr> newInDims) const {
-  // newInDims must contain the same values as getInDims(), ignoring order.
-  DenseSet<StringAttr> newInDimsSet(newInDims.begin(), newInDims.end());
-  DenseSet<StringAttr> oldInDimsSet(getInDimNames().begin(),
-                                    getInDimNames().end());
-  assert(newInDimsSet == oldInDimsSet);
+  assertDimsEqualIgnoringOrder(newInDims, getInDimNames());
 
   BasesT newBases;
   for (const auto &inDim : newInDims) {
-    for (const auto &outDim : getOutDimNames()) {
-      newBases[inDim][outDim] = bases.find(inDim)->second.lookup(outDim);
-    }
+    newBases[inDim] = bases.find(inDim)->second;
   }
-  return LinearLayout(std::move(newBases));
+  return LinearLayout(std::move(newBases), outDimNames.getArrayRef());
 }
 
 LinearLayout
 LinearLayout::transposeOuts(ArrayRef<StringAttr> newOutDims) const {
-  // newOutDims must contain the same values as getOutDimNames(), ignoring
-  // order.
-  DenseSet<StringAttr> newOutDimsSet(newOutDims.begin(), newOutDims.end());
-  DenseSet<StringAttr> oldOutDimsSet(getOutDimNames().begin(),
-                                     getOutDimNames().end());
-  assert(newOutDimsSet == oldOutDimsSet);
+  assertDimsEqualIgnoringOrder(newOutDims, getOutDimNames());
+
+  std::vector<int32_t> permutation;
+  for (const auto &outDim : newOutDims) {
+    permutation.push_back(getOutDimIndex(outDim));
+  }
 
   BasesT newBases;
-  for (const auto &[inDim, outs] : bases) {
-    for (const auto &outDim : newOutDims) {
-      newBases[inDim][outDim] = outs.lookup(outDim);
+  for (const auto &[inDim, inDimBases] : bases) {
+    auto &newInDimBases = newBases[inDim];
+    for (const auto &basis : inDimBases) {
+      std::vector<int32_t> newBasis;
+      for (int32_t i : permutation) {
+        newBasis.push_back(basis[i]);
+      }
+      newInDimBases.push_back(std::move(newBasis));
     }
   }
-  return LinearLayout(std::move(newBases));
+  return LinearLayout(std::move(newBases), newOutDims);
 }
 
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
@@ -316,26 +325,30 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   checkCommonDims(outer.getInDimNames(), inner.getInDimNames());
   checkCommonDims(outer.getOutDimNames(), inner.getOutDimNames());
 
-  // Get the sizeLog2 of all inner and outer dimensions we're going to consider,
-  // in order.  `inner` is more minor, so its dimensions come first.
+  // Get the sizeLog2 of all input and output dimensions we're going to
+  // consider, in order.  `inner` is more minor, so its dimensions come first.
   llvm::MapVector<StringAttr, int32_t> inDimSizes;
-  llvm::MapVector<StringAttr, int32_t> outDimSizes;
+  llvm::SetVector<StringAttr> outDimNames;
   for (const auto &layout : {inner, outer}) {
     for (StringAttr inDim : layout.getInDimNames()) {
       inDimSizes[inDim] += layout.getInDimSizeLog2(inDim);
     }
     for (StringAttr outDim : layout.getOutDimNames()) {
-      outDimSizes[outDim] += layout.getOutDimSizeLog2(outDim);
+      outDimNames.insert(outDim);
     }
   }
-
   BasesT allBases;
   for (auto [inDimName, inDimSize] : inDimSizes) {
-    for (auto [outDimName, outDimSize] : outDimSizes) {
-      std::vector<int32_t> bases(inDimSize);
+    std::vector<std::vector<int32_t>> &inDimBases = allBases[inDimName];
+
+    // Fill with zeros.
+    inDimBases = std::vector<std::vector<int32_t>>(
+        inDimSize, std::vector<int32_t>(outDimNames.size(), 0));
+
+    for (auto [outDimIdx, outDimName] : llvm::enumerate(outDimNames)) {
       if (inner.hasInDim(inDimName) && inner.hasOutDim(outDimName)) {
         for (int i = 0; i < inner.getInDimSizeLog2(inDimName); i++) {
-          bases[i] = inner.getBasis(inDimName, outDimName, i);
+          inDimBases[i][outDimIdx] = inner.getBasis(inDimName, i, outDimName);
         }
       }
       if (outer.hasInDim(inDimName) && outer.hasOutDim(outDimName)) {
@@ -345,31 +358,19 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
                         ? inner.getOutDimSizeLog2(outDimName)
                         : 0;
         for (int i = 0; i < outer.getInDimSizeLog2(inDimName); i++) {
-          bases[offset + i] = outer.getBasis(inDimName, outDimName, i) << shift;
+          inDimBases[offset + i][outDimIdx] =
+              outer.getBasis(inDimName, i, outDimName) << shift;
         }
       }
-      allBases[inDimName][outDimName] = std::move(bases);
     }
   }
 
-  return LinearLayout(std::move(allBases));
+  return LinearLayout(std::move(allBases), outDimNames.getArrayRef());
 }
 
 SmallVector<std::pair<StringAttr, int32_t>>
 LinearLayout::apply(ArrayRef<std::pair<StringAttr, int32_t>> ins) const {
-  // `ins` must contain the same dimensions as getInDimNames(), modulo
-  // reordering.
-  auto insNames = llvm::make_first_range(ins);
-  llvm::DenseSet<StringAttr> argInDims(insNames.begin(), insNames.end());
-  llvm::DenseSet<StringAttr> thisInDims(getInDimNames().begin(),
-                                        getInDimNames().end());
-  if (argInDims != thisInDims) {
-    llvm::report_fatal_error(
-        Twine("Cannot apply layout.  The given input dimensions must match the "
-              "layout's input dimensions, modulo reordering, but they don't.") +
-        "\nGiven dims:" + triton::join(insNames, ", ") +
-        "\nLayout's dims:" + triton::join(getInDimNames(), ", "));
-  }
+  assertDimsEqualIgnoringOrder(llvm::make_first_range(ins), getInDimNames());
 
   SmallVector<std::pair<StringAttr, int32_t>> ret;
   for (StringAttr outDim : getOutDimNames()) {
@@ -377,7 +378,7 @@ LinearLayout::apply(ArrayRef<std::pair<StringAttr, int32_t>> ins) const {
     for (auto &[inDim, val] : ins) {
       for (int i = 0; i < getInDimSizeLog2(inDim); i++) {
         if (val & (1 << i))
-          outVal ^= getBasis(inDim, outDim, i);
+          outVal ^= getBasis(inDim, i, outDim);
       }
     }
     ret.push_back({outDim, outVal});
@@ -385,54 +386,42 @@ LinearLayout::apply(ArrayRef<std::pair<StringAttr, int32_t>> ins) const {
   return ret;
 }
 
+LinearLayout LinearLayout::compose(const LinearLayout &outer) const {
+  assertDimsEqualIgnoringOrder(getOutDimNames(), outer.getInDimNames());
+
+  BasesT newBases;
+  for (const auto &[inDim, inDimBases] : bases) {
+    auto &newInDimBases = newBases[inDim];
+    for (const auto &basis : inDimBases) {
+      SmallVector<std::pair<StringAttr, int32_t>> bases;
+      for (auto [outDim, b] : llvm::zip(getOutDimNames(), basis)) {
+        bases.push_back({outDim, b});
+      }
+      auto newBases = outer.apply(bases);
+      auto newBasesRange = llvm::make_second_range(newBases);
+      newInDimBases.push_back(
+          std::vector<int32_t>(newBasesRange.begin(), newBasesRange.end()));
+    }
+  }
+  return LinearLayout(std::move(newBases), outer.getOutDimNames());
+}
+
 bool operator==(LinearLayout lhs, LinearLayout rhs) {
   // llvm::MapVector doesn't have an operator== :(.
+  if (lhs.getOutDimNames() != rhs.getOutDimNames())
+    return false;
   if (lhs.bases.size() != rhs.bases.size())
     return false;
   for (auto it1 = lhs.bases.begin(), it2 = rhs.bases.begin();
        it1 != lhs.bases.end(); ++it1, ++it2) {
-    if (it1->first != it2->first)
+    if (*it1 != *it2)
       return false;
-    for (auto jt1 = it1->second.begin(), jt2 = it2->second.begin();
-         jt1 != it1->second.end(); ++jt1, ++jt2) {
-      if (jt1->first != jt2->first || jt1->second != jt2->second)
-        return false;
-    }
   }
   return true;
 }
 
 std::string LinearLayout::toString() const {
-  // We could use stringifyBases here, but now that we know the layout is valid,
-  // we can create something nicer.
-  if (bases.empty())
-    return "(empty layout)\n";
-
-  // TODO: Add spaces for alignment.
-  std::string ret;
-  for (const auto &inDim : getInDimNames()) {
-    if (getInDimSizeLog2(inDim) == 0) {
-      ret += " - " + inDim.str() + " is a size 1 dimension\n";
-      continue;
-    }
-
-    ret +=
-        " - " +
-        join(llvm::seq(getInDimSizeLog2(inDim)), "\n   ",
-             [&](int i) {
-               return inDim.str() + "=" + std::to_string(1 << i) + " -> (" +
-                      join(getOutDimNames(), ", ",
-                           [&](StringAttr outDim) {
-                             return std::to_string(getBasis(inDim, outDim, i));
-                           }) +
-                      ")";
-             }) +
-        "\n";
-  }
-  ret += "where out dims are: [" +
-         join(getOutDimNames(), ", ", [](StringAttr s) { return s.str(); }) +
-         "]\n";
-  return ret;
+  return stringifyBases(bases, getOutDimNames());
 }
 
 } // namespace mlir::triton

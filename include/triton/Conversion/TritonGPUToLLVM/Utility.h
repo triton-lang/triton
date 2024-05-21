@@ -615,7 +615,7 @@ emitOffsetForMmaLayoutV1(const NvidiaMmaEncodingAttr &mmaLayout,
   auto [isARow, isBRow, isAVec4, isBVec4, _] =
       mmaLayout.decodeVoltaLayoutStates();
 
-  // TODO: seems like the apttern below to get `rep`/`spw` appears quite often
+  // TODO: seems like the pattern below to get `rep`/`spw` appears quite often
   // A info
   auto aRep = mmaLayout.getMMAv1Rep(0);
   auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
@@ -1177,10 +1177,7 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
 inline SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset,
-            bool allowLL = false) {
-  // TODO(jlebar): LLs are disabled for now due to bugs found on AMD and A100
-  // GPUs.  Enable again wth allowLL = true above.
-
+            bool allowLL = true) {
   // Eventually the LinearLayout path will be the only one.  For now we allow
   // both paths so we can test that they produce the same results.
   if (allowLL) {

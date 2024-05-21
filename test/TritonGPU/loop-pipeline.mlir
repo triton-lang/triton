@@ -1146,7 +1146,7 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     %51 = tt.addptr %50, %47 : tensor<64x256x!tt.ptr<i8>, #blocked>, tensor<64x256xi32, #blocked>
 
     // Check that both loads in the loop are pipelined.
-    // TODO(jlebar): https://github.com/openai/triton/pull/3472 disables the
+    // TODO(jlebar): https://github.com/triton-lang/triton/pull/3472 disables the
     // relevant optimization.  Once we've reenabled it, we can uncomment this test.
     // CHECK: scf.for
     // COM: CHECK-NOT: tt.load
@@ -1569,14 +1569,13 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
 //   CHECK-LABEL: @matmul_tma
 //     CHECK-DAG:   triton_gpu.local_alloc  : () -> !tt.memdesc<3x128x64xf16, #{{.+}}, mutable>
-//     CHECK-DAG:   triton_gpu.local_alloc  : () -> !tt.memdesc<3xi64, #{{.+}}, mutable>
-//         CHECK:   triton_nvidia_gpu.init_barrier
 //     CHECK-DAG:   triton_gpu.local_alloc  : () -> !tt.memdesc<3x64x256xf16, #{{.+}}, mutable>
 //     CHECK-DAG:   triton_gpu.local_alloc  : () -> !tt.memdesc<3xi64, #{{.+}}, mutable>
 // CHECK-COUNT-3:   triton_nvidia_gpu.init_barrier
 // CHECK-COUNT-4:   triton_nvidia_gpu.async_tma_copy_global_to_local
 //         CHECK:   scf.for
-// CHECK-COUNT-2:     triton_nvidia_gpu.wait_barrier
+//         CHECK:     triton_nvidia_gpu.wait_barrier
+//     CHECK-NOT:     triton_nvidia_gpu.wait_barrier
 // CHECK-COUNT-2:     triton_nvidia_gpu.async_tma_copy_global_to_local
 //         CHECK:     scf.yield
   tt.func public @matmul_tma(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) -> tensor<128x256xf32, #mma> {

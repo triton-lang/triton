@@ -28,6 +28,32 @@ DEFINE_DISPATCH(ExternLibCuda, deviceGet, cuDeviceGet, CUdevice *, int)
 DEFINE_DISPATCH(ExternLibCuda, deviceGetAttribute, cuDeviceGetAttribute, int *,
                 CUdevice_attribute, CUdevice)
 
+Device getDevice(uint64_t index) {
+  CUdevice device;
+  cuda::deviceGet<true>(&device, index);
+  int clockRate;
+  cuda::deviceGetAttribute<true>(&clockRate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE,
+                                 device);
+  int memoryClockRate;
+  cuda::deviceGetAttribute<true>(&memoryClockRate,
+                                 CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device);
+  int busWidth;
+  cuda::deviceGetAttribute<true>(
+      &busWidth, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device);
+  int numSms;
+  cuda::deviceGetAttribute<true>(
+      &numSms, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
+  int major;
+  cuda::deviceGetAttribute<true>(
+      &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
+  int minor;
+  cuda::deviceGetAttribute<true>(
+      &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
+  auto arch = major * 10 + minor;
+  return Device(DeviceType::CUDA, index, clockRate, memoryClockRate, busWidth,
+                numSms, arch);
+}
+
 } // namespace cuda
 
 } // namespace proton

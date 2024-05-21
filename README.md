@@ -6,7 +6,7 @@ We're hiring! If you are interested in working on Triton at OpenAI, we have role
 
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
-| [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/openai/triton/actions/workflows/wheels.yml) |
+| [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
 
 # Triton
@@ -35,7 +35,7 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 # Install from source
 
 ```
-git clone https://github.com/openai/triton.git;
+git clone https://github.com/triton-lang/triton.git;
 cd triton;
 
 pip install ninja cmake wheel; # build-time dependencies
@@ -45,7 +45,7 @@ pip install -e python
 Or with a virtualenv:
 
 ```
-git clone https://github.com/openai/triton.git;
+git clone https://github.com/triton-lang/triton.git;
 cd triton;
 
 python -m venv .venv --prompt triton;
@@ -197,6 +197,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   Loop strength reduction is known to cause up to 10% performance changes for
   certain kernels with register pressure.
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
+- `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
+- `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 
 # Changelog
 
@@ -208,7 +210,7 @@ Version 2.0 is out! New features include:
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/openai/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
+Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/triton-lang/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
 
 # Compatibility

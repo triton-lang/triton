@@ -10,6 +10,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 
 namespace mlir::triton {
 
@@ -306,16 +307,17 @@ namespace mlir::triton {
 //
 class LinearLayout {
 private:
-  // bases[inDim][outDim][i] = L(0, ..., inDim=2^i, ..., 0)[outDim].  All other
-  // values of L are computed by xor'ing bases together, using the linearity
-  // rule.  In addition:
+  // bases[inDim][i] = L(0, ..., inDim=2^i, ..., 0).  All other values of L are
+  // computed by xor'ing bases together, using the linearity rule.  In addition:
   //
   // - Each inDim has the same set of outDims, in the same order.
   // - The order of dims is minor-to-major, although this only affects reshape.
-  // - For each inDim, all bases[inDim][<any>].size() are equal.
   llvm::MapVector<StringAttr /*inDim*/,
-                  llvm::MapVector<StringAttr /*outDim*/, std::vector<int32_t>>>
+                  std::vector<std::vector<int32_t> /*size=getNumOutDims()*/>
+                  /*size=getInDimSizeLog2(inDim)*/>
       bases;
+
+  llvm::SetVector<StringAttr> outDimNames;
 
 public:
   using BasesT = decltype(bases);
@@ -326,7 +328,7 @@ public:
   //   LinearLayout ret = LinearLayout::empty();
   //   for (...) ret *= ...;
   //   return ret;
-  static LinearLayout empty() { return LinearLayout(BasesT{}); }
+  static LinearLayout empty() { return LinearLayout(BasesT{}, {}); }
 
   // Creates a 1D -> 1D layout that's the identity function, i.e. L(x) = x
   // for x in [0, size).
@@ -340,46 +342,65 @@ public:
 
   // Creates a LinearLayout from a list of bases.  These are interpreted
   // according to the rules written for the member variable `bases`.
-  explicit LinearLayout(BasesT bases);
+  explicit LinearLayout(BasesT bases, ArrayRef<StringAttr> outDimNames);
 
-  // MapVector doesn't have a constructor that takes an initializer list of
-  // pairs, so we provide this one.
+  // Construct a LinearLayout from an explicit list of bases.  (This constructor
+  // is needed because llvm::MapVector does not have a constructor that accepts
+  // an initializer_list.)
+  //
+  // For example, given these bases
+  //
+  //   L(in1=1, in2=0) = (out1=0, out2=1)
+  //   L(in1=2, in2=0) = (out1=0, out2=2)
+  //   L(in1=0, in2=1) = (out1=0, out2=4)
+  //   L(in1=0, in2=2) = (out1=0, out2=8)
+  //   L(in1=0, in2=4) = (out1=1, out2=1)
+  //
+  // we can use this constructor to build an equivalent LL:
+  //
+  // LinearLayout({
+  //     {"in1", {/*L(in1=1)=*/{0,1}, /*L(in1=2)=*/{0,2}}},
+  //     {"in2", {/*L(in2=1)=*/{0,4}, /*L(in2=2)=*/{0,8}, /*L(in2=4)=*/{1,1}}},
+  //   },
+  //   {"out1", "out2"})
   explicit LinearLayout(
-      ArrayRef<std::pair<StringAttr,
-                         ArrayRef<std::pair<StringAttr, std::vector<int32_t>>>>>
-          bases);
+      ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases,
+      ArrayRef<StringAttr> outDimNames);
 
   const BasesT &getBases() const { return bases; }
 
   // Get the pos'th basis vector for the inDim -> outDim mapping.
-  // getBasis(inDim, outDim, pos) = L(0, ..., inDim = 2^pos, ..., 0)[outDim].
-  int32_t getBasis(StringAttr inDim, StringAttr outDim, int32_t pos) const {
+  // getBasis(inDim, pos) = L(0, ..., inDim = 2^pos, ..., 0).
+  ArrayRef<int32_t> getBasis(StringAttr inDim, int32_t pos) const {
     auto it = bases.find(inDim);
     assert(it != bases.end());
-    auto jt = it->second.find(outDim);
-    assert(jt != it->second.end());
-    assert(pos < jt->second.size());
-    return jt->second[pos];
+    assert(pos < it->second.size());
+    return it->second[pos];
+  }
+
+  int32_t getBasis(StringAttr inDim, int32_t pos, StringAttr outDim) const {
+    return getBasis(inDim, pos)[getOutDimIndex(outDim)];
+    ;
   }
 
   // These are in minor-to-major order, although if you don't flatten the dims
   // (e.g. by reshaping) then the order doesn't really affect anything.
   auto getInDimNames() const { return llvm::make_first_range(bases); }
-  auto getOutDimNames() const {
-    if (bases.empty()) {
-      static const llvm::MapVector<StringAttr, std::vector<int32_t>> empty;
-      return llvm::make_first_range(empty);
-    }
-    return llvm::make_first_range(bases.begin()->second);
+  ArrayRef<StringAttr> getOutDimNames() const {
+    return outDimNames.getArrayRef();
   }
 
-  bool hasInDim(StringAttr inDim) const;
-  bool hasOutDim(StringAttr outDim) const;
+  // Gets the position that this outDim occupies in getOutDimNames().  Asserts
+  // if the dim is not present.
+  int32_t getOutDimIndex(StringAttr outDim) const;
+
+  bool hasInDim(StringAttr inDim) const { return bases.contains(inDim); }
+  bool hasOutDim(StringAttr outDim) const {
+    return outDimNames.contains(outDim);
+  }
 
   int32_t getNumInDims() const { return bases.size(); }
-  int32_t getNumOutDims() const {
-    return bases.empty() ? 0 : bases.front().second.size();
-  }
+  int32_t getNumOutDims() const { return outDimNames.size(); }
 
   // Asserts if the dimension is not present.
   int32_t getInDimSizeLog2(StringAttr inDim) const;
@@ -392,12 +413,14 @@ public:
   //
   // For example, if our bases are
   //
-  //   (in_dim0, out_dim0): [1,4]
-  //   (in_dim1, out_dim0): [2,8]
+  //   L(in0=1) = 1
+  //   L(in0=2) = 4
+  //   L(in1=1) = 2
+  //   L(in1=2) = 8
   //
-  // then the largest value we can produce is 1 ⊕ 4 ⊕ 2 ⊕ 8 = 15 (and indeed we
-  // can produce all values in [0,16) by xor'ing subsets of the bases 1,2,4,8),
-  // so getOutDimSize(out_dim0) == 16.
+  // then the largest value we can produce is L(3,3) = 1 ⊕ 4 ⊕ 2 ⊕ 8 = 15 (and
+  // indeed we can produce all values in [0,16) by xor'ing subsets of the bases
+  // 1,2,4,8), so getOutDimSize(out_dim0) == 16.
   //
   // Asserts if the dimension is not present.
   int32_t getOutDimSizeLog2(StringAttr outDim) const;
@@ -463,6 +486,17 @@ public:
   // function lives in TritonGPUToLLVM/Utility.h.
   SmallVector<std::pair<StringAttr, int32_t>>
   apply(ArrayRef<std::pair<StringAttr, int32_t>> ins) const;
+
+  // Creates a new layout which is equivalent to running this layout, then
+  // running `outer`.  That is,
+  //
+  //  - let this layout be L(x), and
+  //  - let `outer` be O(x).
+  //  - Then compose(outer) returns the layout (O∘L)(x), aka O(L(x)).
+  //
+  // Requires: The output dimensions of this layout equal the input dimensions
+  // of outer (order doesn't matter).
+  [[nodiscard]] LinearLayout compose(const LinearLayout &outer) const;
 
   // TODO(jlebar): Not yet implemented.
   // [[nodiscard]] LinearLayout reshapeIns(

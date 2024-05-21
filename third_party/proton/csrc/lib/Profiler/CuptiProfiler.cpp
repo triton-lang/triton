@@ -1,6 +1,7 @@
 #include "Profiler/CuptiProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
+#include "Driver/Device.h"
 #include "Driver/GPU/Cuda.h"
 #include "Driver/GPU/Cupti.h"
 
@@ -55,7 +56,9 @@ std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
     auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
     metric =
         std::make_shared<KernelMetric>(static_cast<uint64_t>(kernel->start),
-                                       static_cast<uint64_t>(kernel->end), 1);
+                                       static_cast<uint64_t>(kernel->end), 1,
+                                       static_cast<uint64_t>(kernel->deviceId),
+                                       static_cast<uint64_t>(DeviceType::CUDA));
     break;
   }
   default:

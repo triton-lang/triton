@@ -331,12 +331,13 @@ typedef struct HIP_RESOURCE_VIEW_DESC_st
  */
 #if !defined(__HIPCC_RTC__)
 typedef enum hipMemcpyKind {
-    hipMemcpyHostToHost = 0,      ///< Host-to-Host Copy
-    hipMemcpyHostToDevice = 1,    ///< Host-to-Device Copy
-    hipMemcpyDeviceToHost = 2,    ///< Device-to-Host Copy
-    hipMemcpyDeviceToDevice = 3,  ///< Device-to-Device Copy
-    hipMemcpyDefault =
-        4  ///< Runtime will automatically determine copy-kind based on virtual addresses.
+    hipMemcpyHostToHost = 0,            ///< Host-to-Host Copy
+    hipMemcpyHostToDevice = 1,          ///< Host-to-Device Copy
+    hipMemcpyDeviceToHost = 2,          ///< Device-to-Host Copy
+    hipMemcpyDeviceToDevice = 3,        ///< Device-to-Device Copy
+    hipMemcpyDefault = 4,               ///< Runtime will automatically determine
+                                        ///<copy-kind based on virtual addresses.
+    hipMemcpyDeviceToDeviceNoCU = 1024  ///< Device-to-Device Copy without using compute units
 } hipMemcpyKind;
 typedef struct hipPitchedPtr {
     void* ptr;
