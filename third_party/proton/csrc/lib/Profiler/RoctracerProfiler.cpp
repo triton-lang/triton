@@ -234,6 +234,14 @@ void RoctracerProfiler::apiCallback(uint32_t domain, uint32_t cid,
         auto scope = Scope(scopeId, name);
         roctracerState.record(scope, profiler.getDataSet());
         roctracerState.enterOp();
+
+        // Generate and Report external correlation
+        for (int it = CorrelationDomain::begin; it < CorrelationDomain::end;
+             ++it) {
+          if (externalIdMap[it].size() > 0) {
+            profiler.correlation[data->correlation_id] = externalIdMap[it].back();
+          }
+        }
       }
       roctracerState.level++;
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
@@ -243,14 +251,6 @@ void RoctracerProfiler::apiCallback(uint32_t domain, uint32_t cid,
           roctracerState.exitOp();
         }
         roctracerState.reset();
-      }
-
-      // Generate and Report external correlation
-      for (int it = CorrelationDomain::begin; it < CorrelationDomain::end;
-           ++it) {
-        if (externalIdMap[it].size() > 0) {
-          profiler.correlation[data->correlation_id] = externalIdMap[it].back();
-        }
       }
 
       // track outstanding op for flush
