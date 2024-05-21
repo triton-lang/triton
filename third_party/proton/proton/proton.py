@@ -1,8 +1,7 @@
 import argparse
 import sys
 import os
-import torch
-from .profile import start, finalize
+from .profile import start, finalize, _select_backend
 from .flags import set_command_line
 
 
@@ -14,7 +13,7 @@ def parse_arguments():
     python -m triton.profiler.proton [options] script.py [script_args] [script_options]
 """, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-n", "--name", type=str, help="Name of the profiling session")
-    parser.add_argument("-b", "--backend", type=str, help="Profiling backend", default="cupti", choices=["cupti"])
+    parser.add_argument("-b", "--backend", type=str, help="Profiling backend", default=None, choices=["cupti"])
     parser.add_argument("-c", "--context", type=str, help="Profiling context", default="shadow",
                         choices=["shadow", "python"])
     parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree"])
@@ -52,12 +51,9 @@ def execute_as_main(script, args):
 
 
 def run_profiling(args, target_args):
-    # Init ROCM and CUDA eargly to allow cupti or roctracer to work properly.
-    # XXX: This may be not necessary if we do lazy initialization of cupti
-    if (args.backend == 'cupti' or args.backend == 'roctracer') and torch.cuda.is_available():
-        torch.cuda.init()
+    backend = args.backend if args.backend else _select_backend()
 
-    start(args.name, backend=args.backend, context=args.context, data=args.data, hook=args.hook)
+    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
 
     # Set the command line mode to avoid any `start` calls in the script.
     set_command_line()

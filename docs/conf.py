@@ -158,7 +158,7 @@ sphinx_gallery_conf = {
     'filename_pattern': '',
     # TODO: Re-enable the grouped-gemm tutorial.  It currently hits this
     # assertion:
-    # https://github.com/openai/triton/blob/main/lib/Dialect/TritonNvidiaGPU/Transforms/FenceInsertion.cpp#L127
+    # https://github.com/triton-lang/triton/blob/main/lib/Dialect/TritonNvidiaGPU/Transforms/FenceInsertion.cpp#L127
     'ignore_pattern': r'(__init__\.py|11.*.py)',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {

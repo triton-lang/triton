@@ -14,6 +14,11 @@ def test_descriptor_load_ttgir():
     device = "cuda"
     SIZE = 128
 
+    x = torch.randn(SIZE, dtype=torch.float32, device=device)
+    desc = np.empty(SIZE, dtype=np.int8)
+    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size(), desc)
+    size_in_bytes = SIZE * x.element_size()
+
     ir = f"""
     #blocked = #triton_gpu.blocked<{{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}}>
     #shared = #triton_gpu.shared<{{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}}>
@@ -25,6 +30,7 @@ def test_descriptor_load_ttgir():
         %2 = triton_gpu.local_alloc  : () -> !tt.memdesc<1xi64, #shared, mutable>
         triton_nvidia_gpu.init_barrier %2, 1 : <1xi64, #shared, mutable>
         %true = arith.constant 1 : i1
+        triton_nvidia_gpu.barrier_expect %2, {size_in_bytes}, %true : <1xi64, #shared, mutable>
         triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0_i32] %1, %2, %true : <i8>, <1xi64, #shared, mutable> -> <{SIZE}xf32, #shared, mutable>
         triton_nvidia_gpu.wait_barrier %2, %c0_i32 : <1xi64, #shared, mutable>
         %3 = triton_gpu.local_load %1 : !tt.memdesc<{SIZE}xf32, #shared, mutable> -> tensor<{SIZE}xf32, #blocked>
@@ -40,9 +46,6 @@ def test_descriptor_load_ttgir():
         f.flush()
         kernel = triton.compile(f.name)
 
-    x = torch.randn(SIZE, dtype=torch.float32, device=device)
-    desc = np.empty(SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size(), desc)
     desc = torch.tensor(desc, device=device)
     z_tri = torch.empty_like(x)
     kernel[(1, 1, 1)](z_tri, desc)
@@ -88,21 +91,22 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
         b = tl._experimental_descriptor_load(b_desc_ptr, [offs_k, offs_bn], [BLOCK_SIZE_K, BLOCK_SIZE_N], tl.float16)
         accumulator = tl.dot(a, b, acc=accumulator)
         offs_k += BLOCK_SIZE_K
+    accumulator = accumulator.to(tl.float16)
     tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
 
 
 @pytest.mark.parametrize("num_stages", [1, 4])
-def test_experimental_tma_matmul(num_stages):
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
+def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
         pytest.skip("Test requires Hopper target.")
         return
     device = "cuda"
     M, N, K = 8192, 8192, 1024
-    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
     B = torch.randn((K, N), dtype=torch.float16, device=device)
-    C = torch.empty((M, N), dtype=torch.float32, device=device)
+    C = torch.empty((M, N), dtype=torch.float16, device=device)
     TMA_SIZE = 128
     desc_a = np.empty(TMA_SIZE, dtype=np.int8)
     desc_b = np.empty(TMA_SIZE, dtype=np.int8)
@@ -117,8 +121,10 @@ def test_experimental_tma_matmul(num_stages):
     desc_a = torch.tensor(desc_a, device=device)
     desc_b = torch.tensor(desc_b, device=device)
     desc_c = torch.tensor(desc_c, device=device)
-    matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1, 1)](desc_a, desc_b, desc_c, M, N, K,
-                                                                                 BLOCK_M, BLOCK_N, BLOCK_K, num_warps=8,
-                                                                                 num_stages=num_stages)
-    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32))
+    kernel = matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1,
+                                1)](desc_a, desc_b, desc_c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps=8,
+                                    num_stages=num_stages)
+    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+    if BLOCK_M >= 64 and BLOCK_N >= 64:
+        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]

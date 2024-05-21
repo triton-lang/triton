@@ -85,7 +85,7 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   shapePerWarp[rank - 2] = 16;
   // TODO (@daadaada): double-check.
   // original logic in
-  // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
+  // https://github.com/triton-lang/triton/blob/master/lib/codegen/analysis/layout.cc#L252
   // seems buggy for shape = [32, 16] ?
   do {
     if (ret[0] * ret[1] >= numWarps)

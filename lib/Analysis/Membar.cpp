@@ -138,7 +138,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     for (Value value : op->getOperands()) {
       for (auto bufferId : allocation->getBufferIds(value)) {
         if (bufferId != Allocation::InvalidBufferId) {
-          if (isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op)) {
+          if (isa<triton::gpu::AsyncCopyGlobalToLocalOp,
+                  triton::gpu::LocalStoreOp>(op)) {
             // Global -> shared memory
             curBlockInfo.syncWriteIntervals.insert(
                 allocation->getAllocatedInterval(bufferId));

@@ -23,20 +23,6 @@ using ::testing::Pair;
 
 using BasesT = LinearLayout::BasesT;
 
-std::vector<int32_t> standardBasis(int32_t size) {
-  assert(llvm::isPowerOf2_32(size));
-  std::vector<int32_t> ret;
-  for (int i = 1; i < size; i *= 2) {
-    ret.push_back(i);
-  }
-  return ret;
-}
-
-std::vector<int32_t> zerosLike(int32_t size) {
-  assert(llvm::isPowerOf2_32(size));
-  return std::vector<int32_t>(llvm::Log2_32(size));
-}
-
 class LinearLayoutTest : public ::testing::Test {
 public:
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -55,9 +41,8 @@ TEST_F(LinearLayoutTest, Empty) {
 TEST_F(LinearLayoutTest, Identity1D) {
   LinearLayout layout =
       LinearLayout::identity1D(32, S("testIns"), S("testOuts"));
-  EXPECT_THAT(layout, LinearLayout({
-                          {S("testIns"), {{S("testOuts"), standardBasis(32)}}},
-                      }));
+  EXPECT_THAT(layout, LinearLayout({{S("testIns"), {{1}, {2}, {4}, {8}, {16}}}},
+                                   {S("testOuts")}));
   EXPECT_THAT(to_vector(layout.getInDimNames()), ElementsAre(S("testIns")));
   EXPECT_THAT(to_vector(layout.getOutDimNames()), ElementsAre(S("testOuts")));
   EXPECT_THAT(layout.getInDimSizeLog2(S("testIns")), 5);
@@ -67,7 +52,7 @@ TEST_F(LinearLayoutTest, Identity1D) {
 TEST_F(LinearLayoutTest, Identity1DSize1) {
   LinearLayout layout =
       LinearLayout::identity1D(1, S("testIns"), S("testOuts"));
-  EXPECT_EQ(layout, LinearLayout({{S("testIns"), {{S("testOuts"), {}}}}}));
+  EXPECT_EQ(layout, LinearLayout({{S("testIns"), {}}}, {S("testOuts")}));
   EXPECT_THAT(to_vector(layout.getInDimNames()), ElementsAre(S("testIns")));
   EXPECT_THAT(to_vector(layout.getOutDimNames()), ElementsAre(S("testOuts")));
   EXPECT_THAT(layout.getInDimSizeLog2(S("testIns")), 0);
@@ -76,16 +61,17 @@ TEST_F(LinearLayoutTest, Identity1DSize1) {
 
 TEST_F(LinearLayoutTest, Zeros1D) {
   LinearLayout layout = LinearLayout::zeros1D(32, S("ins"), S("outs"));
-  EXPECT_EQ(layout, LinearLayout({{S("ins"), {{S("outs"), zerosLike(32)}}}}));
+  EXPECT_EQ(layout,
+            LinearLayout({{S("ins"), {{0}, {0}, {0}, {0}, {0}}}}, {S("outs")}));
 }
 
 TEST_F(LinearLayoutTest, MultiplyIdentity) {
   LinearLayout prod = LinearLayout::identity1D(16, S("in"), S("out")) *
                       LinearLayout::identity1D(32, S("in"), S("out"));
-  EXPECT_EQ(prod,
-            LinearLayout({
-                {S("in"), {{S("out"), {1, 2, 4, 8, 16, 32, 64, 128, 256}}}},
-            }));
+  EXPECT_EQ(prod, LinearLayout(
+                      {{S("in"),
+                        {{1}, {2}, {4}, {8}, {16}, {32}, {64}, {128}, {256}}}},
+                      {S("out")}));
   EXPECT_THAT(to_vector(prod.getInDimNames()), ElementsAre(S("in")));
   EXPECT_THAT(to_vector(prod.getOutDimNames()), ElementsAre(S("out")));
 }
@@ -93,13 +79,12 @@ TEST_F(LinearLayoutTest, MultiplyIdentity) {
 TEST_F(LinearLayoutTest, MultiplyDisjoint) {
   LinearLayout prod = LinearLayout::identity1D(32, S("in1"), S("out1")) *
                       LinearLayout::identity1D(16, S("in2"), S("out2"));
-  EXPECT_EQ(prod,
-            LinearLayout({
-                {S("in1"),
-                 {{S("out1"), standardBasis(32)}, {S("out2"), zerosLike(32)}}},
-                {S("in2"),
-                 {{S("out1"), zerosLike(16)}, {S("out2"), standardBasis(16)}}},
-            }));
+  EXPECT_EQ(prod, LinearLayout(
+                      {
+                          {S("in1"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+                          {S("in2"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+                      },
+                      {S("out1"), S("out2")}));
   EXPECT_THAT(to_vector(prod.getInDimNames()), ElementsAre(S("in1"), S("in2")));
   EXPECT_THAT(to_vector(prod.getOutDimNames()),
               ElementsAre(S("out1"), S("out2")));
@@ -114,32 +99,29 @@ TEST_F(LinearLayoutTest, MultiplyByEmpty) {
 TEST_F(LinearLayoutTest, MultiplyByZeros) {
   LinearLayout prod = LinearLayout::identity1D(8, S("in"), S("out")) *
                       LinearLayout::zeros1D(16, S("in"), S("out"));
-  EXPECT_EQ(prod,
-            LinearLayout({{S("in"), {{S("out"), {1, 2, 4, 0, 0, 0, 0}}}}}));
+  EXPECT_EQ(prod, LinearLayout({{S("in"), {{1}, {2}, {4}, {0}, {0}, {0}, {0}}}},
+                               {S("out")}));
 }
 
 TEST_F(LinearLayoutTest, MultiplyZerosByDegenerate) {
   LinearLayout prod = LinearLayout::zeros1D(16, S("in"), S("out1")) *
-                      LinearLayout({{S("in"), {{S("out2"), {}}}}});
-  EXPECT_EQ(prod, LinearLayout({{S("in"),
-                                 {{S("out1"), zerosLike(16)},
-                                  {S("out2"), {{zerosLike(16)}}}}}}));
+                      LinearLayout({{S("in"), {}}}, {S("out2")});
+  EXPECT_EQ(prod, LinearLayout({{S("in"), {{0, 0}, {0, 0}, {0, 0}, {0, 0}}}},
+                               {S("out1"), S("out2")}));
 }
 
 TEST_F(LinearLayoutTest, MultiplyEmptyIdentityAndZeros) {
   LinearLayout prod = LinearLayout::identity1D(0, S("in"), S("out")) *
                       LinearLayout::zeros1D(4, S("in"), S("out"));
-  EXPECT_EQ(prod, LinearLayout({{S("in"), {{S("out"), {0, 0}}}}}));
+  EXPECT_EQ(prod, LinearLayout({{S("in"), {{0}, {0}}}}, {S("out")}));
 }
 
 TEST_F(LinearLayoutTest, MultiplyOverlapping) {
   LinearLayout prod = LinearLayout::identity1D(4, S("in"), S("out1")) *
                       LinearLayout::identity1D(8, S("in"), S("out2"));
   EXPECT_EQ(prod,
-            LinearLayout({{
-                S("in"),
-                {{S("out1"), {1, 2, 0, 0, 0}}, {S("out2"), {0, 0, 1, 2, 4}}},
-            }}));
+            LinearLayout({{S("in"), {{1, 0}, {2, 0}, {0, 1}, {0, 2}, {0, 4}}}},
+                         {S("out1"), S("out2")}));
 }
 
 TEST_F(LinearLayoutTest, TimesEquals) {
@@ -149,10 +131,12 @@ TEST_F(LinearLayoutTest, TimesEquals) {
 }
 
 TEST_F(LinearLayoutTest, GetOutDimSizeLog2) {
-  LinearLayout layout({
-      {S("in0"), {{S("dim0"), {0, 0, 0}}}},
-      {S("in1"), {{S("dim0"), {1, 2}}}},
-  });
+  LinearLayout layout(
+      {
+          {S("in0"), {{0}, {0}, {0}}},
+          {S("in1"), {{1}, {2}}},
+      },
+      {S("dim0")});
   EXPECT_EQ(layout.getOutDimSizeLog2(S("dim0")), 2);
 }
 
@@ -163,12 +147,27 @@ TEST_F(LinearLayoutTest, TransposeOuts) {
   EXPECT_THAT(to_vector(layout.getOutDimNames()),
               ElementsAre(S("out2"), S("out1")));
   EXPECT_EQ(layout,
-            LinearLayout({
-                {S("in1"),
-                 {{S("out2"), zerosLike(32)}, {S("out1"), standardBasis(32)}}},
-                {S("in2"),
-                 {{S("out2"), standardBasis(16)}, {S("out1"), zerosLike(16)}}},
-            }));
+            LinearLayout(
+                {
+                    {S("in1"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
+                    {S("in2"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+                },
+                {S("out2"), S("out1")}));
+}
+
+TEST_F(LinearLayoutTest, TransposeOutsDegenerate) {
+  LinearLayout layout = (LinearLayout::identity1D(32, S("in1"), S("out1")) *
+                         LinearLayout::identity1D(1, S("in2"), S("out2")))
+                            .transposeOuts({S("out2"), S("out1")});
+  EXPECT_THAT(to_vector(layout.getOutDimNames()),
+              ElementsAre(S("out2"), S("out1")));
+  EXPECT_EQ(layout,
+            LinearLayout(
+                {
+                    {S("in1"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
+                    {S("in2"), {}},
+                },
+                {S("out2"), S("out1")}));
 }
 
 TEST_F(LinearLayoutTest, TransposeIns) {
@@ -177,13 +176,13 @@ TEST_F(LinearLayoutTest, TransposeIns) {
                             .transposeIns({S("in2"), S("in1")});
   EXPECT_THAT(to_vector(layout.getInDimNames()),
               ElementsAre(S("in2"), S("in1")));
-  EXPECT_EQ(
-      layout,
-      LinearLayout(
-          {{S("in2"),
-            {{S("out1"), zerosLike(16)}, {S("out2"), standardBasis(16)}}},
-           {S("in1"),
-            {{S("out1"), standardBasis(32)}, {S("out2"), zerosLike(32)}}}}));
+  EXPECT_EQ(layout,
+            LinearLayout(
+                {
+                    {S("in2"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+                    {S("in1"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
+                },
+                {S("out1"), S("out2")}));
 }
 
 TEST_F(LinearLayoutTest, EmptyToString) {
@@ -192,10 +191,12 @@ TEST_F(LinearLayoutTest, EmptyToString) {
 }
 
 TEST_F(LinearLayoutTest, Apply) {
-  LinearLayout layout({
-      {S("in1"), {{S("out1"), {4, 2, 1}}, {S("out2"), {2, 1, 0}}}},
-      {S("in2"), {{S("out1"), {1, 2}}, {S("out2"), {2, 1}}}},
-  });
+  LinearLayout layout(
+      {
+          {S("in1"), {{4, 2}, {2, 1}, {1, 0}}},
+          {S("in2"), {{1, 2}, {2, 1}}},
+      },
+      {S("out1"), S("out2")});
   EXPECT_THAT(layout.apply({{S("in1"), 0}, {S("in2"), 0}}),
               ElementsAre(Pair(S("out1"), 0), Pair(S("out2"), 0)));
   EXPECT_THAT(layout.apply({{S("in2"), 0}, {S("in1"), 1}}),
@@ -207,11 +208,66 @@ TEST_F(LinearLayoutTest, Apply) {
 // This is really more of a benchmark than a test.  We're checking that it
 // doesn't take so long to run that a human notices and says "hmm".  :)
 TEST_F(LinearLayoutTest, ConstructLargeLayout) {
-  std::vector<int32_t> pows2;
+  std::vector<std::vector<int32_t>> pows2;
   for (int i = 0; i < 25; i++) {
-    pows2.push_back(1 << i);
+    pows2.emplace_back().push_back(1 << i);
   }
-  LinearLayout layout({{S("in"), {{S("out"), pows2}}}});
+  LinearLayout layout({{S("in"), pows2}}, {S("out")});
+  (void)layout;
+}
+
+TEST_F(LinearLayoutTest, Compose) {
+  LinearLayout l1(
+      {
+          {S("in1"), {{1, 1}, {0, 1}}},
+          {S("in2"), {{1, 0}, {1, 2}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2(
+      {
+          {S("out1"), {{2, 2}, {1, 1}}},
+          {S("out2"), {{1, 1}, {2, 1}}},
+      },
+      {S("out3"), S("out4")});
+  EXPECT_EQ(l1.compose(l2), LinearLayout(
+                                {
+                                    {S("in1"), {{3, 3}, {1, 1}}},
+                                    {S("in2"), {{2, 2}, {0, 3}}},
+                                },
+                                {S("out3"), S("out4")}));
+}
+
+TEST_F(LinearLayoutTest, Compose4D) {
+  LinearLayout l1(
+      {{S("in0"), {{1, 0, 0, 0}, {2, 0, 0, 0}}},
+       {S("in1"), {{4, 0, 0, 0}, {8, 0, 0, 0}, {16, 0, 0, 0}, {32, 0, 0, 0}}},
+       {S("in2"), {{0, 0, 1, 0}, {0, 0, 0, 1}, {0, 0, 0, 2}}},
+       {S("in3"), {}}},
+      {S("out3"), S("out0"), S("out1"), S("out2")});
+  LinearLayout l2(
+      {
+          {S("out3"),
+           {{1, 0, 0, 0},
+            {2, 0, 0, 0},
+            {0, 0, 0, 0},
+            {0, 0, 0, 0},
+            {0, 0, 0, 0},
+            {0, 0, 0, 0}}},
+          {S("out0"), {{0, 1, 0, 0}}},
+          {S("out1"), {{0, 0, 1, 0}}},
+          {S("out2"), {{0, 0, 0, 1}, {0, 0, 0, 2}}},
+      },
+      {S("out3"), S("out2"), S("out1"), S("out0")});
+  EXPECT_EQ(l1.compose(l2),
+            LinearLayout(
+                {
+                    {S("in0"), {{1, 0, 0, 0}, {2, 0, 0, 0}}},
+                    {S("in1"),
+                     {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}},
+                    {S("in2"), {{0, 0, 1, 0}, {0, 0, 0, 1}, {0, 0, 0, 2}}},
+                    {S("in3"), {}},
+                },
+                {S("out3"), S("out2"), S("out1"), S("out0")}));
 }
 
 } // anonymous namespace

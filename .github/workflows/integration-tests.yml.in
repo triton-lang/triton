@@ -111,7 +111,7 @@ jobs:
         id: set-matrix
         if: env.enable_integration == 'true'
         run: |
-          if [ x"${{ github.repository }}" == x"openai/triton" ]; then
+          if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
           else
@@ -288,7 +288,7 @@ jobs:
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
-          ctest
+          ctest -j32
 
       - name: Run Proton tests
         env:
@@ -333,7 +333,7 @@ jobs:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
 
     container:
-      image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
+      image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.1.2
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
