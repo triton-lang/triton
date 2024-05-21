@@ -149,12 +149,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // on hopper they do have side effects. Need to clean it up
     if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
       for (auto value : dotOp.getOperands()) {
-        for (auto bufferIds = allocation->getBufferIds(value)) {
-          for (auto bufferId : bufferIds) {
-            if (bufferId != Allocation::InvalidBufferId)
-              curBlockInfo.syncReadIntervals.insert(
-                  allocation->getAllocatedInterval(bufferId));
-          }
+        for (auto bufferId : allocation->getBufferIds(value)) {
+          if (bufferId != Allocation::InvalidBufferId)
+            curBlockInfo.syncReadIntervals.insert(
+                allocation->getAllocatedInterval(bufferId));
         }
       }
     }
