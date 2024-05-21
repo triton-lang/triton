@@ -138,6 +138,13 @@ LogicalResult WaitBarrierOp::verify() {
   return success();
 }
 
+void WaitBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getAlloc(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
