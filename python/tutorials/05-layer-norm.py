@@ -340,21 +340,21 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     dy = .1 * torch.randn_like(x)
     x.requires_grad_(True)
     quantiles = [0.5, 0.2, 0.8]
-    # utility functions
-    if provider == 'triton':
-
-        def y_fwd():
+    
+    def y_fwd():
+        # utility functions
+        if provider == "triton":
             return layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
 
-    if provider == 'torch':
+        if provider == "torch":
+            return torch.nn.functional.layer_norm(
+                x, w_shape, weight, bias, eps
+            )  # noqa: F811, E704
 
-        def y_fwd():
-            return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
-
-    if provider == 'apex':
-        apex_layer_norm = apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
-
-        def y_fwd():
+        if provider == "apex":
+            apex_layer_norm = (
+                apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
+            )
             return apex_layer_norm(x)  # noqa: F811, E704
 
     # forward pass
@@ -363,11 +363,8 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
         ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles, rep=500)
     # backward pass
     if mode == 'backward':
-
-        def gbps(ms):
-            return 3 * x.numel() * x.element_size() / ms * 1e-6  # noqa: F811, E704
-
         y = y_fwd()
+        gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6  # noqa: F811, E704
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True), quantiles=quantiles,
                                                      grad_to_none=[x], rep=500)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
