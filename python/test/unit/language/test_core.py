@@ -1347,13 +1347,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if is_interpreter():
         if dtype_x_str == 'float16':
             pytest.skip("Only test atomic float16 ops on GPU")
-    else:
-        check_cuda_or_hip(device)
 
-    capability = torch.cuda.get_device_capability()
-    if capability[0] < 7:
-        if dtype_x_str == 'float16':
-            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
     n_programs = 5
 
     # triton kernel
@@ -3015,25 +3009,24 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
     else:
-        check_cuda_or_hip(device)
+        if is_cuda():
+            capability = torch.cuda.get_device_capability()
 
-        capability = torch.cuda.get_device_capability()
-
-        if capability[0] < 7:
-            pytest.skip("Only test tl.dot() on devices with sm >= 70")
-        if capability[0] < 8:
-            if capability[1] == 0 and in_dtype == 'int8':
-                pytest.skip("Only test int8 on devices with sm >= 75")
-            if input_precision != "ieee":
-                pytest.skip("Only test tf32 on devices with sm >= 80")
-        if capability[0] == 7:
-            if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
-                pytest.skip("shared memory out of resource")
-            if out_dtype == 'float16':
-                # TODO: support out_dtype=float16 for tl.dot on V100
-                pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
-        if capability[0] < 9 and in_dtype == 'float8e4nv':
-            pytest.skip("float8e4nv not supported on sm <= 80")
+            if capability[0] < 7:
+                pytest.skip("Only test tl.dot() on devices with sm >= 70")
+            if capability[0] < 8:
+                if capability[1] == 0 and in_dtype == 'int8':
+                    pytest.skip("Only test int8 on devices with sm >= 75")
+                if input_precision != "ieee":
+                    pytest.skip("Only test tf32 on devices with sm >= 80")
+            if capability[0] == 7:
+                if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
+                    pytest.skip("shared memory out of resource")
+                if out_dtype == 'float16':
+                    # TODO: support out_dtype=float16 for tl.dot on V100
+                    pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
+            if capability[0] < 9 and in_dtype == 'float8e4nv':
+                pytest.skip("float8e4nv not supported on sm <= 80")
         if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
             pytest.skip("float8e4nv and float8e5 not supported on HIP")
         if is_hip() and (input_precision != "ieee"):
@@ -4220,10 +4213,8 @@ def test_unary_math(func_str, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm(num_ctas, device):
-    check_cuda_or_hip(device)
-
-    if is_hip():
-        pytest.skip("test_inline_asm is not supported in HIP")
+    if not is_cuda():
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
@@ -4250,10 +4241,8 @@ def test_inline_asm(num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
-    check_cuda_or_hip(device)
-
-    if is_hip():
-        pytest.skip("test_inline_asm is not supported in HIP")
+    if not is_cuda():
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -4279,10 +4268,8 @@ def test_inline_asm_packed(num_ctas, device):
 
 @pytest.mark.parametrize('num_ctas', num_ctas_list)
 def test_inline_asm_with_pointers(num_ctas, device):
-    check_cuda_or_hip(device)
-
-    if is_hip():
-        pytest.skip('test_inline_asm is not supported in HIP')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -4306,9 +4293,8 @@ def test_inline_asm_with_pointers(num_ctas, device):
 
 
 def test_inline_asm_multiple_outputs(device):
-    check_cuda_or_hip(device)
-    if is_hip():
-        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -4353,9 +4339,8 @@ def test_inline_asm_multiple_outputs(device):
 
 
 def test_inline_asm_packed_multiple_outputs(device):
-    check_cuda_or_hip(device)
-    if is_hip():
-        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -4697,7 +4682,6 @@ def test_nested_while(device):
 def test_num_threads(device):
     if is_hip():
         pytest.skip("test_num_threads is not supported in HIP")
-    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out):
@@ -5087,8 +5071,7 @@ def matmul_kernel(  #
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
-    if not is_interpreter():
-        check_cuda_or_hip(device)
+    if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
