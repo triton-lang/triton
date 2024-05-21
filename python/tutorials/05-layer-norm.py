@@ -347,14 +347,10 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
             return layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
 
         if provider == "torch":
-            return torch.nn.functional.layer_norm(
-                x, w_shape, weight, bias, eps
-            )  # noqa: F811, E704
+            return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
 
         if provider == "apex":
-            apex_layer_norm = (
-                apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
-            )
+            apex_layer_norm = (apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype))
             return apex_layer_norm(x)  # noqa: F811, E704
 
     # forward pass
