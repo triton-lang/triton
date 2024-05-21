@@ -9,8 +9,9 @@ namespace proton {
 Device getDevice(DeviceType type, uint64_t index) {
   if (type == DeviceType::CUDA) {
     return cuda::getDevice(index);
-  } else if (type == DeviceType::HIP) {
-    throw hip::getDevice(index);
+  }
+  if (type == DeviceType::HIP) {
+    return hip::getDevice(index);
   }
   throw std::runtime_error("DeviceType not supported");
 }
