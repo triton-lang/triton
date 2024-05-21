@@ -340,7 +340,7 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     dy = .1 * torch.randn_like(x)
     x.requires_grad_(True)
     quantiles = [0.5, 0.2, 0.8]
-    
+
     def y_fwd():
 
         if provider == "triton":
