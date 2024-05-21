@@ -151,7 +151,7 @@ void AsyncTMACopyGlobalToLocalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), getDescPtr(),
-                       SideEffects::DefaultResource::get());
+                       mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), getBarrier(),
                        mlir::triton::gpu::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), getResult(),
@@ -163,7 +163,7 @@ void AsyncTMACopyLocalToGlobalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), getDescPtr(),
-                       SideEffects::DefaultResource::get());
+                       mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
                        mlir::triton::gpu::SharedMemory::get());
 }
