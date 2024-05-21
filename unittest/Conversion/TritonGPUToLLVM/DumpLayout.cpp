@@ -76,7 +76,6 @@ public:
     auto func = builder.create<mlir::triton::FuncOp>(loc, "test_func", funcTy);
     auto mlirModule = mlir::ModuleOp::create(loc);
     mlirModule.push_back(func);
-
     auto *block = func.addEntryBlock();
     rewriter.setInsertionPointToStart(block);
   }
