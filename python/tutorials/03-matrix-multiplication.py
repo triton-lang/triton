@@ -101,10 +101,10 @@ You will specifically learn about:
 #
 #  .. code-block:: Python
 #
-#    pid = triton.program_id(axis=0);
-#    grid_n = (N + BLOCK_SIZE_N - 1) // BLOCK_SIZE_N;
-#    pid_m = pid // grid_n;
-#    pid_n = pid % grid_n;
+#    pid = tl.program_id(axis=0)
+#    grid_n = tl.cdiv(N, BLOCK_SIZE_N)
+#    pid_m = pid // grid_n
+#    pid_n = pid % grid_n
 #
 # is just not going to cut it.
 #
