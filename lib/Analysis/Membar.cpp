@@ -148,11 +148,14 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // XXX(Keren): This is a hack as we cannot set side effects for dot ops, but
     // on hopper they do have side effects. Need to clean it up
     if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
-      for (auto operand : dotOp.getOperands()) {
-        auto bufferId = allocation->getBufferId(operand);
-        if (bufferId != Allocation::InvalidBufferId)
-          curBlockInfo.syncReadIntervals.insert(
-              allocation->getAllocatedInterval(bufferId));
+      for (auto value : dotOp.getOperands()) {
+        for (auto bufferIds = allocation->getBufferIds(value)) {
+          for (auto bufferId : bufferIds) {
+            if (bufferId != Allocation::InvalidBufferId)
+              curBlockInfo.syncReadIntervals.insert(
+                  allocation->getAllocatedInterval(bufferId));
+          }
+        }
       }
     }
     // Scratch buffer is considered as both shared memory write & read
