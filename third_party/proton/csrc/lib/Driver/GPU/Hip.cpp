@@ -18,18 +18,28 @@ void *ExternLibHip::lib = nullptr;
 
 DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
 
-DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
-                hipDeviceProp_tR0000 *, int)
+DEFINE_DISPATCH(ExternLibHip, deviceGetAttribute, hipDeviceGetAttribute, int *,
+                hipDeviceAttribute_t, int);
 
 Device getDevice(uint64_t index) {
-  hipDeviceProp_tR0000 props;
-  (void)hip::getDeviceProperties<true>(&props, index);
+  int clockRate;
+  (void)hip::deviceGetAttribute<true>(&clockRate, hipDeviceAttributeClockRate,
+                                      index);
+  int memoryClockRate;
+  (void)hip::deviceGetAttribute<true>(&memoryClockRate,
+                                      hipDeviceAttributeMemoryClockRate, index);
+  int busWidth;
+  (void)hip::deviceGetAttribute<true>(&busWidth,
+                                      hipDeviceAttributeMemoryBusWidth, index);
+  int smCount;
+  (void)hip::deviceGetAttribute<true>(
+      &smCount, hipDeviceAttributeMultiprocessorCount, index);
 
-  // Parse the gfxNNN arch name to drop the prefix and potential suffix.
-  const char *archName = props.gcnArchName;
-  uint64_t arch = std::stoi(archName + /*gfx*/ 3);
-  return Device(DeviceType::HIP, index, props.clockRate, props.memoryClockRate,
-                props.memoryBusWidth, props.multiProcessorCount, arch);
+  // TODO: Compute capability is a NVIDIA concept. It doesn't map naturally to
+  // AMD GPUs. Figure out a better way to support this.
+  uint64_t arch = 0;
+  return Device(DeviceType::HIP, index, clockRate, memoryClockRate, busWidth,
+                smCount, arch);
 }
 
 } // namespace hip
