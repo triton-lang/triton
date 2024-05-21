@@ -239,7 +239,8 @@ void RoctracerProfiler::apiCallback(uint32_t domain, uint32_t cid,
         for (int it = CorrelationDomain::begin; it < CorrelationDomain::end;
              ++it) {
           if (externalIdMap[it].size() > 0) {
-            profiler.correlation[data->correlation_id] = externalIdMap[it].back();
+            profiler.correlation[data->correlation_id] =
+                externalIdMap[it].back();
           }
         }
       }
