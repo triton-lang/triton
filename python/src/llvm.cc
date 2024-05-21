@@ -304,7 +304,7 @@ void init_triton_llvm(py::module &&m) {
                        instrCbPtr);
 
         std::string pluginFile =
-            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN");
+            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
 
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM
