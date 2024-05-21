@@ -2797,11 +2797,43 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
 void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  // For alloc that cannot be mutated we mark them as no-side effect. This is
-  // not fully correct
-  if (!getType().getMutableMemory())
+  Operation *op = getOperation();
+  // If allocation is immutable, mark it as no side effect allow things like
+  // CSE, DCE to work in early compiler passes.
+  // After the memory offset is computed, we attach the true side effect to the
+  // op.
+  if (!getType().getMutableMemory() && !op->hasAttr("allocation.offset"))
     return;
   effects.emplace_back(MemoryEffects::Allocate::get(),
+                       mlir::triton::gpu::SharedMemory::get());
+  if (getSrc())
+    effects.emplace_back(MemoryEffects::Write::get(), getResult(),
+                         mlir::triton::gpu::SharedMemory::get());
+}
+
+// LocalLoadOp
+void LocalLoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
+// LocalStoreOp
+void LocalStoreOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), getDst(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
+// AsyncCopyGlobalToLocalOp
+void AsyncCopyGlobalToLocalOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(), getResult(),
                        mlir::triton::gpu::SharedMemory::get());
 }
 

@@ -1,5 +1,6 @@
 #include "Context/Python.h"
 #include "pybind11/pybind11.h"
+#include <algorithm>
 #include <string>
 
 namespace proton {
@@ -78,7 +79,6 @@ std::vector<Context> PythonContextSource::getContexts() {
 
   std::vector<Context> contexts;
   while (frame != nullptr) {
-
     PyCodeObject *f_code = getFrameCodeObject(frame);
     size_t lineno = PyFrame_GetLineNumber(frame);
     size_t firstLineNo = f_code->co_firstlineno;
@@ -90,6 +90,7 @@ std::vector<Context> PythonContextSource::getContexts() {
     Py_DECREF(frame);
     frame = newFrame;
   }
+  std::reverse(contexts.begin(), contexts.end());
   return contexts;
 }
 

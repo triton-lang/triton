@@ -69,10 +69,10 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 //
 // DotAsync Op
 //
-def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [Pure,
-                             DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                             TypesMatchWith<"result's type matches accumulator's type",
-                                            "d", "c", "$_self">]> {
+def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                            TypesMatchWith<"result's type matches accumulator's type",
+                                                            "d", "c", "$_self">]> {
     let summary = "dot async";
 
     let description = [{
@@ -106,7 +106,7 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpI
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
 }
 
-def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [MemoryEffects<[MemWrite<SharedMemory>]>]> {
+def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
     let summary = "Initialize a barrier in the given shared memory allocation.";
 
     let description = [{
@@ -123,7 +123,7 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [MemoryEffects<[MemWrite<Shared
     let assemblyFormat = "$alloc `,` $count attr-dict `:` type($alloc)";
 }
 
-def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [MemoryEffects<[MemWrite<SharedMemory>]>]> {
+def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
     let summary = "Invalidate a barrier allocation.";
 
     let description = [{
@@ -138,8 +138,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [MemoryEffects<[MemWrite<Shar
     let assemblyFormat = "$alloc attr-dict `:` type($alloc)";
 }
 
-def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
-  MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>]> {
+def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Signal a barrier of an expected number of bytes to be copied.";
 
   let description = [{
@@ -180,8 +179,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", []> {
 }
 
 
-def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [
-  MemoryEffects<[MemRead<GlobalMemory>, MemWrite<SharedMemory>]>]> {
+def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -211,8 +209,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   }];
 }
 
-def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global", [
-  MemoryEffects<[MemRead<SharedMemory>, MemWrite<GlobalMemory>]>]> {
+def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "copy data based on descriptor from local memory to global memory asynchronously";
 
   let description = [{

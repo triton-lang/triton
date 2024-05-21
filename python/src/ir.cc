@@ -1583,6 +1583,7 @@ void init_triton_ir(py::module &&m) {
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
+
         auto reproducerPath =
             triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
         if (!reproducerPath.empty()) {
@@ -1614,6 +1615,11 @@ void init_triton_ir(py::module &&m) {
 
           ::llvm::DebugFlag = true;
           ::llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+        }
+
+        bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");
+        if (haveTiming) {
+          self.enableTiming();
         }
 
         if (failed(self.run(mod.getOperation())))

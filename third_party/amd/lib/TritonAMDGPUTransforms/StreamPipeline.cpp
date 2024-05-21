@@ -56,7 +56,7 @@ class LoopPipeliner {
   /// The value that each load will be mapped to (after layout conversion)
   DenseMap<Value, Value> convertMapping;
   /// load => buffer
-  DenseMap<Value, Value> loadsBuffer;
+  DenseMap<Operation *, Value> loadsBuffer;
   /// load => buffer type (with shared layout after swizzling)
   DenseMap<Value, triton::MemDescType> loadsBufferType;
 
@@ -64,7 +64,6 @@ class LoopPipeliner {
   Value nextLoopCond;
 
   /// Yield values
-  SmallVector<Value> nextBuffers;
   SmallVector<Value> yieldValues;
 
   /// The number of stages in the pipeline is fixed to '2' for
@@ -73,7 +72,7 @@ class LoopPipeliner {
   int numStages = 2;
 
   /// Arg indicies
-  size_t bufferIdx, depArgsBeginIdx;
+  size_t depArgsBeginIdx;
   DenseMap<BlockArgument, size_t> depArgsIdx;
 
   /// value (in loop) => value at stage N
@@ -537,7 +536,7 @@ void LoopPipeliner::emitPrologue() {
           loadOp.getLoc(), loadsBufferType[loadOp], loadVal);
       Value cvtVal = newOp->getResult(0);
       prologueMap.map(loadOp->getResult(0), cvtVal);
-      loadsBuffer[loadOp] = cvtVal;
+      loadsBuffer[op] = cvtVal;
     } else {
       newOp = cloneWithInferType(builder, op, prologueMap);
     }
@@ -558,9 +557,8 @@ void LoopPipeliner::emitEpilogue(DenseMap<Value, Value> &newResults) {
   auto args = forOp.getRegionIterArgs();
   for (uint32_t i = 0; i < args.size(); ++i)
     epilogueMap.map(args[i], pplForOp.getResult(i));
-  for (auto load : llvm::enumerate(validLoads))
-    epilogueMap.map(load.value()->getResult(0),
-                    pplForOp.getResult(bufferIdx + load.index()));
+  for (auto *loadOp : validLoads)
+    epilogueMap.map(loadOp->getResult(0), loadsBuffer[loadOp]);
   // Map IV to original upper bound (ie. last iteration)
   epilogueMap.map(forOp.getInductionVar(), forOp.getUpperBound());
 
@@ -611,11 +609,6 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
     newLoopArgs.push_back(lookupOrDefault(v, numStages - 1)); /*1*/
   }
 
-  // Shared mem locations from iteration 0
-  bufferIdx = newLoopArgs.size();
-  for (auto *loadOp : validLoads)
-    newLoopArgs.push_back(loadsBuffer[loadOp->getResult(0)]);
-
   // Loop carried vals
   depArgsBeginIdx = newLoopArgs.size();
   for (auto depArg : depArgs) {
@@ -643,10 +636,8 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
   builder.setInsertionPointToStart(pplForOp.getBody());
   for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
     curMapping.map(arg.value(), pplForOp.getRegionIterArgs()[arg.index()]);
-  uint32_t bufIdx = bufferIdx;
   for (auto *loadOp : validLoads)
-    curMapping.map(loadOp->getResult(0),
-                   pplForOp.getRegionIterArgs()[bufIdx++]);
+    curMapping.map(loadOp->getResult(0), loadsBuffer[loadOp]);
   curMapping.map(forOp.getInductionVar(), pplForOp.getInductionVar());
 
   nextMapping = curMapping;
@@ -770,11 +761,8 @@ void LoopPipeliner::storeNextBuffer(OpBuilder &builder) {
   for (auto *loadOp : validLoads) {
     Value loadVal = nextMapping.lookup(loadOp->getResult(0));
     // then store regs -> shared
-    Value storeBuf =
-        pplForOp.getRegionIterArgs()[bufferIdx + nextBuffers.size()];
-    auto alloc = builder.create<ttg::LocalAllocOp>(loadOp->getLoc(),
-                                                   storeBuf.getType(), loadVal);
-    nextBuffers.push_back(alloc);
+    Value storeBuf = loadsBuffer[loadOp];
+    builder.create<ttg::LocalStoreOp>(loadOp->getLoc(), loadVal, storeBuf);
   }
 
   // Some values have not been used by any ops in the loop body
@@ -790,9 +778,6 @@ void LoopPipeliner::finalizeYield(OpBuilder &builder) {
     else
       yieldValues.push_back(pplForOp.getRegionIterArgs()[opr.index()]);
   }
-  for (Value nextBuffer : nextBuffers)
-    yieldValues.push_back(nextBuffer);
-
   for (size_t i = 0; i < depArgsMapping.size(); ++i) {
     auto arg = pplForOp.getRegionIterArgs()[depArgsBeginIdx + i];
     assert(depArgsMapping.count(arg) && "Missing loop-carried value");
