@@ -327,7 +327,7 @@ class Mark:
 
         if print_data:
             print(bench.plot_name + ':')
-            print(df)
+            print(df.to_string())
         if save_path:
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
                       index=False)
