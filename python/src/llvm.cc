@@ -305,14 +305,16 @@ void init_triton_llvm(py::module &&m) {
 
         std::string pluginFile =
             mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN");
+
         if (!pluginFile.empty()) {
-          llvm::dbgs() << "Adding instrumentation pass to Triton pipeline"
-                       << "\n";
+          // TODO: Add some logging here that we inserted a pass into the LLVM
+          // pass pipeline
           auto passPlugin = llvm::PassPlugin::Load(pluginFile);
           if (!passPlugin) {
             llvm::Error Err = passPlugin.takeError();
-            llvm::errs() << "Pass Plugin Error: " << Err << "\n";
-            consumeError(std::move(Err));
+            std::string ErrMsg =
+                "Pass Plugin Error: " + llvm::toString(std::move(Err));
+            throw std::runtime_error(ErrMsg);
           }
           passPlugin->registerPassBuilderCallbacks(pb);
         }
