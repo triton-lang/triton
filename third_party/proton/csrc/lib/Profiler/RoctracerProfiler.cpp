@@ -217,7 +217,7 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
 }
 
 // C++ symbol demangle
-static inline const char *cxxDemangle(const char* symbol) {
+static inline const char *cxxDemangle(const char *symbol) {
   size_t funcnamesize;
   int status;
   const char *ret =
