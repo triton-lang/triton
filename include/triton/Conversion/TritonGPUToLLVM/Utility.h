@@ -395,18 +395,25 @@ inline Value getSharedMemoryBase(Location loc,
 } // namespace LLVM
 
 /* ------------------------------------ */
-// Returns CTA level thread idx
-inline Value getThreadIdInCTA(RewriterBase &rewriter, Location loc) {
-  Value tid =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
-}
 
 // Returns CTA level thread idx.
 inline Value getThreadId(RewriterBase &rewriter, Location loc) {
-  Value tid = getThreadIdInCTA(rewriter, loc);
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  return tid;
+  int threadsPerBlock = triton::gpu::TritonGPUDialect::getNumWarps(mod) *
+                        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+  Value tid =
+      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
+  tid = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+
+  // Emit `tid & (threadsPerBlock - 1)` so that LLVM knows the range of the tid
+  // value.  If we wanted to get rid of this unnecessary & op, we could add an
+  // LLVM pass to set range metadata on the call to the intrinsic that gets the
+  // tid, something like LLVM's NVVMIntrRangePass except taking into account the
+  // kernel's actual limit rather than just the hardware's limit.  But ptxas,
+  // which does know the kernel's actual limit, seems to get rid of the op in
+  // the conversion to SASS, so it really shouldn't matter.
+  return and_(tid, i32_val(threadsPerBlock - 1));
 }
 
 // -----------------------------------------------------------------------
@@ -615,7 +622,7 @@ emitOffsetForMmaLayoutV1(const NvidiaMmaEncodingAttr &mmaLayout,
   auto [isARow, isBRow, isAVec4, isBVec4, _] =
       mmaLayout.decodeVoltaLayoutStates();
 
-  // TODO: seems like the apttern below to get `rep`/`spw` appears quite often
+  // TODO: seems like the pattern below to get `rep`/`spw` appears quite often
   // A info
   auto aRep = mmaLayout.getMMAv1Rep(0);
   auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);

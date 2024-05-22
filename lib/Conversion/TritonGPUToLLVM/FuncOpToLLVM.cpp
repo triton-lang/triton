@@ -87,6 +87,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       // Set an attribute to indicate this function is a kernel entry.
       newFuncOp->setAttr("nvvm.kernel",
                          rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
+      newFuncOp.setLinkage(LLVM::Linkage::External);
     } else {
       // The noinline attribute will be used by the LLVM codegen to prevent
       // inlining.
@@ -94,6 +95,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
+      newFuncOp.setLinkage(LLVM::Linkage::Internal);
     }
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.

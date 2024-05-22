@@ -28,9 +28,10 @@ namespace mlir::triton::gpu {
 // You can flatten the input or output dimensions into a single dimension using
 // LinearLayout::flattenIns/Outs().
 //
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
-
-// TODO(jlebar): Helpers to convert a flattened shared layout to vector loads of
-// size n, in banks of size k, etc.
+// Returns std::nullopt if the given layout can't be converted to an LL.
+// TODO(jlebar): Remove the std::optional once all layouts are supported.
+//
+std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
+                                           Attribute layout);
 
 } // namespace mlir::triton::gpu

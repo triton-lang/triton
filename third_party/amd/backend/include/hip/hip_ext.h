@@ -66,26 +66,26 @@ THE SOFTWARE.
  *
  */
 HIP_PUBLIC_API
-hipError_t hipExtModuleLaunchKernel(hipFunction_t f, uint32_t globalWorkSizeX,
+ extern "C" hipError_t hipExtModuleLaunchKernel(hipFunction_t f, uint32_t globalWorkSizeX,
                                     uint32_t globalWorkSizeY, uint32_t globalWorkSizeZ,
                                     uint32_t localWorkSizeX, uint32_t localWorkSizeY,
                                     uint32_t localWorkSizeZ, size_t sharedMemBytes,
                                     hipStream_t hStream, void** kernelParams, void** extra,
-                                    hipEvent_t startEvent = nullptr,
-                                    hipEvent_t stopEvent = nullptr,
-                                    uint32_t flags = 0);
+                                    hipEvent_t startEvent __dparm(NULL),
+                                    hipEvent_t stopEvent __dparm(NULL),
+                                    uint32_t flags __dparm(0));
 /**
  * @brief This HIP API is deprecated, please use hipExtModuleLaunchKernel() instead.
  *
  */
 HIP_PUBLIC_API
-hipError_t hipHccModuleLaunchKernel(hipFunction_t f, uint32_t globalWorkSizeX,
+extern "C" hipError_t hipHccModuleLaunchKernel(hipFunction_t f, uint32_t globalWorkSizeX,
                                     uint32_t globalWorkSizeY, uint32_t globalWorkSizeZ,
                                     uint32_t localWorkSizeX, uint32_t localWorkSizeY,
                                     uint32_t localWorkSizeZ, size_t sharedMemBytes,
                                     hipStream_t hStream, void** kernelParams, void** extra,
-                                    hipEvent_t startEvent = nullptr,
-                                    hipEvent_t stopEvent = nullptr)
+                                    hipEvent_t startEvent __dparm(NULL),
+                                    hipEvent_t stopEvent __dparm(NULL))
                                     __attribute__((deprecated("use hipExtModuleLaunchKernel instead")));
 
 #if defined(__cplusplus)

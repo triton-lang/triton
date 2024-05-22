@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --mlir-disable-threading --convert-scf-to-cf -test-print-membar 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --mlir-disable-threading --convert-scf-to-cf --allocate-shared-memory -test-print-membar 2>&1 | FileCheck %s
 
 #AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #triton_gpu.slice<{dim = 0, parent = #AL}>
@@ -7,8 +7,8 @@
 #A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
-#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
-#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
+#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
+#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
 
@@ -68,6 +68,23 @@ tt.func @war_single_block(%A : !tt.ptr<f16>) {
   // CHECK: gpu.barrier
   // CHECK-NEXT: %4 = triton_gpu.local_alloc
   %4 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED>
+  tt.return
+}
+
+// CHECK-LABEL: war_single_block_local_store
+tt.func @war_single_block_local_store(%A : !tt.ptr<f16>) {
+  %cst1 = arith.constant dense<true> : tensor<128x32xi1, #AL>
+  %cst2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
+  %0 = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
+  %1 = tt.load %0, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
+  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED>
+  // CHECK: triton_gpu.local_alloc
+  // CHECK: gpu.barrier
+  // CHECK-NEXT: triton_gpu.local_load
+  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED> -> tensor<128x32xf16, #AL>
+  // CHECK: gpu.barrier
+  // CHECK-NEXT: triton_gpu.local_store
+  triton_gpu.local_store %1, %2 : tensor<128x32xf16, #AL> -> !tt.memdesc<128x32xf16, #A_SHARED>
   tt.return
 }
 

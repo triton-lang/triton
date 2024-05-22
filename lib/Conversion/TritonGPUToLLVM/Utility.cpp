@@ -208,45 +208,43 @@ std::optional<SmallVector<SmallVector<Value>>>
 emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
                               const TargetInfoBase &target, Attribute layout,
                               RankedTensorType type, bool withCTAOffset) {
-  auto mma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
-  if (isa<BlockedEncodingAttr>(layout) ||
-      (mma && (mma.isAmpere() || mma.isHopper()))) {
-    MLIRContext *ctx = rewriter.getContext();
-    auto shape = type.getShape();
-    Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
-    Value laneId = urem(threadId, warpSize);
-    Value warpId = udiv(threadId, warpSize);
-    Value blockId =
-        withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
-    unsigned rank = shape.size();
+  MLIRContext *ctx = rewriter.getContext();
+  auto shape = type.getShape();
 
-    LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
-
-    // TODO(jlebar): We could add strong typing if we wanted; for now this is
-    // "stringly typed".
-    StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-    SmallVector<SmallVector<Value>> ret;
-    for (unsigned reg = 0; reg < ll.getInDimSize(str_attr("register")); reg++) {
-      auto idxs = applyLinearLayout(loc, rewriter, ll,
-                                    {{kRegister, i32_val(reg)},
-                                     {kLane, laneId},
-                                     {kWarp, warpId},
-                                     {kBlock, blockId}});
-      assert(idxs.size() == rank);
-      for (unsigned k = 0; k < rank; ++k) {
-        assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
-      }
-      ret.push_back(llvm::to_vector(llvm::make_second_range(idxs)));
-    }
-
-    return ret;
+  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
+  if (!ll.has_value()) {
+    return std::nullopt;
   }
 
-  return std::nullopt;
+  // TODO(jlebar): We could add strong typing if we wanted; for now this is
+  // "stringly typed".
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  Value threadId = getThreadId(rewriter, loc);
+  Value threadsPerWarp = i32_val(ll->getInDimSize(kLane));
+  Value laneId = urem(threadId, threadsPerWarp);
+  Value warpId = udiv(threadId, threadsPerWarp);
+  Value blockId =
+      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
+  unsigned rank = shape.size();
+  SmallVector<SmallVector<Value>> ret;
+  for (unsigned reg = 0; reg < ll->getInDimSize(str_attr("register")); reg++) {
+    auto idxs = applyLinearLayout(loc, rewriter, *ll,
+                                  {{kRegister, i32_val(reg)},
+                                   {kLane, laneId},
+                                   {kWarp, warpId},
+                                   {kBlock, blockId}});
+    assert(idxs.size() == rank);
+    for (unsigned k = 0; k < rank; ++k) {
+      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
+    }
+    ret.push_back(llvm::to_vector(llvm::make_second_range(idxs)));
+  }
+
+  return ret;
 }
 
 namespace LLVM {

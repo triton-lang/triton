@@ -2,6 +2,7 @@
 
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -342,9 +343,6 @@ LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
   assert(mma.getInstrShape().size() == rank);
   assert((rank == 2 && mma.getInstrShape() == ArrayRef<unsigned>({16, 8})) ||
          (rank == 3 && mma.getInstrShape() == ArrayRef<unsigned>({1, 16, 8})));
-  for (int i = 0; i < mma.getInstrShape().size(); i++) {
-    assert(shape[i] >= mma.getInstrShape()[i]);
-  }
 
   MLIRContext *ctx = mma.getContext();
   SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
@@ -400,9 +398,75 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
 
+std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
+                                           SliceEncodingAttr slice) {
+  MLIRContext *ctx = slice.getContext();
+
+  // First compute the linear layout for this layout's parent.
+  SmallVector<int64_t> parentShape(shape);
+  parentShape.insert(parentShape.begin() + slice.getDim(), 1);
+  std::optional<LinearLayout> parentLL =
+      triton::gpu::toLinearLayout(parentShape, slice.getParent());
+  if (!parentLL) {
+    return std::nullopt;
+  }
+
+  // Remove dimension slice.getDim() from the parent layout.
+  //
+  //  1. Construct a layout `transform` from parent-out-dims to slice-out-dims
+  //     that removes the relevant out-dim.
+  //  2. Compute linearSlice = parent.compose(transform).  Now linearSlice maps
+  //     from parent in-dims to slice out-dims.
+  //  3. Fix up duplicate registers introduced by slicing.
+  auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
+  LinearLayout transform = LinearLayout::empty();
+  for (auto [idx, outDim] : llvm::enumerate(parentLL->getOutDimNames())) {
+    if (idx == slice.getDim()) {
+      // Because we're multiplying by all zeros, we could replace outDimNames[0]
+      // with any other valid out-dim; the layout will be the same.
+      transform *= LinearLayout::zeros1D(parentLL->getOutDimSize(outDim),
+                                         outDim, outDimNames[0]);
+    } else {
+      transform *= LinearLayout::identity1D(
+          parentLL->getOutDimSize(outDim), outDim,
+          outDimNames[idx - (idx < slice.getDim() ? 0 : 1)]);
+    }
+  }
+  LinearLayout sliceLL = parentLL->compose(transform);
+
+  // Step 3: Along the "register" dim, remove any all-zero bases.
+  auto bases = sliceLL.getBases();
+  std::vector<std::vector<int>> newRegBases;
+  for (const auto &basis : bases[S("register")]) {
+    if (llvm::any_of(basis, [](int b) { return b != 0; })) {
+      newRegBases.push_back(basis);
+    }
+  }
+  bases[S("register")] = newRegBases;
+
+  LinearLayout ret = LinearLayout(std::move(bases), sliceLL.getOutDimNames());
+
+  // Match a hack in the legacy code that ensures that the number of registers
+  // matches getTotalElemsPerThread.  Yup: We just removed all the zeros, now
+  // we're (maybe) adding some back.  :)
+  //
+  // TODO(jlebar): Once getTotalElemsPerThread uses LLs instead of the existing
+  // legacy code, I think we can remove this.
+  int expectedNumRegisters = getTotalElemsPerThread(RankedTensorType::get(
+      shape, IntegerType::get(ctx, 32) /*dummy type*/, slice));
+  if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
+    int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
+    // Our use of "dim0" here is arbitrary; because we're adding zeros, any
+    // output dimension would work.
+    ret *= LinearLayout::zeros1D(extraZeros, S("register"), S("dim0"));
+  }
+  return ret;
+}
+
 } // anonymous namespace
 
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
+std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
+                                           Attribute layout) {
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
     return blockedToLinearLayout(shape, blocked);
   }
@@ -414,10 +478,12 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
       return hopperMmaToLinearLayout(shape, mma);
     }
   }
+  if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
+    return toLinearLayout(shape, slice);
+  }
 
   // TODO(jlebar): Other layouts
-  llvm::errs() << "Unsupported layout: " << layout << "\n";
-  llvm_unreachable("Unsupported layout");
+  return std::nullopt;
 }
 
 } // namespace mlir::triton::gpu

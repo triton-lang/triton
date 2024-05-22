@@ -30,6 +30,7 @@ class HIPOptions:
     kpack: int = 1
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
+    backend_name: str = 'hip'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -37,7 +38,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["cuda2gcn", "opencl", "ocml", "ockl"]
+        libs = ["ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -185,13 +186,13 @@ class HIPBackend(BaseBackend):
         amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
 
         # Set kernel attributes first given this may affect later optimizations.
-        kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
+        fns = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
         # The public kernel should be kernel 0.
-        kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
-        kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
+        fns[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
+        fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
+        fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
-        kernels[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
+        fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
 
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]

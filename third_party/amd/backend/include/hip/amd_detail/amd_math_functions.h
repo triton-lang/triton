@@ -61,7 +61,7 @@ struct __numeric_type<_Float16>
 #define __RETURN_TYPE bool
 
 // DOT FUNCTIONS
-#if __HIP_CLANG_ONLY__
+#if defined(__clang__) && defined(__HIP__)
 __DEVICE__
 inline
 int amd_mixed_dot(short2 a, short2 b, int c, bool saturate) {
