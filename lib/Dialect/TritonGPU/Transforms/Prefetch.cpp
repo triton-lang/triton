@@ -34,8 +34,10 @@
 
 using namespace mlir;
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUPREFETCH
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
 namespace {
 
@@ -358,7 +360,10 @@ scf::ForOp Prefetcher::createNewForOp() {
   return newForOp;
 }
 
-struct PrefetchPass : public TritonGPUPrefetchBase<PrefetchPass> {
+} // anonymous namespace
+
+struct PrefetchPass
+    : public mlir::triton::gpu::impl::TritonGPUPrefetchBase<PrefetchPass> {
   void runOnOperation() override {
 
     // Canonicalize convert ops to make the pattern matching easier.
@@ -387,9 +392,3 @@ struct PrefetchPass : public TritonGPUPrefetchBase<PrefetchPass> {
     });
   }
 };
-
-} // anonymous namespace
-
-std::unique_ptr<Pass> mlir::triton::gpu::createPrefetchPass() {
-  return std::make_unique<PrefetchPass>();
-}

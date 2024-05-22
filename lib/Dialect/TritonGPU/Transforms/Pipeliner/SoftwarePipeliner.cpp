@@ -28,8 +28,10 @@
 
 using namespace mlir;
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUPIPELINE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
 // Return true if the preconditions for pipelining the loop are met.
 static bool preCondition(scf::ForOp forOp) {
@@ -92,15 +94,11 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
 }
 
 namespace {
-struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
-  PipelinePass() = default;
-  PipelinePass(int numStages, int numWarps, int numCTAs,
-               int computeCapability) {
-    this->numStages = numStages;
-    this->numWarps = numWarps;
-    this->numCTAs = numCTAs;
-    this->computeCapability = computeCapability;
-  }
+struct PipelinePass
+    : public mlir::triton::gpu::impl::TritonGPUPipelineBase<PipelinePass> {
+
+  using mlir::triton::gpu::impl::TritonGPUPipelineBase<
+      PipelinePass>::TritonGPUPipelineBase;
 
   int getNumStagesOrDefault(scf::ForOp forOp) {
     // Use the attribute attached to the loop if it exists otherwise use the
@@ -164,10 +162,3 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
   }
 };
 } // anonymous namespace
-
-std::unique_ptr<Pass>
-mlir::triton::gpu::createPipelinePass(int numStages, int numWarps, int numCTAs,
-                                      int computeCapability) {
-  return std::make_unique<PipelinePass>(numStages, numWarps, numCTAs,
-                                        computeCapability);
-}

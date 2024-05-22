@@ -5,8 +5,10 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUF32DOTTC
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
 namespace {
 
@@ -68,7 +70,8 @@ public:
   }
 };
 
-struct F32DotTCPass : public TritonGPUF32DotTCBase<F32DotTCPass> {
+struct F32DotTCPass
+    : public mlir::triton::gpu::impl::TritonGPUF32DotTCBase<F32DotTCPass> {
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -82,7 +85,3 @@ struct F32DotTCPass : public TritonGPUF32DotTCBase<F32DotTCPass> {
   }
 };
 } // anonymous namespace
-
-std::unique_ptr<Pass> mlir::triton::gpu::createF32DotTCPass() {
-  return std::make_unique<F32DotTCPass>();
-}

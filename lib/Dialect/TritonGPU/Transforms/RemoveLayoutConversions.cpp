@@ -22,15 +22,19 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUREMOVELAYOUTCONVERSIONS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
 #define DEBUG_TYPE "tritongpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace mlir::triton::gpu {
 namespace {
+using namespace mlir;
+using namespace triton;
+using namespace triton::gpu;
 
 // -----------------------------------------------------------------------------
 //
@@ -1220,13 +1224,12 @@ void hoistConvert(ModuleOp module) {
     layoutRemat.cleanup();
   });
 }
+} // namespace
 
 class TritonGPURemoveLayoutConversionsPass
-    : public TritonGPURemoveLayoutConversionsBase<
+    : public mlir::triton::gpu::impl::TritonGPURemoveLayoutConversionsBase<
           TritonGPURemoveLayoutConversionsPass> {
 public:
-  TritonGPURemoveLayoutConversionsPass() = default;
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -1299,11 +1302,3 @@ public:
     });
   }
 };
-
-} // namespace
-
-std::unique_ptr<Pass> createRemoveLayoutConversionsPass() {
-  return std::make_unique<TritonGPURemoveLayoutConversionsPass>();
-}
-
-} // namespace mlir::triton::gpu

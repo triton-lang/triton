@@ -10,15 +10,15 @@ using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUCOMBINETENSORSELECTANDIF
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
 class CombineTensorSelectAndIfPass
-    : public TritonGPUCombineTensorSelectAndIfBase<
+    : public mlir::triton::gpu::impl::TritonGPUCombineTensorSelectAndIfBase<
           CombineTensorSelectAndIfPass> {
 public:
-  explicit CombineTensorSelectAndIfPass() = default;
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -114,7 +114,3 @@ public:
     }
   }
 };
-
-std::unique_ptr<Pass> mlir::triton::gpu::createCombineTensorSelectAndIfPass() {
-  return std::make_unique<CombineTensorSelectAndIfPass>();
-}

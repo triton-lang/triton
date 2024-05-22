@@ -18,10 +18,13 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUCOALESCE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
-struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
+struct CoalescePass
+    : public mlir::triton::gpu::impl::TritonGPUCoalesceBase<CoalescePass> {
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp,
@@ -191,7 +194,3 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     }
   }
 };
-
-std::unique_ptr<Pass> mlir::triton::gpu::createCoalescePass() {
-  return std::make_unique<CoalescePass>();
-}

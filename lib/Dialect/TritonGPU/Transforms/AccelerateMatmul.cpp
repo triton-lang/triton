@@ -378,16 +378,18 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
   });
 }
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUACCELERATEMATMUL
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
 class TritonGPUAccelerateMatmulPass
-    : public TritonGPUAccelerateMatmulBase<TritonGPUAccelerateMatmulPass> {
+    : public ttg::impl::TritonGPUAccelerateMatmulBase<
+          TritonGPUAccelerateMatmulPass> {
 public:
-  TritonGPUAccelerateMatmulPass() = default;
-  TritonGPUAccelerateMatmulPass(int computeCapability) {
-    this->computeCapability = computeCapability;
-  }
+  using ttg::impl::TritonGPUAccelerateMatmulBase<
+      TritonGPUAccelerateMatmulPass>::TritonGPUAccelerateMatmulBase;
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -402,8 +404,3 @@ public:
     decomposeMixedModeDotOp(m, computeCapability);
   }
 };
-
-std::unique_ptr<Pass>
-mlir::triton::gpu::createAccelerateMatmulPass(int computeCapability) {
-  return std::make_unique<TritonGPUAccelerateMatmulPass>(computeCapability);
-}

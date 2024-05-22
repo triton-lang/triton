@@ -17,17 +17,18 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#define GEN_PASS_CLASSES
+
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUREDUCEDATADUPLICATION
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
 using namespace mlir;
 
 class TritonGPUReduceDataDuplicationPass
-    : public TritonGPUReduceDataDuplicationBase<
+    : public mlir::triton::gpu::impl::TritonGPUReduceDataDuplicationBase<
           TritonGPUReduceDataDuplicationPass> {
 public:
-  TritonGPUReduceDataDuplicationPass() = default;
-
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -84,7 +85,3 @@ public:
     });
   }
 };
-
-std::unique_ptr<Pass> mlir::triton::gpu::createReduceDataDuplicationPass() {
-  return std::make_unique<TritonGPUReduceDataDuplicationPass>();
-}
