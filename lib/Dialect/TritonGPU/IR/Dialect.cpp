@@ -228,6 +228,20 @@ static SmallVector<unsigned> eraseOrder(ArrayRef<unsigned> order,
   return resOrder;
 }
 
+SmallVector<unsigned> getWarpOrder(Attribute layout) {
+  auto order = getOrder(layout);
+  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
+    if (mmaLayout.isHopper()) {
+      // Hopper MMA instructions force a warp order of [0, 1]. See docs:
+      // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#matrix-fragments-for-wgmma-mma-async-m64nnk8
+      auto it = std::find(order.begin(), order.end(), 0);
+      order.erase(it);
+      order.insert(order.begin(), 0);
+    }
+  }
+  return order;
+}
+
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
@@ -718,7 +732,7 @@ SmallVector<unsigned> SliceEncodingAttr::getWarpsPerCTA() const {
   return warpsPerCTA;
 }
 SmallVector<unsigned> SliceEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> SliceEncodingAttr::getThreadsPerWarp() const {
   auto parent = getParent();
@@ -979,7 +993,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
   }
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
@@ -1495,7 +1509,7 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
@@ -1648,7 +1662,7 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
@@ -1746,7 +1760,7 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadsPerWarp() const {
   auto rank = getWarpsPerCTA().size();
@@ -1787,7 +1801,10 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getSizePerThread() const {
   }
   if (isHopper()) {
     auto instrShape = getInstrShape();
-    // TODO(thomas): what are those magic numbers?
+    // WGMMA instructions have an order of [0, 1] with 4 warps, each with 8
+    // unique thread ids (32 in a warp group) per column. It is 1 warp wide with
+    // 4 unique thread ids in the row. So the size per thread is the instruction
+    // size divided by the number of unique thread ids.
     return SmallVector<unsigned>{instrShape[0] * 4 / 32, instrShape[1] / 4};
   }
   llvm_unreachable("Unexpected mma version");
