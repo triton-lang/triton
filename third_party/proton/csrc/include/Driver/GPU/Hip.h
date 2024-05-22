@@ -16,8 +16,8 @@ hipError_t deviceGetAttribute(int *value, hipDeviceAttribute_t attribute,
 
 Device getDevice(uint64_t index);
 
-const char* getKernelNameRef(const hipFunction_t f);
-const char* getKernelNameRefByPtr(const void* hostFunction, hipStream_t stream);
+const char *getKernelNameRef(const hipFunction_t f);
+const char *getKernelNameRefByPtr(const void *hostFunction, hipStream_t stream);
 
 } // namespace hip
 
