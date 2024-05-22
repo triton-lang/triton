@@ -153,9 +153,6 @@ struct BarrierExpectConversion
               /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
     ptxBuilder.launch(rewriter, loc, voidTy);
-    // TODO: remove this barrier once membar pass implements tracking ops based
-    // on memory effects.
-    barrier();
     rewriter.eraseOp(op);
     return success();
   }
@@ -187,7 +184,6 @@ struct WaitBarrierOpConversion
              /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
     ptxBuilder.launch(rewriter, op->getLoc(), voidTy);
-    barrier();
     rewriter.eraseOp(op);
     return success();
   }

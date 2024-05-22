@@ -158,7 +158,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<
   }];
 }
 
-def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", []> {
+def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
     let summary = "wait until the mbarrier phase completes.";
 
     let description = [{
