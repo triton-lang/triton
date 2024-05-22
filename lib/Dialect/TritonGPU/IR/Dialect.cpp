@@ -232,7 +232,8 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
   auto order = getOrder(layout);
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mmaLayout.isHopper()) {
-      // Hopper MMA instructions force a warp order of [0, 1].
+      // Hopper MMA instructions force a warp order of [0, 1]. See docs:
+      // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#matrix-fragments-for-wgmma-mma-async-m64nnk8
       auto it = std::find(order.begin(), order.end(), 0);
       order.erase(it);
       order.insert(order.begin(), 0);
