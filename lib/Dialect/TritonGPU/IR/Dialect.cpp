@@ -1628,19 +1628,16 @@ AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
   assert(getMDim() == 32 || getMDim() == 16);
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   auto rank = parentShapePerCTATile.size();
-  unsigned numKGroups =
-      getWarpSize(*this) / (opIdx == 0 ? getMDim() : getNDim());
-  unsigned kDim = kWidth * numKGroups;
   if (opIdx == 0) {
     if (rank == 2)
-      return {parentShapePerCTATile[rank - 2], kDim};
+      return {parentShapePerCTATile[rank - 2], 32};
     else
-      return {parentShapePerCTATile[0], parentShapePerCTATile[rank - 2], kDim};
+      return {parentShapePerCTATile[0], parentShapePerCTATile[rank - 2], 32};
   } else if (opIdx == 1) {
     if (rank == 2)
-      return {kDim, parentShapePerCTATile[rank - 1]};
+      return {32, parentShapePerCTATile[rank - 1]};
     else
-      return {parentShapePerCTATile[0], kDim, parentShapePerCTATile[rank - 1]};
+      return {parentShapePerCTATile[0], 32, parentShapePerCTATile[rank - 1]};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
   }
@@ -1689,8 +1686,9 @@ AMDWmmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   }
 }
 
-SmallVector<unsigned> AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(
-    ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
+                                                      int opIdx) const {
   auto parentShapePerCTA = getShapePerCTATile(shape);
   if (opIdx == 0) {
     return {parentShapePerCTA[0], static_cast<unsigned>(shape[1])};
@@ -2001,8 +1999,9 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
   }
   llvm_unreachable("unknown mma layout");
 }
-SmallVector<unsigned> NvidiaMmaEncodingAttr::getShapePerCTATileForDotOperands(
-    ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
+SmallVector<unsigned>
+NvidiaMmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
+                                                        int opIdx) const {
   assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   auto rank = parentShapePerCTATile.size();
