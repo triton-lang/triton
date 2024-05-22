@@ -143,6 +143,10 @@ void WaitBarrierOp::getEffects(
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), getAlloc(),
                        mlir::triton::gpu::SharedMemory::get());
+  // Need a side effect to prevent compiler from reordering and removing
+  // the wait operation.
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::SideEffects::DefaultResource::get());
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --
