@@ -84,7 +84,7 @@ void RoctracerProfiler::pushCorrelationID(uint64_t id, CorrelationDomain type) {
   if (!instance().externalCorrelationEnabled) {
     return;
   }
-  std::scoped_lock(externalIdLock);
+  std::scoped_lock lock(externalIdLock);
   externalIdMap[type].push_back(id);
 }
 
@@ -92,7 +92,7 @@ void RoctracerProfiler::popCorrelationID(CorrelationDomain type) {
   if (!instance().externalCorrelationEnabled) {
     return;
   }
-  std::scoped_lock(externalIdLock);
+  std::scoped_lock lock(externalIdLock);
   externalIdMap[type].pop_back();
 }
 
@@ -170,6 +170,7 @@ void RoctracerProfiler::activityCallback(const char *begin, const char *end,
     if (record->correlation_id > flushState.maxCompletedCorrelationId_) {
       flushState.maxCompletedCorrelationId_ = record->correlation_id;
     }
+    std::scoped_lock lock(profiler.correlationLock);
     processActivity(correlation, dataSet, record);
     roctracer::getNextRecord<true>(record, &record);
   }
@@ -234,41 +235,41 @@ const char *kernelName(uint32_t domain, uint32_t cid,
     switch (cid) {
     case HIP_API_ID_hipExtLaunchKernel: {
       auto &params = data->args.hipExtLaunchKernel;
-      name = cxx_demangle(
+      name = cxxDemangle(
           hip::getKernelNameRefByPtr(params.function_address, params.stream));
     } break;
     case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice: {
       auto &params =
           data->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList__val;
       name =
-          cxx_demangle(hip::getKernelNameRefByPtr(params.func, params.stream));
+          cxxDemangle(hip::getKernelNameRefByPtr(params.func, params.stream));
     } break;
     case HIP_API_ID_hipExtModuleLaunchKernel: {
       auto &params = data->args.hipExtModuleLaunchKernel;
-      name = cxx_demangle(hip::getKernelNameRef(params.f));
+      name = cxxDemangle(hip::getKernelNameRef(params.f));
     } break;
     case HIP_API_ID_hipHccModuleLaunchKernel: {
       auto &params = data->args.hipHccModuleLaunchKernel;
-      name = cxx_demangle(hip::getKernelNameRef(params.f));
+      name = cxxDemangle(hip::getKernelNameRef(params.f));
     } break;
     case HIP_API_ID_hipLaunchCooperativeKernel: {
       auto &params = data->args.hipLaunchCooperativeKernel;
-      name = cxx_demangle(hip::getKernelNameRefByPtr(params.f, params.stream));
+      name = cxxDemangle(hip::getKernelNameRefByPtr(params.f, params.stream));
     } break;
     case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice: {
       auto &params = data->args.hipLaunchCooperativeKernelMultiDevice
                          .launchParamsList__val;
       name =
-          cxx_demangle(hip::getKernelNameRefByPtr(params.func, params.stream));
+          cxxDemangle(hip::getKernelNameRefByPtr(params.func, params.stream));
     } break;
     case HIP_API_ID_hipLaunchKernel: {
       auto &params = data->args.hipLaunchKernel;
-      name = cxx_demangle(
+      name = cxxDemangle(
           hip::getKernelNameRefByPtr(params.function_address, params.stream));
     } break;
     case HIP_API_ID_hipModuleLaunchKernel: {
       auto &params = data->args.hipModuleLaunchKernel;
-      name = cxx_demangle(hip::getKernelNameRef(params.f));
+      name = cxxDemangle(hip::getKernelNameRef(params.f));
     } break;
     case HIP_API_ID_hipGraphLaunch: {
       name = "graphLaunch";
@@ -306,7 +307,7 @@ void RoctracerProfiler::apiCallback(uint32_t domain, uint32_t cid,
         // Generate and Report external correlation
         for (int it = CorrelationDomain::begin; it < CorrelationDomain::end;
              ++it) {
-          std::scoped_lock(externalIdLock);
+          std::scoped_lock lock(profiler.correlationLock, externalIdLock);
           if (externalIdMap[it].size() > 0) {
             profiler.correlation[data->correlation_id] =
                 externalIdMap[it].back();

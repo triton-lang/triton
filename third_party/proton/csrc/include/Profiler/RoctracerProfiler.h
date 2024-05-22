@@ -52,6 +52,7 @@ private:
   const inline static size_t BufferSize = 64 * 1024 * 1024;
 
   std::map<uint32_t, size_t> correlation;
+  std::mutex correlationLock;
 
   bool externalCorrelationEnabled{true};
 
