@@ -2849,7 +2849,7 @@ void AsyncCopyGlobalToLocalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
-                       SideEffects::DefaultResource::get());
+                       mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), getResult(),
                        mlir::triton::gpu::SharedMemory::get());
 }
