@@ -12,7 +12,6 @@ def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
 
   let methods = [
-
     InterfaceMethod<"Return total element size per thread.",
                     "unsigned",
                     "getTotalElemsPerThread",
@@ -33,7 +32,7 @@ class TritonGPU_Attr<string name, string attrMnemonic, list<Trait> traits = [],
   : AttrDef<dialect, name, !listconcat([TritonGPU_AttrTrait], traits), baseCppClass> {
 
   let description = [{
-TritonGPU Tensors differ from usual tensors in that they contain a _layout_ attribute which determines
+TritonGPU tensors differ from usual tensors in that they contain a _layout_ attribute which determines
 how the data should be partitioned across CUDA threads. Formally speaking, we define a layout as a function
 \mathcal{L} that maps a multi-dimensional tensor index $i \in \mathbb{Z}^d$ to a set of integers T corresponding
 to the indices of the CUDA threads allowed to access some data at index $i$.
@@ -50,7 +49,7 @@ Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
 - T[1,0] is owned by both cuda thread 2 and 6
 - T[1,1] is owned by both cuda thread 3 and 7
 
-Right now, Triton implements two classes of layouts: shared, and distributed.
+Right now, Triton implements two main classes of layouts: shared, and distributed.
   }];
   let attrName = "triton.gpu." # attrMnemonic;
 
@@ -159,10 +158,10 @@ def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding", "shared_encoding"> {
   let description = [{
 An encoding for tensors whose elements may be simultaneously accessed by
 different cuda threads in the programs, via shared memory. In other words,
-for all indices i \in R^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
+for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
 
-In order to avoid shared memory bank conflicts, elements may be swizzled.  Here
-are some examples.  In all cases, the input tensor is [0, 1, ..., n-1].
+In order to avoid shared memory bank conflicts, elements may be swizzled.
+Here are some examples.  In all cases, the input tensor is [0, 1, ..., n-1].
 
 1. Basic swizzling
 
@@ -468,7 +467,7 @@ def DistributedEncodingTrait : AttrInterface<"DistributedEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
 
   let description = [{
-The Distributed encodings describes the layout tensor L with the 4-level hierarchy multiple threads on GPU.
+The Distributed encoding describes the layout L with the 4-level compute hierarchy on GPU.
 It is abstracted from the top to the bottom as CTAs Per CGA->Warps Per CTA->Threads Per Warp->Values Per Thread.
 
 For CTAs Per CGA and Warps Per CTA level, the linear id is distributed contiguously with the shape and order.
@@ -530,27 +529,39 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
 }
 
 class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = [],
-                     Dialect dialect = TritonGPU_Dialect> : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait], traits), dialect> {
+                     Dialect dialect = TritonGPU_Dialect>
+  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait], traits), dialect> {
+
   let description = [{
-Distributed encodings have a layout function that is entirely characterized
-by a d-dimensional tensor L. Note that L doesn't need to have the same shape
+Distributed encodings have a layout function L that is entirely characterized
+by a d-dimensional tensor T. Note that L doesn't need to have the same shape
 (or even the same rank) as the tensor it is encoding.
 
 The layout function \mathcal{L} of this layout is then defined, for an
-index `i` \in R^D, as follows:
+index `i` \in Z^d, as follows:
 
-\mathcal{L}(A)[i_d] = L[(i_d + k_d*A.shape[d]) % L.shape[d]] \forall k_d such as i_d + k_d*A.shape[d] < L.shape[d]
+\mathcal{L}(T)[i_d] = L[(i_d + k_d*T.shape[d]) % L.shape[d]] \forall k_d such as i_d + k_d*T.shape[d] < L.shape[d]
+
+Intuitively, when the tensor dim size T.shape[d] is larger than the layout
+dim size L.shape[d], on that particular dim, we distribute values from the
+tensor to threads mapped in the layout in a "wrapped around" manner, with
+each thread owning multiple values.
+
+OTOH, when the tensor dim size T.shape[d] is smaller than the layout
+dim size L.shape[d], on that particular dim, we distribute values from the
+tensor to threads mapped in the layout in a "broadcasted" manner, with
+each value owned by multiple threads.
 
 For example, for a tensor/layout pair
-A = [x  x  x  x  x  x  x  x]
+T = [x  x  x  x  x  x  x  x]
     [x  x  x  x  x  x  x  x]
 L = [0  1  2  3 ]
     [4  5  6  7 ]
     [8  9  10 11]
     [12 13 14 15]
 
-Then the data of A would be distributed as follow between the 16 CUDA threads:
-L(A) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
+Then the data of T would be distributed as follow between the 16 CUDA threads:
+L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
          {4,12}, {5,13}, {6,14}, {7,15}, {4,12}, {5, 13}, {6, 14}, {7, 15} ]
   }];
 
@@ -758,21 +769,28 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
 
-    InterfaceMethod<"Return whether the layout support reduction op.", "bool",
-      "supportReduction">,
+    InterfaceMethod<"Return whether the layout support reduction op.",
+                    "bool",
+                    "supportReduction">,
 
-    InterfaceMethod<"Return shape per CTA.", "SmallVector<unsigned>",
-      "getShapePerCTATileForDotOperands", (ins "ArrayRef<int64_t>":$tensorShape,
-                                               "unsigned":$opIdx)>,
+    InterfaceMethod<"Return shape per CTA.",
+                    "SmallVector<unsigned>",
+                    "getShapePerCTATileForDotOperands",
+                    (ins "ArrayRef<int64_t>":$tensorShape,
+                         "unsigned":$opIdx)>,
 
-    InterfaceMethod<"Return total element size per thread for dot operands.", "unsigned",
-      "getTotalElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
-                                                "Type":$eltTy,
-                                                "unsigned":$kWidth,
-                                                "unsigned":$opIdx)>,
+    InterfaceMethod<"Return total element size per thread for dot operands.",
+                    "unsigned",
+                    "getTotalElemsPerThreadForOperands",
+                    (ins "ArrayRef<int64_t>":$tensorShape,
+                         "Type":$eltTy,
+                         "unsigned":$kWidth,
+                         "unsigned":$opIdx)>,
 
-    InterfaceMethod<"Return size per thread for dot operands.", "SmallVector<unsigned>",
-      "getSizePerThreadForOperands", (ins "unsigned":$opIdx)>,
+    InterfaceMethod<"Return size per thread for dot operands.",
+                    "SmallVector<unsigned>",
+                    "getSizePerThreadForOperands",
+                    (ins "unsigned":$opIdx)>,
   ];
 }
 
@@ -919,6 +937,7 @@ A `warpsPerCTA` parameter characterizes data distribution between waves.
 An important limitation of WMMA for layout is a shape for tiles proccessed
 by a single wave. It is [16, 16].
 This encoding assumes specific access to matrix elements by threads.
+
 Example:
 Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
 
@@ -976,15 +995,16 @@ def NvidiaMmaEncodingAttr : DistributedEncoding<"NvidiaMmaEncoding", "nvidia_mma
 
   let description = [{
 An encoding for tensors that have been produced by tensor cores.
+
 It is characterized by two parameters:
 - A 'versionMajor' which specifies the generation the tensor cores
-whose output is being partitioned: 1 for first-gen tensor cores (Volta),
-and 2 for second-gen tensor cores (Turing/Ampere).
+  whose output is being partitioned:
+  - 1 for first-gen tensor cores (Volta), and
+  - 2 for second-gen tensor cores (Turing/Ampere).
 - A 'versionMinor' which indicates the specific layout of a tensor core
-generation, e.g. for Volta, there might be multiple kinds of layouts annotated
-by 0,1,2 and so on.
-- A `blockTileSize` to indicate how data should be
-partitioned between warps.
+  generation, e.g. for Volta, there might be multiple kinds of layouts
+  annotated by 0,1,2 and so on.
+- A `blockTileSize` to indicate how data should be partitioned between warps.
 
 // -------------------------------- version = 1 --------------------------- //
 
@@ -1181,21 +1201,31 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let mnemonic = "slice";
 
   let description = [{
-    TODO: improve docs
+    Given a `parent` layout and a `dim`, squeezes the given `dim` in the `parent`
+    layout and distributes values in a tensor T according to the new layout.
 
-    A = [x  x  x  x  x  x  x  x]
+    For example, given
 
-    parent = [0  1  2  3 ]
-             [4  5  6  7 ]
-             [8  9  10 11]
-             [12 13 14 15]
-    dim = 0
+    T = [x  x  x  x  x  x  x  x]
+    L_parent = [0  1  2  3 ]
+               [4  5  6  7 ]
+               [8  9  10 11]
+               [12 13 14 15] (with 16 CUDA threads)
 
-    Then the data of A would be distributed as follow between the 16 CUDA threads:
-    L(A) = [ {0,4,8,12} , {1,5,9,13} , ... {3,7,11,15}, {0,4,8,12} , ..., {3,7,11,15} ]
+    With dim = 0, squeezing out dim 0, we have
+    L = [{0,4,8,12},  {1,5,9,13}, {2,6,10,14},  {3,7,11,15} ]
 
-    This is useful for constructing the inverse layout of an expand_dims operation during some optimization passes.
+    Then the data of T would be distributed as follow between the 16 CUDA threads:
+    L(T) = [ {0,4,8,12} , {1,5,9,13} , ... {3,7,11,15}, {0,4,8,12} , ..., {3,7,11,15} ]
 
+    With dim = 1, squeezing out dim 1, we have
+    L = [ {0,1,2,3}, {4,5,6,7}, {8,9,10,11}, {12,13,14,15} ]
+
+    Then the data of T would be distributed as follow between the 16 CUDA threads:
+    L = [ {0,1,2,3}, {4,5,6,7}, ..., {12,13,14,15}, {0,1,2,3}, ..., {12,13,14,15} ]
+
+    This is useful for constructing the inverse layout of an expand_dims operation
+    during some optimization passes.
   }];
 
   let parameters = (
@@ -1225,11 +1255,11 @@ def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_oper
 In the TritonGPU dialect, given `d = tt.dot a, b, c` tt.dot's operands a and b
 must be of DotOperandEncodingAttr layout, if the dot is MMA v1 or v2 (i.e.
 pre-Hopper).  For MMA v3, the operands are *almost always* in a regular shared
-encoding, but sometimes the LHS is also a dot-operand enc.
+encoding, but sometimes the LHS is also a dot-operand encoding.
 
 a's opIdx is 0, b's opIdx is 1.
 
-The parend field in DotOperandEncodingAttr is the layout of d.
+The parent field is the layout of d.
 
 kWidth defines number of consecutive elements stored by one thread along k dimension.
 Some layouts do not use this parameter, either because they have a fixed number of
