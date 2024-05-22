@@ -7,7 +7,6 @@
 
 #include <roctracer/roctracer_ext.h>
 #include <roctracer/roctracer_hip.h>
-#include <roctracer/roctracer_hsa.h>
 
 #include <cstdlib>
 #include <deque>
@@ -15,6 +14,7 @@
 #include <mutex>
 
 #include <unistd.h>
+#include <cxxabi.h>
 
 namespace proton {
 
@@ -176,6 +176,7 @@ void RoctracerProfiler::processActivity(std::map<uint32_t, size_t> &correlation,
                                         std::set<Data *> &dataSet,
                                         const roctracer_record_t *record) {
   switch (record->kind) {
+  case 0x11F1:	// Task - kernel enqueued by graph launch
   case kHipVdiCommandKernel: {
     processActivityKernel(correlation, dataSet, record);
     break;
@@ -195,7 +196,6 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
   case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice:
   case HIP_API_ID_hipExtModuleLaunchKernel:
   case HIP_API_ID_hipHccModuleLaunchKernel:
-  case HIP_API_ID_hipLaunchByPtr:
   case HIP_API_ID_hipLaunchCooperativeKernel:
   case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice:
   case HIP_API_ID_hipLaunchKernel:
@@ -210,6 +210,78 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
     break;
   }
   return std::make_pair(isRuntimeApi, isDriverApi);
+}
+
+// C++ symbol demangle
+static inline const char* cxx_demangle(const char* symbol) {
+  size_t funcnamesize;
+  int status;
+  const char* ret = (symbol != NULL) ? abi::__cxa_demangle(symbol, NULL, &funcnamesize, &status) : symbol;
+  return (ret != NULL) ? ret : symbol;
+}
+
+const char *kernelName(uint32_t domain, uint32_t cid, const void *callback_data) {
+  const char *name = "";
+  if (domain == ACTIVITY_DOMAIN_HIP_API) {
+    const hip_api_data_t* data = (const hip_api_data_t*)(callback_data);
+    switch (cid) {
+      case HIP_API_ID_hipExtLaunchKernel:
+      {
+        auto &params = data->args.hipExtLaunchKernel;
+        name = cxx_demangle(hip::getKernelNameRefByPtr(params.function_address, params.stream));
+      }
+      break;
+      case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice:
+      {
+        auto &params = data->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList__val;
+        name = cxx_demangle(hip::getKernelNameRefByPtr(params.func, params.stream));
+      }
+      break;
+      case HIP_API_ID_hipExtModuleLaunchKernel:
+      {
+        auto &params = data->args.hipExtModuleLaunchKernel;
+        name = cxx_demangle(hip::getKernelNameRef(params.f));
+      }
+      break;
+      case HIP_API_ID_hipHccModuleLaunchKernel:
+      {
+        auto &params = data->args.hipHccModuleLaunchKernel;
+        name = cxx_demangle(hip::getKernelNameRef(params.f));
+      }
+      break;
+      case HIP_API_ID_hipLaunchCooperativeKernel:
+      {
+        auto &params = data->args.hipLaunchCooperativeKernel;
+        name = cxx_demangle(hip::getKernelNameRefByPtr(params.f, params.stream));
+      }
+      break;
+      case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice:
+      {
+        auto &params = data->args.hipLaunchCooperativeKernelMultiDevice.launchParamsList__val;
+        name = cxx_demangle(hip::getKernelNameRefByPtr(params.func, params.stream));
+      }
+      break;
+      case HIP_API_ID_hipLaunchKernel:
+      {
+        auto &params = data->args.hipLaunchKernel;
+        name = cxx_demangle(hip::getKernelNameRefByPtr(params.function_address, params.stream));
+      }
+      break;
+      case HIP_API_ID_hipModuleLaunchKernel:
+      {
+        auto &params = data->args.hipModuleLaunchKernel;
+        name = cxx_demangle(hip::getKernelNameRef(params.f));
+      }
+      break;
+      case HIP_API_ID_hipGraphLaunch:
+      {
+        name = "graphLaunch";
+      }
+      break;
+      default:;
+    }
+  }
+  return name;
 }
 
 } // namespace
@@ -229,7 +301,8 @@ void RoctracerProfiler::apiCallback(uint32_t domain, uint32_t cid,
       {
         // Valid context and outermost level of the kernel launch
         const char *name =
-            roctracer::getOpString(ACTIVITY_DOMAIN_HIP_API, cid, 0);
+            kernelName(domain, cid, callback_data);
+            //roctracer::getOpString(ACTIVITY_DOMAIN_HIP_API, cid, 0);	// proper api name
         auto scopeId = Scope::getNewScopeId();
         auto scope = Scope(scopeId, name);
         roctracerState.record(scope, profiler.getDataSet());

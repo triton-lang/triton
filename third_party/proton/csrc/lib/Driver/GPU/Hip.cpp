@@ -42,6 +42,28 @@ Device getDevice(uint64_t index) {
                 smCount, arch);
 }
 
+const char* getKernelNameRef(const hipFunction_t f) {
+  typedef const char *(*hipKernelNameRef_t)(const hipFunction_t);
+  static hipKernelNameRef_t func = nullptr;
+  Dispatch<ExternLibHip>::init(ExternLibHip::name,
+                                     &ExternLibHip::lib);
+  if (func == nullptr)
+    func = reinterpret_cast<hipKernelNameRef_t>(
+        dlsym(ExternLibHip::lib, "hipKernelNameRef"));
+  return (func ? func(f) : NULL);
+}
+
+const char* getKernelNameRefByPtr(const void* hostFunction, hipStream_t stream) {
+  typedef const char *(*hipKernelNameRefByPtr_t)(const void*, hipStream_t);
+  static hipKernelNameRefByPtr_t func = nullptr;
+  Dispatch<ExternLibHip>::init(ExternLibHip::name,
+                                     &ExternLibHip::lib);
+  if (func == nullptr)
+    func = reinterpret_cast<hipKernelNameRefByPtr_t>(
+        dlsym(ExternLibHip::lib, "hipKernelNameRefByPtr"));
+  return (func ? func(hostFunction, stream) : NULL);
+}
+
 } // namespace hip
 
 } // namespace proton
