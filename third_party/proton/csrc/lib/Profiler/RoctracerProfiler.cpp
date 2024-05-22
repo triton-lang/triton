@@ -13,8 +13,8 @@
 #include <memory>
 #include <mutex>
 
-#include <unistd.h>
 #include <cxxabi.h>
+#include <unistd.h>
 
 namespace proton {
 
@@ -179,7 +179,7 @@ void RoctracerProfiler::processActivity(std::map<uint32_t, size_t> &correlation,
                                         std::set<Data *> &dataSet,
                                         const roctracer_record_t *record) {
   switch (record->kind) {
-  case 0x11F1:	// Task - kernel enqueued by graph launch
+  case 0x11F1: // Task - kernel enqueued by graph launch
   case kHipVdiCommandKernel: {
     processActivityKernel(correlation, dataSet, record);
     break;
@@ -216,72 +216,64 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
 }
 
 // C++ symbol demangle
-static inline const char* cxxDemangle(const char* symbol) {
+static inline const char *cxxDemangle(const char* symbol) {
   size_t funcnamesize;
   int status;
-  const char* ret = (symbol != NULL) ? abi::__cxa_demangle(symbol, NULL, &funcnamesize, &status) : symbol;
+  const char *ret =
+      (symbol != NULL)
+          ? abi::__cxa_demangle(symbol, NULL, &funcnamesize, &status)
+          : symbol;
   return (ret != NULL) ? ret : symbol;
 }
 
-const char *kernelName(uint32_t domain, uint32_t cid, const void *callback_data) {
+const char *kernelName(uint32_t domain, uint32_t cid,
+                       const void *callback_data) {
   const char *name = "";
   if (domain == ACTIVITY_DOMAIN_HIP_API) {
-    const hip_api_data_t* data = (const hip_api_data_t*)(callback_data);
+    const hip_api_data_t *data = (const hip_api_data_t *)(callback_data);
     switch (cid) {
-      case HIP_API_ID_hipExtLaunchKernel:
-      {
-        auto &params = data->args.hipExtLaunchKernel;
-        name = cxxDemangle(hip::getKernelNameRefByPtr(params.function_address, params.stream));
-      }
-      break;
-      case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice:
-      {
-        auto &params = data->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList__val;
-        name = cxxDemangle(hip::getKernelNameRefByPtr(params.func, params.stream));
-      }
-      break;
-      case HIP_API_ID_hipExtModuleLaunchKernel:
-      {
-        auto &params = data->args.hipExtModuleLaunchKernel;
-        name = cxxDemangle(hip::getKernelNameRef(params.f));
-      }
-      break;
-      case HIP_API_ID_hipHccModuleLaunchKernel:
-      {
-        auto &params = data->args.hipHccModuleLaunchKernel;
-        name = cxxDemangle(hip::getKernelNameRef(params.f));
-      }
-      break;
-      case HIP_API_ID_hipLaunchCooperativeKernel:
-      {
-        auto &params = data->args.hipLaunchCooperativeKernel;
-        name = cxxDemangle(hip::getKernelNameRefByPtr(params.f, params.stream));
-      }
-      break;
-      case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice:
-      {
-        auto &params = data->args.hipLaunchCooperativeKernelMultiDevice.launchParamsList__val;
-        name = cxxDemangle(hip::getKernelNameRefByPtr(params.func, params.stream));
-      }
-      break;
-      case HIP_API_ID_hipLaunchKernel:
-      {
-        auto &params = data->args.hipLaunchKernel;
-        name = cxxDemangle(hip::getKernelNameRefByPtr(params.function_address, params.stream));
-      }
-      break;
-      case HIP_API_ID_hipModuleLaunchKernel:
-      {
-        auto &params = data->args.hipModuleLaunchKernel;
-        name = cxxDemangle(hip::getKernelNameRef(params.f));
-      }
-      break;
-      case HIP_API_ID_hipGraphLaunch:
-      {
-        name = "graphLaunch";
-      }
-      break;
-      default:;
+    case HIP_API_ID_hipExtLaunchKernel: {
+      auto &params = data->args.hipExtLaunchKernel;
+      name = cxx_demangle(
+          hip::getKernelNameRefByPtr(params.function_address, params.stream));
+    } break;
+    case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice: {
+      auto &params =
+          data->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList__val;
+      name =
+          cxx_demangle(hip::getKernelNameRefByPtr(params.func, params.stream));
+    } break;
+    case HIP_API_ID_hipExtModuleLaunchKernel: {
+      auto &params = data->args.hipExtModuleLaunchKernel;
+      name = cxx_demangle(hip::getKernelNameRef(params.f));
+    } break;
+    case HIP_API_ID_hipHccModuleLaunchKernel: {
+      auto &params = data->args.hipHccModuleLaunchKernel;
+      name = cxx_demangle(hip::getKernelNameRef(params.f));
+    } break;
+    case HIP_API_ID_hipLaunchCooperativeKernel: {
+      auto &params = data->args.hipLaunchCooperativeKernel;
+      name = cxx_demangle(hip::getKernelNameRefByPtr(params.f, params.stream));
+    } break;
+    case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice: {
+      auto &params = data->args.hipLaunchCooperativeKernelMultiDevice
+                         .launchParamsList__val;
+      name =
+          cxx_demangle(hip::getKernelNameRefByPtr(params.func, params.stream));
+    } break;
+    case HIP_API_ID_hipLaunchKernel: {
+      auto &params = data->args.hipLaunchKernel;
+      name = cxx_demangle(
+          hip::getKernelNameRefByPtr(params.function_address, params.stream));
+    } break;
+    case HIP_API_ID_hipModuleLaunchKernel: {
+      auto &params = data->args.hipModuleLaunchKernel;
+      name = cxx_demangle(hip::getKernelNameRef(params.f));
+    } break;
+    case HIP_API_ID_hipGraphLaunch: {
+      name = "graphLaunch";
+    } break;
+    default:;
     }
   }
   return name;
@@ -303,9 +295,9 @@ void RoctracerProfiler::apiCallback(uint32_t domain, uint32_t cid,
       // if (callbackData->context && roctracerState.level == 0) {
       {
         // Valid context and outermost level of the kernel launch
-        const char *name =
-            kernelName(domain, cid, callback_data);
-            //roctracer::getOpString(ACTIVITY_DOMAIN_HIP_API, cid, 0);	// proper api name
+        const char *name = kernelName(domain, cid, callback_data);
+        // roctracer::getOpString(ACTIVITY_DOMAIN_HIP_API, cid, 0);	//
+        // proper api name
         auto scopeId = Scope::getNewScopeId();
         auto scope = Scope(scopeId, name);
         roctracerState.record(scope, profiler.getDataSet());
