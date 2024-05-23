@@ -1656,8 +1656,8 @@ AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   SmallVector<unsigned> shapePerCTATile(warpsPerCTA.begin(), warpsPerCTA.end());
 
   auto mnkDim = getMNKDimPerWMMAInstr();
-  shapePerCTATile[rank - 1] *= mnkDim[0];
-  shapePerCTATile[rank - 2] *= mnkDim[1];
+  shapePerCTATile[rank - 2] *= mnkDim[0];
+  shapePerCTATile[rank - 1] *= mnkDim[1];
   return shapePerCTATile;
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {

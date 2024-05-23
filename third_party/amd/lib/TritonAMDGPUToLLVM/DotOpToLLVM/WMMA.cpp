@@ -209,14 +209,15 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   for (int b = 0; b < numRepB; ++b) {
     for (int m = 0; m < numRepM; ++m) {
       for (int n = 0; n < numRepN; ++n) {
+        auto batchOffIdx = b * numRepM * numRepN * dElemsToStorePerThread;
+        auto mRepOffId = m * numRepN * dElemsToStorePerThread;
+        auto nRepOffId = n * dElemsToStorePerThread;
+        auto fcThreadOffIdx = batchOffIdx + mRepOffId + nRepOffId;
+
         Value acc = undef(vecTy);
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          acc =
-              insert_element(vecTy, acc,
-                             fc[b * numRepM * numRepN * dElemsToStorePerThread +
-                                m * numRepN * dElemsToStorePerThread +
-                                n * dElemsToStorePerThread + v],
-                             i32_val(v * paddedOutputElemSize));
+          acc = insert_element(vecTy, acc, fc[fcThreadOffIdx + v],
+                               i32_val(v * paddedOutputElemSize));
         }
         for (size_t k = 0; k < numRepK; k++) {
           acc = generateWMMAOp(rewriter, loc, wmmaInstrType, ha[{b, m, k}],
@@ -224,10 +225,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                                bTensorTy.getElementType());
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          fc[b * numRepM * numRepN * dElemsToStorePerThread +
-             m * numRepN * dElemsToStorePerThread + n * dElemsToStorePerThread +
-             v] = extract_element(dstElemTy, acc,
-                                  i32_val(v * paddedOutputElemSize));
+          fc[fcThreadOffIdx + v] = extract_element(
+              dstElemTy, acc, i32_val(v * paddedOutputElemSize));
         }
       }
     }
