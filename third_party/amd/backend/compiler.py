@@ -84,13 +84,13 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def path_to_rocm_lld():
-        # First check backend for ld.lld (used for pytorch wheels)
+        # Check env path for ld.lld
         lld_env_path = os.getenv("TRITON_HIP_LLD_PATH")
         if lld_env_path is not None:
             lld = Path(lld_env_path)
             if lld.is_file():
                 return lld
-
+        # Check backend for ld.lld (used for pytorch wheels)
         lld = Path(__file__).parent / "llvm/bin/ld.lld"
         if lld.is_file():
             return lld
