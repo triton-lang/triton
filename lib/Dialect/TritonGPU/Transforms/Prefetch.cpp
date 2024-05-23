@@ -18,7 +18,7 @@
 // %a_prefetch = triton_gpu.local_load %a_tmp
 // scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch)
 // {
-//   %x = tt.dot %a_arg, %b, %c
+//   %x = tt.dot %a_prefetch_arg, %b, %c
 //   %a_tmp_rem = tensor.subview %a_buf[0, 16] [128, 16]
 //   %a_prefetch_next = triton_gpu.local_load %a_tmp_rem
 //   ...
