@@ -326,8 +326,8 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     y = core.reshape(x, shape)
     # slice left/right with 'stride' 2**(n_dims - i - 1)
     mask = core.arange(0, 2)[None, :, None]
-    left = core.broadcast_to(sum(y * (1 - mask), 1)[:, None, :], shape)
-    right = core.broadcast_to(sum(y * mask, 1)[:, None, :], shape)
+    left = core.broadcast_to(sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)
+    right = core.broadcast_to(sum(y * mask, 1)[:, None, :], shape).to(y.dtype)
     left = core.reshape(left, x.shape)
     right = core.reshape(right, x.shape)
     # actual compare-and-swap
