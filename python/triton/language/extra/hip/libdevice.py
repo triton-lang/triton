@@ -58,6 +58,13 @@ def exp2(arg0, _builder=None):
 
 
 @core.extern
+def fast_dividef(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__triton_hip_fast_fdividef", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def sqrt(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
