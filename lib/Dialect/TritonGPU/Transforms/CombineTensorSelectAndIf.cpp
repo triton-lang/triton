@@ -6,14 +6,12 @@
 
 #include <memory>
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
+namespace mlir {
+namespace triton {
+namespace gpu {
 
-namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUCOMBINETENSORSELECTANDIF
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
 
 class CombineTensorSelectAndIfPass
     : public mlir::triton::gpu::impl::TritonGPUCombineTensorSelectAndIfBase<
@@ -114,3 +112,7 @@ public:
     }
   }
 };
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

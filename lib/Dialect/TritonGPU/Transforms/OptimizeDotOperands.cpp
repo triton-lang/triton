@@ -9,11 +9,11 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
-namespace {
+namespace mlir {
+namespace triton {
+namespace gpu {
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
+namespace {
 
 // Given
 //   convert(trans(src)) #dot_operand ->
@@ -305,10 +305,8 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
 
 } // namespace
 
-namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUOPTIMIZEDOTOPERANDS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
 
 class TritonGPUOptimizeDotOperandsPass
     : public mlir::triton::gpu::impl::TritonGPUOptimizeDotOperandsBase<
@@ -336,3 +334,7 @@ public:
       signalPassFailure();
   }
 };
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

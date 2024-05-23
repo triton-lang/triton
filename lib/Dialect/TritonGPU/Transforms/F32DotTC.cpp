@@ -2,13 +2,12 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
-using namespace mlir;
-namespace tt = mlir::triton;
+namespace mlir {
+namespace triton {
+namespace gpu {
 
-namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUF32DOTTC
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
 
 namespace {
 
@@ -21,18 +20,18 @@ namespace {
 //  dot(aSmall, bBig, inputPrecision="tf32") +
 //  dot(aBig, bSmall, inputPrecision="tf32") +
 //  dot(aBig, bBig, inputPrecision="tf32")
-class TF32x3 : public OpRewritePattern<tt::DotOp> {
+class TF32x3 : public OpRewritePattern<DotOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(tt::DotOp dotOp,
+  LogicalResult matchAndRewrite(DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
 
     auto isF32 = [](Value operand) {
       return cast<RankedTensorType>(operand.getType()).getElementType().isF32();
     };
 
-    if (!(dotOp.getInputPrecision() == tt::InputPrecision::TF32x3 &&
+    if (!(dotOp.getInputPrecision() == InputPrecision::TF32x3 &&
           isF32(dotOp.getA()) && isF32(dotOp.getB()))) {
       return failure();
     }
@@ -40,19 +39,19 @@ public:
     // Aux functions
     auto f32ToTF32 = [&](Value value) -> Value {
       return rewriter
-          .create<tt::ElementwiseInlineAsmOp>(
-              dotOp.getLoc(), value.getType(), "cvt.rna.tf32.f32 $0, $1;",
-              "=r,r",
-              /*isPure=*/true, /*pack=*/1, ArrayRef<Value>{value})
+          .create<ElementwiseInlineAsmOp>(dotOp.getLoc(), value.getType(),
+                                          "cvt.rna.tf32.f32 $0, $1;", "=r,r",
+                                          /*isPure=*/true, /*pack=*/1,
+                                          ArrayRef<Value>{value})
           .getResult()[0];
     };
     auto sub = [&](Value a, Value b) -> Value {
       return rewriter.create<arith::SubFOp>(dotOp.getLoc(), a, b);
     };
     auto dot = [&](Value a, Value b, Value c) -> Value {
-      return rewriter.create<tt::DotOp>(dotOp->getLoc(), c.getType(), a, b, c,
-                                        tt::InputPrecision::TF32,
-                                        dotOp.getMaxNumImpreciseAcc());
+      return rewriter.create<DotOp>(dotOp->getLoc(), c.getType(), a, b, c,
+                                    InputPrecision::TF32,
+                                    dotOp.getMaxNumImpreciseAcc());
     };
 
     auto aBig = f32ToTF32(dotOp.getA());
@@ -70,6 +69,8 @@ public:
   }
 };
 
+} // anonymous namespace
+
 struct F32DotTCPass
     : public mlir::triton::gpu::impl::TritonGPUF32DotTCBase<F32DotTCPass> {
   void runOnOperation() override {
@@ -84,4 +85,7 @@ struct F32DotTCPass
     }
   }
 };
-} // anonymous namespace
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

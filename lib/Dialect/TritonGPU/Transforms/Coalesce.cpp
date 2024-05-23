@@ -15,13 +15,12 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
-using namespace mlir::triton;
+namespace mlir {
+namespace triton {
+namespace gpu {
 
-namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUCOALESCE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
 
 struct CoalescePass
     : public mlir::triton::gpu::impl::TritonGPUCoalesceBase<CoalescePass> {
@@ -194,3 +193,7 @@ struct CoalescePass
     }
   }
 };
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

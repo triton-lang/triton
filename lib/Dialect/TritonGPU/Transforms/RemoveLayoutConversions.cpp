@@ -22,19 +22,18 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
-namespace mlir::triton::gpu {
+namespace mlir {
+namespace triton {
+namespace gpu {
+
 #define GEN_PASS_DEF_TRITONGPUREMOVELAYOUTCONVERSIONS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
 
 #define DEBUG_TYPE "tritongpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
 
 // -----------------------------------------------------------------------------
 //
@@ -1302,3 +1301,7 @@ public:
     });
   }
 };
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

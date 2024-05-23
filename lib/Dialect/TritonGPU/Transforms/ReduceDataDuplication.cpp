@@ -18,12 +18,12 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 
-namespace mlir::triton::gpu {
+namespace mlir {
+namespace triton {
+namespace gpu {
+
 #define GEN_PASS_DEF_TRITONGPUREDUCEDATADUPLICATION
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
-
-using namespace mlir;
 
 class TritonGPUReduceDataDuplicationPass
     : public mlir::triton::gpu::impl::TritonGPUReduceDataDuplicationBase<
@@ -85,3 +85,7 @@ public:
     });
   }
 };
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

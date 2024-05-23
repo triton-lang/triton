@@ -32,12 +32,12 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
-using namespace mlir;
+namespace mlir {
+namespace triton {
+namespace gpu {
 
-namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUPREFETCH
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
 
 namespace {
 
@@ -392,3 +392,7 @@ struct PrefetchPass
     });
   }
 };
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

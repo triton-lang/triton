@@ -10,12 +10,13 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-namespace mlir::triton::gpu {
+namespace mlir {
+namespace triton {
+namespace gpu {
+
 #define GEN_PASS_DEF_TRITONGPUOPTIMIZETHREADLOCALITY
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
 
-using namespace mlir;
 namespace {
 // Change the destination layout of reshape ops allowing reorder when used by a
 // reduction in order to minimize the amount of cross thread communication for
@@ -429,3 +430,7 @@ private:
     return res;
   }
 };
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

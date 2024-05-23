@@ -26,12 +26,12 @@
 // expander to generate the prologue and new loop.
 //===----------------------------------------------------------------------===//
 
-using namespace mlir;
+namespace mlir {
+namespace triton {
+namespace gpu {
 
-namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUPIPELINE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
 
 // Return true if the preconditions for pipelining the loop are met.
 static bool preCondition(scf::ForOp forOp) {
@@ -93,7 +93,6 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
   return true;
 }
 
-namespace {
 struct PipelinePass
     : public mlir::triton::gpu::impl::TritonGPUPipelineBase<PipelinePass> {
 
@@ -161,4 +160,7 @@ struct PipelinePass
     }
   }
 };
-} // anonymous namespace
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

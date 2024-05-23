@@ -20,12 +20,12 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-namespace mlir::triton::gpu {
+namespace mlir {
+namespace triton {
+namespace gpu {
+
 #define GEN_PASS_DEF_TRITONGPUREORDERINSTRUCTIONS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
-
-using namespace mlir;
 
 static bool willIncreaseRegisterPressure(Operation *op) {
   if (isa<triton::gpu::LocalLoadOp>(op))
@@ -134,3 +134,7 @@ public:
     return;
   }
 };
+
+} // namespace gpu
+} // namespace triton
+} // namespace mlir
