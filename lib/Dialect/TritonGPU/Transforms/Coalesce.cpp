@@ -15,13 +15,14 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
-using namespace mlir::triton;
+namespace mlir {
+namespace triton {
+namespace gpu {
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONGPUCOALESCE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
+struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp,
@@ -192,6 +193,6 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createCoalescePass() {
-  return std::make_unique<CoalescePass>();
-}
+} // namespace gpu
+} // namespace triton
+} // namespace mlir
