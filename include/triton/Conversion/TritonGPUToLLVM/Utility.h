@@ -395,25 +395,18 @@ inline Value getSharedMemoryBase(Location loc,
 } // namespace LLVM
 
 /* ------------------------------------ */
+// Returns CTA level thread idx
+inline Value getThreadIdInCTA(RewriterBase &rewriter, Location loc) {
+  Value tid =
+      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+}
 
 // Returns CTA level thread idx.
 inline Value getThreadId(RewriterBase &rewriter, Location loc) {
+  Value tid = getThreadIdInCTA(rewriter, loc);
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  int threadsPerBlock = triton::gpu::TritonGPUDialect::getNumWarps(mod) *
-                        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-
-  Value tid =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  tid = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
-
-  // Emit `tid & (threadsPerBlock - 1)` so that LLVM knows the range of the tid
-  // value.  If we wanted to get rid of this unnecessary & op, we could add an
-  // LLVM pass to set range metadata on the call to the intrinsic that gets the
-  // tid, something like LLVM's NVVMIntrRangePass except taking into account the
-  // kernel's actual limit rather than just the hardware's limit.  But ptxas,
-  // which does know the kernel's actual limit, seems to get rid of the op in
-  // the conversion to SASS, so it really shouldn't matter.
-  return and_(tid, i32_val(threadsPerBlock - 1));
+  return tid;
 }
 
 // -----------------------------------------------------------------------
