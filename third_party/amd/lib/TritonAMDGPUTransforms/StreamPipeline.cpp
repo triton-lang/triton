@@ -559,8 +559,26 @@ void LoopPipeliner::emitEpilogue(DenseMap<Value, Value> &newResults) {
     epilogueMap.map(args[i], pplForOp.getResult(i));
   for (auto *loadOp : validLoads)
     epilogueMap.map(loadOp->getResult(0), loadsBuffer[loadOp]);
-  // Map IV to original upper bound (ie. last iteration)
-  epilogueMap.map(forOp.getInductionVar(), forOp.getUpperBound());
+
+  // This is computing the upper bound of the pipelined loop as:
+  //   pplUpperBound = lb+((ub-1-lb)/step)*step
+  Location loc = forOp.getLoc();
+  Value ub = forOp.getUpperBound();
+  Value lb = forOp.getLowerBound();
+  Value step = forOp.getStep();
+  Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
+
+  // pplRange = ub-1-lb
+  Value pplRange = builder.create<arith::SubIOp>(
+      loc, builder.create<arith::SubIOp>(loc, ub, one), lb);
+
+  // pplIters = (pplrRange/step)*step
+  Value pplIters = builder.create<arith::MulIOp>(
+      loc, builder.create<arith::DivUIOp>(loc, pplRange, step), step);
+
+  // pplUpperBound = lb+pplIters
+  Value pplUpperBound = builder.create<arith::AddIOp>(loc, lb, pplIters);
+  epilogueMap.map(forOp.getInductionVar(), pplUpperBound);
 
   const auto &yieldOprs = yieldOp.getOperands();
   // Clone the loop body after the new ForOp
