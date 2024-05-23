@@ -109,8 +109,8 @@ static WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
 }
 
 Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
-                     WMMAInstrType wmmaType, Value valA, Value valB,
-                     Value valC) {
+                     WMMAInstrType wmmaType, Value valA, Value valB, Value valC,
+                     Type aElType, Type bElType) {
   auto resType = valC.getType();
   Value falseFlag = int_val(1, false);
   switch (wmmaType) {
@@ -129,11 +129,15 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
   case WMMAInstrType::INT32_IU8:
     return rewriter.create<ROCDL::wmma_i32_16x16x16_iu8>(
         loc, TypeRange{resType},
-        ValueRange{falseFlag, valA, falseFlag, valB, valC, falseFlag});
+        ValueRange{int_val(1, !aElType.isUnsignedInteger()), valA,
+                   int_val(1, !bElType.isUnsignedInteger()), valB, valC,
+                   falseFlag});
   case WMMAInstrType::INT32_IU4:
     return rewriter.create<ROCDL::wmma_i32_16x16x16_iu4>(
         loc, TypeRange{resType},
-        ValueRange{falseFlag, valA, falseFlag, valB, valC, falseFlag});
+        ValueRange{int_val(1, !aElType.isUnsignedInteger()), valA,
+                   int_val(1, !bElType.isUnsignedInteger()), valB, valC,
+                   falseFlag});
   default:
     llvm::report_fatal_error("WMMA data type not supported");
   }
@@ -207,7 +211,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       }
       for (size_t k = 0; k < numRepK; k++) {
         acc = generateWMMAOp(rewriter, loc, wmmaInstrType, ha[{m, k}],
-                             hb[{n, k}], acc);
+                             hb[{n, k}], acc, aTensorTy.getElementType(),
+                             bTensorTy.getElementType());
       }
       for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
         fc[m * numRepN * dElemsToStorePerThread + n * dElemsToStorePerThread +
