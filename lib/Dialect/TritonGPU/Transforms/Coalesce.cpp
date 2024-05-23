@@ -22,8 +22,7 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUCOALESCE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-struct CoalescePass
-    : public mlir::triton::gpu::impl::TritonGPUCoalesceBase<CoalescePass> {
+struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp,

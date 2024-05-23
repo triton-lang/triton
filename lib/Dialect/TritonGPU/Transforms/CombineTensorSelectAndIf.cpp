@@ -14,7 +14,7 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 class CombineTensorSelectAndIfPass
-    : public mlir::triton::gpu::impl::TritonGPUCombineTensorSelectAndIfBase<
+    : public impl::TritonGPUCombineTensorSelectAndIfBase<
           CombineTensorSelectAndIfPass> {
 public:
   void runOnOperation() override {

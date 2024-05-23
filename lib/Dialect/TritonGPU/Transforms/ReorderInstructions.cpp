@@ -40,7 +40,7 @@ static bool willIncreaseRegisterPressure(Operation *op) {
 }
 
 class TritonGPUReorderInstructionsPass
-    : public mlir::triton::gpu::impl::TritonGPUReorderInstructionsBase<
+    : public impl::TritonGPUReorderInstructionsBase<
           TritonGPUReorderInstructionsPass> {
 public:
   TritonGPUReorderInstructionsPass() = default;

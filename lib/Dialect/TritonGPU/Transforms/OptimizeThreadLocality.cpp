@@ -93,7 +93,7 @@ struct OptimizeReshapeLayoutPattern
 } // namespace
 
 class TritonGPUOptimizeThreadLocalityPass
-    : public mlir::triton::gpu::impl::TritonGPUOptimizeThreadLocalityBase<
+    : public impl::TritonGPUOptimizeThreadLocalityBase<
           TritonGPUOptimizeThreadLocalityPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();

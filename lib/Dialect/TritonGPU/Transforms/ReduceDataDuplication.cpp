@@ -26,7 +26,7 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 class TritonGPUReduceDataDuplicationPass
-    : public mlir::triton::gpu::impl::TritonGPUReduceDataDuplicationBase<
+    : public impl::TritonGPUReduceDataDuplicationBase<
           TritonGPUReduceDataDuplicationPass> {
 public:
   void runOnOperation() override {

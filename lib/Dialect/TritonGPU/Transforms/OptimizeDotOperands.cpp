@@ -309,10 +309,10 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 class TritonGPUOptimizeDotOperandsPass
-    : public mlir::triton::gpu::impl::TritonGPUOptimizeDotOperandsBase<
+    : public impl::TritonGPUOptimizeDotOperandsBase<
           TritonGPUOptimizeDotOperandsPass> {
 public:
-  using mlir::triton::gpu::impl::TritonGPUOptimizeDotOperandsBase<
+  using impl::TritonGPUOptimizeDotOperandsBase<
       TritonGPUOptimizeDotOperandsPass>::TritonGPUOptimizeDotOperandsBase;
 
   void runOnOperation() override {

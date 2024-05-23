@@ -1226,7 +1226,7 @@ void hoistConvert(ModuleOp module) {
 } // namespace
 
 class TritonGPURemoveLayoutConversionsPass
-    : public mlir::triton::gpu::impl::TritonGPURemoveLayoutConversionsBase<
+    : public impl::TritonGPURemoveLayoutConversionsBase<
           TritonGPURemoveLayoutConversionsPass> {
 public:
   void runOnOperation() override {

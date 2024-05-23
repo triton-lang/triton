@@ -93,11 +93,9 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
   return true;
 }
 
-struct PipelinePass
-    : public mlir::triton::gpu::impl::TritonGPUPipelineBase<PipelinePass> {
+struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
-  using mlir::triton::gpu::impl::TritonGPUPipelineBase<
-      PipelinePass>::TritonGPUPipelineBase;
+  using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
 
   int getNumStagesOrDefault(scf::ForOp forOp) {
     // Use the attribute attached to the loop if it exists otherwise use the

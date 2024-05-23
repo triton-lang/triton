@@ -362,8 +362,7 @@ scf::ForOp Prefetcher::createNewForOp() {
 
 } // anonymous namespace
 
-struct PrefetchPass
-    : public mlir::triton::gpu::impl::TritonGPUPrefetchBase<PrefetchPass> {
+struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
   void runOnOperation() override {
 
     // Canonicalize convert ops to make the pattern matching easier.

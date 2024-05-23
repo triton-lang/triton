@@ -71,8 +71,7 @@ public:
 
 } // anonymous namespace
 
-struct F32DotTCPass
-    : public mlir::triton::gpu::impl::TritonGPUF32DotTCBase<F32DotTCPass> {
+struct F32DotTCPass : public impl::TritonGPUF32DotTCBase<F32DotTCPass> {
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
