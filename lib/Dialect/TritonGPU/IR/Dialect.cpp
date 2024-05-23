@@ -1135,8 +1135,7 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<{"
-          << "sizePerThread = [" << ArrayRef(getSizePerThread()) << "]"
+  printer << "<{" << "sizePerThread = [" << ArrayRef(getSizePerThread()) << "]"
           << ", threadsPerWarp = [" << ArrayRef(getThreadsPerWarp()) << "]"
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"
           << ", order = [" << getOrder() << "]";
@@ -1214,8 +1213,7 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{"
-          << "versionMajor = " << getVersionMajor()
+  printer << "<{" << "versionMajor = " << getVersionMajor()
           << ", versionMinor = " << getVersionMinor() //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
 
@@ -1296,8 +1294,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{"
-          << "versionMajor = " << getVersionMajor()                      //
+  printer << "<{" << "versionMajor = " << getVersionMajor()              //
           << ", versionMinor = " << getVersionMinor()                    //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"    //
           << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
@@ -1357,8 +1354,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{"
-          << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+  printer << "<{" << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
   printer << "}>";
@@ -1382,9 +1378,8 @@ Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<{"
-          << "dim = " << getDim() << ", "
-          << "parent = " << getParent() << "}>";
+  printer << "<{" << "dim = " << getDim() << ", " << "parent = " << getParent()
+          << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -1457,8 +1452,7 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void SharedEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{"
-          << "vec = " << getVec() //
+  printer << "<{" << "vec = " << getVec() //
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
           << ", order = [" << getOrder() << "]";
@@ -1551,10 +1545,10 @@ AMDMfmaEncodingAttr::getMFMAInstrShapeForOperands(int kWidth, int opIdx) const {
   unsigned nDim = getNDim();
   assert((mDim == nDim) && (mDim == 32 || mDim == 16 || mDim == 4) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
-  constexpr int waveSize = 64; // MFMA is used on wave64 architectures only
+  constexpr int warpSize = 64; // MFMA is used on wave64 architectures only
   int kGroups = -1;
   if (mDim == nDim)
-    kGroups = waveSize / mDim;
+    kGroups = warpSize / mDim;
   if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
     kGroups = 1;
   int64_t kDim = kWidth * kGroups;
@@ -1591,7 +1585,7 @@ AMDMfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
 
 unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  constexpr int waveSize = 64;
+  constexpr int warpSize = 64;
   auto rep = getMFMARepForOperands(shape, kWidth, opIdx);
   return rep[0] * rep[1] * rep[2] * kWidth;
 }
