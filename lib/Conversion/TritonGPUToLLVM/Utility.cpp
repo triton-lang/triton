@@ -510,13 +510,8 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     // TODO: fix the bug in MMAEncodingAttr document
     SmallVector<Value> multiDimWarpId(2);
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-    if (mmaLayout.isHopper()) {
-      multiDimWarpId[0] = urem(warpId, i32_val(warpsPerCTA[0]));
-      multiDimWarpId[1] = udiv(warpId, i32_val(warpsPerCTA[0]));
-    } else {
-      auto order = triton::gpu::getOrder(mmaLayout);
-      multiDimWarpId = delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-    }
+    auto warpOrder = triton::gpu::getWarpOrder(mmaLayout);
+    multiDimWarpId = delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
     Value _1 = i32_val(1);
     Value _2 = i32_val(2);
     Value _4 = i32_val(4);
@@ -544,7 +539,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
       mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
       mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
     } else if (mmaLayout.isVolta()) {
-      // Volta doesn't follow the pattern here."
+      // Volta doesn't follow the pattern here.
     } else {
       llvm_unreachable("Unexpected MMALayout version");
     }
