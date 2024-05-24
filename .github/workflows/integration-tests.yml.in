@@ -114,9 +114,11 @@ jobs:
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           fi
 
   pre-commit:
@@ -162,6 +164,80 @@ jobs:
         run: |
           git diff
 
+  Build-Tests:
+    needs: Runner-Preparation
+    if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: "true"
+      - name: Compute cache keys
+        id: cache-key
+        run: |
+          echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
+          echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/pybind11
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
+      - # Cache ~/.triton/cache because the vast majority of unit test time is
+        # spent compiling.  Triton won't (well, should not) use these cached files
+        # if something internal to Triton changes, because Triton's internal
+        # source code is part of the cache key.
+        #
+        # Similarly, cache ~/.cache/ccache to speed up compilation.
+        #
+        # On branch `main` we always start from an empty cache, i.e. we skip the
+        # "restore" step.  This is to prevent the caches from accumulating stale
+        # files over time.
+        name: Restore cache of ccache and Triton compilation artifacts
+        if: github.event_name != 'push'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.triton/cache
+            ~/.cache/ccache
+          # Restore the most recent cache entry.
+          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          # We expect this cache key never to hit and for us to fall back
+          # unconditionally to the restore-key, so it doesn't actually matter
+          # what we put here (so long as it doesn't hit an existing key).
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+      - name: Inspect cache directory
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+      - name: Update PATH
+        run: |
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Install pip dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+      - name: Install Triton
+        env:
+          TRITON_BUILD_WITH_CCACHE: "true"
+        run: |
+          echo "PATH is '$PATH'"
+          cd python
+          python3 -m pip install --no-build-isolation '.[tests]'
+
   Integration-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-CUDA != ''
@@ -199,6 +275,7 @@ jobs:
             ~/.triton/llvm
             ~/.triton/nvidia
             ~/.triton/pybind11
+            ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
 
       # Cache ~/.triton/cache because the vast majority of unit test time is
