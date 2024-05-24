@@ -32,8 +32,8 @@ set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 # used conditionally in this file and by lit tests
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
-set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O1 -g")
-set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O1 -g")
+set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O1")
+set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O1")
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
