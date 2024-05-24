@@ -32,6 +32,7 @@ jobs:
     outputs:
       matrix-CUDA: ${{ steps.set-matrix.outputs.matrix-CUDA }}
       matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
+      matrix-MACOS: ${{ steps.set-matrix.outputs.matrix-MACOS }}
     steps:
       - name: Decide pre-submit integration test enablement
         # Always enable integration tests for pre-submit pull requests.
