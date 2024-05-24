@@ -216,6 +216,7 @@ jobs:
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
       - name: Install pip dependencies
         run: |
           python3 -m venv ~/.venv
