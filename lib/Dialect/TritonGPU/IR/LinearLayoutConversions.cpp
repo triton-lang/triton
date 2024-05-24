@@ -398,6 +398,40 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
 
+std::optional<LinearLayout> mfmaToLinearLayout(ArrayRef<int64_t> shape,
+                                               AMDMfmaEncodingAttr mfma) {
+  int rank = shape.size();
+  assert(rank == mfma.getWarpsPerCTA().size());
+  MLIRContext *ctx = mfma.getContext();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  if (mfma.getMDim() != 32 || mfma.getNDim() != 32)
+    return std::nullopt;
+
+  auto rDim = S("register");
+  auto lDim = S("lane");
+  auto wDim = S("warp");
+
+  auto order = triton::gpu::getOrder(mfma);
+  auto tileLayout = LinearLayout::empty();
+  tileLayout =
+      LinearLayout({{rDim, {{0, 1}, {0, 2}, {0, 8}, {0, 16}}},
+                    {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}}},
+                   {outDimNames[order[0]], outDimNames[order[1]]});
+  if (rank == 3) {
+    assert(order[0] == 2);
+    tileLayout *= LinearLayout::identity1D(1, rDim, outDimNames[order[2]]);
+    tileLayout *= LinearLayout::identity1D(1, lDim, outDimNames[order[2]]);
+  }
+
+  LinearLayout warpLayout =
+      identityND(wDim, mfma.getWarpsPerCTA(), order, outDimNames);
+
+  LinearLayout ctaLayout = tileLayout * warpLayout;
+
+  return combineCtaCgaWithShape(ctaLayout, mfma.getCTALayout(), shape);
+}
+
 std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
                                            SliceEncodingAttr slice) {
   MLIRContext *ctx = slice.getContext();
@@ -469,6 +503,9 @@ std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape,
                                            Attribute layout) {
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
     return blockedToLinearLayout(shape, blocked);
+  }
+  if (auto mfma = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
+    return mfmaToLinearLayout(shape, mfma);
   }
   if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mma.isAmpere()) {
