@@ -159,10 +159,10 @@ LogicalResult Prefetcher::initialize() {
   SmallVector<triton::DotOp> dotsInFor;
   for (Operation &op : *loop)
     if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
-      // skip if there are MMA v3 dots.
+      // bail out if there exist non v2 dots.
       auto dstEnc =
           dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
-      if (dstEnc && dstEnc.getVersionMajor() == 3)
+      if (!dstEnc || dstEnc.getVersionMajor() != 2)
         return failure();
       dotsInFor.push_back(dotOp);
     }
