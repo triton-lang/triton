@@ -657,7 +657,14 @@ static Value Fp16_to_Fp8E4M3FNUZ_oneValue(Location loc,
   auto c23 = icmp_sle(e, int_val(16, 7));
   auto re = select(c23, e2, e13);
 
-  auto r = or_(i16_ty, s, or_(i16_ty, re, m));
+
+  // In nuz format, -0 is NaN. We need to explicitly handle this case.
+  auto re_m = or_(i16_ty, re, m);
+  // If mantissa and exponent are non-zero, add sign
+  // back into return value. Otherwise, dont use sign
+  // and instead return zero.
+  auto use_sign = icmp_sgt(re_m, int_val(16, 0));
+  auto r = select(use_sign, or_(i16_ty, s, re_m), int_val(16, 0));
   auto fp8x2VecTy = vec_ty(i8_ty, 2);
   auto res = bitcast(r, fp8x2VecTy);
 
