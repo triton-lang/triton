@@ -1,7 +1,7 @@
 #ifndef PROTON_DRIVER_GPU_ROCTRACER_H_
 #define PROTON_DRIVER_GPU_ROCTRACER_H_
 
-#include <roctracer/roctracer.h>
+#include "roctracer/roctracer.h"
 
 namespace proton {
 
