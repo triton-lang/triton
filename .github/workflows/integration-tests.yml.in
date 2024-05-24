@@ -173,16 +173,16 @@ jobs:
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
-    env:
-      TRITON_BUILD_WITH_CLANG_LLD: "FALSE"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: "true"
-      - name: Install ccache
+      - name: Install brew dependencies
         run: |
+          brew update
           brew install ccache
+          brew install clang
       - name: Compute cache keys
         id: cache-key
         run: |
