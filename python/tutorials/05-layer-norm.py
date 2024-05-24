@@ -134,13 +134,11 @@ def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
                              DB,  # pointer to the partial sum of biases gradient
                              X,  # pointer to the input
                              W,  # pointer to the weights
-                             B,  # pointer to the biases
                              Mean,  # pointer to the mean
                              Rstd,  # pointer to the 1/std
                              Lock,  # pointer to the lock
                              stride,  # how much to increase the pointer when moving by 1 row
                              N,  # number of columns in X
-                             eps,  # epsilon to avoid division by zero
                              GROUP_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     # Map the program id to the elements of X, DX, and DY it should compute.
     row = tl.program_id(0)
@@ -265,18 +263,18 @@ class LayerNorm(torch.autograd.Function):
         if N <= 1024: GROUP_SIZE_M = 256
         # allocate output
         locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device='cuda')
-        _dw = torch.empty((GROUP_SIZE_M, w.shape[0]), dtype=x.dtype, device=w.device)
-        _db = torch.empty((GROUP_SIZE_M, w.shape[0]), dtype=x.dtype, device=w.device)
-        dw = torch.empty((w.shape[0], ), dtype=w.dtype, device=w.device)
-        db = torch.empty((w.shape[0], ), dtype=w.dtype, device=w.device)
+        _dw = torch.empty((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
+        _db = torch.empty((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
+        dw = torch.empty((N, ), dtype=w.dtype, device=w.device)
+        db = torch.empty((N, ), dtype=w.dtype, device=w.device)
         dx = torch.empty_like(dy)
         # enqueue kernel using forward pass heuristics
         # also compute partial sums for DW and DB
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
         _layer_norm_bwd_dx_fused[(M, )](  #
-            dx, dy, _dw, _db, x, w, b, m, v, locks,  #
-            x_arg.stride(0), N, ctx.eps,  #
+            dx, dy, _dw, _db, x, w, m, v, locks,  #
+            x_arg.stride(0), N,  #
             BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
             GROUP_SIZE_M=GROUP_SIZE_M,  #
             num_warps=ctx.num_warps)
@@ -296,9 +294,9 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
-    weight = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    bias = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
+    weight = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+    bias = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device=device)
     dy = .1 * torch.randn_like(x)
     x.requires_grad_(True)
     # forward pass
@@ -334,27 +332,23 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
-    weight = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    bias = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
+    weight = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+    bias = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device=device)
     dy = .1 * torch.randn_like(x)
     x.requires_grad_(True)
     quantiles = [0.5, 0.2, 0.8]
-    # utility functions
-    if provider == 'triton':
 
-        def y_fwd():
+    def y_fwd():
+
+        if provider == "triton":
             return layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
 
-    if provider == 'torch':
-
-        def y_fwd():
+        if provider == "torch":
             return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
 
-    if provider == 'apex':
-        apex_layer_norm = apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
-
-        def y_fwd():
+        if provider == "apex":
+            apex_layer_norm = (apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype))
             return apex_layer_norm(x)  # noqa: F811, E704
 
     # forward pass
@@ -363,11 +357,8 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
         ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles, rep=500)
     # backward pass
     if mode == 'backward':
-
-        def gbps(ms):
-            return 3 * x.numel() * x.element_size() / ms * 1e-6  # noqa: F811, E704
-
         y = y_fwd()
+        gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6  # noqa: F811, E704
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True), quantiles=quantiles,
                                                      grad_to_none=[x], rep=500)
     return gbps(ms), gbps(max_ms), gbps(min_ms)

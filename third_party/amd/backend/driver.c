@@ -40,7 +40,9 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
                   unsigned int numOptions, hipJitOption *options,              \
                   void **optionValues)                                         \
   FOR_EACH_ERR_FN(hipModuleGetFunction, hipFunction_t *function,               \
-                  hipModule_t module, const char *kname)
+                  hipModule_t module, const char *kname)                       \
+  FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
+                  hipFunction_t function)
 
 // The HIP symbol table for holding resolved dynamic library symbols.
 struct HIPSymbolTable {
@@ -170,6 +172,10 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   // get allocated registers and spilled registers from the function
   int n_regs = 0;
   int n_spills = 0;
+  hipSymbolTable.hipFuncGetAttribute(&n_regs, HIP_FUNC_ATTRIBUTE_NUM_REGS, fun);
+  hipSymbolTable.hipFuncGetAttribute(&n_spills,
+                                     HIP_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun);
+  n_spills /= 4;
   if (PyErr_Occurred()) {
     return NULL;
   }

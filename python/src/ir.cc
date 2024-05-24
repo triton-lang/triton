@@ -19,7 +19,9 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Transforms/LocationSnapshot.h"
 #include "mlir/Transforms/Passes.h"
+
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -380,9 +382,7 @@ void init_triton_ir(py::module &&m) {
              std::string str;
              llvm::raw_string_ostream os(str);
              auto printingFlags = OpPrintingFlags();
-             bool dumpLoc = !::triton::tools::getBoolEnv("USE_TTGIR_LOC");
-             if (dumpLoc)
-               printingFlags.enableDebugInfo();
+             printingFlags.enableDebugInfo();
              self->print(os, printingFlags);
              return str;
            })
@@ -447,9 +447,7 @@ void init_triton_ir(py::module &&m) {
              std::string str;
              llvm::raw_string_ostream os(str);
              auto printingFlags = OpPrintingFlags();
-             bool dumpLoc = !::triton::tools::getBoolEnv("USE_TTGIR_LOC");
-             if (dumpLoc)
-               printingFlags.enableDebugInfo();
+             printingFlags.enableDebugInfo();
              self.print(os, printingFlags);
              return str;
            })
@@ -474,6 +472,12 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::int_(ret.getInt());
            })
+      .def("create_location_snapshot",
+           [](ModuleOp &self, const std::string &fileName) -> void {
+             generateLocationsFromIR(/*raw_ostream=*/llvm::nulls(),
+                                     /*fileName=*/fileName,
+                                     /*op=*/self, /*flags=*/{});
+           })
       .def("walk",
            [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
              self.walk(fn);
@@ -494,12 +498,6 @@ void init_triton_ir(py::module &&m) {
             parseSourceFile<ModuleOp>(inputFilename, &context);
         if (!module)
           throw std::runtime_error("Parse MLIR file failed.");
-        // locations are incompatible with ptx < 7.5 !
-        if (!::triton::tools::getBoolEnv("USE_TTGIR_LOC"))
-          module->walk([](Operation *op) {
-            op->setLoc(UnknownLoc::get(op->getContext()));
-          });
-
         return module->clone();
       },
       ret::take_ownership);
@@ -1585,6 +1583,7 @@ void init_triton_ir(py::module &&m) {
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
+
         auto reproducerPath =
             triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
         if (!reproducerPath.empty()) {
@@ -1616,6 +1615,11 @@ void init_triton_ir(py::module &&m) {
 
           ::llvm::DebugFlag = true;
           ::llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+        }
+
+        bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");
+        if (haveTiming) {
+          self.enableTiming();
         }
 
         if (failed(self.run(mod.getOperation())))

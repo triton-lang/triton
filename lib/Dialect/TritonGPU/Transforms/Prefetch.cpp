@@ -18,7 +18,7 @@
 // %a_prefetch = triton_gpu.local_load %a_tmp
 // scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch)
 // {
-//   %x = tt.dot %a_arg, %b, %c
+//   %x = tt.dot %a_prefetch_arg, %b, %c
 //   %a_tmp_rem = tensor.subview %a_buf[0, 16] [128, 16]
 //   %a_prefetch_next = triton_gpu.local_load %a_tmp_rem
 //   ...
@@ -32,9 +32,11 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
-using namespace mlir;
+namespace mlir {
+namespace triton {
+namespace gpu {
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONGPUPREFETCH
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 namespace {
@@ -358,7 +360,9 @@ scf::ForOp Prefetcher::createNewForOp() {
   return newForOp;
 }
 
-struct PrefetchPass : public TritonGPUPrefetchBase<PrefetchPass> {
+} // anonymous namespace
+
+struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
   void runOnOperation() override {
 
     // Canonicalize convert ops to make the pattern matching easier.
@@ -388,8 +392,6 @@ struct PrefetchPass : public TritonGPUPrefetchBase<PrefetchPass> {
   }
 };
 
-} // anonymous namespace
-
-std::unique_ptr<Pass> mlir::triton::gpu::createPrefetchPass() {
-  return std::make_unique<PrefetchPass>();
-}
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

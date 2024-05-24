@@ -144,7 +144,9 @@ def patch_kernel(template, to_replace):
         return kernel
 
 
-def check_cuda_only(device):
+def check_cuda_or_hip(device):
+    # CUDA and HIP both use pytorch device 'cuda'.  Other backends like Intel
+    # GPU do not.
     if device not in ['cuda']:
         pytest.skip("Only for cuda")
 
@@ -174,6 +176,15 @@ class MfmaLayout:
 
     def __str__(self):
         return f"#{GPU_DIALECT}.amd_mfma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA = {self.warps_per_cta}, instrShape={self.instr_shape}, isTransposed = {str(self.is_transposed).lower()}}}>"
+
+
+class WmmaLayout:
+
+    def __init__(self, warps_per_cta):
+        self.warps_per_cta = warps_per_cta
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.amd_wmma<{{warpsPerCTA = {self.warps_per_cta}}}>"
 
 
 class MmaLayout:
@@ -220,13 +231,28 @@ class SharedLayout:
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
-def filter_layouts(layouts):
-    if is_cuda():
-        return [l for l in layouts if not isinstance(l, MfmaLayout)]
+def is_layout_applicable(layout) -> bool:
+    common_layouts = [BlockedLayout, SharedLayout]
+    if layout in common_layouts:
+        return True
+    elif is_cuda():
+        return isinstance(layout, MmaLayout)
     elif is_hip():
-        return [l for l in layouts if not isinstance(l, MmaLayout)]
+        target_arch = triton.runtime.driver.active.get_current_target().arch
+        if "gfx11" in target_arch:
+            # RDNA 3
+            return isinstance(layout, WmmaLayout)
+        elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
+            # CDNA 1, 2, 3
+            return isinstance(layout, MfmaLayout)
+        else:
+            return False
     else:
-        return layouts
+        return True
+
+
+def filter_layouts(layouts):
+    return [l for l in layouts if is_layout_applicable(l)]
 
 
 @pytest.mark.interpreter
@@ -1345,13 +1371,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if is_interpreter():
         if dtype_x_str == 'float16':
             pytest.skip("Only test atomic float16 ops on GPU")
-    else:
-        check_cuda_only(device)
 
-    capability = torch.cuda.get_device_capability()
-    if capability[0] < 7:
-        if dtype_x_str == 'float16':
-            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
     n_programs = 5
 
     # triton kernel
@@ -2508,12 +2528,17 @@ layouts = [
               instr_shape=[16, 8]),
     MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
               instr_shape=[16, 16, 16]),
+    MmaLayout(version=(3, 0), warps_per_cta=[4, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
+              instr_shape=[16, 32, 16]),
     MfmaLayout(version=(2, 0), warps_per_cta=[2, 2], instr_shape=[32, 32], is_transposed=False),
     MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=False),
     MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=False),
     MfmaLayout(version=(2, 0), warps_per_cta=[2, 2], instr_shape=[32, 32], is_transposed=True),
     MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=True),
     MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=True),
+    WmmaLayout(warps_per_cta=[2, 2]),
+    WmmaLayout(warps_per_cta=[4, 1]),
+    WmmaLayout(warps_per_cta=[1, 4]),
 ]
 
 
@@ -2524,9 +2549,9 @@ layouts = [
 @pytest.mark.parametrize("dtype_str", ["int32", "float32", "float16"])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce_op, device):
-    if is_hip() and isinstance(src_layout, MfmaLayout) and (M < src_layout.instr_shape[0]
-                                                            or N < src_layout.instr_shape[1]):
-        pytest.skip("Skipping because tensor shape is smaller than MfmaLayout isntr_shape")
+    if isinstance(src_layout,
+                  (MfmaLayout, MmaLayout)) and (M < src_layout.instr_shape[0] or N < src_layout.instr_shape[1]):
+        pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
     if is_hip() and isinstance(src_layout, MfmaLayout) and ((M, N) == (128, 128)):
         pytest.skip("Skipping test because it runs out of shared memory")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
@@ -2534,6 +2559,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     if epilogue_kind == 'expand_reduce2d' and isinstance(src_layout, MmaLayout):
         pytest.skip(
             "Currently MmaLayout combined with slice encoding and reduce op trigger device illegal memory access")
+
+    if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
+        src_layout[2] = 16 if dtype_str == "float16" else 8
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
@@ -2545,6 +2573,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
     blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
+    num_warps = src_layout.warps_per_cta[0] * src_layout.warps_per_cta[1]
+    if num_warps == 8:
+        blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 2], [0, 1], [1, 1], [1, 1], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [4], [0], [1], [1], [0])
 
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
@@ -2592,7 +2623,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     #blocked = {blocked}
     #src = {src_layout}
     #one_d_layout = {one_d_layout}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = {num_warps} : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>>
         %1 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
@@ -3013,25 +3044,24 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
     else:
-        check_cuda_only(device)
+        if is_cuda():
+            capability = torch.cuda.get_device_capability()
 
-        capability = torch.cuda.get_device_capability()
-
-        if capability[0] < 7:
-            pytest.skip("Only test tl.dot() on devices with sm >= 70")
-        if capability[0] < 8:
-            if capability[1] == 0 and in_dtype == 'int8':
-                pytest.skip("Only test int8 on devices with sm >= 75")
-            if input_precision != "ieee":
-                pytest.skip("Only test tf32 on devices with sm >= 80")
-        if capability[0] == 7:
-            if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
-                pytest.skip("shared memory out of resource")
-            if out_dtype == 'float16':
-                # TODO: support out_dtype=float16 for tl.dot on V100
-                pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
-        if capability[0] < 9 and in_dtype == 'float8e4nv':
-            pytest.skip("float8e4nv not supported on sm <= 80")
+            if capability[0] < 7:
+                pytest.skip("Only test tl.dot() on devices with sm >= 70")
+            if capability[0] < 8:
+                if capability[1] == 0 and in_dtype == 'int8':
+                    pytest.skip("Only test int8 on devices with sm >= 75")
+                if input_precision != "ieee":
+                    pytest.skip("Only test tf32 on devices with sm >= 80")
+            if capability[0] == 7:
+                if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
+                    pytest.skip("shared memory out of resource")
+                if out_dtype == 'float16':
+                    # TODO: support out_dtype=float16 for tl.dot on V100
+                    pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
+            if capability[0] < 9 and in_dtype == 'float8e4nv':
+                pytest.skip("float8e4nv not supported on sm <= 80")
         if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
             pytest.skip("float8e4nv and float8e5 not supported on HIP")
         if is_hip() and (input_precision != "ieee"):
@@ -4218,10 +4248,8 @@ def test_unary_math(func_str, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm(num_ctas, device):
-    check_cuda_only(device)
-
-    if is_hip():
-        pytest.skip("test_inline_asm is not supported in HIP")
+    if not is_cuda():
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
@@ -4248,10 +4276,8 @@ def test_inline_asm(num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
-    check_cuda_only(device)
-
-    if is_hip():
-        pytest.skip("test_inline_asm is not supported in HIP")
+    if not is_cuda():
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -4277,10 +4303,8 @@ def test_inline_asm_packed(num_ctas, device):
 
 @pytest.mark.parametrize('num_ctas', num_ctas_list)
 def test_inline_asm_with_pointers(num_ctas, device):
-    check_cuda_only(device)
-
-    if is_hip():
-        pytest.skip('test_inline_asm is not supported in HIP')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -4304,9 +4328,8 @@ def test_inline_asm_with_pointers(num_ctas, device):
 
 
 def test_inline_asm_multiple_outputs(device):
-    check_cuda_only(device)
-    if is_hip():
-        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -4351,9 +4374,8 @@ def test_inline_asm_multiple_outputs(device):
 
 
 def test_inline_asm_packed_multiple_outputs(device):
-    check_cuda_only(device)
-    if is_hip():
-        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -4695,7 +4717,6 @@ def test_nested_while(device):
 def test_num_threads(device):
     if is_hip():
         pytest.skip("test_num_threads is not supported in HIP")
-    check_cuda_only(device)
 
     @triton.jit
     def kernel(Out):
@@ -4712,7 +4733,7 @@ def test_num_threads(device):
 def test_globaltimer(device):
     if is_hip():
         pytest.skip("test_globaltimer is not supported in HIP")
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out1, Out2):
@@ -4733,7 +4754,7 @@ def test_globaltimer(device):
 def test_smid(device):
     if is_hip():
         pytest.skip("test_smid is not supported in HIP")
-    check_cuda_only(device)
+    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out):
@@ -5085,8 +5106,7 @@ def matmul_kernel(  #
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
-    if not is_interpreter():
-        check_cuda_only(device)
+    if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
@@ -5302,3 +5322,38 @@ def test_tl_range(device):
             ptx = pgm.asm['ptx']
             # check that the loop got pipelined with the right number of stages.
             assert 'cp.async.wait_group 0x6' in ptx
+
+
+@triton.jit(noinline=True)
+def maxnreg_noinline1(X):
+    tl.store(X, 0)
+
+
+@triton.jit(noinline=True)
+def maxnreg_noinline2(X):
+    tl.store(X, 0)
+
+
+def test_maxnreg(device):
+    assert not is_interpreter(), "this test won't work with the interpreter"
+    if is_hip():
+        pytest.skip('maxnreg only works on CUDA')
+
+    # triton kernel
+    @triton.jit
+    def kernel(X):
+        maxnreg_noinline1(X)
+        tl.store(X, 0)
+        maxnreg_noinline2(X)
+
+    X = torch.empty(1, dtype=torch.int32, device=device)
+    k = kernel[(1, )](X, maxnreg=42)
+
+    # Ensure that .maxnreg is set on the kernel function (marked with .entry)
+    # and not on either of the noinline functions (marked with .func).
+    try:
+        assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
+        assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
+    except AssertionError:
+        print("Failing ptx:\n", k.asm["ptx"])
+        raise

@@ -46,22 +46,27 @@ void init_triton_passes_ttir(py::module &&m) {
 
 void init_triton_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton::gpu;
-  ADD_PASS_WRAPPER_0("add_coalesce", createCoalescePass);
+  ADD_PASS_WRAPPER_0("add_coalesce", createTritonGPUCoalesce);
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
-                     createOptimizeThreadLocalityPass);
-  ADD_PASS_WRAPPER_4("add_pipeline", createPipelinePass, int, int, int, int);
-  ADD_PASS_WRAPPER_0("add_prefetch", createPrefetchPass);
-  ADD_PASS_WRAPPER_1("add_accelerate_matmul", createAccelerateMatmulPass, int);
-  ADD_PASS_WRAPPER_0("add_reorder_instructions", createReorderInstructionsPass);
-  ADD_PASS_WRAPPER_0("add_f32_dot_tc", createF32DotTCPass);
-  ADD_PASS_WRAPPER_1("add_optimize_dot_operands", createOptimizeDotOperandsPass,
-                     bool);
+                     createTritonGPUOptimizeThreadLocality);
+  ADD_PASS_OPTION_WRAPPER_4("add_pipeline", createTritonGPUPipeline, int, int,
+                            int, int);
+  ADD_PASS_WRAPPER_0("add_prefetch", createTritonGPUPrefetch);
+  ADD_PASS_OPTION_WRAPPER_1("add_accelerate_matmul",
+                            createTritonGPUAccelerateMatmul, int);
+  ADD_PASS_WRAPPER_0("add_reorder_instructions",
+                     createTritonGPUReorderInstructions);
+  ADD_PASS_WRAPPER_0("add_f32_dot_tc", createTritonGPUF32DotTC);
+  ADD_PASS_OPTION_WRAPPER_1("add_optimize_dot_operands",
+                            createTritonGPUOptimizeDotOperands, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
-                     createRemoveLayoutConversionsPass);
+                     createTritonGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
-                     createReduceDataDuplicationPass);
+                     createTritonGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      createAllocateSharedMemoryPass);
+  ADD_PASS_WRAPPER_0("add_combine_tensor_select_and_if",
+                     createTritonGPUCombineTensorSelectAndIf);
 }
 
 void init_triton_passes_convert(py::module &&m) {

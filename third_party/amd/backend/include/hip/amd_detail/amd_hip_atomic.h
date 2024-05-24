@@ -947,22 +947,13 @@ inline
 unsigned int atomicInc(unsigned int* address, unsigned int val)
 {
 #if defined(__gfx941__)
-  __device__
-  extern
-  unsigned int __builtin_amdgcn_atomic_inc(
-    unsigned int*,
-    unsigned int,
-    unsigned int,
-    unsigned int,
-    bool) __asm("llvm.amdgcn.atomic.inc.i32.p0i32");
-
   return hip_cas_expander<__ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT>(
     address,
     val,
     [](unsigned int& x, unsigned int y) { x = (x >= y) ? 0 : (x + 1); },
     [=]() {
     return
-      __builtin_amdgcn_atomic_inc(address, val, __ATOMIC_RELAXED, 1, false);
+      __builtin_amdgcn_atomic_inc32(address, val, __ATOMIC_RELAXED, "agent");
   });
 #else
     return __builtin_amdgcn_atomic_inc32(address, val, __ATOMIC_RELAXED, "agent");
@@ -975,27 +966,18 @@ inline
 unsigned int atomicDec(unsigned int* address, unsigned int val)
 {
 #if defined(__gfx941__)
-  __device__
-  extern
-  unsigned int __builtin_amdgcn_atomic_dec(
-    unsigned int*,
-    unsigned int,
-    unsigned int,
-    unsigned int,
-    bool) __asm("llvm.amdgcn.atomic.dec.i32.p0i32");
-
   return hip_cas_expander<__ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT>(
     address,
     val,
     [](unsigned int& x, unsigned int y) { x = (!x || x > y) ? y : (x - 1); },
     [=]() {
     return
-      __builtin_amdgcn_atomic_dec(address, val, __ATOMIC_RELAXED, 1, false);
+      __builtin_amdgcn_atomic_dec32(address, val, __ATOMIC_RELAXED, "agent");
   });
 #else
   return __builtin_amdgcn_atomic_dec32(address, val, __ATOMIC_RELAXED, "agent");
 #endif // __gfx941__
-    
+
 }
 
 __device__

@@ -29,6 +29,8 @@ public:
       return convertPredicatedLoad(callOp, rewriter);
     } else if (isPredicatedStore(callOp)) {
       return convertPredicatedStore(callOp, rewriter);
+    } else if (isWrappedLLVMIntrinsic(callOp)) {
+      return convertToLLVMIntrinsic(callOp, rewriter);
     } else {
       return failure();
     }
@@ -43,6 +45,15 @@ private:
   bool isPredicatedStore(LLVM::CallOp callOp) const {
     return callOp.getCallee().value().find(mlir::LLVM::AMD::Predicated_Store) !=
            llvm::StringRef::npos;
+  }
+
+  bool isWrappedLLVMIntrinsic(LLVM::CallOp callOp) const {
+    if (std::optional<StringRef> callee = callOp.getCallee()) {
+      if (callee.value().starts_with("__triton_hip_")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   LogicalResult convertPredicatedStore(LLVM::CallOp callOp,
@@ -97,6 +108,53 @@ private:
     Value loadVal = afterLoad->getArgument(0);
     rewriter.replaceOp(callOp, loadVal);
     return mlir::success();
+  }
+
+  LogicalResult convertToLLVMIntrinsic(LLVM::CallOp callOp,
+                                       mlir::PatternRewriter &rewriter) const {
+    StringRef calleeName = callOp.getCallee().value();
+
+    auto operands = callOp.getOperands();
+    auto result = callOp.getResult();
+
+    LLVM::LLVMFunctionType calleeType = callOp.getCalleeType().value();
+    Type returnType = calleeType.getReturnType();
+
+    auto loc = callOp.getLoc();
+
+    Operation *replacementOp = nullptr;
+    if (calleeName == "__triton_hip_iabs") {
+      assert(operands.size() == 1);
+      replacementOp = rewriter.create<LLVM::AbsOp>(loc, returnType, operands[0],
+                                                   /*is_int_min_poison=*/false);
+    } else if (calleeName == "__triton_hip_fabs") {
+      assert(operands.size() == 1);
+      replacementOp =
+          rewriter.create<LLVM::FAbsOp>(loc, returnType, operands[0]);
+    } else if (calleeName == "__triton_hip_llrint") {
+      assert(operands.size() == 1);
+      // Note, LrintOp and LlrintOp result in a code-gen error
+      Operation *op = rewriter.create<LLVM::RintOp>(loc, operands[0].getType(),
+                                                    operands[0]);
+      replacementOp =
+          rewriter.create<LLVM::FPToSIOp>(loc, returnType, op->getResult(0));
+    } else if (calleeName == "__triton_hip_fast_fdividef") {
+      assert(operands.size() == 2);
+      auto name = StringAttr::get(callOp.getContext(), "llvm.amdgcn.rcp.f32");
+      LLVM::FastmathFlagsAttr defaultFlags{};
+      auto rcpOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          loc, returnType, name, operands[1], defaultFlags);
+
+      replacementOp = rewriter.create<LLVM::FMulOp>(
+          loc, returnType, operands[0], rcpOp->getResult(0), defaultFlags);
+    }
+
+    if (replacementOp) {
+      rewriter.replaceOp(callOp, replacementOp);
+      return mlir::success();
+    }
+
+    return mlir::failure();
   }
 };
 

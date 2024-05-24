@@ -218,7 +218,7 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          python3 -m pip install --no-build-isolation '.[tests]'
       - name: Run lit tests
         run: |
           cd python
@@ -230,12 +230,12 @@ jobs:
       - name: Run python tests on CUDA
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-          python3 -m pytest -vvv -n 8 language/test_subprocess.py
+          python3 -m pytest -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -n 8 language/test_subprocess.py
           # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -vvv runtime/
+          python3 -m pytest runtime/
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -vs hopper/test_flashattention.py
       - name: Run interpreter tests
@@ -244,7 +244,7 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+          python3 -m pytest -n 16 -m interpreter language/test_core.py language/test_standard.py \
            language/test_random.py language/test_block_pointer.py language/test_subprocess.py \
            operators/test_flash_attention.py::test_op \
            ../../tutorials/06-fused-attention.py::test_op --device cpu
@@ -252,13 +252,13 @@ jobs:
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
-          ctest
+          ctest -j32
       - name: Run Proton tests
         env:
           LD_LIBRARY_PATH: "/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
         run: |
           cd third_party/proton
-          python3 -m pytest -vvv test
+          python3 -m pytest test
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
@@ -288,7 +288,7 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
     container:
-      image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
+      image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.1.2
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
@@ -363,24 +363,24 @@ jobs:
           lit -v "${LIT_TEST_DIR}"
       - name: Run python tests on HIP
         run: |
-          pytest --capture=tee-sys -rfs -vvv python/tutorials/06-fused-attention.py
+          pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -vvv -n 32 language operators \
+          pytest --capture=tee-sys -rfs -n 32 language operators \
                  hopper/test_mixed_io.py \
                  hopper/test_gemm.py \
                  hopper/test_tma_store_gemm.py \
                  hopper/test_persistent_warp_specialized_fused-attention.py \
                  --ignore=language/test_line_info.py
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vvv -n 8 language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -n 8 language/test_line_info.py
 
           # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -vvv runtime
+          python3 -m pytest runtime
       - name: Run C++ unittests
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
-          ctest
+          ctest -j32
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
