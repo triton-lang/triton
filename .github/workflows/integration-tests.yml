@@ -157,6 +157,8 @@ jobs:
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
+    env:
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
