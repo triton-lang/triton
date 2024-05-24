@@ -657,7 +657,6 @@ static Value Fp16_to_Fp8E4M3FNUZ_oneValue(Location loc,
   auto c23 = icmp_sle(e, int_val(16, 7));
   auto re = select(c23, e2, e13);
 
-
   // In nuz format, -0 is NaN. We need to explicitly handle this case.
   auto re_m = or_(i16_ty, re, m);
   // If mantissa and exponent are zero, return positive zero.
