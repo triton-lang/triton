@@ -216,7 +216,7 @@ jobs:
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+          python3 -m pip install setuptools wheel cmake==3.24 ninja pytest-xdist lit
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_CCACHE: "true"
