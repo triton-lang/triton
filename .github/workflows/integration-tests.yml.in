@@ -237,6 +237,7 @@ jobs:
         env:
           TRITON_BUILD_WITH_CCACHE: "true"
         run: |
+          source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           cd python
           python3 -m pip install --no-build-isolation '.[tests]'
