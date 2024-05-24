@@ -152,10 +152,20 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
 LogicalResult Prefetcher::initialize() {
   Block *loop = forOp.getBody();
 
+  auto getEncoding = [](Value v) {
+    return cast<TensorOrMemDesc>(v.getType()).getEncoding();
+  };
+
   SmallVector<triton::DotOp> dotsInFor;
   for (Operation &op : *loop)
-    if (auto dotOp = dyn_cast<triton::DotOp>(op))
+    if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
+      // skip if there are MMA v3 dots.
+      auto dstEnc =
+          dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
+      if (dstEnc && dstEnc.getVersionMajor() == 3)
+        return failure();
       dotsInFor.push_back(dotOp);
+    }
 
   if (dotsInFor.empty())
     return failure();
