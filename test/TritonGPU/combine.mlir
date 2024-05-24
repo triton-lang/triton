@@ -107,6 +107,28 @@ tt.func @hoist_above_ext2(%arg0: tensor<1024xf16, #layout0>, %arg1: f16) -> tens
   tt.return %4 : tensor<1024xf32, #layout1>
 }
 
+/// CHECK-LABEL: hoist_above_fptofp
+tt.func @hoist_above_fptofp(%arg0: tensor<1024xf8E4M3FNUZ, #layout0>) -> tensor<1024xf32, #layout1> {
+// CHECK: %[[CVT:.+]] = triton_gpu.convert_layout
+// CHECK: tt.fp_to_fp %[[CVT]]
+// CHECK-NOT: triton_gpu.convert_layout
+// CHECK: tt.return
+  %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<1024xf8E4M3FNUZ, #layout0> -> tensor<1024xf32, #layout0>
+  %1 = triton_gpu.convert_layout %0 : tensor<1024xf32, #layout0> -> tensor<1024xf32, #layout1>
+  tt.return %1 : tensor<1024xf32, #layout1>
+}
+
+/// CHECK-LABEL: dont_hoist_above_trunc_fptofp
+tt.func @dont_hoist_above_trunc_fptofp(%arg0: tensor<1024xf32, #layout0>) -> tensor<1024xf8E4M3FNUZ, #layout1> {
+// CHECK-NOT: triton_gpu.convert_layout
+// CHECK: %[[FP8:.+]] = tt.fp_to_fp %[[CVT]]
+// CHECK: triton_gpu.convert_layout %[[FP8]]
+// CHECK: tt.return
+  %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<1024xf32, #layout0> -> tensor<1024xf8E4M3FNUZ, #layout0>
+  %1 = triton_gpu.convert_layout %0 : tensor<1024xf8E4M3FNUZ, #layout0> -> tensor<1024xf8E4M3FNUZ, #layout1>
+  tt.return %1 : tensor<1024xf8E4M3FNUZ, #layout1>
+}
+
 // Hoist the convert on top of broadcast to make it cheaper.
 // CHECK-LABEL: hoist_above_broadcast
 tt.func @hoist_above_broadcast(%arg0: tensor<1024x1xf32, #layout2>, %arg1: f32) -> tensor<1024x128xf32, #layout3> {
