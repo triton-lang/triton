@@ -39,7 +39,7 @@ if(APPLE)
 endif()
 
 include_directories(${CUPTI_INCLUDE_DIR})
-include_directories(${ROCTRACER_INCLUDE_DIR})
+include_directories(SYSTEM ${ROCTRACER_INCLUDE_DIR})
 target_compile_definitions(proton PRIVATE __HIP_PLATFORM_AMD__)
 
 target_link_libraries(proton PRIVATE ${Python_LIBRARIES} ${PROTON_PYTHON_LDFLAGS})

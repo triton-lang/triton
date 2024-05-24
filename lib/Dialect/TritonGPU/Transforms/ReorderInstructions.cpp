@@ -19,10 +19,13 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-using namespace mlir;
+namespace mlir {
+namespace triton {
+namespace gpu {
+
+#define GEN_PASS_DEF_TRITONGPUREORDERINSTRUCTIONS
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 static bool willIncreaseRegisterPressure(Operation *op) {
   if (isa<triton::gpu::LocalLoadOp>(op))
@@ -37,7 +40,7 @@ static bool willIncreaseRegisterPressure(Operation *op) {
 }
 
 class TritonGPUReorderInstructionsPass
-    : public TritonGPUReorderInstructionsBase<
+    : public impl::TritonGPUReorderInstructionsBase<
           TritonGPUReorderInstructionsPass> {
 public:
   TritonGPUReorderInstructionsPass() = default;
@@ -132,6 +135,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createReorderInstructionsPass() {
-  return std::make_unique<TritonGPUReorderInstructionsPass>();
-}
+} // namespace gpu
+} // namespace triton
+} // namespace mlir
