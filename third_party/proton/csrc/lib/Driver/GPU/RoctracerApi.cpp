@@ -1,4 +1,4 @@
-#include "Driver/GPU/Roctracer.h"
+#include "Driver/GPU/RoctracerApi.h"
 #include "Driver/Dispatch.h"
 
 namespace proton {
