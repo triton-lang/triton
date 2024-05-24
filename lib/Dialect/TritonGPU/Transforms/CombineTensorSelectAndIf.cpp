@@ -1,5 +1,6 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -13,6 +14,23 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUCOMBINETENSORSELECTANDIF
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+// Return true if the select could be merged into the If without breaking SSA
+// rules.
+static bool canMergeIntoIf(arith::SelectOp selectOp, scf::IfOp ifOp,
+                           DominanceInfo &dom) {
+  // If needs to be dominated by the select.
+  if (!dom.dominates(selectOp.getOperation(), ifOp.getOperation())) {
+    return false;
+  }
+  // If needs to dominate all the select's users.
+  for (auto user : selectOp.getResult().getUsers()) {
+    if (!dom.dominates(ifOp, user)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 class CombineTensorSelectAndIfPass
     : public impl::TritonGPUCombineTensorSelectAndIfBase<
           CombineTensorSelectAndIfPass> {
@@ -24,59 +42,38 @@ public:
 
     // Go over the arith.select ops, look if there is an if
     // with the same condition.
-    SmallVector<std::pair<arith::SelectOp, scf::IfOp>, 4> selectIfCandidates;
+    llvm::MapVector<scf::IfOp, SmallVector<arith::SelectOp>> selectToIf;
     m.walk([&](arith::SelectOp selectOp) {
       // Look if there is an if in the same block, with the same condition.
       auto *parentBlock = selectOp->getBlock();
       Value condition = selectOp.getOperand(0);
+      SetVector<Operation *> conditionUsers(condition.getUsers().begin(),
+                                            condition.getUsers().end());
+      // sort the users in topological order.
+      conditionUsers = multiRootTopologicalSort(conditionUsers);
       // Get condition's users
-      for (auto user : condition.getUsers()) {
-        if (auto ifOp = dyn_cast<scf::IfOp>(user)) {
-          if (ifOp->getBlock() == parentBlock) {
-            selectIfCandidates.emplace_back(selectOp, ifOp);
-            continue;
-          }
+      for (Operation *user : conditionUsers) {
+        auto ifOp = dyn_cast<scf::IfOp>(user);
+        if (!ifOp || ifOp->getBlock() != parentBlock)
+          continue;
+        if (canMergeIntoIf(selectOp, ifOp, dom)) {
+          selectToIf[ifOp].push_back(selectOp);
+          break;
         }
       }
     });
 
-    llvm::MapVector<arith::SelectOp, scf::IfOp> selectToIf;
-
-    // Go over the candidates and check if the select and if can be combined.
-    for (auto [selectOp, ifOp] : selectIfCandidates) {
-      if (selectToIf.count(selectOp) > 0) {
-        continue;
-      }
-
-      // If needs to be dominated by the select.
-      if (!dom.dominates(selectOp.getOperation(), ifOp.getOperation())) {
-        continue;
-      }
-      // If needs to dominate all the select's users.
-      bool allUsersDominated = true;
-      for (auto user : selectOp.getResult().getUsers()) {
-        if (!dom.dominates(ifOp, user)) {
-          allUsersDominated = false;
-          break;
-        }
-      }
-
-      if (allUsersDominated) {
-        selectToIf[selectOp] = ifOp;
-      }
-    }
-
-    for (auto [selectOp, ifOp] : selectToIf) {
+    for (auto [ifOp, selectOps] : selectToIf) {
       // Add new return value to the if (and create else block if necessary),
       // then yield the select value in the then block and the else block.
       OpBuilder builder(ifOp);
       auto loc = ifOp.getLoc();
-      auto thenValue = selectOp.getTrueValue();
-      auto elseValue = selectOp.getFalseValue();
       // Create an scf::IfOp with extra return value.
       SmallVector<Type> newResultTypes = {ifOp.getResultTypes().begin(),
                                           ifOp.getResultTypes().end()};
-      newResultTypes.push_back(selectOp.getResult().getType());
+      for (arith::SelectOp selectOp : selectOps) {
+        newResultTypes.push_back(selectOp.getResult().getType());
+      }
       auto newIfOp = builder.create<scf::IfOp>(
           loc, newResultTypes, ifOp.getCondition(), /*hasElse*/ true);
       // Move the existing blocks to the new if.
@@ -89,25 +86,34 @@ public:
         auto yieldOp = newIfOp.getElseBodyBuilder().create<scf::YieldOp>(loc);
       }
 
+      SmallVector<Value> ifYieldOperands = newIfOp.thenYield().getOperands();
+      SmallVector<Value> elseYieldOperands = newIfOp.elseYield().getOperands();
+      for (arith::SelectOp selectOp : selectOps) {
+        Value thenValue = selectOp.getTrueValue();
+        Value elseValue = selectOp.getFalseValue();
+        ifYieldOperands.push_back(thenValue);
+        elseYieldOperands.push_back(elseValue);
+      }
       // Update yields
-      auto appendToYield = [&](scf::YieldOp yield, Value value) {
-        SmallVector<Value> operands(yield.getOperands());
-        operands.append({value});
+      auto updateYield = [&](scf::YieldOp yield, SmallVector<Value> &operands) {
         builder.setInsertionPoint(yield);
         builder.create<scf::YieldOp>(loc, operands);
         yield.erase();
       };
-      appendToYield(newIfOp.thenYield(), thenValue);
-      appendToYield(newIfOp.elseYield(), elseValue);
+      updateYield(newIfOp.thenYield(), ifYieldOperands);
+      updateYield(newIfOp.elseYield(), elseYieldOperands);
 
+      int resultIdx = 0;
       // Replace old if with the new one.
       for (auto result : ifOp.getResults()) {
-        result.replaceAllUsesWith(newIfOp->getResult(result.getResultNumber()));
+        result.replaceAllUsesWith(newIfOp->getResult(resultIdx++));
       }
       // Replace the select with the new return value.
-      selectOp.replaceAllUsesWith(
-          newIfOp->getResult(newIfOp->getNumResults() - 1));
-      selectOp.erase();
+      for (arith::SelectOp selectOp : selectOps) {
+        selectOp.replaceAllUsesWith(newIfOp->getResult(resultIdx++));
+        selectOp.erase();
+      }
+
       ifOp.erase();
     }
   }
