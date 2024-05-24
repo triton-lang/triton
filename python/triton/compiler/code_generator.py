@@ -1,5 +1,6 @@
 import ast
 import inspect
+import numpy as np
 import re
 import sys
 import warnings
@@ -94,7 +95,7 @@ def _get_fn_file_line(fn):
     return file_name, begin_line
 
 
-_condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
+_condition_types = {bool, int, type(None), np.bool_}  # Python types accepted for conditionals inside kernels
 
 
 class enter_sub_region:
