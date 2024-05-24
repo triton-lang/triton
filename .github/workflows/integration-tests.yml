@@ -166,7 +166,7 @@ jobs:
         run: |
           brew update
           brew install ccache
-          brew install clang
+          brew install llvm
       - name: Compute cache keys
         id: cache-key
         run: |
