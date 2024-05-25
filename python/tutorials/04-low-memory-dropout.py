@@ -90,7 +90,7 @@ print(tabulate.tabulate([
 # The above implementation of dropout works fine, but it can be a bit awkward to deal with. Firstly
 # we need to store the dropout mask for backpropagation. Secondly, dropout state management can get
 # very tricky when using recompute/checkpointing (e.g. see all the notes about `preserve_rng_state` in
-# https://pytorch.org/docs/1.9.0/checkpoint.html). In this tutorial we'll describe an alternative implementation
+# https://pytorch.org/docs/stable/checkpoint.html). In this tutorial we'll describe an alternative implementation
 # that (1) has a smaller memory footprint; (2) requires less data movement; and (3) simplifies the management
 # of persisting randomness across multiple invocations of the kernel.
 #
@@ -155,7 +155,7 @@ print(
 # %%
 # Et Voilà! We have a triton kernel that applies the same dropout mask provided the seed is the same!
 # If you'd like explore further applications of pseudorandomness in GPU programming, we encourage you
-# to explore the `triton/language/random` folder!
+# to explore the `python/triton/language/random.py`!
 
 # %%
 # Exercises

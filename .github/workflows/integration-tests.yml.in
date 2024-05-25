@@ -248,7 +248,7 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install --no-build-isolation '.[tests]'
+          python3 -m pip install '.[tests]'
 
       - &run-lit-tests-step
         name: Run lit tests

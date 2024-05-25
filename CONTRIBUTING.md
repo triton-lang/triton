@@ -42,6 +42,7 @@ The core maintainers should publicly articulate their decision-making, and share
 __List of core maintainers (as of 05/12/2024, alphabetical order):__
 * Justin Lebar
 * Keren Zhou
+* Pawel Szczerbuk
 * Phil Tillet
 * Thomas Raoux
 * Zahi Moudallal
