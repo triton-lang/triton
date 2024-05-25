@@ -171,7 +171,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
-      TRITON_BUILD_WITH_CLANG_LLD: "FALSE"
       CMAKE_BUILD_TYPE: "MIN_SIZE_REL"
     strategy:
       matrix:
@@ -183,6 +182,7 @@ jobs:
           submodules: "true"
       - name: Install brew dependencies
         run: |
+          brew update
           brew install ccache
           brew install llvm
       - name: Compute cache keys
