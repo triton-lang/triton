@@ -97,6 +97,8 @@ def get_build_type():
         return "Debug"
     elif check_env_flag("REL_WITH_DEB_INFO"):
         return "RelWithDebInfo"
+    elif check_env_flag("MIN_SIZE_REL"):
+        return "MinSizeRel"
     elif check_env_flag("TRITON_REL_BUILD_WITH_ASSERTS"):
         return "TritonRelBuildWithAsserts"
     else:

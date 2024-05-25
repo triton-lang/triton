@@ -170,6 +170,9 @@ jobs:
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      TRITON_BUILD_WITH_CLANG_LLD: "FALSE"
+      CMAKE_BUILD_TYPE: "MIN_SIZE_REL"
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
@@ -180,9 +183,7 @@ jobs:
           submodules: "true"
       - name: Install brew dependencies
         run: |
-          brew update
           brew install ccache
-          brew install llvm
       - name: Compute cache keys
         id: cache-key
         run: |
