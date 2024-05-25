@@ -26,9 +26,7 @@ config.test_source_root = os.path.dirname(__file__)
 
 # test_exec_root: The root path where tests should be run.
 config.test_exec_root = os.path.join(config.triton_obj_root, 'test')
-
 config.substitutions.append(('%PATH%', config.environment['PATH']))
-
 config.substitutions.append(("%shlibdir", config.llvm_shlib_dir))
 config.substitutions.append(("%shlibext", config.llvm_shlib_ext))
 
@@ -71,4 +69,3 @@ llvm_config.add_tool_substitutions(tools, tool_dirs)
 llvm_config.with_environment('PYTHONPATH', [
     os.path.join(config.mlir_binary_dir, 'python_packages', 'triton'),
 ], append_path=True)
-
