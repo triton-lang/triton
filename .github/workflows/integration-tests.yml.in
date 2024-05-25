@@ -184,6 +184,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew install ccache
+          brew install llvm
       - name: Compute cache keys
         id: cache-key
         run: |
