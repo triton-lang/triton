@@ -357,7 +357,7 @@ jobs:
           echo "PATH is '$PATH'"
           pip uninstall -y triton
           cd python
-          pip install -v -e .
+          pip install -v .
 
       - *run-lit-tests-step
 
