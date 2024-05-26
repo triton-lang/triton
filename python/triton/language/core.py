@@ -1510,17 +1510,17 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     The two blocks must be two-dimensional and have compatible inner dimensions.
 
     :param input: The first tensor to be multiplied.
-    :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type input: 2D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second tensor to be multiplied.
-    :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
-    :param input_precision: How to exercise the Tenors cores for f32 x f32. If
+    :type other: 2D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :param input_precision: How to exercise the Tensor Cores for f32 x f32. If
       the device does not have Tensor Cores or the inputs are not of dtype f32,
       this option is ignored.  For devices that do have tensor cores, the
       default precision is tf32.
+    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
     :param allow_tf32: *Deprecated.*  If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
-    :type other: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
     """
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is None:
