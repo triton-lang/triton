@@ -246,6 +246,9 @@ jobs:
         env:
           TRITON_BUILD_WITH_CCACHE: "true"
           TRITON_BUILD_WITH_O1: "true"
+          # macos-latest has a 3-core M1 vcpu
+          # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
+          MAX_JOBS: 3
         run: |
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
