@@ -229,11 +229,12 @@ jobs:
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_CCACHE: "true"
+          TRITON_BUILD_WITH_O1: "true"
         run: |
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install --no-build-isolation '.[tests]'
+          python3 -vvv -m pip install --no-build-isolation '.[tests]'
   Integration-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-CUDA != ''
