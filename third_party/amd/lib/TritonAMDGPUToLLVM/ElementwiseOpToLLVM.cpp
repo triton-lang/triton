@@ -312,7 +312,7 @@ static Value convertFp32ToBf16(Location loc,
     auto as_int32 = bitcast(v, i32_ty);
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
-    return bitcast(truncated, i16_ty);
+    return bitcast(truncated, bf16_ty);
   }
   // Otherwise it is (rounding == RoundingMode::RTNE)
   auto as_uint32 = bitcast(v, i32_ty);
@@ -335,7 +335,7 @@ static Value convertFp32ToBf16(Location loc,
 
   auto shifted = lshr(i32_ty, res, i32_val(16));
   auto truncated = trunc(i16_ty, shifted);
-  return truncated;
+  return bitcast(truncated, bf16_ty);
 }
 
 static Value Fp8E5M2FNUZ_to_Fp16_oneValue(Location loc,
@@ -445,14 +445,14 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
   out0 = or_(i32_ty, out0, sign0);
   out1 = or_(i32_ty, out1, sign1);
 
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   out0 = bitcast(out0, bf16x2VecTy);
   out1 = bitcast(out1, bf16x2VecTy);
 
-  return {extract_element(i16_ty, out0, i32_val(0)),
-          extract_element(i16_ty, out0, i32_val(1)),
-          extract_element(i16_ty, out1, i32_val(0)),
-          extract_element(i16_ty, out1, i32_val(1))};
+  return {extract_element(bf16_ty, out0, i32_val(0)),
+          extract_element(bf16_ty, out0, i32_val(1)),
+          extract_element(bf16_ty, out1, i32_val(0)),
+          extract_element(bf16_ty, out1, i32_val(1))};
 }
 
 static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
@@ -714,16 +714,16 @@ static SmallVector<Value> Fp8E4M3_to_Bf16(Location loc,
   Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
   Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
 
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = or_(i32_ty, sign0, b0);
   Value bf16x2Vec1 = or_(i32_ty, sign1, b1);
   bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
   bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
 
-  return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
+  return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
+          extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
+          extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
+          extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
 }
 
 static SmallVector<Value> Bf16_to_Fp8E4M3(Location loc,
@@ -1102,7 +1102,7 @@ static SmallVector<Value> S8_to_Bf16(Location loc,
     f32Val = bitcast(f32Val, i32_ty);
     auto shifted = lshr(i32_ty, f32Val, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
-    outValues.push_back(truncated);
+    outValues.push_back(bitcast(truncated, bf16_ty));
   }
   return outValues;
 }

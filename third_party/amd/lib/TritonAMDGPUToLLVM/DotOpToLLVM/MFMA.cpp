@@ -329,7 +329,7 @@ struct DotOpMFMAConversionHelper {
             if (type.getIntOrFloatBitWidth() == 8) {
               vals = extractOperands(rawElems, kWidth, kBase, i8_ty);
             } else if (type.isBF16()) {
-              vals = extractOperands(rawElems, kWidth, kBase, i16_ty);
+              vals = extractOperands(rawElems, kWidth, kBase, bf16_ty);
             } else {
               assert(type.isF16() && "Unsupported data type");
               vals = extractOperands(rawElems, kWidth, kBase, f16_ty);
