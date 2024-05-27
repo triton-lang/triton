@@ -107,11 +107,11 @@ jobs:
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest-xlarge"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest-xl"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest-xlarge"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest-xl"]]'
           fi
   pre-commit:
     name: pre-commit (code formatting)
