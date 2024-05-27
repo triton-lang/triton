@@ -496,4 +496,4 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install --no-build-isolation
+          python3 -m pip install --no-build-isolation .
