@@ -253,7 +253,7 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install -v --no-build-isolation '.[tests]'
+          python3 -m pip install --no-build-isolation '.[tests]'
 
   Integration-Tests:
     needs: Runner-Preparation

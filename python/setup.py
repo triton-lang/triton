@@ -7,7 +7,6 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
-import time
 import zipfile
 import urllib.request
 from io import BytesIO
@@ -244,7 +243,6 @@ def get_thirdparty_packages(packages: list):
 
 
 def download_and_copy(name, src_path, variable, version, url_func):
-    start_time = time.time()
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
@@ -273,8 +271,6 @@ def download_and_copy(name, src_path, variable, version, url_func):
         shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
     else:
         shutil.copy(src_path, dst_path)
-    end_time = time.time()
-    print(f"Built {name} in {end_time - start_time:.2f} seconds")
 
 
 # ---- cmake extension ----
@@ -340,10 +336,7 @@ class CMakeBuild(build_ext):
             raise RuntimeError("CMake >= 3.18.0 is required")
 
         for ext in self.extensions:
-            start_time = time.time()
             self.build_extension(ext)
-            end_time = time.time()
-            print(f"Built {ext.name} in {end_time - start_time:.2f} seconds")
 
     def get_proton_cmake_args(self):
         cmake_args = get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
