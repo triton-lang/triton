@@ -107,11 +107,11 @@ jobs:
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest-xlarge"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest-xlarge"]]'
           fi
   pre-commit:
     name: pre-commit (code formatting)
@@ -229,6 +229,7 @@ jobs:
         env:
           TRITON_BUILD_WITH_CCACHE: "true"
           TRITON_BUILD_WITH_O1: "true"
+          MAX_JOBS: 6
         run: |
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
