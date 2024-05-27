@@ -6,7 +6,7 @@ import os
 import triton
 import triton.language as tl
 
-test_stdout = 'Hello From First Instruction of AMDGPU Kernel: add_kernel\t01-vector-add.py:19:24\n'
+test_stdout = 'Hello From First Instruction of AMDGPU Kernel: add_kernel\ttest_vector-add.py:19:24\n'
 
 @triton.jit
 def add_kernel(x_ptr,  # *Pointer* to first input vector.
