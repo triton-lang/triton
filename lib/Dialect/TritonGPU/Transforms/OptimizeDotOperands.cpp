@@ -267,10 +267,11 @@ public:
 //   dot(convert(lhs #mma) #shared, rhs) #mma ->
 //   dot(convert(lhs #mma) #dot_operand, rhs) #mma,
 // for fp16 or bf16 MMAv3 dots.
-struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
+struct MMAV3UseRegOperand
+    : public OpRewritePattern<triton::nvidia_gpu::DotAsyncOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(DotOp dotOp,
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::DotAsyncOp dotOp,
                                 PatternRewriter &rewriter) const override {
     auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
     if (!alloc || !alloc.getSrc())
@@ -283,11 +284,6 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
     if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
       return failure();
     auto srcEnc = dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(alloc.getSrc()));
-    auto dstEnc =
-        dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
-    if (!srcEnc || srcEnc.getVersionMajor() != 3 || !dstEnc ||
-        dstEnc.getVersionMajor() != 3)
-      return failure();
     auto srcTy = cast<RankedTensorType>(alloc.getSrc().getType());
     auto dotOperandEnc = DotOperandEncodingAttr::get(
         dotOp.getContext(), /*opIdx=*/0, srcEnc, /*kWidth=*/0);

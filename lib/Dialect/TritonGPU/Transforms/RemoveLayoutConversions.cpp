@@ -39,45 +39,6 @@ namespace {
 //
 // -----------------------------------------------------------------------------
 
-// dot(a, b, load(ptr)) -> add(load(ptr), dot(a, b, 0))
-class ConvertDotConvert : public RewritePattern {
-public:
-  ConvertDotConvert(MLIRContext *context)
-      : RewritePattern(ConvertLayoutOp::getOperationName(), 1, context) {}
-
-  LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const override {
-    auto dstOp = cast<ConvertLayoutOp>(op);
-    auto dotOp = dstOp.getSrc().getDefiningOp<DotOp>();
-    if (!dotOp)
-      return failure();
-    if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
-        std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
-      return failure();
-    auto cvtOp = dotOp.getOperand(2).getDefiningOp<ConvertLayoutOp>();
-    if (!cvtOp)
-      return failure();
-    if (!cvtOp.getSrc().getDefiningOp<LoadOp>())
-      return failure();
-    RankedTensorType dstTy = dstOp.getType();
-    RankedTensorType srcTy = cvtOp.getSrc().getType();
-    if (dstTy != srcTy)
-      return failure();
-
-    auto _0f = rewriter.create<arith::ConstantOp>(
-        op->getLoc(), dstTy.getElementType(),
-        rewriter.getZeroAttr(dstTy.getElementType()));
-    auto _0 = rewriter.create<SplatOp>(op->getLoc(), dotOp.getType(), _0f);
-    auto newDot = rewriter.create<DotOp>(
-        op->getLoc(), dotOp.getType(), dotOp.getOperand(0), dotOp.getOperand(1),
-        _0, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
-    auto newCvt = rewriter.create<ConvertLayoutOp>(op->getLoc(), dstTy,
-                                                   newDot.getResult());
-    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getSrc());
-    return success();
-  }
-};
-
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
 // based on the analysis. The algorithm is as follows.
 //
@@ -1279,17 +1240,6 @@ public:
     hoistConvert(m);
     LLVM_DEBUG({
       DBGS() << "Module after hoisting converts:\n";
-      m.dump();
-    });
-
-    RewritePatternSet decomposePatterns(context);
-    decomposePatterns.add<ConvertDotConvert>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(decomposePatterns))
-            .failed()) {
-      signalPassFailure();
-    }
-    LLVM_DEBUG({
-      DBGS() << "Module after decomposing dot-converts:\n";
       m.dump();
     });
 
