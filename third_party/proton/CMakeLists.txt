@@ -35,7 +35,8 @@ endif()
 
 # Check if the platform is MacOS
 if(APPLE)
-  set(PROTON_PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
+  set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
+  set(PROTON_PYTHON_LDFLAGS "-undefined dynamic_lookup")
 endif()
 
 include_directories(${CUPTI_INCLUDE_DIR})
