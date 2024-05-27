@@ -246,7 +246,6 @@ jobs:
         env:
           TRITON_BUILD_WITH_CCACHE: "true"
           TRITON_BUILD_WITH_O1: "true"
-          MAX_JOBS: 3
         run: |
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
