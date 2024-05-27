@@ -746,16 +746,20 @@ schedulePrologueAndEpilogue(scf::ForOp forOp, CoarseSchedule &schedule,
   // Look for the IfOp that is in the backward slice any of the currently
   // scheduled ops and put it at the beginning of the loop.
   DenseMap<scf::IfOp, int> ifsToStage;
-  for (auto [op, stageAndCluster] : schedule.opToStageAndCluster) {
-    SetVector<Operation *> backwardSlice;
-    BackwardSliceOptions opt;
-    opt.omitBlockArguments = true;
-    getBackwardSlice((Operation *)op, &backwardSlice, opt);
+  // Go stage by stage.
+  for (int stage = 0; stage < numStages; stage++) {
+    for (auto [op, stage_, cluster] : schedule.getOpsInOrder(forOp)) {
+      if (stage_ != stage)
+        continue;
+      SetVector<Operation *> backwardSlice;
+      BackwardSliceOptions opt;
+      opt.omitBlockArguments = true;
+      getBackwardSlice((Operation *)op, &backwardSlice, opt);
 
-    int stage = stageAndCluster.first;
-    for (auto op : backwardSlice) {
-      if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-        ifsToStage.insert({ifOp, stage});
+      for (auto op : backwardSlice) {
+        if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+          ifsToStage.insert({ifOp, stage});
+        }
       }
     }
   }

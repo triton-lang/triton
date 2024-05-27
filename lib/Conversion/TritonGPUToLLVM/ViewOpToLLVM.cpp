@@ -74,7 +74,7 @@ struct ArithConstantSplatOpConversion
     auto values = mlir::dyn_cast<SplatElementsAttr>(op.getValue());
     auto elemType = values.getElementType();
     Attribute val;
-    if (elemType.isBF16() || type::isFloat(elemType)) {
+    if (type::isFloat(elemType)) {
       val = values.getValues<FloatAttr>()[0];
     } else if (type::isInt(elemType)) {
       val = values.getValues<IntegerAttr>()[0];
