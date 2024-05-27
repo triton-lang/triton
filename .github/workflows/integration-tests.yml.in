@@ -185,6 +185,7 @@ jobs:
           brew update
           brew install ccache
           brew install llvm
+          file /opt/homebrew/opt/llvm/bin/clang
       - name: Compute cache keys
         id: cache-key
         run: |
