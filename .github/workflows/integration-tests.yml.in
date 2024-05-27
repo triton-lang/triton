@@ -185,7 +185,6 @@ jobs:
           brew update
           brew install ccache
           brew install llvm
-          file /opt/homebrew/opt/llvm/bin/clang
       - name: Compute cache keys
         id: cache-key
         run: |
@@ -250,7 +249,7 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           cd python
-          python3 -vvv -m pip install --no-build-isolation '.[tests]'
+          python3 -m pip install -v --no-build-isolation '.[tests]'
 
   Integration-Tests:
     needs: Runner-Preparation
