@@ -536,9 +536,6 @@ def test_op(capfd, Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     # triton implementation
     tri_out = attention(q, k, v, causal, sm_scale).half()
     tri_out.backward(dout)
-    tri_dv, v.grad = v.grad.clone(), None
-    tri_dk, k.grad = k.grad.clone(), None
-    tri_dq, q.grad = q.grad.clone(), None
     stdout, stderr = capfd.readouterr()
     assert repr(stderr) == repr(test_stdout)
 
