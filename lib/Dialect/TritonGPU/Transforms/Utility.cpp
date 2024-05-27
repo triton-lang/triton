@@ -8,6 +8,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -816,6 +817,26 @@ bool isPureUnaryInlineAsm(Operation *op) {
     return false;
   return op->getNumOperands() == 1 && op->getNumResults() == 1 &&
          inlineAsmOp.getPure();
+}
+
+int getNVIDIAComputeCapability(Operation *module) {
+  assert(module->hasAttr(triton::AttrTargetName) &&
+         "Expected a target attribute on the module operation");
+
+  StringAttr targetAttr =
+      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+
+  StringRef ref = targetAttr.strref();
+  assert(ref.starts_with("cuda:") &&
+         "expected target attribute to be prefixed with \"cuda:\"");
+
+  StringRef capabilityStr = ref.drop_front(5); // drop the "cuda:"
+  int computeCapability = 80;                  // default capability
+  bool parseError = capabilityStr.getAsInteger(10, computeCapability);
+  assert(!parseError &&
+         "invalid compute capability string in target attribute");
+
+  return computeCapability;
 }
 
 namespace {
