@@ -115,11 +115,11 @@ jobs:
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest-xl"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest-xl"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           fi
 
   pre-commit:
@@ -191,6 +191,7 @@ jobs:
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
           echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
           echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
+          echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
@@ -203,7 +204,7 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/pybind11
             ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.datetime }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
         # spent compiling.  Triton won't (well, should not) use these cached files
         # if something internal to Triton changes, because Triton's internal
@@ -245,7 +246,7 @@ jobs:
         env:
           TRITON_BUILD_WITH_CCACHE: "true"
           TRITON_BUILD_WITH_O1: "true"
-          MAX_JOBS: 6
+          MAX_JOBS: 3
         run: |
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
