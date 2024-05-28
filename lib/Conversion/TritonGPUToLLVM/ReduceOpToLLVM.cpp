@@ -240,7 +240,7 @@ private:
                     ConversionPatternRewriter &rewriter) const {
     auto srcLayout = helper.getSrcLayout();
     auto srcShape = helper.getSrcShape();
-    auto order = getOrder(srcLayout);
+    auto order = triton::gpu::getWarpOrder(srcLayout);
     SmallVector<Value> multiDimWarpId;
 
     // 2x2 warps with slice dim = 0, warpId = 2 ends up writing at the same
@@ -249,7 +249,7 @@ private:
     if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
       auto parentLayout = sliceLayout.getParent();
       auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(parentLayout);
-      auto parentOrder = triton::gpu::getOrder(parentLayout);
+      auto parentOrder = triton::gpu::getWarpOrder(parentLayout);
       multiDimWarpId =
           delinearize(rewriter, loc, warpId, parentWarpsPerCTA, parentOrder);
       multiDimWarpId.erase(multiDimWarpId.begin() + sliceLayout.getDim());

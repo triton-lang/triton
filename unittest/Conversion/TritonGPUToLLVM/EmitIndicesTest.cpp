@@ -751,8 +751,8 @@ void DistributedLegacyVsLinearLayoutsTest<LayoutT, ParamsT>::DoIt() {
                                     legacyLayout);
 
   int threadsPerWarp = product(triton::gpu::getThreadsPerWarp(legacyLayout));
-  int warpsPerCTA = product(triton::gpu::getNumWarpsPerCTA(legacyLayout));
-  int threadsPerCTA = threadsPerWarp * warpsPerCTA;
+  int numThreads = product(triton::gpu::getThreadsPerWarp(legacyLayout)) *
+                   product(triton::gpu::getWarpsPerCTA(legacyLayout));
 
   // Can't call getCTAsPerCGA on a SliceEncodingAttr.  But all we care about is
   // the total number of CTAs, which we can just as easily get from the slice
@@ -766,9 +766,6 @@ void DistributedLegacyVsLinearLayoutsTest<LayoutT, ParamsT>::DoIt() {
   mlir::OpBuilder builder(&context);
   Location loc = UnknownLoc::get(&context);
   auto mlirModule = mlir::ModuleOp::create(loc);
-  mlirModule->setAttr("triton_gpu.num-warps",
-                      builder.getI32IntegerAttr(warpsPerCTA));
-
   auto func = builder.create<mlir::triton::FuncOp>(
       loc, "test_func", builder.getFunctionType({}, {}));
   mlirModule.push_back(func);
@@ -823,7 +820,7 @@ void DistributedLegacyVsLinearLayoutsTest<LayoutT, ParamsT>::DoIt() {
         SCOPED_TRACE("Dimension " + std::to_string(j));
         iterate(numCTAs, [&](int ctaId) {
           SCOPED_TRACE("CTA " + std::to_string(ctaId));
-          iterate(threadsPerCTA, [&](int tid) {
+          iterate(numThreads, [&](int tid) {
             SCOPED_TRACE("Thread " + std::to_string(tid));
             int llValue = evalValue((*llIndices)[i][j], ctaId, tid);
             int legacyValue = evalValue(legacyIndices[i][j], ctaId, tid);
@@ -860,7 +857,7 @@ void DistributedLegacyVsLinearLayoutsTest<LayoutT, ParamsT>::DoIt() {
     llvm::errs() << "  }},\n";
 
     llvm::errs() << "  {S(\"lane\"), {\n";
-    for (int tid = 1; tid < threadsPerCTA; tid *= 2) {
+    for (int tid = 1; tid < numThreads; tid *= 2) {
       if (tid == threadsPerWarp) {
         llvm::errs() << "  }},\n";
         llvm::errs() << "  {S(\"warp\"), {\n";

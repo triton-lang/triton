@@ -22,14 +22,17 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+namespace triton {
+namespace gpu {
+
+#define GEN_PASS_DEF_TRITONGPUREMOVELAYOUTCONVERSIONS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 #define DEBUG_TYPE "tritongpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace mlir::triton::gpu {
 namespace {
 
 // -----------------------------------------------------------------------------
@@ -1132,8 +1135,16 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
-    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
-               ExpandDimsOp>(op);
+    if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
+            ExpandDimsOp>(op)) {
+      return true;
+    }
+    if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
+      auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
+      return getElementBitWidth(srcType) <
+             getElementBitWidth(fpToFpOp.getType());
+    }
+    return false;
   };
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
@@ -1220,13 +1231,12 @@ void hoistConvert(ModuleOp module) {
     layoutRemat.cleanup();
   });
 }
+} // namespace
 
 class TritonGPURemoveLayoutConversionsPass
-    : public TritonGPURemoveLayoutConversionsBase<
+    : public impl::TritonGPURemoveLayoutConversionsBase<
           TritonGPURemoveLayoutConversionsPass> {
 public:
-  TritonGPURemoveLayoutConversionsPass() = default;
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -1300,10 +1310,6 @@ public:
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> createRemoveLayoutConversionsPass() {
-  return std::make_unique<TritonGPURemoveLayoutConversionsPass>();
-}
-
-} // namespace mlir::triton::gpu
+} // namespace gpu
+} // namespace triton
+} // namespace mlir
