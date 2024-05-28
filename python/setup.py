@@ -99,6 +99,8 @@ def get_build_type():
         return "RelWithDebInfo"
     elif check_env_flag("TRITON_REL_BUILD_WITH_ASSERTS"):
         return "TritonRelBuildWithAsserts"
+    elif check_env_flag("TRITON_BUILD_WITH_O1"):
+        return "TritonBuildWithO1"
     else:
         # TODO: change to release when stable enough
         return "TritonRelBuildWithAsserts"
@@ -416,7 +418,10 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
             ]
 
-        cmake_args += self.get_proton_cmake_args()
+        if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+            cmake_args += self.get_proton_cmake_args()
+        else:
+            cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
@@ -502,7 +507,8 @@ def add_link_to_proton():
 
 def add_links():
     add_link_to_backends()
-    add_link_to_proton()
+    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+        add_link_to_proton()
 
 
 class plugin_install(install):
@@ -561,9 +567,12 @@ def get_packages():
 
 
 def get_entry_points():
-    entry_points = {
-        "console_scripts": ["proton-viewer = triton.profiler.viewer:main", "proton = triton.profiler.proton:main"]
-    }
+    entry_points = {}
+    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+        entry_points["console_scripts"] = [
+            "proton-viewer = triton.profiler.viewer:main",
+            "proton = triton.profiler.proton:main",
+        ]
     return entry_points
 
 

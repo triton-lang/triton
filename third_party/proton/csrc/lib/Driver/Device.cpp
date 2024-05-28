@@ -1,6 +1,6 @@
 #include "Driver/Device.h"
-#include "Driver/GPU/Cuda.h"
-#include "Driver/GPU/Hip.h"
+#include "Driver/GPU/CudaApi.h"
+#include "Driver/GPU/HipApi.h"
 
 #include "Utility/Errors.h"
 
