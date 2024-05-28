@@ -6,7 +6,6 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
-#include "triton/Conversion/TritonToTritonCPU/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -43,8 +42,6 @@ void init_triton_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_4("add_convert_to_ttgpuir",
                      createConvertTritonToTritonGPUPass, const std::string &,
                      int, int, int);
-  // ADD_PASS_WRAPPER_0("add_convert_to_ttcpuir",
-  //                    createConvertTritonToTritonCPUPass);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {
