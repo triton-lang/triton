@@ -1373,7 +1373,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
         # CUDA specific limitation
-        assert builder.options.backend_name == "hip" or lhs.shape[1].value >= 32, "small blocks not supported!"
+        assert builder.options.backend_name != "cuda" or lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     elif out_dtype.is_bf16():
