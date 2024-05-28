@@ -5357,3 +5357,37 @@ def test_maxnreg(device):
     except AssertionError:
         print("Failing ptx:\n", k.asm["ptx"])
         raise
+
+
+@pytest.mark.interpreter
+def test_temp_var_in_loop(device):
+
+    @triton.jit
+    def temp_in_loop(Z, N: tl.constexpr, BLOCK: tl.constexpr):
+        acc = tl.full((BLOCK, ), 0, dtype=tl.int32)
+        for i in range(N):
+            if i == 0:
+                temp = tl.full((BLOCK, ), 2, dtype=tl.int32)
+                acc = temp
+            else:
+                acc += tl.full((BLOCK, ), 1, dtype=tl.int32)
+            # re-use the temp variable and make sure to check that it isn't creating incorrect IR.
+            temp = tl.full((BLOCK, ), 1, dtype=tl.int32)
+            acc += temp
+        z = Z + tl.arange(0, BLOCK)
+        tl.store(z, acc)
+
+    N = 10
+    BLOCK = 32
+    out = torch.empty((BLOCK, ), dtype=torch.int32, device=device)
+    temp_in_loop[(1, )](out, N, BLOCK)
+    acc = torch.full((BLOCK, ), 0, dtype=torch.int32, device=device)
+    for i in range(N):
+        if i == 0:
+            temp = torch.full((BLOCK, ), 2, dtype=torch.int32, device=device)
+            acc = temp
+        else:
+            acc += torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
+        temp = torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
+        acc += temp
+    assert (acc == out).all()
