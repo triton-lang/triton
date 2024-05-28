@@ -1372,8 +1372,8 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         f"All non-batch values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
-        # TODO: This is CUDA specific, check if ROCm has the same limitation
-        assert lhs.shape[1].value >= 32, "small blocks not supported!"
+        # CUDA specific limitation
+        assert builder.options.backend_name == "hip" or lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     elif out_dtype.is_bf16():
