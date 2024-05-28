@@ -68,6 +68,9 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
     return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
   }
 
+  if (isMfmaToDotShortcut(srcTy, dstTy))
+    return {};
+
   // MmaToDotShortcut and MmaToMmaShortcut doesn't use shared mem
   if (auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
     if (mlir::isa<DotOperandEncodingAttr>(dstLayout)) {
@@ -111,11 +114,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
-  if (mlir::isa<AMDMfmaEncodingAttr>(srcLayout) &&
-      mlir::dyn_cast<AMDMfmaEncodingAttr>(srcLayout).getIsTransposed() &&
-      mlir::isa<DotOperandEncodingAttr>(dstLayout))
-    if (isMfmaToDotShortcut(srcTy, dstTy))
-      return {};
+  assert(!isMfmaToDotShortcut(srcTy, dstTy));
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
   unsigned srcContigPerThread =
