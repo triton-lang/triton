@@ -212,6 +212,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
+  assert((rank == 2 || order[2] == 0) &&
+         "expect batch to be the slowest dimension");
 
   auto elemTy = aTensorTy.getElementType();
   auto kWidth = encoding.getKWidth();
