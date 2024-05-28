@@ -5390,5 +5390,4 @@ def test_temp_var_in_loop(device):
             acc += torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
         temp = torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
         acc += temp
-    print(out)
     assert (acc == out).all()
