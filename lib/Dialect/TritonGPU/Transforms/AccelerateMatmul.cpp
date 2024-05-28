@@ -296,14 +296,14 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
-    Operation *newDot = nullptr;
     if (versionMajor == 3) {
       a = getMMAv3Operand(a, rewriter, 0);
       b = getMMAv3Operand(b, rewriter, 1);
-      newDot = rewriter.create<triton::nvidia_gpu::DotAsyncOp>(
+      auto newDot = rewriter.create<triton::nvidia_gpu::GroupDotOp>(
           dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.getInputPrecision(),
-          dotOp.getMaxNumImpreciseAcc());
-      rewriter.create<triton::nvidia_gpu::DotWaitOp>(dotOp.getLoc(), newDot);
+          dotOp.getMaxNumImpreciseAcc(), false);
+      rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, oldRetType,
+                                                   newDot.getResult());
     } else {
       // convert operands
       int minBitwidth =
@@ -323,13 +323,13 @@ public:
       auto newBType = RankedTensorType::get(
           oldBType.getShape(), oldBType.getElementType(), newBEncoding);
       b = rewriter.create<ConvertLayoutOp>(b.getLoc(), newBType, b);
-      newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b, newAcc,
-                                      dotOp.getInputPrecision(),
-                                      dotOp.getMaxNumImpreciseAcc());
+      auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b,
+                                           newAcc, dotOp.getInputPrecision(),
+                                           dotOp.getMaxNumImpreciseAcc());
+      // convert dot instruction
+      rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, oldRetType,
+                                                   newDot.getResult());
     }
-    // convert dot instruction
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, oldRetType,
-                                                 newDot->getResult());
     return success();
   }
 };

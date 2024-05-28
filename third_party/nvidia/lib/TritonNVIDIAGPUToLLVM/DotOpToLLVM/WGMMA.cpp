@@ -515,8 +515,8 @@ LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                     op.getMaxNumImpreciseAcc(), true, thread);
 }
 
-LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
-                                triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
+LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::GroupDotOp op,
+                                triton::nvidia_gpu::GroupDotOp::Adaptor adaptor,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread) {

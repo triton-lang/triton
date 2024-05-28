@@ -27,8 +27,8 @@ LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread);
 
-LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
-                                triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
+LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::GroupDotOp op,
+                                triton::nvidia_gpu::GroupDotOp::Adaptor adaptor,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread);
@@ -76,13 +76,13 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   }
 };
 
-struct DotAsyncOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::DotAsyncOp> {
+struct GroupDotOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::GroupDotOp> {
   using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::DotAsyncOp>::ConvertOpToLLVMPattern;
+      triton::nvidia_gpu::GroupDotOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::DotAsyncOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::GroupDotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     // D = A * B + C
@@ -105,21 +105,21 @@ struct DotAsyncOpConversion
       }
 
       llvm::report_fatal_error(
-          "Unsupported MMA kind found when converting DotAsyncOp to LLVM.");
+          "Unsupported MMA kind found when converting GroupDotOp to LLVM.");
     }
 
     llvm::report_fatal_error(
-        "Unsupported DotAsyncOp found when converting TritonGPU to LLVM.");
+        "Unsupported GroupDotOp found when converting TritonGPU to LLVM.");
   }
 };
 
-struct DotWaitOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::DotWaitOp> {
+struct GroupDotWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::GroupDotWaitOp> {
   using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::DotWaitOp>::ConvertOpToLLVMPattern;
+      triton::nvidia_gpu::GroupDotWaitOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::DotWaitOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::GroupDotWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto pendings = op.getPendings();
     Location loc = op.getLoc();
@@ -180,6 +180,6 @@ void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, benefit);
-  patterns.add<DotAsyncOpConversion>(typeConverter, benefit);
-  patterns.add<DotWaitOpConversion>(typeConverter, benefit);
+  patterns.add<GroupDotOpConversion>(typeConverter, benefit);
+  patterns.add<GroupDotWaitOpConversion>(typeConverter, benefit);
 }

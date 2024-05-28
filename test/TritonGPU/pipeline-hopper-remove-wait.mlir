@@ -116,10 +116,10 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
       %118 = triton_gpu.convert_layout %116 : tensor<128x64xf16, #mma> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
       // The first dot gets converted to dot-async + wait.  The second one
       // doesn't have a wait because the first wait is sufficient.
-      // CHECK: triton_nvidia_gpu.dot_async
-      // CHECK: triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
-      // CHECK: triton_nvidia_gpu.dot_async
-      // CHECK-NOT: triton_nvidia_gpu.dot_wait
+      // CHECK: triton_nvidia_gpu.group_dot
+      // CHECK: triton_nvidia_gpu.group_dot_wait {{.*}} {pendings = 0 : i32}
+      // CHECK: triton_nvidia_gpu.group_dot
+      // CHECK-NOT: triton_nvidia_gpu.group_dot_wait
       // CHECK: scf.yield
       %119 = tt.dot %118, %117, %arg23 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * !tt.memdesc<64x128xf16, #shared> -> tensor<128x128xf32, #mma1>
       %120 = arith.mulf %arg24, %arg25 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>

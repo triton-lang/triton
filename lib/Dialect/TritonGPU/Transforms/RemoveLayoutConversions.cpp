@@ -246,7 +246,7 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOp, nvidia_gpu::DotAsyncOp, AtomicRMWOp, AtomicCASOp>(op))
+  if (isa<DotOp, nvidia_gpu::GroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
@@ -363,7 +363,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp, nvidia_gpu::DotWaitOp>(user)) {
+            ConvertLayoutOp, nvidia_gpu::GroupDotWaitOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -782,7 +782,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-          ConvertLayoutOp, nvidia_gpu::DotWaitOp>(op)) {
+          ConvertLayoutOp, nvidia_gpu::GroupDotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {

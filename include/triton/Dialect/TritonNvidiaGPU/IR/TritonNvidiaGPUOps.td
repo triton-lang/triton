@@ -101,7 +101,7 @@ def TTNG_GroupDotWaitOp : TTNG_Op<"group_dot_wait", [DeclareOpInterfaceMethods<I
 
     $inputs must be the tensors corresponding to the async dot ops that we're
     waiting on.  For example, if there are N pending async dot ops and we call
-    `dot_wait 1`, then $inputs must be the result of the first dot op.
+    `group_dot_wait 1`, then $inputs must be the result of the first dot op.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";

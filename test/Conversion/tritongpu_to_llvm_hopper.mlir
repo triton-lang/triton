@@ -14,7 +14,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK-COUNT-128: llvm.fadd
     // CHECK: nvgpu.wgmma
     // CHECK-COUNT-128: llvm.fadd
-    %m = triton_nvidia_gpu.dot_async %a, %b, %c
+    %m = triton_nvidia_gpu.group_dot %a, %b, %c
       {maxNumImpreciseAcc = 32 : i32, inputPrecision = 0 : i32} :
       !tt.memdesc<128x128xf8E5M2, #shared> * !tt.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
@@ -38,7 +38,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: nvgpu.wgmma
     // CHECK-NOT: llvm.fadd
     // CHECK: llvm.return
-    %m = triton_nvidia_gpu.dot_async %a, %b, %c
+    %m = triton_nvidia_gpu.group_dot %a, %b, %c
       {maxNumImpreciseAcc = 129 : i32, inputPrecision = 0 : i32} :
       !tt.memdesc<128x128xf8E5M2, #shared> * !tt.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
@@ -62,7 +62,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: nvgpu.wgmma
     // CHECK-COUNT-128: llvm.fadd
     // CHECK: llvm.return
-    %m = triton_nvidia_gpu.dot_async %a, %b, %c
+    %m = triton_nvidia_gpu.group_dot %a, %b, %c
       {maxNumImpreciseAcc = 64 : i32, inputPrecision = 0 : i32} :
       !tt.memdesc<128x128xf8E5M2, #shared> * !tt.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
@@ -80,7 +80,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK: nvgpu.wgmma %{{.*}}, %{{.*}} {
   tt.func @dot_zero_acc(%a: !tt.memdesc<128x64xf16, #shared>, %b: !tt.memdesc<64x64xf16, #shared1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
-    %m = triton_nvidia_gpu.dot_async %a, %b, %cst {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+    %m = triton_nvidia_gpu.group_dot %a, %b, %cst {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
       !tt.memdesc<128x64xf16, #shared> * !tt.memdesc<64x64xf16, #shared1> -> tensor<128x64xf32, #mma>
     tt.return
   }

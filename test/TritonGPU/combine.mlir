@@ -2316,11 +2316,11 @@ tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i1>, #blocked>) {
 #blocked3 = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @dot_wait_propagate
-  tt.func public @dot_wait_propagate(%arg0: tensor<16x2xf32, #blocked>) -> tensor<16x2xf32, #blocked> {
+  // CHECK-LABEL: @group_dot_wait_propagate
+  tt.func public @group_dot_wait_propagate(%arg0: tensor<16x2xf32, #blocked>) -> tensor<16x2xf32, #blocked> {
     // CHECK-NOT: triton_gpu.convert_layout
     %a = triton_gpu.convert_layout %arg0 : tensor<16x2xf32, #blocked> -> tensor<16x2xf32, #blocked1>
-    %b = triton_nvidia_gpu.dot_wait %a {pendings = 0 : i32} : tensor<16x2xf32, #blocked1>
+    %b = triton_nvidia_gpu.group_dot_wait %a {pendings = 0 : i32} : tensor<16x2xf32, #blocked1>
     %c = triton_gpu.convert_layout %b : tensor<16x2xf32, #blocked1> -> tensor<16x2xf32, #blocked>
     tt.return %c : tensor<16x2xf32, #blocked>
   }

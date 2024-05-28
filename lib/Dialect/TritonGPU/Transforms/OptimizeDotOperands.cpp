@@ -210,7 +210,7 @@ public:
   LogicalResult matchAndRewrite(LocalAllocOp allocOp,
                                 PatternRewriter &rewriter) const override {
     if (!allocOp->hasOneUse() ||
-        !isa<DotOp, nvidia_gpu::DotAsyncOp>(*allocOp->getUsers().begin()))
+        !isa<DotOp, nvidia_gpu::GroupDotOp>(*allocOp->getUsers().begin()))
       return failure();
 
     auto dot = *allocOp->getUsers().begin();
@@ -268,10 +268,10 @@ public:
 //   dot(convert(lhs #mma) #dot_operand, rhs) #mma,
 // for fp16 or bf16 MMAv3 dots.
 struct MMAV3UseRegOperand
-    : public OpRewritePattern<triton::nvidia_gpu::DotAsyncOp> {
+    : public OpRewritePattern<triton::nvidia_gpu::GroupDotOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(triton::nvidia_gpu::DotAsyncOp dotOp,
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::GroupDotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
     if (!alloc || !alloc.getSrc())
