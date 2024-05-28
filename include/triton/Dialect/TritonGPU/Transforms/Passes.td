@@ -19,16 +19,7 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let options = [
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
-           "number of pipeline stages">,
-    Option<"numWarps", "num-warps",
-           "int32_t", /*default*/"4",
-           "number of warps per block">,
-    Option<"numCTAs", "num-ctas",
-           "int32_t", /*default*/"1",
-           "number of CTAs per CGA">,
-    Option<"computeCapability", "compute-capability",
-           "int32_t", /*default*/"80",
-           "device compute capability">
+           "number of pipeline stages">
   ];
 }
 
@@ -68,12 +59,6 @@ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::Modul
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::triton::TritonDialect"];
-
-  let options = [
-    Option<"computeCapability", "compute-capability",
-           "int32_t", /*default*/"80",
-           "device compute capability">
-  ];
 }
 
 def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir::ModuleOp"> {
