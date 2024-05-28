@@ -3262,6 +3262,11 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
+        if "gfx11" in triton.runtime.driver.active.get_current_target().arch:
+            if in_dtype_str == "float32":
+                pytest.skip(f"{in_dtype_str} is not supported in WMMA dot, FMA does not support dot3d")
+            if out_dtype_str == "float16":
+                pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
         input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
 
