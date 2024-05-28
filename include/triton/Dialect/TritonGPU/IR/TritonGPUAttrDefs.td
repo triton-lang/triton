@@ -804,7 +804,7 @@ It is characterized by the following parameters:
   - 1.0: gfx908, i.e. MI100
   - 2.0: gfx90a: i.e. MI200, MI210, MI250
   - 3.0: gfx940, gfx941, gfx942: MI300
-- `warpsPerCTA` indicates the warp layout in the workgroup.
+- `warpsPerCTA` indicates the warp layout in the block.
 - `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
 - `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
 without going to LDS. This is used in the case of chained dot (E.g. Flash-Attention kernel).

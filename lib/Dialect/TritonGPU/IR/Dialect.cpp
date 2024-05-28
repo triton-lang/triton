@@ -1135,7 +1135,8 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<{" << "sizePerThread = [" << ArrayRef(getSizePerThread()) << "]"
+  printer << "<{"
+          << "sizePerThread = [" << ArrayRef(getSizePerThread()) << "]"
           << ", threadsPerWarp = [" << ArrayRef(getThreadsPerWarp()) << "]"
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"
           << ", order = [" << getOrder() << "]";
@@ -1213,7 +1214,8 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{" << "versionMajor = " << getVersionMajor()
+  printer << "<{"
+          << "versionMajor = " << getVersionMajor()
           << ", versionMinor = " << getVersionMinor() //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
 
@@ -1294,7 +1296,8 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{" << "versionMajor = " << getVersionMajor()              //
+  printer << "<{"
+          << "versionMajor = " << getVersionMajor()                      //
           << ", versionMinor = " << getVersionMinor()                    //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"    //
           << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
@@ -1354,7 +1357,8 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{" << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+  printer << "<{"
+          << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
   printer << "}>";
@@ -1378,8 +1382,9 @@ Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<{" << "dim = " << getDim() << ", " << "parent = " << getParent()
-          << "}>";
+  printer << "<{"
+          << "dim = " << getDim() << ", "
+          << "parent = " << getParent() << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -1452,7 +1457,8 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void SharedEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{" << "vec = " << getVec() //
+  printer << "<{"
+          << "vec = " << getVec() //
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
           << ", order = [" << getOrder() << "]";
