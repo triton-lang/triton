@@ -458,7 +458,7 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
 static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           const SmallVector<Value> &v) {
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = undef(bf16x2VecTy);
   Value bf16x2Vec1 = undef(bf16x2VecTy);
   bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
@@ -729,7 +729,7 @@ static SmallVector<Value> Fp8E4M3_to_Bf16(Location loc,
 static SmallVector<Value> Bf16_to_Fp8E4M3(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           const SmallVector<Value> &v) {
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = undef(bf16x2VecTy);
   Value bf16x2Vec1 = undef(bf16x2VecTy);
   bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
