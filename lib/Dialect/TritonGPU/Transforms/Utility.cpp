@@ -831,7 +831,7 @@ int getNVIDIAComputeCapability(Operation *module) {
          "expected target attribute to be prefixed with \"cuda:\"");
 
   StringRef capabilityStr = ref.drop_front(5); // drop the "cuda:"
-  int computeCapability = 80;                  // default capability
+  int computeCapability;
   bool parseError = capabilityStr.getAsInteger(10, computeCapability);
   assert(!parseError &&
          "invalid compute capability string in target attribute");
