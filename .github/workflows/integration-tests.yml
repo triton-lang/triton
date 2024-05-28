@@ -389,8 +389,6 @@ jobs:
           cd "build/$(ls build | grep -i cmake)"
           ctest -j32
       - name: Run Proton tests
-        env:
-          LD_LIBRARY_PATH: "/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
         run: |
           cd third_party/proton
           python3 -m pytest test          
