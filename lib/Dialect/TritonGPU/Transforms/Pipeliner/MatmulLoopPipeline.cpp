@@ -1710,14 +1710,9 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // We call those dots that don't need to be followed immediately by a `wait 0`
   // "properly async", or sometimes just "async".
   IRRewriter builder(forOp.getContext());
-  for (auto dotOp : llvm::to_vector(forOp.getBody()->getOps<tt::DotOp>())) {
-    if (isMMAv3Dot(dotOp)) {
-      builder.setInsertionPoint(dotOp);
-      builder.replaceOpWithNewOp<ttng::DotAsyncOp>(
-          dotOp, dotOp.getA(), dotOp.getB(), dotOp.getC(),
-          dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
-    }
-  }
+  for (auto dotWaitOp :
+       llvm::to_vector(forOp.getBody()->getOps<ttng::DotWaitOp>()))
+    builder.eraseOp(dotWaitOp);
 
   // For each dot, determine whether it can be properly async, or if it needs a
   // sync immediately after.  If it can be properly async, we know its only use

@@ -67,13 +67,13 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 }
 
 //
-// DotAsync Op
+// GroupDot Op
 //
-def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+def TTNG_GroupDotOp : TTNG_Op<"group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                             DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
                                             TypesMatchWith<"result's type matches accumulator's type",
                                                             "d", "c", "$_self">]> {
-    let summary = "dot async";
+    let summary = "group dot";
 
     let description = [{
         $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
@@ -83,16 +83,17 @@ def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [DeclareOpInterfaceMethods<InferTypeO
                          TT_TensorOrMemDesc:$b,
                          TT_FpIntTensor:$c,
                          TT_InputPrecisionAttr:$inputPrecision,
-                         I32Attr:$maxNumImpreciseAcc);
+                         I32Attr:$maxNumImpreciseAcc,
+                         BoolAttr:$isAsync);
 
     let results = (outs TT_FpIntTensor:$d);
 
     let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
 }
 
-def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                          AllTypesMatch<["inputs", "outputs"]>]> {
-  let summary = "dot wait";
+def TTNG_GroupDotWaitOp : TTNG_Op<"group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                     AllTypesMatch<["inputs", "outputs"]>]> {
+  let summary = "group dot wait";
   let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
   let results = (outs Variadic<TT_TensorOrMemDesc>:$outputs);
   let description = [{
