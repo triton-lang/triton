@@ -424,8 +424,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache
-          brew install llvm
+          brew install ccache llvm
       - name: Compute cache keys
         id: cache-key
         run: |
@@ -495,3 +494,23 @@ jobs:
           echo "PATH is '$PATH'"
           cd python
           python3 -m pip install --no-build-isolation .
+      - # If we're on branch `main`, save the ccache Triton compilation artifacts
+        # to the cache so they can be used by other (non-main) CI runs.
+        #
+        # (It wouldn't be a problem to save the cache on every run, because github
+        # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
+        name: Save ccache and Triton compilation artifacts to cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.triton/cache ~/.cache/ccache
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+          du -sh ~/.triton/**
+
+          mkdir -p ~/.cache/ccache
+          ls -alh ~/.cache/ccache
+          du -sh ~/.cache/ccache

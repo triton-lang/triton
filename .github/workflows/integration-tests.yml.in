@@ -407,8 +407,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache
-          brew install llvm
+          brew install ccache llvm
 
       - *compute-cache-keys-step
       - *cache-build-dependencies-step
@@ -437,3 +436,6 @@ jobs:
           echo "PATH is '$PATH'"
           cd python
           python3 -m pip install --no-build-isolation .
+
+      - *save-build-artifacts-step
+      - *inspect-cache-directories-step
