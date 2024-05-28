@@ -37,12 +37,13 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
     auto order = triton::gpu::getOrder(layout);
+    auto warpOrder = triton::gpu::getWarpOrder(layout);
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
     Value warpSize = i32_val(32);
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
     SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+        delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
     SmallVector<Value> multiDimThreadId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
     for (unsigned dim = 0; dim < rank; ++dim) {

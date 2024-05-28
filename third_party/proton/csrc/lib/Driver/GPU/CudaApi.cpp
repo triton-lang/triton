@@ -1,4 +1,4 @@
-#include "Driver/GPU/Cuda.h"
+#include "Driver/GPU/CudaApi.h"
 #include "Driver/Dispatch.h"
 
 namespace proton {
