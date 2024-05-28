@@ -1,5 +1,5 @@
 #include "Proton.h"
-#include "Driver/GPU/Cuda.h"
+#include "Driver/GPU/CudaApi.h"
 
 #include <map>
 #include <stdexcept>

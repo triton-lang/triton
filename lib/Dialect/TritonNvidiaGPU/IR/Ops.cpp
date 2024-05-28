@@ -32,7 +32,7 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-///--- DotAsyncOp ---
+// -- DotAsyncOp --
 mlir::LogicalResult DotAsyncOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
@@ -57,7 +57,20 @@ mlir::LogicalResult DotAsyncOp::inferReturnTypes(
   return mlir::success();
 }
 
-///--- DotWaitOp ---
+void DotAsyncOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  auto a = getA();
+  auto b = getB();
+  if (isa<MemDescType>(a.getType()))
+    effects.emplace_back(MemoryEffects::Read::get(), a,
+                         mlir::triton::gpu::SharedMemory::get());
+  if (isa<MemDescType>(b.getType()))
+    effects.emplace_back(MemoryEffects::Read::get(), b,
+                         mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- DotWaitOp --
 LogicalResult DotWaitOp::inferReturnTypes(
     ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
     ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
@@ -83,11 +96,25 @@ LogicalResult InitBarrierOp::verify() {
   return success();
 }
 
+void InitBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), getAlloc(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
 // -- InvalBarrierOp --
 LogicalResult InvalBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
+}
+
+void InvalBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), getAlloc(),
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- BarrierExpectOp --
@@ -97,11 +124,29 @@ LogicalResult BarrierExpectOp::verify() {
   return success();
 }
 
+void BarrierExpectOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), getAlloc(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
 // -- WaitBarrierOp --
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
   return success();
+}
+
+void WaitBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getAlloc(),
+                       mlir::triton::gpu::SharedMemory::get());
+  // Need a side effect to prevent compiler from reordering and removing
+  // the wait operation.
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::SideEffects::DefaultResource::get());
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --
@@ -111,6 +156,27 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (getCoord().size() < 1 || getCoord().size() > 5)
     return emitOpError("TMA copies must have between 1 and 5 coordinates");
   return success();
+}
+
+void AsyncTMACopyGlobalToLocalOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getDescPtr(),
+                       mlir::triton::GlobalMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), getBarrier(),
+                       mlir::triton::gpu::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), getResult(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- AsyncTMACopyLocalToGlobalOp --
+void AsyncTMACopyLocalToGlobalOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), getDescPtr(),
+                       mlir::triton::GlobalMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 } // namespace nvidia_gpu
