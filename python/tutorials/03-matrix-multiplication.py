@@ -364,7 +364,7 @@ print(f"torch_output_with_fp16_inputs={torch_output}")
 # Bigger tolerance for AMD MI200 devices.
 # MI200 devices use reduced precision fp16 and bf16 and flush input and
 # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-rtol = 1e-2 if is_hip_mi200() else 1e-3
+rtol = 1e-2 if is_hip_mi200() else 0
 if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
     print("✅ Triton and Torch match")
 else:
