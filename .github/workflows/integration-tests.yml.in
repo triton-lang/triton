@@ -388,7 +388,6 @@ jobs:
           python3 -m pytest runtime
 
       - name: Run Proton tests
-        env:
         run: |
           cd third_party/proton
           python3 -m pytest test          
