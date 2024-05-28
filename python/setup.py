@@ -99,6 +99,8 @@ def get_build_type():
         return "RelWithDebInfo"
     elif check_env_flag("TRITON_REL_BUILD_WITH_ASSERTS"):
         return "TritonRelBuildWithAsserts"
+    elif check_env_flag("TRITON_BUILD_WITH_O1"):
+        return "TritonBuildWithO1"
     else:
         # TODO: change to release when stable enough
         return "TritonRelBuildWithAsserts"
