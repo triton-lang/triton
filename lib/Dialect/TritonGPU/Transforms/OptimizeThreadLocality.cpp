@@ -9,10 +9,14 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#define GEN_PASS_CLASSES
+
+namespace mlir {
+namespace triton {
+namespace gpu {
+
+#define GEN_PASS_DEF_TRITONGPUOPTIMIZETHREADLOCALITY
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-using namespace mlir;
 namespace {
 // Change the destination layout of reshape ops allowing reorder when used by a
 // reduction in order to minimize the amount of cross thread communication for
@@ -89,7 +93,7 @@ struct OptimizeReshapeLayoutPattern
 } // namespace
 
 class TritonGPUOptimizeThreadLocalityPass
-    : public TritonGPUOptimizeThreadLocalityBase<
+    : public impl::TritonGPUOptimizeThreadLocalityBase<
           TritonGPUOptimizeThreadLocalityPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
@@ -427,6 +431,6 @@ private:
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createOptimizeThreadLocalityPass() {
-  return std::make_unique<TritonGPUOptimizeThreadLocalityPass>();
-}
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

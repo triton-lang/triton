@@ -98,10 +98,10 @@ struct DotOpMFMAConversionHelper {
            "numSubBlocks in not pow 2!");
     if (numSubBlocks == 1)
       return acc;
-    constexpr int waveSize = 64;
-    int subBlockSize = waveSize / numSubBlocks;
+    constexpr int warpSize = 64;
+    int subBlockSize = warpSize / numSubBlocks;
     Value laneId = getThreadId();
-    laneId = and_(laneId, i32_val(waveSize - 1));
+    laneId = and_(laneId, i32_val(warpSize - 1));
     auto vecTy = dyn_cast<VectorType>(acc.getType());
     auto elemType = vecTy.getElementType();
     assert(elemType.getIntOrFloatBitWidth() == 32);
@@ -111,7 +111,7 @@ struct DotOpMFMAConversionHelper {
       accScalar[i] = extract_element(elemType, acc, i32_val(i));
 
     if (reduceSubBlocks) {
-      while (subBlockSize < waveSize) {
+      while (subBlockSize < warpSize) {
         for (int i = 0; i < numScalars; ++i) {
           Value other_acc =
               shuffleXor(loc, rewriter, accScalar[i], subBlockSize);
@@ -151,9 +151,9 @@ struct DotOpMFMAConversionHelper {
 
   /// @brief Zeroes out redundant values in all sub-blocks except first one
   ///
-  /// Every wave in mfma 4x4 layout holds only 4 unique values(scalar or
+  /// Every warp in mfma 4x4 layout holds only 4 unique values(scalar or
   /// vectors) in blocks of 4 consecutive threads, There are 16 copies of these
-  /// 4 values across all threads of the wave. Need to zero out 15 copies to use
+  /// 4 values across all threads of the warp. Need to zero out 15 copies to use
   /// accumulator between dot operations.
   /// @param numSubBlocks
   /// @param acc

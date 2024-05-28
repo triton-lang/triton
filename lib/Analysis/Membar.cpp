@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
 
 namespace mlir {
@@ -86,9 +87,8 @@ void MembarAnalysis::visitTerminator(Operation *op,
     return;
   }
   // Otherwise, it could be a return op
-  if (isa<triton::ReduceReturnOp, triton::ScanReturnOp, triton::ReturnOp>(op)) {
+  if (op->hasTrait<OpTrait::ReturnLike>())
     return;
-  }
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
@@ -100,15 +100,6 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<triton::gpu::LocalDeallocOp, triton::gpu::MemDescSubviewOp,
-          triton::TransOp>(op)) {
-    return;
-  }
-  if (auto alloc = dyn_cast<triton::gpu::LocalAllocOp>(op)) {
-    if (!alloc.getSrc())
-      return;
-  }
-
   if (isa<gpu::BarrierOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
@@ -130,33 +121,39 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
-            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
+            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable()))
       curBlockInfo = funcBlockInfoMap->lookup(callee);
-    }
   } else {
     // Intra-function dependencies
-    for (Value value : op->getOperands()) {
-      for (auto bufferId : allocation->getBufferIds(value)) {
-        if (bufferId != Allocation::InvalidBufferId) {
-          if (isa<triton::gpu::AsyncCopyGlobalToLocalOp,
-                  triton::gpu::LocalStoreOp>(op)) {
-            // Global -> shared memory
-            curBlockInfo.syncWriteIntervals.insert(
-                allocation->getAllocatedInterval(bufferId));
-          } else {
-            // ConvertLayoutOp: shared memory -> registers
-            curBlockInfo.syncReadIntervals.insert(
-                allocation->getAllocatedInterval(bufferId));
+    if (auto memoryEffectOpInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
+      // Explicit buffer
+      SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>>
+          effectInstances;
+      memoryEffectOpInterface.getEffects(effectInstances);
+      for (auto effectInstance : effectInstances) {
+        if (auto value = effectInstance.getValue()) {
+          for (auto bufferId : allocation->getBufferIds(value)) {
+            if (bufferId != Allocation::InvalidBufferId) {
+              if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
+                curBlockInfo.syncWriteIntervals.insert(
+                    allocation->getAllocatedInterval(bufferId));
+              else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
+                curBlockInfo.syncReadIntervals.insert(
+                    allocation->getAllocatedInterval(bufferId));
+            }
           }
         }
       }
     }
-    for (Value value : op->getResults()) {
-      // ConvertLayoutOp: registers -> shared memory
-      auto bufferId = allocation->getBufferId(value);
-      if (bufferId != Allocation::InvalidBufferId) {
-        curBlockInfo.syncWriteIntervals.insert(
-            allocation->getAllocatedInterval(bufferId));
+    // XXX(Keren): This is a hack as we cannot set side effects for dot ops, but
+    // on hopper they do have side effects. Need to clean it up
+    if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
+      for (auto value : dotOp.getOperands()) {
+        for (auto bufferId : allocation->getBufferIds(value)) {
+          if (bufferId != Allocation::InvalidBufferId)
+            curBlockInfo.syncReadIntervals.insert(
+                allocation->getAllocatedInterval(bufferId));
+        }
       }
     }
     // Scratch buffer is considered as both shared memory write & read

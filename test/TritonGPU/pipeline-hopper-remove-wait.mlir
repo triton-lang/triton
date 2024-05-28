@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -canonicalize -tritongpu-pipeline=compute-capability=90 -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -canonicalize -tritongpu-pipeline -canonicalize | FileCheck %s
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>

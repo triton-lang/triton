@@ -1,4 +1,4 @@
-#include "Driver/GPU/Cupti.h"
+#include "Driver/GPU/CuptiApi.h"
 #include "Driver/Device.h"
 #include "Driver/Dispatch.h"
 

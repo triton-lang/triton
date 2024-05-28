@@ -138,6 +138,15 @@ private:
                                                     operands[0]);
       replacementOp =
           rewriter.create<LLVM::FPToSIOp>(loc, returnType, op->getResult(0));
+    } else if (calleeName == "__triton_hip_fast_fdividef") {
+      assert(operands.size() == 2);
+      auto name = StringAttr::get(callOp.getContext(), "llvm.amdgcn.rcp.f32");
+      LLVM::FastmathFlagsAttr defaultFlags{};
+      auto rcpOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          loc, returnType, name, operands[1], defaultFlags);
+
+      replacementOp = rewriter.create<LLVM::FMulOp>(
+          loc, returnType, operands[0], rcpOp->getResult(0), defaultFlags);
     }
 
     if (replacementOp) {

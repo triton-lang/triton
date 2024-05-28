@@ -1,16 +1,17 @@
 #include "Driver/Device.h"
-#include "Driver/GPU/Cuda.h"
+#include "Driver/GPU/CudaApi.h"
+#include "Driver/GPU/HipApi.h"
 
 #include "Utility/Errors.h"
-#include "Utility/String.h"
 
 namespace proton {
 
 Device getDevice(DeviceType type, uint64_t index) {
   if (type == DeviceType::CUDA) {
     return cuda::getDevice(index);
-  } else if (type == DeviceType::ROCM) {
-    throw NotImplemented();
+  }
+  if (type == DeviceType::HIP) {
+    return hip::getDevice(index);
   }
   throw std::runtime_error("DeviceType not supported");
 }
@@ -18,8 +19,8 @@ Device getDevice(DeviceType type, uint64_t index) {
 const std::string getDeviceTypeString(DeviceType type) {
   if (type == DeviceType::CUDA) {
     return DeviceTraits<DeviceType::CUDA>::name;
-  } else if (type == DeviceType::ROCM) {
-    return DeviceTraits<DeviceType::ROCM>::name;
+  } else if (type == DeviceType::HIP) {
+    return DeviceTraits<DeviceType::HIP>::name;
   }
   throw std::runtime_error("DeviceType not supported");
 }

@@ -399,8 +399,8 @@ ScanOpConversion::getMultiDimWarpId(ConversionPatternRewriter &rewriter,
 
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
-  auto order = triton::gpu::getOrder(srcEncoding);
-  return delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+  auto warpOrder = triton::gpu::getWarpOrder(srcEncoding);
+  return delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
 }
 
 // Break up the threadId into lane and warp id along the scan dimension and
@@ -416,10 +416,11 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
   auto order = triton::gpu::getOrder(srcEncoding);
+  auto warpOrder = triton::gpu::getWarpOrder(srcEncoding);
   SmallVector<Value> multiDimLaneId =
       delinearize(rewriter, loc, laneId, threadsPerWarp, order);
   SmallVector<Value> multiDimWarpId =
-      delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+      delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
 
   Value laneIdAxis = multiDimLaneId[axis];
   Value warpIdAxis = multiDimWarpId[axis];
@@ -431,7 +432,7 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   multiDimWarpId[axis] = i32_val(0);
   warpsPerCTA[axis] = 1;
   Value warpIdParallel =
-      linearize(rewriter, loc, multiDimWarpId, warpsPerCTA, order);
+      linearize(rewriter, loc, multiDimWarpId, warpsPerCTA, warpOrder);
   Value flatIdParallel =
       add(laneIdParallel,
           mul(warpIdParallel, i32_val(helper.getNonAxisNumThreadsPerWarp())));
