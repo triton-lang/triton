@@ -387,6 +387,8 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
+    auto computeCapability = getNVIDIAComputeCapability(m);
+
     mlir::RewritePatternSet patterns(context);
     patterns.add<BlockedToMMA>(context, computeCapability);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
