@@ -60,6 +60,7 @@ public:
     addIllegalOp<triton::ClampFOp>();
     addIllegalOp<triton::TransOp>();
     addIllegalOp<triton::JoinOp>();
+    addIllegalOp<triton::CatOp>();
   }
 };
 
@@ -236,6 +237,24 @@ struct JoinOpConversion : public OpConversionPattern<triton::JoinOp> {
   }
 };
 
+struct CatOpConversion : public OpConversionPattern<triton::CatOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::CatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto lhs = rewriter.getRemappedValue(op.getLhs());
+    auto rhs = rewriter.getRemappedValue(op.getRhs());
+    auto lhsTy = dyn_cast<VectorType>(lhs.getType());
+    auto rhsTy = dyn_cast<VectorType>(rhs.getType());
+    SmallVector<int64_t> indices(lhsTy.getShape()[0] + rhsTy.getShape()[0]);
+    std::iota(indices.begin(), indices.end(), 0);
+    rewriter.replaceOpWithNewOp<vector::ShuffleOp>(op, lhs, rhs, indices);
+    return success();
+  }
+};
+
 struct ConvertElementwiseOps
     : public triton::impl::ConvertElementwiseOpsBase<ConvertElementwiseOps> {
   using ConvertElementwiseOpsBase::ConvertElementwiseOpsBase;
@@ -320,6 +339,7 @@ struct ConvertElementwiseOps
     patterns.add<ClampFOpConversion>(typeConverter, context);
     patterns.add<TransOpConversion>(typeConverter, context);
     patterns.add<JoinOpConversion>(typeConverter, context);
+    patterns.add<CatOpConversion>(typeConverter, context);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
