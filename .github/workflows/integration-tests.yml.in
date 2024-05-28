@@ -396,8 +396,6 @@ jobs:
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
-    env:
-      CMAKE_BUILD_TYPE: "Debug"
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
