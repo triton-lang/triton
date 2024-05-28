@@ -241,7 +241,8 @@ static Value Fp16_to_Fp8E5M2FNUZ_oneValue(Location loc,
   auto e_is_all1 = icmp_eq(e, int_val(16, 0x7C00));
 
   auto ot = select(e_is_zero, o2, a1);
-  auto o = select(e_is_all1, vi16, ot);
+  // When e is all one, value represents inf and should be cast to nan.
+  auto o = select(e_is_all1, int_val(16, 0x8000), ot);
 
   // Handle -0 case, since it represents NaN we instead return
   // positive 0.
@@ -668,6 +669,11 @@ static Value Fp16_to_Fp8E4M3FNUZ_oneValue(Location loc,
   // Otherwise mix sign back into return value.
   auto all_zero = icmp_eq(re_m, int_val(16, 0));
   auto r = select(all_zero, int_val(16, 0), or_(i16_ty, s, re_m));
+  // Also check inf. If so, return nan.
+  auto inf = int_val(16, 0x7C00);
+  auto is_inf = icmp_eq(e10, inf);
+  auto r2 = select(is_inf, int_val(16, 0x8000), r);
+  // Finally cast to fp8 and extract high byte.
   auto fp8x2VecTy = vec_ty(i8_ty, 2);
   auto res = bitcast(r, fp8x2VecTy);
 
