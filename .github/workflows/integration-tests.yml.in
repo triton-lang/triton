@@ -387,6 +387,13 @@ jobs:
           # Run runtime tests serially to avoid race condition with cache handling
           python3 -m pytest runtime
 
+      - name: Run Proton tests
+        env:
+          LD_LIBRARY_PATH: "/opt/rocm/lib:$LD_LIBRARY_PATH"
+        run: |
+          cd third_party/proton
+          python3 -m pytest test          
+
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
       - *inspect-cache-directories-step
