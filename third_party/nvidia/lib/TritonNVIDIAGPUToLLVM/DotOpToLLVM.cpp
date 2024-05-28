@@ -23,15 +23,10 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter);
 
-LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+LogicalResult convertWGMMA(triton::nvidia_gpu::GroupDotOp op,
+                           triton::nvidia_gpu::GroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread);
-
-LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::GroupDotOp op,
-                                triton::nvidia_gpu::GroupDotOp::Adaptor adaptor,
-                                const LLVMTypeConverter *typeConverter,
-                                ConversionPatternRewriter &rewriter,
-                                Value thread);
 namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
@@ -59,9 +54,6 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
         return convertMMA1688(op, adaptor, getTypeConverter(), rewriter);
       if (mmaLayout.isAmpere())
         return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
-      if (mmaLayout.isHopper())
-        return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                            getThreadId(rewriter, loc));
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
@@ -100,8 +92,8 @@ struct GroupDotOpConversion
     if (!isOuter && mmaLayout &&
         supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
       if (mmaLayout.isHopper()) {
-        return convertAsyncWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                                 getThreadId(rewriter, loc));
+        return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
+                            getThreadId(rewriter, loc));
       }
 
       llvm::report_fatal_error(

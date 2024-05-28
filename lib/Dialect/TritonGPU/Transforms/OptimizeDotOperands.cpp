@@ -210,7 +210,7 @@ public:
   LogicalResult matchAndRewrite(LocalAllocOp allocOp,
                                 PatternRewriter &rewriter) const override {
     if (!allocOp->hasOneUse() ||
-        !isa<DotOp, nvidia_gpu::GroupDotOp>(*allocOp->getUsers().begin()))
+        !allocOp->getUsers().begin()->hasTrait<OpTrait::DotLike>())
       return failure();
 
     auto dot = *allocOp->getUsers().begin();

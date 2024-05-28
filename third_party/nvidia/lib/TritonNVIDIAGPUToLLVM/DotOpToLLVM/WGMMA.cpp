@@ -500,26 +500,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   return success();
 }
 
-LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+LogicalResult convertWGMMA(triton::nvidia_gpu::GroupDotOp op,
+                           triton::nvidia_gpu::GroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
-  auto AEnc = op.getA().getType().getEncoding();
-  auto BEnc = op.getB().getType().getEncoding();
-  assert((mlir::isa<SharedEncodingAttr, DotOperandEncodingAttr>(AEnc)));
-  assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
-         "Operand B should use Shared layout.");
-  return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
-                    op.getA(), op.getB(), op.getC(), op.getD(),              //
-                    adaptor.getA(), adaptor.getB(), adaptor.getC(),          //
-                    op.getInputPrecision() == InputPrecision::TF32,
-                    op.getMaxNumImpreciseAcc(), true, thread);
-}
-
-LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::GroupDotOp op,
-                                triton::nvidia_gpu::GroupDotOp::Adaptor adaptor,
-                                const LLVMTypeConverter *typeConverter,
-                                ConversionPatternRewriter &rewriter,
-                                Value thread) {
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
   assert(mlir::isa<SharedEncodingAttr>(AEnc) ||
@@ -530,5 +514,5 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::GroupDotOp op,
                     op.getA(), op.getB(), op.getC(), op.getD(),              //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),
                     op.getInputPrecision() == InputPrecision::TF32,
-                    op.getMaxNumImpreciseAcc(), false, thread);
+                    op.getMaxNumImpreciseAcc(), op.getIsAsync(), thread);
 }

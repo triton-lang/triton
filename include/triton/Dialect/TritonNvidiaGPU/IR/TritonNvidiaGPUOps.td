@@ -71,6 +71,7 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 //
 def TTNG_GroupDotOp : TTNG_Op<"group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                             DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                            DotLike,
                                             TypesMatchWith<"result's type matches accumulator's type",
                                                             "d", "c", "$_self">]> {
     let summary = "group dot";
