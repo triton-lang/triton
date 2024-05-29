@@ -12,15 +12,15 @@ Hello From First Instruction of GPU Kernel: kernel3\ttest_gpuhello.py:23:4\n'
 
 @triton.jit
 def kernel1(BLOCK_SIZE: tl.constexpr):
-    return
+    pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
 
 @triton.jit
 def kernel2(BLOCK_SIZE: tl.constexpr):
-    return
+    pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
 
 @triton.jit
 def kernel3(BLOCK_SIZE: tl.constexpr):
-    return
+    pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
 
 def func(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
