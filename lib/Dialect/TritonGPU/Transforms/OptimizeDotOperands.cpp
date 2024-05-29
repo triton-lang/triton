@@ -285,6 +285,11 @@ struct MMAV3UseRegOperand
     if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
       return failure();
     auto srcEnc = dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(alloc.getSrc()));
+    auto dstEnc =
+        dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
+    if (!srcEnc || srcEnc.getVersionMajor() != 3 || !dstEnc ||
+        dstEnc.getVersionMajor() != 3)
+      return failure();
     auto srcTy = cast<RankedTensorType>(alloc.getSrc().getType());
     auto dotOperandEnc = DotOperandEncodingAttr::get(
         dotOp.getContext(), /*opIdx=*/0, srcEnc, /*kWidth=*/0);
