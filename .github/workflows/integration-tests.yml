@@ -371,6 +371,7 @@ jobs:
                  hopper/test_tma_store_gemm.py \
                  hopper/test_persistent_warp_specialized_fused-attention.py \
                  --ignore=language/test_line_info.py
+          pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -n 8 language/test_line_info.py
 
