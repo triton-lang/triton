@@ -106,12 +106,13 @@ def TT_MemDescType : TritonTypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> 
     ArrayRefParameter<"int64_t">:$shape,
     "Type":$elementType,
     "Attribute":$encoding,
+    "Attribute":$memorySpace,
     "bool":$mutable_memory
   );
   let extraClassDeclaration = [{
     MemDescType cloneWith(std::optional<ArrayRef<int64_t>> shape,
                           Type elementType) const {
-        return MemDescType::get(shape.value_or(getShape()), elementType, getEncoding());
+        return MemDescType::get(shape.value_or(getShape()), elementType, getEncoding(), getMemorySpace(), getMutableMemory());
     }
 
     bool hasRank() const { return true; }
@@ -120,17 +121,19 @@ def TT_MemDescType : TritonTypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> 
         TypeBuilderWithInferredContext<(ins
             "llvm::ArrayRef<int64_t>":$shape,
             "Type":$elementType,
-            "Attribute":$encoding
+            "Attribute":$encoding,
+            "Attribute":$memorySpace
         ), [{
-            return $_get(elementType.getContext(), shape, elementType, encoding, /*mutableMemory=*/false);
+            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, /*mutableMemory=*/false);
         }]>,
         TypeBuilderWithInferredContext<(ins
             "llvm::ArrayRef<int64_t>":$shape,
             "Type":$elementType,
             "Attribute":$encoding,
+            "Attribute":$memorySpace,
             "bool":$mutableMemory
         ), [{
-            return $_get(elementType.getContext(), shape, elementType, encoding, mutableMemory);
+            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, mutableMemory);
         }]>
     ];
   let hasCustomAssemblyFormat = 1;

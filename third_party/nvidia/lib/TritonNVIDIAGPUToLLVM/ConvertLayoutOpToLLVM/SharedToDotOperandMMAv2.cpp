@@ -738,7 +738,8 @@ MemDescType getExpandedDesc(MemDescType descTy) {
   expandedShape[2] = shape[1];
   auto encoding = descTy.getEncoding();
   auto expandedEncoding = getExpandedEncoding(encoding);
-  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding);
+  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
+                                       descTy.getMemorySpace());
   return expandedDesc;
 }
 
