@@ -2,6 +2,7 @@ add_triton_library(TritonToTritonCPU
     ConvertControlFlowOps.cpp
     ConvertDotOp.cpp
     ConvertElementwiseOps.cpp
+    ConvertHistogramOp.cpp
     ConvertMemoryOps.cpp
     ConvertReductionOp.cpp
     ConvertPtrOps.cpp
