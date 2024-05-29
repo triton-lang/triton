@@ -42,6 +42,10 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
     opts.enableLowerTensors(lower_tensors);
     pm.addPass(mlir::createConvertVectorToSCFPass(opts));
   });
+  m.def("add_lower_vector_multi_dim", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::triton::cpu::createLowerMultiReductionPass());
+  });
   m.def("add_vector_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createConvertVectorToLLVMPass());
   });

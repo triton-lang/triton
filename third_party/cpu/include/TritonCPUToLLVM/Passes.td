@@ -43,4 +43,15 @@ def GetProgramIdOpToLLVM : Pass<"triton-cpu-get-program-id-op-to-llvm", "mlir::M
                              "mlir::triton::TritonDialect"];
 }
 
+def LowerMultiReduction : Pass<"triton-cpu-lower-multi-reduction", "mlir::triton::FuncOp"> {
+    let summary = "Convert multi-dimensional reductions.";
+    let description = [{
+    }];
+    let constructor = "mlir::triton::cpu::createLowerMultiReductionPass()";
+
+    let dependentDialects = ["mlir::vector::VectorDialect",
+                             "mlir::triton::cpu::TritonCPUDialect",
+                             "mlir::triton::TritonDialect"];
+}
+
 #endif

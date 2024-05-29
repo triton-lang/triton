@@ -2147,6 +2147,7 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
                                                   for op in ['min', 'max', 'sum']]
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_str, shape, axis, keep_dims", reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config +
@@ -2154,6 +2155,9 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
+
+    if is_cpu() and op in ('argmin', 'argmax'):
+        pytest.skip(f"Not yet implemented on CPU: {op}")
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,

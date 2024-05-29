@@ -5,6 +5,8 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+#include "triton/Dialect/Triton/IR/Dialect.h"
+
 #include <memory>
 
 namespace mlir {
@@ -21,6 +23,7 @@ namespace cpu {
 std::unique_ptr<OperationPass<ModuleOp>> createFuncOpToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>> createMemoryOpToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>> createGetProgramIdOpToLLVMPass();
+std::unique_ptr<OperationPass<triton::FuncOp>> createLowerMultiReductionPass();
 
 void tritonCPUToLLVMPipelineBuilder(OpPassManager &pm);
 void registerTritonCPUToLLVMPipeline();

@@ -12,6 +12,7 @@ void tritonToTritonCPUPipelineBuilder(OpPassManager &pm) {
   pm.addPass(mlir::triton::cpu::createConvertPtrOps());
   pm.addPass(mlir::triton::cpu::createConvertElementwiseOps());
   pm.addPass(mlir::triton::cpu::createConvertDotOp());
+  pm.addPass(mlir::triton::cpu::createConvertReductionOp());
   pm.addPass(mlir::triton::cpu::createConvertControlFlowOps());
   // pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
