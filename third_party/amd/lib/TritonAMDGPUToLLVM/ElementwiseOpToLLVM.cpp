@@ -1253,6 +1253,10 @@ struct Exp2OpConversion
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
+    // On AMD backend, both intrinsics are lowered to v_exp_f32 instruction,
+    // which flushes input and output denorms. `llvm.amdgcn.exp2.f32` provides
+    // direct access to v_exp_f32. For `llvm.exp2.f32`, the LLVM backend inserts
+    // instructions to handle denorms iff `allow_flush_denorm` is False.
     StringRef funcName = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
@@ -1303,7 +1307,7 @@ void populateElementwiseOpToLLVMPatterns(
   // later pass will call __ocml_exp_f64 for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   // Exp2OpConversion will use llvm.exp2.f32 or llvm.amdgcn.exp2.f32
-  // based on the __HIP_FTZ flag if the input type is FP32. For FP64 input,
+  // based on the ftz flag if the input type is FP32. For FP64 input,
   // Exp2OpConversion will return failure and later pass will call
   // __ocml_exp2_f64 for higher-precision calculation
   patterns.add<Exp2OpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
