@@ -83,9 +83,9 @@ def TTNG_GroupDotOp : TTNG_Op<"group_dot", [DeclareOpInterfaceMethods<InferTypeO
     let arguments = (ins TT_TensorOrMemDesc:$a,
                          TT_TensorOrMemDesc:$b,
                          TT_FpIntTensor:$c,
-                         TT_InputPrecisionAttr:$inputPrecision,
-                         I32Attr:$maxNumImpreciseAcc,
-                         BoolAttr:$isAsync);
+                         DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
+                         DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
+                         DefaultValuedAttr<BoolAttr, "false">:$isAsync);
 
     let results = (outs TT_FpIntTensor:$d);
 

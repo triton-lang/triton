@@ -506,7 +506,7 @@ loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
       };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!isa<tt::DotOp>(op))
+    if (!op.hasTrait<OpTrait::DotLike>())
       continue;
     seen.clear();
     dfs(&op, 0, &op);
@@ -583,7 +583,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         continue;
     }
 
-    if (auto dot = dyn_cast<tt::DotOp>(use)) {
+    if (op->hasTrait<OpTrait::DotLike>()) {
       loadInfo.usedByDot = true;
       if (loadIsMMAv3(op)) {
         loadInfo.loadIsMMAV3 = true;
@@ -593,6 +593,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         loadInfo.sharedEncoding =
             getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
       } else {
+        auto dot = cast<tt::DotOp>(use);
         loadInfo.sharedEncoding =
             getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
 
@@ -1701,40 +1702,30 @@ static void insertAsyncGroupDotWaitInLoop(
 void triton::asyncLaunchDots(scf::ForOp forOp) {
   LDBG("Original loop:\n" << *forOp);
 
-  // First, change every MMAv3 tt.dot into ttng.group_dot.  The rest of this
-  // function is concerned with inserting ttng.group_dot_wait ops in the
-  // appropriate places.
-  //
-  // It's not strictly necessary to convert every dot into group_dot:
-  // Synchronous MMAv3 dots can be represented equally well as `tt.dot` or
-  // `ttng.group_dot; wait 0`.  But this makes things easier elsewhere.
+  // First, change every MMAv3 ttng.group_dot {isAsync=false}
+  // into ttng.group_dot {isAsync=true}.
+  // The rest of this function is concerned with inserting
+  // ttng.group_dot_wait ops in the appropriate places.
   //
   // We call those dots that don't need to be followed immediately by a `wait 0`
   // "properly async", or sometimes just "async".
-  IRRewriter builder(forOp.getContext());
-  for (auto groupDotOp :
-       llvm::to_vector(forOp.getBody()->getOps<ttng::GroupDotOp>())) {
-    builder.replaceOpWithNewOp<ttng::GroupDotOp>(
-
-        groupDotOp, groupDotOp.getA(), groupDotOp.getB(), groupDotOp.getC(),
-        groupDotOp.getInputPrecision(), groupDotOp.getMaxNumImpreciseAcc(),
-        true);
-  }
-
+  //
   // For each dot, determine whether it can be properly async, or if it needs a
   // sync immediately after.  If it can be properly async, we know its only use
   // is in the loop's `yield` statement; asyncDots maps the op to its index in
   // the yield op.
+  IRRewriter builder(forOp.getContext());
   llvm::MapVector<Operation *, int /*iterArgIdx*/> properlyAsyncDots;
-  for (auto dotOp : forOp.getBody()->getOps<ttng::GroupDotOp>()) {
-    if (auto iterArgIdx = dotCanBeProperlyAsync(dotOp, forOp)) {
-      properlyAsyncDots[dotOp] = *iterArgIdx;
+  for (auto groupDotOp : forOp.getBody()->getOps<ttng::GroupDotOp>()) {
+    groupDotOp.setIsAsync(true);
+    if (auto iterArgIdx = dotCanBeProperlyAsync(groupDotOp, forOp)) {
+      properlyAsyncDots[groupDotOp] = *iterArgIdx;
     } else {
-      builder.setInsertionPointAfter(dotOp);
-      auto wait = builder.create<ttng::GroupDotWaitOp>(dotOp.getLoc(),
+      builder.setInsertionPointAfter(groupDotOp);
+      auto wait = builder.create<ttng::GroupDotWaitOp>(groupDotOp.getLoc(),
                                                        ArrayRef<Value>{},
                                                        /*pendings=*/0);
-      SmallVector<Value> waitOperands = {dotOp.getResult()};
+      SmallVector<Value> waitOperands = {groupDotOp.getResult()};
       threadValuesThroughWait(wait, waitOperands);
     }
   }
