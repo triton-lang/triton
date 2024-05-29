@@ -26,14 +26,14 @@ def test_descriptor_load_ttgir():
       tt.func public @kernel(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
         %c0_i32 = arith.constant 0 : i32
         %0 = tt.make_range {{end = {SIZE} : i32, start = 0 : i32}} : tensor<{SIZE}xi32, #blocked>
-        %1 = triton_gpu.local_alloc  : () -> !tt.memdesc<{SIZE}xf32, #shared, mutable>
-        %2 = triton_gpu.local_alloc  : () -> !tt.memdesc<1xi64, #shared, mutable>
-        triton_nvidia_gpu.init_barrier %2, 1 : <1xi64, #shared, mutable>
+        %1 = triton_gpu.local_alloc  : () -> !tt.memdesc<{SIZE}xf32, #shared, #triton_gpu.shared_memory, mutable>
+        %2 = triton_gpu.local_alloc  : () -> !tt.memdesc<1xi64, #shared, #triton_gpu.shared_memory, mutable>
+        triton_nvidia_gpu.init_barrier %2, 1 : <1xi64, #shared, #triton_gpu.shared_memory, mutable>
         %true = arith.constant 1 : i1
-        triton_nvidia_gpu.barrier_expect %2, {size_in_bytes}, %true : <1xi64, #shared, mutable>
-        triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0_i32] %1, %2, %true : <i8>, <1xi64, #shared, mutable> -> <{SIZE}xf32, #shared, mutable>
-        triton_nvidia_gpu.wait_barrier %2, %c0_i32 : <1xi64, #shared, mutable>
-        %3 = triton_gpu.local_load %1 : !tt.memdesc<{SIZE}xf32, #shared, mutable> -> tensor<{SIZE}xf32, #blocked>
+        triton_nvidia_gpu.barrier_expect %2, {size_in_bytes}, %true : <1xi64, #shared, #triton_gpu.shared_memory, mutable>
+        triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0_i32] %1, %2, %true : <i8>, <1xi64, #shared, #triton_gpu.shared_memory, mutable> -> <{SIZE}xf32, #shared, #triton_gpu.shared_memory, mutable>
+        triton_nvidia_gpu.wait_barrier %2, %c0_i32 : <1xi64, #shared, #triton_gpu.shared_memory, mutable>
+        %3 = triton_gpu.local_load %1 : !tt.memdesc<{SIZE}xf32, #shared, #triton_gpu.shared_memory, mutable> -> tensor<{SIZE}xf32, #blocked>
         %4 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<{SIZE}x!tt.ptr<f32>, #blocked>
         %5 = tt.addptr %4, %0 : tensor<{SIZE}x!tt.ptr<f32>, #blocked>, tensor<{SIZE}xi32, #blocked>
         tt.store %5, %3 : tensor<{SIZE}x!tt.ptr<f32>, #blocked>

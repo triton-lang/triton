@@ -41,7 +41,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
 // CHECK-LABEL: alloc
 tt.func @alloc(%A : !tt.ptr<f16>) {
   // CHECK: %0 -> %0
-  %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, mutable>
+  %cst2 = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
   tt.return
 }
 
@@ -49,40 +49,40 @@ tt.func @alloc(%A : !tt.ptr<f16>) {
 tt.func @alloc_init(%A : !tt.ptr<f16>) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   // CHECK: %0 -> %0
-  %cst1 = triton_gpu.local_alloc %cst0 : (tensor<16x16xf16, #AL>) -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %cst1 = triton_gpu.local_alloc %cst0 : (tensor<16x16xf16, #AL>) -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   tt.return
 }
 
 // CHECK-LABEL: trans
 tt.func @trans(%A : !tt.ptr<f16>) {
   // CHECK: %0 -> %0
-  %tensor = triton_gpu.local_alloc : () -> !tt.memdesc<16x32xf16, #A_SHARED>
+  %tensor = triton_gpu.local_alloc : () -> !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK: %1 -> %0
-  %b = tt.trans %tensor {order=array<i32: 1,0>} : !tt.memdesc<16x32xf16, #A_SHARED> -> !tt.memdesc<32x16xf16, #A_SHARED_T>
+  %b = tt.trans %tensor {order=array<i32: 1,0>} : !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> !tt.memdesc<32x16xf16, #A_SHARED_T, #triton_gpu.shared_memory>
   tt.return
 }
 
 // CHECK-LABEL: subview
-tt.func @subview(%A : !tt.memdesc<1x16x16xf16, #A_SHARED>) {
+tt.func @subview(%A : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory>) {
   %index = arith.constant 0 : i32
   // CHECK: %0 -> %0
-  %a = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED>
+  %a = triton_gpu.local_alloc : () -> !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %1 -> %0
-  %cst1 = triton_gpu.memdesc_subview %a[%index, %index, %index] : !tt.memdesc<1x16x16xf16, #A_SHARED> -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %cst1 = triton_gpu.memdesc_subview %a[%index, %index, %index] : !tt.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory> -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   tt.return
 }
 
 // CHECK-LABEL: if_alias
 tt.func @if_alias(%i1 : i1) {
   // CHECK: %0 -> %0
-  %a = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %a = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK: %1 -> %1
-  %b = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %b = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %2 -> %0,%1
-  %cst2 = scf.if %i1 -> !tt.memdesc<16x16xf16, #A_SHARED> {
-    scf.yield %a : !tt.memdesc<16x16xf16, #A_SHARED>
+  %cst2 = scf.if %i1 -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory> {
+    scf.yield %a : !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   } else {
-    scf.yield %b : !tt.memdesc<16x16xf16, #A_SHARED>
+    scf.yield %b : !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   }
   tt.return
 }
@@ -90,11 +90,11 @@ tt.func @if_alias(%i1 : i1) {
 // CHECK-LABEL: for
 tt.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   // CHECK: %0 -> %0
-  %a = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %a = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK: %1 -> %1
-  %b = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %b = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK: %2 -> %2
-  %c = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED>
+  %c = triton_gpu.local_alloc : () -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %arg6 -> %0
   // CHECK-NEXT: %arg7 -> %1
   // CHECK-NEXT: %arg8 -> %2
@@ -102,8 +102,8 @@ tt.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !t
   // CHECK-NEXT: %3#1 -> %0,%1
   // CHECK-NEXT: %3#2 -> %0,%1,%2
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a, %b_shared = %b, %c_shared = %c) ->
-  (!tt.memdesc<16x16xf16, #A_SHARED>, !tt.memdesc<16x16xf16, #A_SHARED>, !tt.memdesc<16x16xf16, #A_SHARED>) {
-    scf.yield %b_shared, %a_shared, %a_shared : !tt.memdesc<16x16xf16, #A_SHARED>, !tt.memdesc<16x16xf16, #A_SHARED>, !tt.memdesc<16x16xf16, #A_SHARED>
+  (!tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>) {
+    scf.yield %b_shared, %a_shared, %a_shared : !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   }
   tt.return
 }
@@ -111,11 +111,11 @@ tt.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !t
 // CHECK-LABEL: for_if
 tt.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: %0 -> %0
-  %a_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %a_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %1 -> %1
-  %b_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %b_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %2 -> %2
-  %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %arg7 -> %0
   // CHECK-NEXT: %arg8 -> %1
   // CHECK-NEXT: %arg9 -> %2
@@ -123,14 +123,14 @@ tt.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B :
   // CHECK-NEXT: %3#1 -> %0,%1
   // CHECK-NEXT: %3#2 -> %0,%1,%2
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) ->
-  (!tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>) {
+  (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>) {
     scf.if %i1 {
       %index = arith.constant 8 : i32
       // CHECK-NEXT: %4 -> %0,%1
-      %cst0 = triton_gpu.memdesc_subview %a_shared[%index, %index] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<32xf16, #A_SHARED>
+      %cst0 = triton_gpu.memdesc_subview %a_shared[%index, %index] : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> !tt.memdesc<32xf16, #A_SHARED, #triton_gpu.shared_memory>
       scf.yield
     }
-    scf.yield %b_shared, %a_shared, %a_shared : !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>
+    scf.yield %b_shared, %a_shared, %a_shared : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   }
   tt.return
 }
@@ -138,11 +138,11 @@ tt.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B :
 // CHECK-LABEL: for_for_if
 tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: %0 -> %0
-  %a_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %a_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %1 -> %1
-  %b_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %b_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %2 -> %2
-  %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %arg7 -> %0
   // CHECK-NEXT: %arg8 -> %1
   // CHECK-NEXT: %arg9 -> %2
@@ -150,23 +150,23 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   // CHECK-NEXT: %3#1 -> %1
   // CHECK-NEXT: %3#2 -> %2,%6,%6
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) ->
-  (!tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>) {
+  (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>) {
     // CHECK-NEXT: %arg11 -> %2,%6,%6
     // CHECK-NEXT: %4 -> %2,%6,%6
-    %c_shared_next = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (!tt.memdesc<128x32xf16, #A_SHARED>) {
+    %c_shared_next = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>) {
       // CHECK-NEXT: %5 -> %6,%6
-      %c_shared_next_next = scf.if %i1 -> !tt.memdesc<128x32xf16, #A_SHARED> {
+      %c_shared_next_next = scf.if %i1 -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> {
         // CHECK-NEXT: %6 -> %6
-        %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
-        scf.yield %cst0 : !tt.memdesc<128x32xf16, #A_SHARED>
+        %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+        scf.yield %cst0 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
       } else {
         // CHECK-NEXT: %6 -> %6
-        %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
-        scf.yield %cst0 : !tt.memdesc<128x32xf16, #A_SHARED>
+        %cst0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+        scf.yield %cst0 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
       }
-      scf.yield %c_shared_next_next : !tt.memdesc<128x32xf16, #A_SHARED>
+      scf.yield %c_shared_next_next : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
     }
-    scf.yield %a_shared, %b_shared, %c_shared_next : !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>
+    scf.yield %a_shared, %b_shared, %c_shared_next : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   }
   tt.return
 }
@@ -175,29 +175,29 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
 tt.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %arg4: !tt.ptr<f16>) {
   %idx = arith.constant 0 : i32
   // CHECK: %0 -> %0
-  %cst = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %cst = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %1 -> %1
-  %cst_0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %cst_0 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %2 -> %0
-  %0 = triton_gpu.memdesc_subview %cst[%idx, %idx] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %0 = triton_gpu.memdesc_subview %cst[%idx, %idx] : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   gpu.barrier
   // CHECK-NEXT: %3 -> %3
-  %cst_1 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %cst_1 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: %5 -> %0,%1,%3
   // CHECK-NEXT: %6 -> %0,%1,%3
   // CHECK-NEXT: %7 -> %0,%1,%3
-  cf.br ^bb1(%arg0, %cst, %cst_0, %cst_1 : index, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>)
-^bb1(%1: index, %2: !tt.memdesc<128x32xf16, #A_SHARED>, %3: !tt.memdesc<128x32xf16, #A_SHARED>, %4: !tt.memdesc<128x32xf16, #A_SHARED>):  // 2 preds: ^bb0, ^bb2
+  cf.br ^bb1(%arg0, %cst, %cst_0, %cst_1 : index, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>)
+^bb1(%1: index, %2: !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, %3: !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, %4: !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>):  // 2 preds: ^bb0, ^bb2
   %5 = arith.cmpi slt, %1, %arg1 : index
   cf.cond_br %5, ^bb2, ^bb3
 ^bb2:  // pred: ^bb1
   gpu.barrier
   %8 = arith.addi %1, %arg2 : index
-  cf.br ^bb1(%8, %4, %2, %3 : index, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>, !tt.memdesc<128x32xf16, #A_SHARED>)
+  cf.br ^bb1(%8, %4, %2, %3 : index, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>)
 ^bb3:  // pred: ^bb1
   gpu.barrier
   // CHECK-NEXT: %10 -> %0
-  %9 = triton_gpu.memdesc_subview %0[%idx, %idx] : !tt.memdesc<128x32xf16, #A_SHARED> -> !tt.memdesc<128x32xf16, #A_SHARED>
+  %9 = triton_gpu.memdesc_subview %0[%idx, %idx] : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   tt.return
 }
 

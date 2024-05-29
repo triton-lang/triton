@@ -1,4 +1,4 @@
-#include <pybind11/functional.h>
+﻿#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -519,6 +519,9 @@ void init_triton_ir(py::module &&m) {
       .def(
           "set_arg_attr",
           [](FuncOp &self, int arg_no, const std::string &name, int val) {
+            if (arg_no >= self.getNumArguments())
+              throw pybind11::index_error(
+                  "Function argument index out of range");
             // set arg attributes "name" to value "val"
             auto attrTy = IntegerType::get(self.getContext(), 32);
             self.setArgAttr(arg_no, name, IntegerAttr::get(attrTy, val));

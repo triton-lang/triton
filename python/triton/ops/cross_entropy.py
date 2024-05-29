@@ -47,7 +47,7 @@ def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     idx = tl.load(IDX + row)
     # pointers to probs
     PROBS = PROBS + row * N + cols
-    # We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
+    # We know d(-log(p[i]))/dlogit[k] = -id_mat[i,k] + p[k]
     # and we have -log(p[k]) stored in PROBS, so this is easy
     probs = -tl.load(PROBS, mask=cols < N, other=float('inf'))
     probs = tl.exp(probs.to(tl.float32))
@@ -78,7 +78,7 @@ class _cross_entropy(torch.autograd.Function):
 
     @classmethod
     def backward(cls, ctx, dneg_logprobs):
-        """We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
+        """We know d(-log(p[i]))/dlogit[k] = -id_mat[i,k] + p[k]
         so we initialize the gradient as neg_logprobs, so we can just exponentiate
         to get p[k], which is most of what we need...  neg_logprobs will be
         modified in place to become the gradient we want

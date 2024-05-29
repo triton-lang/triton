@@ -59,12 +59,12 @@ public:
                                 srcTy.getElementType(), /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
       return failure();
-
     rewriter.setInsertionPoint(trans);
+    auto sharedMemorySpace = SharedMemorySpaceAttr::get(getContext());
     auto alloc = rewriter.create<LocalAllocOp>(
         trans.getLoc(),
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
-                         newInnerCvtEnc),
+                         newInnerCvtEnc, sharedMemorySpace),
         trans.getSrc());
     auto newTrans = rewriter.create<TransOp>(trans.getLoc(), alloc,
                                              ArrayRef<int32_t>({1, 0}));
@@ -254,7 +254,8 @@ public:
         allocEncoding.getCTALayout(), srcTy.getElementType());
 
     MemDescType innerTy =
-        MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc);
+        MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc,
+                         allocType.getMemorySpace());
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   trans.getSrc());
     rewriter.replaceOpWithNewOp<TransOp>(allocOp, newAlloc,

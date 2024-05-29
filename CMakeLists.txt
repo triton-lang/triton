@@ -34,6 +34,8 @@ set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 # Customized release build type with assertions: TritonRelBuildWithAsserts
 set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
 set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+set(CMAKE_C_FLAGS_TRITONBUILDWITHO1 "-O1")
+set(CMAKE_CXX_FLAGS_TRITONBUILDWITHO1 "-O1")
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -264,7 +266,7 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
 
   # Check if the platform is MacOS
   if(APPLE)
-    set(PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
+    set(PYTHON_LDFLAGS "-undefined dynamic_lookup")
   endif()
 
   target_link_libraries(triton PRIVATE ${PYTHON_LDFLAGS})

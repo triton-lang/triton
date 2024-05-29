@@ -208,12 +208,15 @@ public:
       }
     }
 
+    Attribute SharedMemorySpace =
+        SharedMemorySpaceAttr::get(argType.getContext());
     auto CTALayout = getCTALayout(argType.getEncoding());
     auto newLayout =
         SharedEncodingAttr::get(argType.getContext(), argType.getShape(),
                                 newOrder, CTALayout, argType.getElementType());
-    auto newType = MemDescType::get(argType.getShape(),
-                                    argType.getElementType(), newLayout);
+    auto newType =
+        MemDescType::get(argType.getShape(), argType.getElementType(),
+                         newLayout, SharedMemorySpace);
     rewriter.setInsertionPointAfterValue(arg);
     return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
   }
@@ -388,6 +391,8 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
+
+    auto computeCapability = getNVIDIAComputeCapability(m);
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<BlockedToMMA>(context, computeCapability);

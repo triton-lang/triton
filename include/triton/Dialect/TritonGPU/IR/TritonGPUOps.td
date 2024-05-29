@@ -144,6 +144,12 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
   let arguments = (ins Optional<TT_Tensor>:$src);
 
+  let extraClassDeclaration = [{
+    bool isSharedMemoryAlloc() {
+      return getType().getMemorySpace() &&
+             isa<SharedMemorySpaceAttr>(getType().getMemorySpace());
+    }
+  }];
   let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 
   let results = (outs TT_MemDescType:$result);

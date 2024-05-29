@@ -150,8 +150,8 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
   Type elemX2Ty = vec_ty(f16_ty, 2);
   Type elemTy = f16_ty;
   if (tensorTy.getElementType().isBF16()) {
-    elemX2Ty = vec_ty(i16_ty, 2);
-    elemTy = i16_ty;
+    elemX2Ty = vec_ty(bf16_ty, 2);
+    elemTy = bf16_ty;
   }
 
   // prepare arguments
@@ -276,8 +276,8 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   Type elemTy = f16_ty;
   Type elemX2Ty = vec_ty(f16_ty, 2);
   if (tensorTy.getElementType().isBF16()) {
-    elemTy = i16_ty;
-    elemX2Ty = vec_ty(i16_ty, 2);
+    elemTy = bf16_ty;
+    elemX2Ty = vec_ty(bf16_ty, 2);
   }
 
   SmallVector<Value> ptrB(numPtrB);
