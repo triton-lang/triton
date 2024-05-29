@@ -40,3 +40,4 @@ def test_op(capfd):
     func(x, y)
     stdout, stderr = capfd.readouterr()
     assert repr(stderr) == repr(test_stdout)
+    os.environ["LLVM_PASS_PLUGIN_PATH"] = ""
