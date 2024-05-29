@@ -188,15 +188,6 @@ public:
   }
 };
 
-static bool isMMAv3Dot(Operation *op) {
-  auto dot = dyn_cast<tt::DotOp>(op);
-  if (!dot)
-    return false;
-  auto enc =
-      mlir::dyn_cast<ttg::NvidiaMmaEncodingAttr>(dot.getType().getEncoding());
-  return enc && enc.isHopper();
-}
-
 // Replace the ForOp's yield with a new one with the given operands appended.
 static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   // Fix up the yield op.
@@ -642,7 +633,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
     // If we still don't have a shared encoding, try a "generic" shared
     // encoding.
-    if (!loadInfo.sharedEncoding && !isMMAv3Dot(use)) {
+    if (!loadInfo.sharedEncoding && !isa<ttng::GroupDotOp>(use)) {
       loadInfo.sharedEncoding =
           getSharedEncoding(op, /*isMMAV3=*/loadInfo.loadIsMMAV3)
               .value_or(nullptr);
