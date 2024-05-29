@@ -224,9 +224,9 @@ LogicalResult TransOp::inferReturnTypes(
       return failure();
     }
   }
-  if (isa<MemDescType>(argTy)) {
-    inferredReturnTypes.push_back(
-        MemDescType::get(retShape, retEltTy, retEncoding));
+  if (auto memDescTy = dyn_cast<MemDescType>(argTy)) {
+    inferredReturnTypes.push_back(MemDescType::get(
+        retShape, retEltTy, retEncoding, memDescTy.getMemorySpace()));
   } else {
     inferredReturnTypes.push_back(
         RankedTensorType::get(retShape, retEltTy, retEncoding));

@@ -1298,4 +1298,10 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   }];
 }
 
+def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {
+  let mnemonic = "shared_memory";
+  let description = [{
+    Attribute to indicate that the memory descriptor points to shared memory.
+  }];
+}
 #endif

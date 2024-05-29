@@ -245,9 +245,11 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   auto view =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
   Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
@@ -316,6 +318,8 @@ static void createTMAAsyncCopy(
     llvm::MapVector<Operation *, LoadInfo> &loadToInfo, int numStages) {
   assert(phase && "Phase value is required for TMA async copy.");
   OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
@@ -324,7 +328,7 @@ static void createTMAAsyncCopy(
   copyOffsets[0] = insertIdx;
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   auto view =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
 
@@ -906,11 +910,14 @@ static void scheduleRemainingToLastStage(scf::ForOp forOp,
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
                          ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
   OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
   Type memdescType = mlir::triton::MemDescType::get(
-      bufferShape, ty.getElementType(), sharedEnc, /*mutableMemory*/ true);
+      bufferShape, ty.getElementType(), sharedEnc, sharedMemorySpace,
+      /*mutableMemory*/ true);
   Value alloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
       loadOp->getLoc(), memdescType, Value());
   return alloc;
@@ -919,6 +926,8 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
 // Create an allocation to hold the mbarriers.
 static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   Location loc = forOp.getLoc();
   auto context = forOp.getContext();
   auto barrierCTALayout =
@@ -926,11 +935,12 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
                               /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding =
       ttg::SharedEncodingAttr::get(context, 1, 1, 1, {0}, barrierCTALayout);
-  Type barrierMemDescType =
-      tt::MemDescType::get({distance}, builder.getI64Type(), barrierEncoding,
-                           /*mutableMemory=*/true);
-  Type singleBarrierMemDescType = tt::MemDescType::get(
-      {1}, builder.getI64Type(), barrierEncoding, /*mutableMemory=*/true);
+  Type barrierMemDescType = tt::MemDescType::get(
+      {distance}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
+      /*mutableMemory=*/true);
+  Type singleBarrierMemDescType =
+      tt::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
+                           sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
       loc, barrierMemDescType, Value());
   for (unsigned i = 0; i < distance; i++) {
@@ -1026,9 +1036,12 @@ static void createTMABarrierAndWait(
     barriers.push_back(barrierAlloc);
     Location loc = forOp.getLoc();
     OpBuilder builder(forOp);
+    Attribute sharedMemorySpace =
+        triton::gpu::SharedMemorySpaceAttr::get(builder.getContext());
     tt::MemDescType barrierTy = tt::MemDescType::get(
         {1}, builder.getI64Type(),
         cast<tt::MemDescType>(barrierAlloc.getType()).getEncoding(),
+        sharedMemorySpace,
         /*mutableMemory=*/true);
     builder.setInsertionPoint(group[0]->loadOp);
     Value barrier = builder.create<ttg::MemDescSubviewOp>(
@@ -1167,6 +1180,8 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
 
 static void invalidateBarriers(OpBuilder &builder,
                                SmallVector<Value> &barriers) {
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(builder.getContext());
   for (Value barrier : barriers) {
     int numBarriers = cast<tt::MemDescType>(barrier.getType()).getShape()[0];
     for (int i = 0; i < numBarriers; i++) {
@@ -1174,6 +1189,7 @@ static void invalidateBarriers(OpBuilder &builder,
       tt::MemDescType barrierTy = tt::MemDescType::get(
           {1}, builder.getI64Type(),
           cast<tt::MemDescType>(barrier.getType()).getEncoding(),
+          sharedMemorySpace,
           /*mutableMemory=*/true);
       Value barrierView = builder.create<ttg::MemDescSubviewOp>(
           barrier.getLoc(), barrierTy, barrier, idx);
