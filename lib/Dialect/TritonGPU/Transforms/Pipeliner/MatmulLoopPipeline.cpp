@@ -1476,10 +1476,10 @@ static void threadValuesThroughWait(ttng::GroupDotWaitOp wait,
 // a wait immediately after it.
 //
 // In PTX, MMAv3 exists only as an asynchronous op.  In Triton, we can represent
-// MMAv3 ops as either tt.dot (synchronous) or ttng.group_dot.  But even if we
-// use ttng.group_dot, the conservative thing is to make a dot "effectively
-// synchronous" by inserting a `ttng.group_dot_wait {pendings=0}` right after
-// it.
+// MMAv3 ops as either ttng.group_dot {isAsync=True} or ttng.group_dot
+// {isAsync=False}.  But even if we use ttng.group_dot {isAsync=True}, the
+// conservative thing is to make a dot "effectively synchronous" by inserting a
+// `ttng.group_dot_wait {pendings=0}` right after it.
 //
 // We can omit the wait and create a "properly async" dot if all of the
 // following are true.
@@ -1699,8 +1699,9 @@ static void insertAsyncGroupDotWaitInLoop(
   threadValuesThroughWait(wait, addlWaitOperands);
 }
 
-// Convert MMAv3 tt::DotOps (i.e. Hopper wgmma) into ttng::GroupDotOps and
-// insert ttng::GroupDotWaitOps as necessary.
+// Convert MMAv3 ttng::GroupDotOps {isAsync = False} (i.e. Hopper wgmma) into
+// ttng::GroupDotOps {isAsync = True} and insert ttng::GroupDotWaitOps as
+// necessary.
 //
 // We assume we have space for each dot to be pipelined to depth 2, i.e. each
 // dot op in the loop can have at most 2 group_dot ops in flight at once.  (Each
