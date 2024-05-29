@@ -900,7 +900,7 @@ struct FpToFpOpConversion
     if (srcMap.count(key) == 0) {
       return mlir::failure();
     }
-    return mlir::FailureOr(srcMap.lookup(key));
+    return srcMap.lookup(key);
   }
 
   SmallVector<Value> createDestOps(triton::FpToFpOp op, OpAdaptor adaptor,
