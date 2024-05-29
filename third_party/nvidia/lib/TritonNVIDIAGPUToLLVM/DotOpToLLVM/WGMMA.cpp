@@ -514,5 +514,5 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::GroupDotOp op,
                     op.getA(), op.getB(), op.getC(), op.getD(),              //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),
                     op.getInputPrecision() == InputPrecision::TF32,
-                    op.getMaxNumImpreciseAcc(), op.getIsAsync(), thread);
+                    op.getMaxNumImpreciseAcc(), !op.getIsAsync(), thread);
 }

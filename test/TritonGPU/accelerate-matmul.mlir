@@ -25,8 +25,8 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #blocked1>
     %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #blocked2>
     // CHECK: scf.for
-    // CHECK:   tt.dot {{.*}} -> tensor<128x16xf16, #[[MMA]]>
-    // CHECK:   tt.dot {{.*}} -> tensor<128x64xf16, #[[MMA1]]>
+    // CHECK:   triton_nvidia_gpu.group_dot {{.*}} -> tensor<128x16xf16, #[[MMA]]>
+    // CHECK:   triton_nvidia_gpu.group_dot {{.*}} -> tensor<128x64xf16, #[[MMA1]]>
     %115 = scf.for %arg15 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg16 = %cst_0) -> (tensor<128x64xf16, #blocked1>) : i32 {
       %172 = tt.dot %170, %171, %cst : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x16xf16, #blocked>
       %178 = triton_gpu.convert_layout %172 : tensor<128x16xf16, #blocked> -> tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked1}>>
@@ -34,8 +34,8 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
       scf.yield %180 : tensor<128x64xf16, #blocked1>
     }
     // CHECK: scf.for
-    // CHECK:   tt.dot {{.*}} -> tensor<128x32xf16, #[[MMA2]]>
-    // CHECK:   tt.dot {{.*}} -> tensor<128x64xf16, #[[MMA1]]>
+    // CHECK:   triton_nvidia_gpu.group_dot {{.*}} -> tensor<128x32xf16, #[[MMA2]]>
+    // CHECK:   triton_nvidia_gpu.group_dot {{.*}} -> tensor<128x64xf16, #[[MMA1]]>
     %149 = scf.for %arg15 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg16 = %115) -> (tensor<128x64xf16, #blocked1>) : i32 {
       %166 = tt.dot %164, %165, %cst_2 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked2}>> * tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked2}>> -> tensor<128x32xf16, #blocked2>
       %172 = triton_gpu.convert_layout %166 : tensor<128x32xf16, #blocked2> -> tensor<128x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked1}>>

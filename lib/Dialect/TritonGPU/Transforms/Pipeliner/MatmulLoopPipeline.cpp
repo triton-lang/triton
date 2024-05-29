@@ -583,7 +583,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         continue;
     }
 
-    if (op->hasTrait<OpTrait::DotLike>()) {
+    if (use->hasTrait<OpTrait::DotLike>()) {
       loadInfo.usedByDot = true;
       if (loadIsMMAv3(op)) {
         loadInfo.loadIsMMAV3 = true;
@@ -592,8 +592,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
         loadInfo.sharedEncoding =
             getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
-      } else {
-        auto dot = cast<tt::DotOp>(use);
+      } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
         loadInfo.sharedEncoding =
             getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
 
