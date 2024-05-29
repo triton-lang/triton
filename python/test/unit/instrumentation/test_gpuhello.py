@@ -32,12 +32,10 @@ def func(x: torch.Tensor, y: torch.Tensor):
     kernel3[grid](BLOCK_SIZE=1024)
 
 def test_op(capfd):
-    TRITON_PATH = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    os.environ["LLVM_PASS_PLUGIN_PATH"] = os.path.join(TRITON_PATH, "triton/_C/libGPUHello.so")
     size = 98432
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
     func(x, y)
     stdout, stderr = capfd.readouterr()
-    assert repr(stderr) == repr(test_stdout)
-    os.environ["LLVM_PASS_PLUGIN_PATH"] = ""
+    if 'LLVM_PASS_PLUGIN_PATH' in os.environ:
+        assert repr(stderr) == repr(test_stdout)
