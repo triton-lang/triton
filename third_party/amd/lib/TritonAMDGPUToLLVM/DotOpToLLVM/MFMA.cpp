@@ -71,7 +71,7 @@ struct DotOpMFMAConversionHelper {
   }
 
   int getNumSubmatrices(Type elementType, int mDim, int nDim) const {
-    if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
+    if ((mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64))
       return 1;
     assert(mDim == nDim);
     switch (mDim) {
