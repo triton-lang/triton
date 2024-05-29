@@ -1,12 +1,13 @@
-set(AMDGPU_INSTRUMENTATION_PASSES
-    AMDGPUHello
+set(GPU_INSTRUMENTATION_PASSES
+    GPUHello
     )
 
-set(AMDGPUHello_SOURCES
-  AMDGPUHello.cpp)
+set(GPUHello_SOURCES
+    GPUHello.cpp
+    )
 
 
-foreach( plugin ${AMDGPU_INSTRUMENTATION_PASSES} )
+foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
     add_library(
       ${plugin}
       SHARED

@@ -11,12 +11,12 @@ using namespace std;
 
 namespace {
 
-struct AMDGPUHello : public PassInfoMixin<AMDGPUHello> {
+struct GPUHello : public PassInfoMixin<GPUHello> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
     bool ModifiedCodeGen = runOnModule(M);
 
     return (ModifiedCodeGen ? llvm::PreservedAnalyses::none()
-                    : llvm::PreservedAnalyses::all());
+                            : llvm::PreservedAnalyses::all());
   }
   bool runOnModule(llvm::Module &M);
   // isRequired being set to true keeps this pass from being skipped
@@ -26,14 +26,14 @@ struct AMDGPUHello : public PassInfoMixin<AMDGPUHello> {
 
 } // end anonymous namespace
 
-bool AMDGPUHello::runOnModule(Module &M) {
+bool GPUHello::runOnModule(Module &M) {
   bool ModifiedCodeGen = false;
-  auto &CTX = M.getContext();
 
   for (auto &F : M) {
     if (F.isIntrinsic())
       continue;
-    if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL) {
+    if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL ||
+        F.getCallingConv() == CallingConv::PTX_Kernel) {
       for (Function::iterator BB = F.begin(); BB != F.end(); BB++) {
         for (BasicBlock::iterator I = BB->begin(); I != BB->end(); I++) {
           DILocation *DL = dyn_cast<Instruction>(I)->getDebugLoc();
@@ -42,8 +42,8 @@ bool AMDGPUHello::runOnModule(Module &M) {
                Twine(DL->getLine()) + ":" + Twine(DL->getColumn()))
                   .str();
 
-          errs() << "Hello From First Instruction of AMDGPU Kernel: "
-                 << SourceInfo << "\n";
+          errs() << "Hello From First Instruction of GPU Kernel: " << SourceInfo
+                 << "\n";
           return ModifiedCodeGen;
         }
       }
@@ -55,13 +55,12 @@ bool AMDGPUHello::runOnModule(Module &M) {
 PassPluginLibraryInfo getPassPluginInfo() {
   const auto callback = [](PassBuilder &PB) {
     PB.registerOptimizerLastEPCallback([&](ModulePassManager &MPM, auto) {
-      MPM.addPass(AMDGPUHello());
+      MPM.addPass(GPUHello());
       return true;
     });
   };
 
-  return {LLVM_PLUGIN_API_VERSION, "amdgpu-hello", LLVM_VERSION_STRING,
-          callback};
+  return {LLVM_PLUGIN_API_VERSION, "gpu-hello", LLVM_VERSION_STRING, callback};
 };
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
