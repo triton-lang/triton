@@ -33,10 +33,10 @@ def func(x: torch.Tensor, y: torch.Tensor):
 
 def test_op(capfd):
     TRITON_PATH = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    os.environ["LLVM_PASS_PLUGIN_PATH"] = os.path.join(TRITON_PATH, "triton/_C/libGPUHello.so")      
+    os.environ["LLVM_PASS_PLUGIN_PATH"] = os.path.join(TRITON_PATH, "triton/_C/libGPUHello.so")
     size = 98432
     x = torch.rand(size, device='cuda')
-    y = torch.rand(size, device='cuda')    
+    y = torch.rand(size, device='cuda')
     func(x, y)
     stdout, stderr = capfd.readouterr()
     assert repr(stderr) == repr(test_stdout)
