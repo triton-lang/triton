@@ -32,8 +32,8 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-// -- GroupDotOp --
-mlir::LogicalResult GroupDotOp::inferReturnTypes(
+// -- WarpGroupDotOp --
+mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
@@ -57,7 +57,7 @@ mlir::LogicalResult GroupDotOp::inferReturnTypes(
   return mlir::success();
 }
 
-void GroupDotOp::getEffects(
+void WarpGroupDotOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   auto a = getA();
@@ -70,8 +70,8 @@ void GroupDotOp::getEffects(
                          mlir::triton::gpu::SharedMemory::get());
 }
 
-// -- GroupDotWaitOp --
-LogicalResult GroupDotWaitOp::inferReturnTypes(
+// -- WarpGroupDotWaitOp --
+LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
     ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
     ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
     ::mlir::OpaqueProperties properties, ::mlir::RegionRange regions,

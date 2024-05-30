@@ -500,8 +500,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   return success();
 }
 
-LogicalResult convertWGMMA(triton::nvidia_gpu::GroupDotOp op,
-                           triton::nvidia_gpu::GroupDotOp::Adaptor adaptor,
+LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
+                           triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
   auto AEnc = op.getA().getType().getEncoding();

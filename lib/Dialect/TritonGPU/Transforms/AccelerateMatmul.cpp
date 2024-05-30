@@ -303,7 +303,7 @@ public:
     if (versionMajor == 3) {
       a = getMMAv3Operand(a, rewriter, 0);
       b = getMMAv3Operand(b, rewriter, 1);
-      newDot = rewriter.create<triton::nvidia_gpu::GroupDotOp>(
+      newDot = rewriter.create<triton::nvidia_gpu::WarpGroupDotOp>(
           dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.getInputPrecision(),
           dotOp.getMaxNumImpreciseAcc(), false);
     } else {

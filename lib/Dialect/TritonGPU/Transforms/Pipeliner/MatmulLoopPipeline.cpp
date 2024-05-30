@@ -637,7 +637,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
     // If we still don't have a shared encoding, try a "generic" shared
     // encoding.
-    if (!loadInfo.sharedEncoding && !isa<ttng::GroupDotOp>(use)) {
+    if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
       loadInfo.sharedEncoding =
           getSharedEncoding(op, /*isMMAV3=*/loadInfo.loadIsMMAV3)
               .value_or(nullptr);
@@ -1400,16 +1400,17 @@ void mlir::triton::updateWaits(ModuleOp module) {
 // also adds some MemDesc's to the wait.  The idea is that if you have
 //
 //   %alloc = ttg.local_alloc ...
-//   %a = ttng.group_dot %alloc
-//   %a1 = ttng.group_dot_wait %a
+//   %a = ttng.warp_group_dot %alloc
+//   %a1 = ttng.warp_group_dot_wait %a
 //
 // then we want the wait to depend on %alloc as well as %a.  This extends the
 // live range of %alloc, so that it won't be destroyed until after the dot is
 // waited on.
 //
-// Specifically, this function finds all group_dot ops that elements of `values`
-// depend on.  Then it adds the MemDesc operands of those dots to the wait.
-static void threadValuesThroughWait(ttng::GroupDotWaitOp wait,
+// Specifically, this function finds all warp_group_dot ops that elements of
+// `values` depend on.  Then it adds the MemDesc operands of those dots to the
+// wait.
+static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
                                     MutableArrayRef<Value> values) {
   IRRewriter builder(wait.getContext());
   builder.setInsertionPoint(wait);
@@ -1426,12 +1427,12 @@ static void threadValuesThroughWait(ttng::GroupDotWaitOp wait,
   newOperands.insert(values.begin(), values.end());
 
   // Find memdefs depended on by `values` through async dot ops.
-  SmallVector<ttng::GroupDotOp> asyncDots;
+  SmallVector<ttng::WarpGroupDotOp> asyncDots;
   for (Value v : values) {
     BackwardSliceOptions options;
     options.omitBlockArguments = true;
     options.filter = [&](Operation *op) {
-      if (auto dot = dyn_cast<ttng::GroupDotOp>(op)) {
+      if (auto dot = dyn_cast<ttng::WarpGroupDotOp>(op)) {
         asyncDots.push_back(dot);
         return false;
       }
@@ -1441,7 +1442,7 @@ static void threadValuesThroughWait(ttng::GroupDotWaitOp wait,
     getBackwardSlice(v, &slice, options);
   }
 
-  for (ttng::GroupDotOp dot : asyncDots) {
+  for (ttng::WarpGroupDotOp dot : asyncDots) {
     for (Value operand : dot.getOperands()) {
       if (isa<tt::MemDescType>(operand.getType())) {
         newOperands.insert(operand);
@@ -1451,7 +1452,7 @@ static void threadValuesThroughWait(ttng::GroupDotWaitOp wait,
 
   // We can't use replaceWithNewOp because we're changing the number of return
   // values in the operation.
-  auto newWait = builder.create<ttng::GroupDotWaitOp>(
+  auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
       wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
 
   auto dominatedByNewWait = [&](OpOperand &operand) {
@@ -1472,14 +1473,14 @@ static void threadValuesThroughWait(ttng::GroupDotWaitOp wait,
   wait->erase();
 }
 
-// Determines whether a given MMAv3 dot op, represented as ttng.group_dot, needs
-// a wait immediately after it.
+// Determines whether a given MMAv3 dot op, represented as ttng.warp_group_dot,
+// needs a wait immediately after it.
 //
 // In PTX, MMAv3 exists only as an asynchronous op.  In Triton, we can represent
-// MMAv3 ops as either ttng.group_dot {isAsync=True} or ttng.group_dot
-// {isAsync=False}.  But even if we use ttng.group_dot {isAsync=True}, the
+// MMAv3 ops as either ttng.warp_group_dot {isAsync=True} or ttng.warp_group_dot
+// {isAsync=False}.  But even if we use ttng.warp_group_dot {isAsync=True}, the
 // conservative thing is to make a dot "effectively synchronous" by inserting a
-// `ttng.group_dot_wait {pendings=0}` right after it.
+// `ttng.warp_group_dot_wait {pendings=0}` right after it.
 //
 // We can omit the wait and create a "properly async" dot if all of the
 // following are true.
@@ -1491,28 +1492,29 @@ static void threadValuesThroughWait(ttng::GroupDotWaitOp wait,
 //     and will be synced with a `wait 0` at the beginning of the `if` block.
 //
 //  3. During iteration i, between the start of the loop up until the first
-//     `ttng.group_dot_wait {pendings=0}` op, the result of the dot from
+//     `ttng.warp_group_dot_wait {pendings=0}` op, the result of the dot from
 //     iteration i-1 is consumed only by other MMAv3 dots as the `c` operand.
 //
 //     This is safe because the following pseudo-PTX is valid:
 //
-//        %accum = group_dot %a1, %b1, %c1
-//        %accum = group_dot %a2, %b2, %accum
+//        %accum = warp_group_dot %a1, %b1, %c1
+//        %accum = warp_group_dot %a2, %b2, %accum
 //
 //     That is, the second async dot can use the result of the first one without
 //     an intervening wait.  However, the only operation that can legally read
-//     %accum before the wait is another group_dot, and this only works for the
-//     `c` operand, not `a` or `b`.  See
+//     %accum before the wait is another warp_group_dot, and this only works for
+//     the `c` operand, not `a` or `b`.  See
 //     https://docs.nvidia.com/cuda/parallel-thread-execution/#asynchronous-warpgroup-level-matrix-instructions-wgmma-fence
-//     (ttng::GroupDotOp corresponds to wgmma.fence followed by one or more
-//     wgmma.async ops, so our understanding is that the two ttng::GroupDotOps
-//     don't have to correspond to wgmma.async ops with the same shapes as
-//     specified in the docs, because there's an intervening fence.)
+//     (ttng::WarpGroupDotOp corresponds to wgmma.fence followed by one or more
+//     wgmma.async ops, so our understanding is that the two
+//     ttng::WarpGroupDotOps don't have to correspond to wgmma.async ops with
+//     the same shapes as specified in the docs, because there's an intervening
+//     fence.)
 //
 // If the op can be properly async, this function returns the index of the dot
 // in the loop's iter_args.  (Rule (2) above ensures this is well-defined.)
 //
-static std::optional<int> dotCanBeProperlyAsync(ttng::GroupDotOp dotOp,
+static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
                                                 scf::ForOp forOp) {
   LDBG("Considering whether to make MMAv3 dot properly async: " << dotOp);
 
@@ -1586,17 +1588,17 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::GroupDotOp dotOp,
   // Rule 3a: Are the only users of the dot's result from iteration i-1 other
   // MMAv3 dots?  If so, we're done, this dot can be properly async.
   if (llvm::all_of(iterArg.getUses(), [&](OpOperand &use) {
-        return isa<ttng::GroupDotOp>(use.getOwner()) &&
+        return isa<ttng::WarpGroupDotOp>(use.getOwner()) &&
                use.getOperandNumber() == 2;
       })) {
     return iterArgIdx;
   }
 
   // Rule 3b: Are all users of the dot's result from iteration i-1 after the
-  // first `group_dot_wait {pendings=0}` op?  If so, the dot can be properly
-  // async, but we have to thread its result from iteration i-1 through the
-  // wait.
-  auto waitOps = forOp.getBody()->getOps<ttng::GroupDotWaitOp>();
+  // first `warp_group_dot_wait {pendings=0}` op?  If so, the dot can be
+  // properly async, but we have to thread its result from iteration i-1 through
+  // the wait.
+  auto waitOps = forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>();
   auto firstWaitOpIter = llvm::find_if(
       waitOps, [&](auto waitOp) { return waitOp.getPendings() == 0; });
   if (firstWaitOpIter != waitOps.end() &&
@@ -1607,7 +1609,8 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::GroupDotOp dotOp,
         }
         return (*firstWaitOpIter)->isBeforeInBlock(user);
       })) {
-    LDBG("MMAv3 dot can be properly async because it follows a group_dot_wait "
+    LDBG("MMAv3 dot can be properly async because it follows a "
+         "warp_group_dot_wait "
          "{pendings=0}.\n"
          << "  wait: " << *firstWaitOpIter << "\n"
          << "  dot: " << dotOp);
@@ -1622,16 +1625,16 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::GroupDotOp dotOp,
 
 // If necessary, insert a dot-wait inside the loop, waiting for the results of
 // the properly-async dots from iteration i-1 to complete.  (We pipeline to
-// depth 2, so there are at most 2 copies of each group_dot in flight at a
+// depth 2, so there are at most 2 copies of each warp_group_dot in flight at a
 // time.)
 //
-// We can skip inserting the wait if we have a `group_dot_wait {pendings=0}`
-// somewhere in the loop.  To see why, consider:
+// We can skip inserting the wait if we have a `warp_group_dot_wait
+// {pendings=0}` somewhere in the loop.  To see why, consider:
 //
-//   group_dot
-//   group_dot; wait 0  // synchronous dot
-//   group_dot
-//   group_dot
+//   warp_group_dot
+//   warp_group_dot; wait 0  // synchronous dot
+//   warp_group_dot
+//   warp_group_dot
 //
 // In this example, there are three properly-async dots, so we'd normally put
 // `wait 3` at the end of the loop, meaning "wait until there are 3 or fewer
@@ -1639,13 +1642,13 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::GroupDotOp dotOp,
 // completes, there are only *two* pending async dots from this iteration, so
 // this wait would do nothing.  This is true in general, no matter where the
 // `wait 0` appears.
-static void insertAsyncGroupDotWaitInLoop(
+static void insertAsyncWarpGroupDotWaitInLoop(
     scf::ForOp forOp,
     const llvm::MapVector<Operation *, int /*iterArgIdx*/> &properlyAsyncDots) {
   if (properlyAsyncDots.empty())
     return;
 
-  if (llvm::any_of(forOp.getBody()->getOps<ttng::GroupDotWaitOp>(),
+  if (llvm::any_of(forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>(),
                    [](auto wait) { return wait.getPendings() == 0; })) {
     return;
   }
@@ -1669,8 +1672,8 @@ static void insertAsyncGroupDotWaitInLoop(
 
     for (auto [block, users] : blockToUsers) {
       OpBuilder builder(block, block->begin());
-      auto newWait = builder.create<ttng::GroupDotWaitOp>(asyncDot->getLoc(),
-                                                          ArrayRef<Value>{}, 0);
+      auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
+          asyncDot->getLoc(), ArrayRef<Value>{}, 0);
 
       threadValuesThroughWait(newWait, users);
     }
@@ -1687,9 +1690,9 @@ static void insertAsyncGroupDotWaitInLoop(
   IRRewriter builder(forOp.getContext());
   auto lastAsyncDot = properlyAsyncDots.back().first;
   builder.setInsertionPointAfter(lastAsyncDot);
-  auto wait = builder.create<ttng::GroupDotWaitOp>(lastAsyncDot->getLoc(),
-                                                   /*inputs=*/ArrayRef<Value>{},
-                                                   properlyAsyncDots.size());
+  auto wait = builder.create<ttng::WarpGroupDotWaitOp>(
+      lastAsyncDot->getLoc(),
+      /*inputs=*/ArrayRef<Value>{}, properlyAsyncDots.size());
 
   // Thread the results of the async dots through the wait.
   SmallVector<Value> addlWaitOperands;
@@ -1699,20 +1702,20 @@ static void insertAsyncGroupDotWaitInLoop(
   threadValuesThroughWait(wait, addlWaitOperands);
 }
 
-// Convert MMAv3 ttng::GroupDotOps {isAsync = False} (i.e. Hopper wgmma) into
-// ttng::GroupDotOps {isAsync = True} and insert ttng::GroupDotWaitOps as
-// necessary.
+// Convert MMAv3 ttng::WarpGroupDotOps {isAsync = False} (i.e. Hopper wgmma)
+// into ttng::WarpGroupDotOps {isAsync = True} and insert
+// ttng::WarpGroupDotWaitOps as necessary.
 //
 // We assume we have space for each dot to be pipelined to depth 2, i.e. each
-// dot op in the loop can have at most 2 group_dot ops in flight at once.  (Each
-// group_dot op usually corresponds to a series of wgmma.async ops.)
+// dot op in the loop can have at most 2 warp_group_dot ops in flight at once.
+// (Each warp_group_dot op usually corresponds to a series of wgmma.async ops.)
 void triton::asyncLaunchDots(scf::ForOp forOp) {
   LDBG("Original loop:\n" << *forOp);
 
-  // First, change every MMAv3 ttng.group_dot {isAsync=false}
-  // into ttng.group_dot {isAsync=true}.
+  // First, change every MMAv3 ttng.warp_group_dot {isAsync=false}
+  // into ttng.warp_group_dot {isAsync=true}.
   // The rest of this function is concerned with inserting
-  // ttng.group_dot_wait ops in the appropriate places.
+  // ttng.warp_group_dot_wait ops in the appropriate places.
   //
   // We call those dots that don't need to be followed immediately by a `wait 0`
   // "properly async", or sometimes just "async".
@@ -1723,16 +1726,16 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // the yield op.
   IRRewriter builder(forOp.getContext());
   llvm::MapVector<Operation *, int /*iterArgIdx*/> properlyAsyncDots;
-  for (auto groupDotOp : forOp.getBody()->getOps<ttng::GroupDotOp>()) {
-    groupDotOp.setIsAsync(true);
-    if (auto iterArgIdx = dotCanBeProperlyAsync(groupDotOp, forOp)) {
-      properlyAsyncDots[groupDotOp] = *iterArgIdx;
+  for (auto WarpGroupDotOp : forOp.getBody()->getOps<ttng::WarpGroupDotOp>()) {
+    WarpGroupDotOp.setIsAsync(true);
+    if (auto iterArgIdx = dotCanBeProperlyAsync(WarpGroupDotOp, forOp)) {
+      properlyAsyncDots[WarpGroupDotOp] = *iterArgIdx;
     } else {
-      builder.setInsertionPointAfter(groupDotOp);
-      auto wait = builder.create<ttng::GroupDotWaitOp>(groupDotOp.getLoc(),
-                                                       ArrayRef<Value>{},
-                                                       /*pendings=*/0);
-      SmallVector<Value> waitOperands = {groupDotOp.getResult()};
+      builder.setInsertionPointAfter(WarpGroupDotOp);
+      auto wait = builder.create<ttng::WarpGroupDotWaitOp>(
+          WarpGroupDotOp.getLoc(), ArrayRef<Value>{},
+          /*pendings=*/0);
+      SmallVector<Value> waitOperands = {WarpGroupDotOp.getResult()};
       threadValuesThroughWait(wait, waitOperands);
     }
   }
@@ -1746,7 +1749,7 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // iteration's set of asynchronous dots (and their corresponding async copies
   // from global to shmem) can't start until the first iteration's set has
   // completed.
-  insertAsyncGroupDotWaitInLoop(forOp, properlyAsyncDots);
+  insertAsyncWarpGroupDotWaitInLoop(forOp, properlyAsyncDots);
 
   // Finally, insert a wait after the loop, waiting for dots from the final
   // iteration of the loop.
@@ -1756,7 +1759,7 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   }
   // Wait until there are 0 outstanding async dot ops.
   builder.setInsertionPointAfter(forOp);
-  auto GroupDotWaitAfterLoop = builder.create<ttng::GroupDotWaitOp>(
+  auto WarpGroupDotWaitAfterLoop = builder.create<ttng::WarpGroupDotWaitOp>(
       forOp.getLoc(), ArrayRef<Value>{}, 0);
-  threadValuesThroughWait(GroupDotWaitAfterLoop, waitOperands);
+  threadValuesThroughWait(WarpGroupDotWaitAfterLoop, waitOperands);
 }

@@ -443,7 +443,7 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
       isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::GroupDotWaitOp>(op)) {
+          nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     return encoding;
   }
 
@@ -472,7 +472,7 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
       isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::GroupDotWaitOp>(op))
+          nvidia_gpu::WarpGroupDotWaitOp>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);

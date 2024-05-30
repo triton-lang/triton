@@ -269,10 +269,10 @@ public:
 //   dot(convert(lhs #mma) #dot_operand, rhs) #mma,
 // for fp16 or bf16 MMAv3 dots.
 struct MMAV3UseRegOperand
-    : public OpRewritePattern<triton::nvidia_gpu::GroupDotOp> {
+    : public OpRewritePattern<triton::nvidia_gpu::WarpGroupDotOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(triton::nvidia_gpu::GroupDotOp dotOp,
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::WarpGroupDotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
     if (!alloc || !alloc.getSrc())

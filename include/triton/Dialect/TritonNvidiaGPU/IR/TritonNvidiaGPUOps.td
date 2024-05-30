@@ -67,14 +67,14 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 }
 
 //
-// GroupDot Op
+// WarpGroupDot Op
 //
-def TTNG_GroupDotOp : TTNG_Op<"group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                             DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
                                             DotLike,
                                             TypesMatchWith<"result's type matches accumulator's type",
                                                             "d", "c", "$_self">]> {
-    let summary = "group dot";
+    let summary = "warp group dot";
 
     let description = [{
         $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
@@ -92,9 +92,9 @@ def TTNG_GroupDotOp : TTNG_Op<"group_dot", [DeclareOpInterfaceMethods<InferTypeO
     let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
 }
 
-def TTNG_GroupDotWaitOp : TTNG_Op<"group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                      AllTypesMatch<["inputs", "outputs"]>]> {
-  let summary = "group dot wait";
+  let summary = "warp group dot wait";
   let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
   let results = (outs Variadic<TT_TensorOrMemDesc>:$outputs);
   let description = [{
@@ -102,7 +102,7 @@ def TTNG_GroupDotWaitOp : TTNG_Op<"group_dot_wait", [DeclareOpInterfaceMethods<I
 
     $inputs must be the tensors corresponding to the async dot ops that we're
     waiting on.  For example, if there are N pending async dot ops and we call
-    `group_dot_wait 1`, then $inputs must be the result of the first dot op.
+    `warp_group_dot_wait 1`, then $inputs must be the result of the first dot op.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
