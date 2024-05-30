@@ -570,8 +570,8 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   }
   for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
     int row = 1 << logRow;
-    // TODO: Add tests for this.
-    // TODO: Does this mean shared.vec must be 1?
+    // XXX: Add tests for this.
+    // XXX: Does this mean shared.vec must be 1?
     int vec = 8 * 16 / elemBitWidth;
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
