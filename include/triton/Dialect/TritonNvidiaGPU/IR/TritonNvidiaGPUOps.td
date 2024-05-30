@@ -67,13 +67,14 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 }
 
 //
-// DotAsync Op
+// WarpGroupDot Op
 //
-def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                             DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                            DotLike,
                                             TypesMatchWith<"result's type matches accumulator's type",
                                                             "d", "c", "$_self">]> {
-    let summary = "dot async";
+    let summary = "warp group dot";
 
     let description = [{
         $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
@@ -82,17 +83,18 @@ def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [DeclareOpInterfaceMethods<InferTypeO
     let arguments = (ins TT_TensorOrMemDesc:$a,
                          TT_TensorOrMemDesc:$b,
                          TT_FpIntTensor:$c,
-                         TT_InputPrecisionAttr:$inputPrecision,
-                         I32Attr:$maxNumImpreciseAcc);
+                         DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
+                         DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
+                         DefaultValuedAttr<BoolAttr, "false">:$isAsync);
 
     let results = (outs TT_FpIntTensor:$d);
 
     let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
 }
 
-def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                          AllTypesMatch<["inputs", "outputs"]>]> {
-  let summary = "dot wait";
+def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                     AllTypesMatch<["inputs", "outputs"]>]> {
+  let summary = "warp group dot wait";
   let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
   let results = (outs Variadic<TT_TensorOrMemDesc>:$outputs);
   let description = [{
@@ -100,7 +102,7 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpI
 
     $inputs must be the tensors corresponding to the async dot ops that we're
     waiting on.  For example, if there are N pending async dot ops and we call
-    `dot_wait 1`, then $inputs must be the result of the first dot op.
+    `warp_group_dot_wait 1`, then $inputs must be the result of the first dot op.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";

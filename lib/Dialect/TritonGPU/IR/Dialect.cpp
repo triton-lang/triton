@@ -2741,8 +2741,9 @@ struct CanonicalizeConvertFromConvert
     // for hopper MMAv3
     if (mlir::isa<SharedEncodingAttr>(dstType.getEncoding()) &&
         mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) &&
-        llvm::any_of(op.getResult().getUsers(),
-                     [](Operation *dot) { return isa<DotOp>(dot); })) {
+        llvm::any_of(op.getResult().getUsers(), [](Operation *dot) {
+          return dot->hasTrait<OpTrait::DotLike>();
+        })) {
       return failure();
     }
 
