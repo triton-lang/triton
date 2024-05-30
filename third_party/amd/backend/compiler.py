@@ -101,7 +101,7 @@ class HIPBackend(BaseBackend):
         lld = Path("/usr/bin/ld.lld")
         if lld.is_file():
             return lld
-        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found")
+        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its path.")
 
     @staticmethod
     def make_ttir(mod, metadata, options):
