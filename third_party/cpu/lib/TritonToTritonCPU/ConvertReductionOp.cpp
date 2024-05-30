@@ -149,11 +149,11 @@ struct ReduceOpConversion : public OpConversionPattern<triton::ReduceOp> {
     else if (kind == vector::CombiningKind::MAXSI)
       initVal = rewriter.getIntegerAttr(
           elemTy,
-          static_cast<int64_t>(1UL << (elemTy.getIntOrFloatBitWidth() - 1)));
+          static_cast<int64_t>(-(1UL << (elemTy.getIntOrFloatBitWidth() - 1))));
     else if (kind == vector::CombiningKind::MINSI)
       initVal = rewriter.getIntegerAttr(
           elemTy, static_cast<int64_t>(
-                      1UL << (elemTy.getIntOrFloatBitWidth() - 1) - 1));
+                      (1UL << (elemTy.getIntOrFloatBitWidth() - 1)) - 1));
     else if (kind == vector::CombiningKind::MINIMUMF ||
              kind == vector::CombiningKind::MINNUMF) {
       if (elemTy.isF32())
