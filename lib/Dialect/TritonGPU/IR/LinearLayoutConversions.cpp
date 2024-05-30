@@ -405,6 +405,9 @@ std::optional<LinearLayout> mfmaToLinearLayout(ArrayRef<int64_t> shape,
   MLIRContext *ctx = mfma.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
+  if (shape[rank - 2] < mfma.getMDim() || shape[rank - 1] < mfma.getNDim())
+    return std::nullopt;
+
   if (mfma.getMDim() != 32 || mfma.getNDim() != 32)
     return std::nullopt;
 
@@ -419,7 +422,8 @@ std::optional<LinearLayout> mfmaToLinearLayout(ArrayRef<int64_t> shape,
                     {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}}},
                    {outDimNames[order[0]], outDimNames[order[1]]});
   if (rank == 3) {
-    assert(order[0] == 2);
+    assert(order[2] == 0);
+    // use identity, because
     tileLayout *= LinearLayout::identity1D(1, rDim, outDimNames[order[2]]);
     tileLayout *= LinearLayout::identity1D(1, lDim, outDimNames[order[2]]);
   }
