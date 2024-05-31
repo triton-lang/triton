@@ -580,8 +580,9 @@ class JITFunction(KernelInterface[T]):
         bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
 
         # compute cache key
+        device_key = f"{target.backend}:{device}"
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
-        kernel = self.cache[device].get(key, None)
+        kernel = self.cache[device_key].get(key, None)
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
@@ -625,7 +626,7 @@ class JITFunction(KernelInterface[T]):
                 target=target,
                 options=options.__dict__,
             )
-            self.cache[device][key] = kernel
+            self.cache[device_key][key] = kernel
             self._call_hook(key, signature, device, constants, options, configs, warmup, before=False)
 
         # Check that used global values have not changed.
