@@ -59,12 +59,12 @@ public:
                                 srcTy.getElementType(), /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
       return failure();
-
     rewriter.setInsertionPoint(trans);
+    auto sharedMemorySpace = SharedMemorySpaceAttr::get(getContext());
     auto alloc = rewriter.create<LocalAllocOp>(
         trans.getLoc(),
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
-                         newInnerCvtEnc),
+                         newInnerCvtEnc, sharedMemorySpace),
         trans.getSrc());
     auto newTrans = rewriter.create<TransOp>(trans.getLoc(), alloc,
                                              ArrayRef<int32_t>({1, 0}));
@@ -210,7 +210,7 @@ public:
   LogicalResult matchAndRewrite(LocalAllocOp allocOp,
                                 PatternRewriter &rewriter) const override {
     if (!allocOp->hasOneUse() ||
-        !isa<DotOp, nvidia_gpu::DotAsyncOp>(*allocOp->getUsers().begin()))
+        !allocOp->getUsers().begin()->hasTrait<OpTrait::DotLike>())
       return failure();
 
     auto dot = *allocOp->getUsers().begin();
@@ -254,7 +254,8 @@ public:
         allocEncoding.getCTALayout(), srcTy.getElementType());
 
     MemDescType innerTy =
-        MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc);
+        MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc,
+                         allocType.getMemorySpace());
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   trans.getSrc());
     rewriter.replaceOpWithNewOp<TransOp>(allocOp, newAlloc,
@@ -267,10 +268,11 @@ public:
 //   dot(convert(lhs #mma) #shared, rhs) #mma ->
 //   dot(convert(lhs #mma) #dot_operand, rhs) #mma,
 // for fp16 or bf16 MMAv3 dots.
-struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
+struct MMAV3UseRegOperand
+    : public OpRewritePattern<triton::nvidia_gpu::WarpGroupDotOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(DotOp dotOp,
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::WarpGroupDotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
     if (!alloc || !alloc.getSrc())

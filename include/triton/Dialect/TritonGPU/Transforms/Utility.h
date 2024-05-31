@@ -23,7 +23,7 @@ class SharedEncodingAttr;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                TensorOrMemDesc type,
+                                                RankedTensorType type,
                                                 int numWarps);
 
 /// Returns true if the Load uses block pointer.
@@ -168,6 +168,9 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
 // Return true if the op is a pure elementwise_inline_asm op with a single
 // operand and single result.
 bool isPureUnaryInlineAsm(Operation *op);
+
+// read the compute capability from the module attributes
+int getNVIDIAComputeCapability(Operation *module);
 
 } // namespace mlir
 

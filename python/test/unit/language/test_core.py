@@ -3262,6 +3262,11 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
+        if "gfx11" in triton.runtime.driver.active.get_current_target().arch:
+            if in_dtype_str == "float32":
+                pytest.skip(f"{in_dtype_str} is not supported in WMMA dot, FMA does not support dot3d")
+            if out_dtype_str == "float16":
+                pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
         input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
 
@@ -4847,10 +4852,10 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
     """ if interm_layout is None else f"""
-    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !tt.memdesc<{M}x{N}xi32, #interm>
-    %16 = triton_gpu.local_load %15 : !tt.memdesc<{M}x{N}xi32, #interm> -> tensor<{M}x{N}xi32, #src>
-    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !tt.memdesc<{M}x{N}xf16, #interm>
-    %18 = triton_gpu.local_load %17 : !tt.memdesc<{M}x{N}xf16, #interm> -> tensor<{M}x{N}xf16, #src>
+    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !tt.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory>
+    %16 = triton_gpu.local_load %15 : !tt.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xi32, #src>
+    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !tt.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory>
+    %18 = triton_gpu.local_load %17 : !tt.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xf16, #src>
 
     %12 = triton_gpu.convert_layout %16 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %18 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
@@ -5357,3 +5362,37 @@ def test_maxnreg(device):
     except AssertionError:
         print("Failing ptx:\n", k.asm["ptx"])
         raise
+
+
+@pytest.mark.interpreter
+def test_temp_var_in_loop(device):
+
+    @triton.jit
+    def temp_in_loop(Z, N: tl.constexpr, BLOCK: tl.constexpr):
+        acc = tl.full((BLOCK, ), 0, dtype=tl.int32)
+        for i in range(N):
+            if i == 0:
+                temp = tl.full((BLOCK, ), 2, dtype=tl.int32)
+                acc = temp
+            else:
+                acc += tl.full((BLOCK, ), 1, dtype=tl.int32)
+            # re-use the temp variable and make sure to check that it isn't creating incorrect IR.
+            temp = tl.full((BLOCK, ), 1, dtype=tl.int32)
+            acc += temp
+        z = Z + tl.arange(0, BLOCK)
+        tl.store(z, acc)
+
+    N = 10
+    BLOCK = 32
+    out = torch.empty((BLOCK, ), dtype=torch.int32, device=device)
+    temp_in_loop[(1, )](out, N, BLOCK)
+    acc = torch.full((BLOCK, ), 0, dtype=torch.int32, device=device)
+    for i in range(N):
+        if i == 0:
+            temp = torch.full((BLOCK, ), 2, dtype=torch.int32, device=device)
+            acc = temp
+        else:
+            acc += torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
+        temp = torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
+        acc += temp
+    assert (acc == out).all()

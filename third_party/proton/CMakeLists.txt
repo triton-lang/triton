@@ -35,7 +35,9 @@ endif()
 
 # Check if the platform is MacOS
 if(APPLE)
-  set(PROTON_PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
+  set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
+  # Other platforms build with -flto, but we found that this adds significant overhead to our macos CI without providing a major benefit.
+  set(PROTON_PYTHON_LDFLAGS "-undefined dynamic_lookup")
 endif()
 
 include_directories(${CUPTI_INCLUDE_DIR})

@@ -34,8 +34,8 @@ public:
 
     auto dstDotOp = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
         op.getType().getEncoding());
-    auto sharedEncoding =
-        cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
+    MemDescType srcType = op.getSrc().getType();
+    auto sharedEncoding = cast<SharedEncodingAttr>(srcType.getEncoding());
     if (!dstDotOp || !sharedEncoding.getHasLeadingOffset())
       return failure();
     RankedTensorType type = op.getType();
@@ -55,7 +55,8 @@ public:
         triton::gpu::SharedEncodingAttr::get(
             op.getContext(), dstDotOp, type.getShape(),
             triton::gpu::getOrder(parentEnc),
-            triton::gpu::getCTALayout(parentEnc), type.getElementType()));
+            triton::gpu::getCTALayout(parentEnc), type.getElementType()),
+        srcType.getMemorySpace());
     auto tmp = rewriter.create<triton::gpu::LocalAllocOp>(
         op.getLoc(), newSharedDescTy, load);
     auto newConvert =

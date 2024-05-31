@@ -36,6 +36,7 @@ jobs:
     outputs:
       matrix-CUDA: ${{ steps.set-matrix.outputs.matrix-CUDA }}
       matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
+      matrix-MACOS: ${{ steps.set-matrix.outputs.matrix-MACOS }}
     steps:
       - name: Decide pre-submit integration test enablement
         # Always enable integration tests for pre-submit pull requests.
@@ -115,9 +116,11 @@ jobs:
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           fi
 
   pre-commit:
@@ -163,6 +166,7 @@ jobs:
         run: |
           git diff
 
+
   Integration-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-CUDA != ''
@@ -187,6 +191,7 @@ jobs:
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
           echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
           echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
+          echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
 
@@ -200,7 +205,8 @@ jobs:
             ~/.triton/llvm
             ~/.triton/nvidia
             ~/.triton/pybind11
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
 
       # Cache ~/.triton/cache because the vast majority of unit test time is
       # spent compiling.  Triton won't (well, should not) use these cached files
@@ -386,5 +392,54 @@ jobs:
           python3 -m pytest runtime
 
       - *run-cpp-unittests-step
+      - *save-build-artifacts-step
+      - *inspect-cache-directories-step
+
+  Build-Tests:
+    needs: Runner-Preparation
+    if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: "true"
+      - name: Install brew dependencies
+        run: |
+          brew update
+          brew install ccache llvm
+
+      - *compute-cache-keys-step
+      - *cache-build-dependencies-step
+      - *restore-build-artifacts-step
+      - *inspect-cache-directory-step
+
+      - name: Update PATH
+        run: |
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
+      - name: Install pip dependencies
+        run: |
+          python3 -m venv ~/.venv
+          source ~/.venv/bin/activate
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit
+      - name: Install Triton
+        env:
+          TRITON_BUILD_WITH_CCACHE: "true"
+          TRITON_BUILD_WITH_O1: "true"
+          # macos-latest has 3 vcpus and 7GB DRAM, to save memory we limit the number of jobs to 3
+          # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
+          MAX_JOBS: 3
+        run: |
+          source ~/.venv/bin/activate
+          echo "PATH is '$PATH'"
+          cd python
+          python3 -m pip install --no-build-isolation .
+
       - *save-build-artifacts-step
       - *inspect-cache-directories-step
