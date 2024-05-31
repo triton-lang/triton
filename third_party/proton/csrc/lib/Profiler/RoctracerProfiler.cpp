@@ -13,6 +13,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <tuple>
 
 #include <cxxabi.h>
 #include <unistd.h>
@@ -267,9 +268,15 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doFlush() {
   // Implement reliable flushing.
-  // Wait for all dispatched ops to be reported
+  // Wait for all dispatched ops to be reported.
+  std::ignore = hip::deviceSynchronize<true>();
   roctracer::flushActivity<true>();
-  profiler->correlation.flush([]() { roctracer::flushActivity<true>(); });
+  // If flushing encounters an activity record still being written, flushing
+  // stops. Use a subsequent flush when the record has completed being written
+  // to resume the flush.
+  profiler->correlation.flush(
+      /*maxRetries=*/100, /*sleepMs=*/10, /*flush=*/
+      []() { roctracer::flushActivity<true>(); });
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {

@@ -70,10 +70,6 @@ protected:
   };
 
   struct Correlation {
-    // Max wait time = MAX_RETRIES * SLEEP_MS = 3s
-    static inline const uint64_t MAX_RETRIES = 3000;
-    static inline const uint64_t SLEEP_MS = 1;
-    std::mutex mutex;
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
 
@@ -87,20 +83,15 @@ protected:
       atomicMax(maxCompletedCorrelationId, correlationId);
     }
 
-    template <typename FlushFnT> void flush(FlushFnT &&flushFn) {
-      // We get the current max correlationId and wait until all the
-      // operations with correlationId less than the current max
-      // correlationId are completed.
-      // If there's any threads that are not completing the operations,
-      // we don't wait for them to submit operations to the GPU.
-      // Although this is not ideal, it's better than waiting infinitely or
-      // explicitly call cuda device synchronize when we have multiple devices.
+    template <typename FlushFnT>
+    void flush(uint64_t maxRetries, uint64_t sleepMs, FlushFnT &&flushFn) {
       auto submittedId = maxSubmittedCorrelationId.load();
       auto completedId = maxCompletedCorrelationId.load();
-      auto retries = MAX_RETRIES;
+      auto retries = maxRetries;
       while ((completedId < submittedId) && --retries > 0) {
         flushFn();
-        std::this_thread::sleep_for(std::chrono::microseconds(SLEEP_MS));
+        // sleep_for 0 is still valid and will yield the thread
+        std::this_thread::sleep_for(std::chrono::microseconds(sleepMs));
         completedId = maxCompletedCorrelationId.load();
       }
     }

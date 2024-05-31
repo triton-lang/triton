@@ -241,11 +241,28 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
-  auto &profiler = dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
-  CUcontext cu_context = nullptr;
-  profiler.correlation.flush([]() {
-    cupti::activityFlushAll<true>(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
-  });
+  // cuptiActivityFlushAll returns the activity records associated with all
+  // contexts/streams.
+  // This is a blocking call but it doesn’t issue any CUDA synchronization calls
+  // implicitly thus it’s not guaranteed that all activities are completed on
+  // the underlying devices.
+  // We do an "oppurtunistic" synchronization here to try to ensure that all
+  // activities are completed on the current context.
+  // If the current context is not set, we don't do any synchronization.
+  CUcontext cuContext = nullptr;
+  cuda::ctxGetCurrent<false>(&cuContext);
+  if (cuContext)
+    cuda::ctxSynchronize<true>();
+  profiler->correlation.flush(
+      /*maxRetries=*/100, /*sleepMs=*/10,
+      /*flush=*/[]() {
+        cupti::activityFlushAll<true>(
+            /*flag=*/0);
+      });
+  // CUPTI_ACTIVITY_FLAG_FLUSH_FORCED is used to ensure that even incomplete
+  // activities are flushed so that the next profiling session can start with
+  // new activities.
+  cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
