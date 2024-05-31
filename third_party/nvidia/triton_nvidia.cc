@@ -11,6 +11,9 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include "backend/include/cuda.h"
+#include <dlfcn.h>
+
 namespace py = pybind11;
 
 void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
@@ -34,6 +37,60 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
+}
+
+// Forward decls of cublas types
+/* CUBLAS status type returns */
+typedef enum {
+  CUBLAS_STATUS_SUCCESS = 0,
+  CUBLAS_STATUS_NOT_INITIALIZED = 1,
+  CUBLAS_STATUS_ALLOC_FAILED = 3,
+  CUBLAS_STATUS_INVALID_VALUE = 7,
+  CUBLAS_STATUS_ARCH_MISMATCH = 8,
+  CUBLAS_STATUS_MAPPING_ERROR = 11,
+  CUBLAS_STATUS_EXECUTION_FAILED = 13,
+  CUBLAS_STATUS_INTERNAL_ERROR = 14,
+  CUBLAS_STATUS_NOT_SUPPORTED = 15,
+  CUBLAS_STATUS_LICENSE_ERROR = 16
+} cublasStatus_t;
+
+struct cublasContext;
+typedef struct cublasLtContext *cublasLtHandle_t;
+struct cublasLtMatmulDescOpaque_t;
+typedef cublasLtMatmulDescOpaque_t *cublasLtMatmulDesc_t;
+struct cublasLtMatmulAlgo_t;
+
+// Typedefs for cublas functions
+typedef cublasStatus_t (*cublasLtCreate_t)(cublasLtHandle_t *);
+typedef cublasStatus_t (*cublasLtDestroy_t)(cublasLtHandle_t);
+
+cublasLtCreate_t _cublasLtCreate;
+cublasLtDestroy_t _cublasLtDestroy;
+
+void *cublas_handle = nullptr;
+
+void load_cublas() {
+  void *cublas_handle = dlopen("libcublas.so", RTLD_LAZY);
+  if (!cublas_handle) {
+    fprintf(stderr, "%s\n", dlerror());
+    exit(1);
+  }
+  dlerror(); // Clear any existing error
+  _cublasLtCreate = (cublasLtCreate_t)dlsym(cublas_handle, "cublasLtCreate");
+  _cublasLtDestroy = (cublasLtDestroy_t)dlsym(cublas_handle, "cublasLtDestroy");
+  const char *dlsym_error = dlerror();
+  if (dlsym_error) {
+    fprintf(stderr, "%s\n", dlsym_error);
+    exit(1);
+  }
+}
+
+void unload_cublas() { dlclose(cublas_handle); }
+
+void dummy_cublas_call() {
+  cublasLtHandle_t handle;
+  _cublasLtCreate(&handle);
+  _cublasLtDestroy(handle);
 }
 
 void init_triton_nvidia(py::module &&m) {
@@ -82,4 +139,13 @@ void init_triton_nvidia(py::module &&m) {
     auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
     mod->addModuleFlag(reflect);
   });
+
+  // cublas
+  auto cublas = m.def_submodule("cublas");
+  if (!cublas) {
+    throw std::runtime_error("Failed to create cublas submodule");
+  }
+  cublas.def("load", &load_cublas);
+  cublas.def("unload", &unload_cublas);
+  cublas.def("dummy_call", &dummy_cublas_call);
 }

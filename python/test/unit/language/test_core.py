@@ -5396,3 +5396,10 @@ def test_temp_var_in_loop(device):
         temp = torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
         acc += temp
     assert (acc == out).all()
+
+
+def test_cublas():
+    from triton._C.libtriton import nvidia
+    nvidia.cublas.load()
+    nvidia.cublas.dummy_call()
+    nvidia.cublas.unload()

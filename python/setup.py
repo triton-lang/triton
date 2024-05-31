@@ -242,7 +242,7 @@ def get_thirdparty_packages(packages: list):
     return thirdparty_cmake_args
 
 
-def download_and_copy(name, src_path, variable, version, url_func):
+def download_and_copy(name, src_path, variable, version, url_func, dst_path=None):
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
@@ -254,7 +254,8 @@ def download_and_copy(name, src_path, variable, version, url_func):
         arch = platform.machine()
     url = url_func(arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path
+                            or src_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
     if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
@@ -434,6 +435,10 @@ nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-ve
 with open(nvidia_version_path, "r") as nvidia_version_file:
     NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
 
+cublas_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-cublas-version.txt")
+with open(cublas_version_path, "r") as cublas_version_file:
+    NVIDIA_CUBLAS_VERSION = cublas_version_file.read().strip()
+
 download_and_copy(
     name="ptxas",
     src_path="bin/ptxas",
@@ -481,6 +486,15 @@ download_and_copy(
     version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2",
+)
+download_and_copy(
+    name="cublas",
+    src_path="targets/x86_64-linux/include",
+    dst_path="include",
+    variable="TRITON_CUBLAS_PATH",
+    version=NVIDIA_CUBLAS_VERSION,
+    url_func=lambda arch, version:
+    f"https://anaconda.org/nvidia/libcublas-dev/{version}/download/linux-{arch}/libcublas-dev-{version}-0.tar.bz2",
 )
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
