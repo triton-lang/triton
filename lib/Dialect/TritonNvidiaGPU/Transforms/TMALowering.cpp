@@ -23,6 +23,8 @@ public:
 
   LogicalResult matchAndRewrite(ExperimentalDescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
+    MLIRContext *ctx = op.getContext();
+    Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
     auto loc = op.getLoc();
     auto tensorType = op.getResult().getType();
     auto order = getOrder(tensorType.getEncoding());
@@ -36,15 +38,16 @@ public:
     }
     MemDescType memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                         encoding, /*mutableMemory=*/true);
+                         encoding, sharedMemorySpace, /*mutableMemory=*/true);
     Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, Value());
     auto barrierCTALayout = CTALayoutAttr::get(
         /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
         /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
     auto barrierEncoding = SharedEncodingAttr::get(tensorType.getContext(), 1,
                                                    1, 1, {0}, barrierCTALayout);
-    MemDescType barrierMemDescType = MemDescType::get(
-        {1}, rewriter.getI64Type(), barrierEncoding, /*mutableMemory=*/true);
+    MemDescType barrierMemDescType =
+        MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
+                         sharedMemorySpace, /*mutableMemory=*/true);
     Value barrierAlloc =
         rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
@@ -70,6 +73,8 @@ public:
 
   LogicalResult matchAndRewrite(ExperimentalDescriptorStoreOp op,
                                 PatternRewriter &rewriter) const override {
+    MLIRContext *ctx = op.getContext();
+    Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
     auto loc = op.getLoc();
     auto tensorType = op.getSrc().getType();
     auto order = getOrder(tensorType.getEncoding());
@@ -83,7 +88,7 @@ public:
     }
     MemDescType memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                         encoding, /*mutableMemory=*/true);
+                         encoding, sharedMemorySpace, /*mutableMemory=*/true);
     Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
     rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(

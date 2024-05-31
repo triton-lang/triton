@@ -208,12 +208,15 @@ public:
       }
     }
 
+    Attribute SharedMemorySpace =
+        SharedMemorySpaceAttr::get(argType.getContext());
     auto CTALayout = getCTALayout(argType.getEncoding());
     auto newLayout =
         SharedEncodingAttr::get(argType.getContext(), argType.getShape(),
                                 newOrder, CTALayout, argType.getElementType());
-    auto newType = MemDescType::get(argType.getShape(),
-                                    argType.getElementType(), newLayout);
+    auto newType =
+        MemDescType::get(argType.getShape(), argType.getElementType(),
+                         newLayout, SharedMemorySpace);
     rewriter.setInsertionPointAfterValue(arg);
     return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
   }
@@ -296,11 +299,14 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
+    Operation *newDot = nullptr;
     if (versionMajor == 3) {
       a = getMMAv3Operand(a, rewriter, 0);
       b = getMMAv3Operand(b, rewriter, 1);
+      newDot = rewriter.create<triton::nvidia_gpu::WarpGroupDotOp>(
+          dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.getInputPrecision(),
+          dotOp.getMaxNumImpreciseAcc(), false);
     } else {
-
       // convert operands
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
@@ -319,14 +325,13 @@ public:
       auto newBType = RankedTensorType::get(
           oldBType.getShape(), oldBType.getElementType(), newBEncoding);
       b = rewriter.create<ConvertLayoutOp>(b.getLoc(), newBType, b);
+      newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b, newAcc,
+                                      dotOp.getInputPrecision(),
+                                      dotOp.getMaxNumImpreciseAcc());
     }
     // convert dot instruction
-    auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                         newAcc, dotOp.getInputPrecision(),
-                                         dotOp.getMaxNumImpreciseAcc());
-
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, oldRetType,
-                                                 newDot.getResult());
+                                                 newDot->getResult(0));
     return success();
   }
 };
@@ -386,6 +391,8 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
+
+    auto computeCapability = getNVIDIAComputeCapability(m);
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<BlockedToMMA>(context, computeCapability);

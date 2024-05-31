@@ -469,6 +469,7 @@ bool supportMFMA(triton::DotOp op) {
   auto bShape = bTy.getShape();
 
   auto rank = aShape.size();
+  assert(bShape.size() == rank);
   auto M = aShape[rank - 2];
   auto N = bShape[rank - 1];
   auto K = aShape[rank - 1];
@@ -521,8 +522,11 @@ bool supportWMMA(triton::DotOp op) {
   auto aShape = aTy.getShape();
   auto bShape = bTy.getShape();
 
-  assert(aShape[1] == bShape[0]);
-  if (!supportWMMAGranularity(aShape[0], bShape[1], aShape[1]))
+  auto rank = aShape.size();
+  assert(bShape.size() == rank);
+  assert(aShape[rank - 1] == bShape[rank - 2]);
+  if (!supportWMMAGranularity(aShape[rank - 2], bShape[rank - 1],
+                              aShape[rank - 1]))
     return false;
 
   return true;
@@ -581,8 +585,10 @@ bool supportMMA(Value value, int version) {
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(srcLayout);
-  auto dotOperandLayout = cast<DotOperandEncodingAttr>(dstLayout);
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcLayout);
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstLayout);
+  if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
+    return false;
   // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
   // improved. In addition, we can enable this shortcut for regular MFMA
   // layout when opIdx == 1.

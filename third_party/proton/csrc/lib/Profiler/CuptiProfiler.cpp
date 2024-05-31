@@ -2,8 +2,8 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Driver/Device.h"
-#include "Driver/GPU/Cuda.h"
-#include "Driver/GPU/Cupti.h"
+#include "Driver/GPU/CudaApi.h"
+#include "Driver/GPU/CuptiApi.h"
 
 #include <cstdlib>
 #include <memory>

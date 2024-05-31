@@ -136,8 +136,9 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
         builder.create<arith::ConstantIntOp>(v.getLoc(), off, 32));
   Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
       v.getLoc(),
-      triton::MemDescType::get(shape, elementType, type.getEncoding()), v,
-      offsetsVal);
+      triton::MemDescType::get(shape, elementType, type.getEncoding(),
+                               type.getMemorySpace()),
+      v, offsetsVal);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
@@ -151,10 +152,20 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
 LogicalResult Prefetcher::initialize() {
   Block *loop = forOp.getBody();
 
+  auto getEncoding = [](Value v) {
+    return cast<TensorOrMemDesc>(v.getType()).getEncoding();
+  };
+
   SmallVector<triton::DotOp> dotsInFor;
   for (Operation &op : *loop)
-    if (auto dotOp = dyn_cast<triton::DotOp>(op))
+    if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
+      // bail out if there exist non v2 dots.
+      auto dstEnc =
+          dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
+      if (!dstEnc || dstEnc.getVersionMajor() != 2)
+        return failure();
       dotsInFor.push_back(dotOp);
+    }
 
   if (dotsInFor.empty())
     return failure();

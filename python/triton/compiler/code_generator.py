@@ -991,6 +991,9 @@ class CodeGenerator(ast.NodeVisitor):
 
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
+            # reset local scope to not pick up local defs from the previous dry run.
+            self.lscope = liveins.copy()
+            self.local_defs = {}
             for i, name in enumerate(names):
                 self.set_value(name, language.core.tensor(for_op.get_body(0).arg(i + 1), yields[i].type))
             self.visit_compound_statement(node.body)

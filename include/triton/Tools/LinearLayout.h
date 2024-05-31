@@ -187,9 +187,9 @@ namespace mlir::triton {
 //
 // where
 //
-//   - a is a vector [a0...aM], and ai is a scalar in some field 𝔽 (for
+//   - a is a vector [a1...aM], and ai is a scalar in some field 𝔽 (for
 //     example, ai might be a real number), and
-//   - each Bj is a vector [b0j, b1j, ..., bNj] of N scalars in 𝔽.
+//   - each Bj is a vector [b1j, b1j, ..., bNj] of N scalars in 𝔽.
 //
 // We can also write this as a matrix-vector product Ba, where
 //
@@ -201,8 +201,8 @@ namespace mlir::triton {
 //       B = | B1,  B2, ...,  BM|
 //           | ↓    ↓         ↓ |
 //
-//           |b11, b12, ..., b0M|
-//           |b21, b22, ..., b1M|
+//           |b11, b12, ..., b1M|
+//           |b21, b22, ..., b2M|
 //         = | ↓    ↓         ↓ |
 //           |bN1, bN2, ..., bNM|.
 //

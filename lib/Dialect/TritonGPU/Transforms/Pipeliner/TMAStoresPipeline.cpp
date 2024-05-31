@@ -39,9 +39,11 @@ static Value createAlloc(scf::ForOp &forOp,
     encoding = ttg::SharedEncodingAttr::get(
         ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
   }
-
-  Type memdescType = tt::MemDescType::get(ty.getShape(), ty.getElementType(),
-                                          encoding, /*mutableMemory*/ true);
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(ty.getContext());
+  Type memdescType =
+      tt::MemDescType::get(ty.getShape(), ty.getElementType(), encoding,
+                           sharedMemorySpace, /*mutableMemory*/ true);
   Value alloc = builder.create<ttg::LocalAllocOp>(storeOp->getLoc(),
                                                   memdescType, Value());
   return alloc;

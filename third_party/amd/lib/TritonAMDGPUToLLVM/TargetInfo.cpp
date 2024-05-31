@@ -1,6 +1,6 @@
 #include "TargetInfo.h"
+#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "Utility.h"
-#include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"

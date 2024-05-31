@@ -491,7 +491,7 @@ Type getSharedMemTy(Type argType) {
   if (argType.isF16())
     return type::f16Ty(ctx);
   else if (argType.isBF16())
-    return type::i16Ty(ctx);
+    return type::bf16Ty(ctx);
   else if (argType.isF32())
     return type::f32Ty(ctx);
   else if (argType.getIntOrFloatBitWidth() == 8)
@@ -738,7 +738,8 @@ MemDescType getExpandedDesc(MemDescType descTy) {
   expandedShape[2] = shape[1];
   auto encoding = descTy.getEncoding();
   auto expandedEncoding = getExpandedEncoding(encoding);
-  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding);
+  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
+                                       descTy.getMemorySpace());
   return expandedDesc;
 }
 
