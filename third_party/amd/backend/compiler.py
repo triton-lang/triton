@@ -158,7 +158,8 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
-        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch)
+        __HIP_FTZ = True
+        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
