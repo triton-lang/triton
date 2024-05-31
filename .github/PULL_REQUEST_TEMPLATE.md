@@ -1,28 +1,26 @@
 # Pull Request Template
 
-## Description
-Please provide a brief description of the changes in this pull request:
+Please ensure the following are completed before creating a PR.
 
-- What is the current behavior?
-- What is the new behavior?
-- Any other details that might be useful for understanding the motivation and context for this change.
+- [ ] **PR Description** is written in clear, idiomatic English and follows the
+  [rules](https://cbea.ms/git-commit/#why-not-how) for a good PR description.
 
-## Checklist
-Please ensure the following are completed before submitting the PR:
+  (The LLM of your choice can help copyedit your PR description.  You can even
+  give it your whole patch to analyze.)
 
-- [ ] **Code Quality Checks**
-  - [ ] Pre-commit checks have been run and passed.
+- [ ] **Pre-commit checks** pass.
     ```bash
     pre-commit install
     pre-commit run --all-files
     ```
 
-
-- [ ] **Unit Tests**
-  - [ ] Relevant and applicable unit tests have been added and/or updated.
-    - [ ] For changes to the backend: `/test/` (for `lit`), `/unittest/` (for `gtest`)
-    - [ ] For changes to the frontend: `/python/test/`
+- [ ] **Tests** have been added and/or updated.
+  - For changes to the backend: `/test/` (for `lit`), `/unittest/` (for
+    `gtest`), or occasionally end-to-end tests like in
+    `/python/test/unit/language/test_core.py`.
+  - For changes to the frontend: `/python/test/`
 
 - [ ] **Documentation**
-  - [ ] The code contains comments where appropriate.
-  - [ ] The relevant parts of the documentation have been updated.
+  - [ ] The code contains comments where appropriate, written in clear,
+    idiomatic English. Again, an LLM can help.
+  - [ ] If appropriate, the Triton documentation have been updated.
