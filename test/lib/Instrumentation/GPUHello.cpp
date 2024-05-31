@@ -11,14 +11,14 @@ using namespace std;
 
 namespace {
 
-struct GPUHello : public PassInfoMixin<GPUHello> {
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
-    bool ModifiedCodeGen = runOnModule(M);
+struct GpuHello : public PassInfoMixin<GpuHello> {
+  PreservedAnalyses run(Module &module, ModuleAnalysisManager &) {
+    bool modifiedCodeGen = runOnModule(module);
 
-    return (ModifiedCodeGen ? llvm::PreservedAnalyses::none()
+    return (modifiedCodeGen ? llvm::PreservedAnalyses::none()
                             : llvm::PreservedAnalyses::all());
   }
-  bool runOnModule(llvm::Module &M);
+  bool runOnModule(llvm::Module &module);
   // isRequired being set to true keeps this pass from being skipped
   // if it has the optnone LLVM attribute
   static bool isRequired() { return true; }
@@ -26,36 +26,40 @@ struct GPUHello : public PassInfoMixin<GPUHello> {
 
 } // end anonymous namespace
 
-bool GPUHello::runOnModule(Module &M) {
-  bool ModifiedCodeGen = false;
+bool GpuHello::runOnModule(Module &module) {
+  bool modifiedCodeGen = false;
 
-  for (auto &F : M) {
-    if (F.isIntrinsic())
+  for (auto &function : module) {
+    if (function.isIntrinsic())
       continue;
-    if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL ||
-        F.getCallingConv() == CallingConv::PTX_Kernel) {
-      for (Function::iterator BB = F.begin(); BB != F.end(); BB++) {
-        for (BasicBlock::iterator I = BB->begin(); I != BB->end(); I++) {
-          DILocation *DL = dyn_cast<Instruction>(I)->getDebugLoc();
-          std::string SourceInfo =
-              (F.getName() + "\t" + DL->getFilename() + ":" +
-               Twine(DL->getLine()) + ":" + Twine(DL->getColumn()))
+    if (function.getCallingConv() == CallingConv::AMDGPU_KERNEL ||
+        function.getCallingConv() == CallingConv::PTX_Kernel) {
+      for (Function::iterator basicBlock = function.begin();
+           basicBlock != function.end(); basicBlock++) {
+        for (BasicBlock::iterator inst = basicBlock->begin();
+             inst != basicBlock->end(); inst++) {
+          DILocation *debugLocation =
+              dyn_cast<Instruction>(inst)->getDebugLoc();
+          std::string sourceInfo =
+              (function.getName() + "\t" + debugLocation->getFilename() + ":" +
+               Twine(debugLocation->getLine()) + ":" +
+               Twine(debugLocation->getColumn()))
                   .str();
 
-          errs() << "Hello From First Instruction of GPU Kernel: " << SourceInfo
+          errs() << "Hello From First Instruction of GPU Kernel: " << sourceInfo
                  << "\n";
-          return ModifiedCodeGen;
+          return modifiedCodeGen;
         }
       }
     }
   }
-  return ModifiedCodeGen;
+  return modifiedCodeGen;
 }
 
 PassPluginLibraryInfo getPassPluginInfo() {
-  const auto callback = [](PassBuilder &PB) {
-    PB.registerOptimizerLastEPCallback([&](ModulePassManager &MPM, auto) {
-      MPM.addPass(GPUHello());
+  const auto callback = [](PassBuilder &pb) {
+    pb.registerOptimizerLastEPCallback([&](ModulePassManager &mpm, auto) {
+      mpm.addPass(GpuHello());
       return true;
     });
   };

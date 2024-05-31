@@ -6,9 +6,9 @@ import os
 import triton
 import triton.language as tl
 
-test_stdout = 'Hello From First Instruction of GPU Kernel: kernel1\ttest_gpuhello.py:15:4\n\
-Hello From First Instruction of GPU Kernel: kernel2\ttest_gpuhello.py:19:4\n\
-Hello From First Instruction of GPU Kernel: kernel3\ttest_gpuhello.py:23:4\n'
+test_stdout = 'Hello From First Instruction of GPU Kernel: kernel1\ttest_gpuhello.py:17:4\n\
+Hello From First Instruction of GPU Kernel: kernel2\ttest_gpuhello.py:23:4\n\
+Hello From First Instruction of GPU Kernel: kernel3\ttest_gpuhello.py:29:4\n'
 
 
 @pytest.mark.parametrize(None, [None])
