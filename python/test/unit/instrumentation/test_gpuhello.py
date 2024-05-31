@@ -1,5 +1,6 @@
 import torch
 
+import pytest
 import os
 
 import triton
