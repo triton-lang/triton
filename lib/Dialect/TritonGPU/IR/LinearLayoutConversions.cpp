@@ -408,7 +408,8 @@ std::optional<LinearLayout> mfmaToLinearLayout(ArrayRef<int64_t> shape,
   if (shape[rank - 2] < mfma.getMDim() || shape[rank - 1] < mfma.getNDim())
     return std::nullopt;
 
-  if (mfma.getMDim() != 32 || mfma.getNDim() != 32)
+  if ((mfma.getMDim() != 32 || mfma.getNDim() != 32) &&
+      (mfma.getMDim() != 16 || mfma.getNDim() != 16))
     return std::nullopt;
 
   auto rDim = S("register");
@@ -417,10 +418,18 @@ std::optional<LinearLayout> mfmaToLinearLayout(ArrayRef<int64_t> shape,
 
   auto order = triton::gpu::getOrder(mfma);
   auto tileLayout = LinearLayout::empty();
-  tileLayout =
-      LinearLayout({{rDim, {{0, 1}, {0, 2}, {0, 8}, {0, 16}}},
-                    {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}}},
-                   {outDimNames[order[0]], outDimNames[order[1]]});
+  if (mfma.getMDim() == 32) {
+    tileLayout = LinearLayout(
+        {{rDim, {{0, 1}, {0, 2}, {0, 8}, {0, 16}}},
+         {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}}},
+        {outDimNames[order[0]], outDimNames[order[1]]});
+  } else {
+    assert(mfma.getMDim() == 16);
+    tileLayout =
+        LinearLayout({{rDim, {{0, 1}, {0, 2}}},
+                      {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 4}, {0, 8}}}},
+                     {outDimNames[order[0]], outDimNames[order[1]]});
+  }
   if (rank == 3) {
     assert(order[2] == 0);
     // use identity, because

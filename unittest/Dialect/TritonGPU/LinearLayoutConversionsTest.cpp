@@ -521,6 +521,22 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
                 {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
+  auto mfmaNT = mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4},
+                     /*mDim*/ 16, /*nDim*/ 16, /*isTranspose*/ false);
+
+  EXPECT_EQ(toLinearLayout({8, 8}, mfmaNT), std::nullopt);
+  EXPECT_EQ(toLinearLayout({8, 32}, mfmaNT), std::nullopt);
+  EXPECT_EQ(toLinearLayout({16, 8}, mfmaNT), std::nullopt);
+  EXPECT_EQ(toLinearLayout({16, 16}, mfmaNT),
+            LinearLayout(
+                {{S("register"), {{1, 0}, {2, 0}}},
+                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {4, 0}, {8, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
   auto mfmaNT =
       mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4, 1},
