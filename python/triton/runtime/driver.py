@@ -66,5 +66,22 @@ class DriverConfig:
     def reset_active(self):
         self.active = self.default
 
+    def set_active_to_cpu(self):
+        if "cpu" not in backends:
+            raise RuntimeError("CPU backend is unavailable")
+        self.active = backends["cpu"].driver()
+
+    def set_active_to_gpu(self):
+        active_gpus = [(name, backend.driver)
+                       for name, backend in backends.items()
+                       if backend.driver.is_active() and name != "cpu"]
+        if len(active_gpus) != 1:
+            raise RuntimeError(f"{len(active_gpus)} active GPU drivers ({active_gpus}). There should only be one GPU.")
+        self.active = active_gpus[0][1]()
+        return active_gpus[0][0]
+
+    def get_active_gpus(self):
+        return [name for name, backend in backends.items() if backend.driver.is_active() and name != "cpu"]
+
 
 driver = DriverConfig()
