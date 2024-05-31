@@ -1,6 +1,5 @@
 import torch
 
-import pytest
 import os
 
 import triton
@@ -10,17 +9,21 @@ test_stdout = 'Hello From First Instruction of GPU Kernel: kernel1\ttest_gpuhell
 Hello From First Instruction of GPU Kernel: kernel2\ttest_gpuhello.py:19:4\n\
 Hello From First Instruction of GPU Kernel: kernel3\ttest_gpuhello.py:23:4\n'
 
+
 @triton.jit
 def kernel1(BLOCK_SIZE: tl.constexpr):
     return
+
 
 @triton.jit
 def kernel2(BLOCK_SIZE: tl.constexpr):
     return
 
+
 @triton.jit
 def kernel3(BLOCK_SIZE: tl.constexpr):
     return
+
 
 def func(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
@@ -30,6 +33,7 @@ def func(x: torch.Tensor, y: torch.Tensor):
     kernel1[grid](BLOCK_SIZE=1024)
     kernel2[grid](BLOCK_SIZE=1024)
     kernel3[grid](BLOCK_SIZE=1024)
+
 
 def test_op(capfd):
     size = 98432

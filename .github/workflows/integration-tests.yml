@@ -373,6 +373,7 @@ jobs:
                  --ignore=language/test_line_info.py
           LLVM_PASS_PLUGIN_PATH=../../triton/_C/libGPUHello.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
+
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -n 8 language/test_line_info.py
 
