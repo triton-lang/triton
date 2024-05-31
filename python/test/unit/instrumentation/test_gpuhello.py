@@ -11,16 +11,19 @@ Hello From First Instruction of GPU Kernel: kernel2\ttest_gpuhello.py:19:4\n\
 Hello From First Instruction of GPU Kernel: kernel3\ttest_gpuhello.py:23:4\n'
 
 
+@pytest.mark.parametrize(None, [None])
 @triton.jit
 def kernel1(BLOCK_SIZE: tl.constexpr):
     return
 
 
+@pytest.mark.parametrize(None, [None])
 @triton.jit
 def kernel2(BLOCK_SIZE: tl.constexpr):
     return
 
 
+@pytest.mark.parametrize(None, [None])
 @triton.jit
 def kernel3(BLOCK_SIZE: tl.constexpr):
     return
