@@ -92,7 +92,6 @@ class Autotuner(KernelInterface):
         self.num_reps = rep
         import torch
         self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
-        self.benchmarkig_stream = torch.cuda.Stream() if self.use_cuda_graph else None
 
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
@@ -128,7 +127,7 @@ class Autotuner(KernelInterface):
         try:
             if self.use_cuda_graph:
                 import torch
-                with torch.cuda.stream(self.benchmarkig_stream):
+                with torch.cuda.stream(torch.cuda.Stream()):
                     bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
                 return bench_res
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))

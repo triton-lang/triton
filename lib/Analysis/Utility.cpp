@@ -469,6 +469,7 @@ bool supportMFMA(triton::DotOp op) {
   auto bShape = bTy.getShape();
 
   auto rank = aShape.size();
+  assert(bShape.size() == rank);
   auto M = aShape[rank - 2];
   auto N = bShape[rank - 1];
   auto K = aShape[rank - 1];
@@ -491,7 +492,7 @@ static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
   if (a.isIntOrIndex()) {
     if (!c.isIntOrIndex())
       return false;
-    bool aValid = a.isUnsignedInteger() && aWidth <= 8;
+    bool aValid = aWidth <= 8;
     bool cValid = cWidth <= 32;
     return aValid && cValid;
   } else if (isa<FloatType>(a) && isa<FloatType>(c)) {
@@ -499,7 +500,7 @@ static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
       return c.isBF16() || c.isF32();
     if (a.isF16())
       return c.isF16() || c.isF32();
-    return aWidth <= cWidth;
+    return aWidth <= cWidth && aWidth <= 16;
   }
   return false;
 }
@@ -521,8 +522,11 @@ bool supportWMMA(triton::DotOp op) {
   auto aShape = aTy.getShape();
   auto bShape = bTy.getShape();
 
-  assert(aShape[1] == bShape[0]);
-  if (!supportWMMAGranularity(aShape[0], bShape[1], aShape[1]))
+  auto rank = aShape.size();
+  assert(bShape.size() == rank);
+  assert(aShape[rank - 1] == bShape[rank - 2]);
+  if (!supportWMMAGranularity(aShape[rank - 2], bShape[rank - 1],
+                              aShape[rank - 1]))
     return false;
 
   return true;
@@ -581,8 +585,10 @@ bool supportMMA(Value value, int version) {
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(srcLayout);
-  auto dotOperandLayout = cast<DotOperandEncodingAttr>(dstLayout);
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcLayout);
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstLayout);
+  if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
+    return false;
   // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
   // improved. In addition, we can enable this shortcut for regular MFMA
   // layout when opIdx == 1.

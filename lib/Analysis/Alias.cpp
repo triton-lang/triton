@@ -26,8 +26,13 @@ void SharedMemoryAliasAnalysis::visitOperation(
     ArrayRef<dataflow::Lattice<AliasInfo> *> results) {
   AliasInfo aliasInfo;
   bool pessimistic = true;
-  // These ops may allocate a new shared memory buffer.
   auto result = op->getResult(0);
+  // skip ops that return memdesc in a different memory space.
+  if (auto memdescTy = dyn_cast<triton::MemDescType>(result.getType())) {
+    if (!isa_and_nonnull<triton::gpu::SharedMemorySpaceAttr>(
+            memdescTy.getMemorySpace()))
+      return;
+  }
 
   // Only LocalAllocOp creates a new buffer.
   if (isa<triton::gpu::LocalAllocOp>(op)) {

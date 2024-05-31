@@ -804,7 +804,7 @@ It is characterized by the following parameters:
   - 1.0: gfx908, i.e. MI100
   - 2.0: gfx90a: i.e. MI200, MI210, MI250
   - 3.0: gfx940, gfx941, gfx942: MI300
-- `warpsPerCTA` indicates the wave layout in the workgroup.
+- `warpsPerCTA` indicates the warp layout in the block.
 - `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
 - `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
 without going to LDS. This is used in the case of chained dot (E.g. Flash-Attention kernel).
@@ -813,7 +813,7 @@ Example 1:
 Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and MDim=NDim=32.
 The data will be distributed between threads as follows:
 
-                wave 0                                 wave 1
+                warp 0                                 warp 1
 -----------------/\--------------      -----------------/\--------------
 [ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
 [ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
@@ -852,7 +852,7 @@ Example 2:
 Suppose we have a tensor with a shape of [16, 32], warpsPerCTA set to [1, 2] and MDim=NDim=16.
 The data will be distributed between threads as follows:
 
-                wave 0                                 wave 1
+                warp 0                                 warp 1
 -----------------/\-------------      ------------------/\---------------
 [ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
 [ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
@@ -877,13 +877,13 @@ The data will be distributed between threads as follows(note that each element i
 Suppose we have a tensor with a shape of [8, 8], warpsPerCTA set to [2, 2] and MDim=NDim=4.
 The data will be distributed between threads as follows(note that each element is duplicated in 16 threads):
 
-M  N ->                    wave 0                                                       wave 2
+M  N ->                    warp 0                                                       warp 2
 | --------------------------/\--------------------------   ------------------------------/\------------------------------
 V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
   [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
   [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
   [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,133...189  130,134...190  131,135...191 ]
-                           wave 1                                                       wave 3
+                           warp 1                                                       warp 3
   --------------------------/\--------------------------   ------------------------------/\------------------------------
   [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
   [ 64,68...124  65,69...125  66,70...126  67,71...127 ]   [ 192,196...252  193,197...253  194,198...254  195,199...255 ]
@@ -933,15 +933,15 @@ def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encod
   let description = [{
 An encoding for tensors that have been produced by WMMA instructions,
 available on RDNA 3.
-A `warpsPerCTA` parameter characterizes data distribution between waves.
+A `warpsPerCTA` parameter characterizes data distribution between warps.
 An important limitation of WMMA for layout is a shape for tiles proccessed
-by a single wave. It is [16, 16].
+by a single warp. It is [16, 16].
 This encoding assumes specific access to matrix elements by threads.
 
 Example:
 Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
 
-    wave 0 [16, 16]           wave 1 [16, 16]           wave 2 [16, 16]
+    warp 0 [16, 16]           warp 1 [16, 16]           warp 2 [16, 16]
 -----------/\----------   -----------/\----------   -----------/\----------
 [0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
 [16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
@@ -951,7 +951,7 @@ Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
 [0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
 [16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
 
-    wave 3 [16, 16]           wave 4 [16, 16]           wave 5 [16, 16]
+    warp 3 [16, 16]           warp 4 [16, 16]           warp 5 [16, 16]
 -----------/\----------   -----------/\----------   -----------/\----------
 [0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
 [16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
@@ -1241,7 +1241,9 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
 
     SmallVector<unsigned> getContigPerThread() {
       auto parentLayout = mlir::cast<DistributedEncodingTrait>(getParent());
-      return parentLayout.getContigPerThread();
+      auto parentContigPerThread = parentLayout.getContigPerThread();
+      parentContigPerThread.erase(parentContigPerThread.begin() + getDim());
+      return parentContigPerThread;
     };
   }];
 
@@ -1296,4 +1298,10 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   }];
 }
 
+def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {
+  let mnemonic = "shared_memory";
+  let description = [{
+    Attribute to indicate that the memory descriptor points to shared memory.
+  }];
+}
 #endif

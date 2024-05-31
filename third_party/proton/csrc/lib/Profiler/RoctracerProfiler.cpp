@@ -1,13 +1,12 @@
 #include "Profiler/RoctracerProfiler.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
-#include "Driver/GPU/Hip.h"
-#include "Driver/GPU/Roctracer.h"
-#include <hip/amd_detail/hip_runtime_prof.h>
+#include "Driver/GPU/HipApi.h"
+#include "Driver/GPU/RoctracerApi.h"
 
-#include <roctracer/roctracer.h>
-#include <roctracer/roctracer_ext.h>
-#include <roctracer/roctracer_hip.h>
+#include "hip/amd_detail/hip_runtime_prof.h"
+#include "roctracer/roctracer_ext.h"
+#include "roctracer/roctracer_hip.h"
 
 #include <cstdlib>
 #include <deque>

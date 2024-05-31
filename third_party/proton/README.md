@@ -14,6 +14,13 @@ cd triton/python
 pip install .
 ```
 
+To not build Proton, you can set the `TRITON_BUILD_PROTON` environment variable to `OFF`:
+
+```bash
+TRITON_BUILD_PROTON=OFF pip install .
+```
+
+
 ## Usage
 
 ### Basic usage

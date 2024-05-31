@@ -24,7 +24,6 @@
 #include "DumpLayout.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #ifdef AMD_TARGET
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
@@ -83,8 +82,6 @@ public:
   llvm::SmallVector<llvm::SmallVector<Value>>
   emitIndices(Attribute layout, llvm::ArrayRef<int64_t> shape,
               bool withCTAOffset) {
-    setWarpsPerCTA(product(triton::gpu::getNumWarpsPerCTA(layout)));
-
     auto type = RankedTensorType::get(shape, rewriter.getF16Type(), layout);
     return mlir::emitIndices(loc, rewriter, targetInfo, layout, type,
                              withCTAOffset);
@@ -94,8 +91,6 @@ public:
   emitDistributedToShared(Attribute srcLayout, SharedEncodingAttr sharedLayout,
                           Type elemTy, llvm::ArrayRef<int64_t> shape,
                           bool withCTAOffset) {
-    setWarpsPerCTA(product(triton::gpu::getWarpsPerCTA(sharedLayout)));
-
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
     SharedMemoryObject smemObj(getMockSmemBaseImpl(rewriter, loc), elemTy,
                                shape, sharedLayout.getOrder(), loc, rewriter);
@@ -105,14 +100,6 @@ public:
   }
 
 private:
-  void setWarpsPerCTA(int32_t warpsPerCTA) {
-    rewriter.getInsertionBlock()
-        ->getParent()
-        ->getParentOfType<ModuleOp>()
-        ->setAttr("triton_gpu.num-warps",
-                  rewriter.getI32IntegerAttr(warpsPerCTA));
-  }
-
   // Non-static members are initialized in declaration order
   MLIRContext *context;
   LowerToLLVMOptions option;
