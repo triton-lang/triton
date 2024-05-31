@@ -106,7 +106,7 @@ protected:
   // those headers only within cpp files.
   class GPUProfilerPimplInterface {
   public:
-    GPUProfilerPimplInterface(ConcreteProfilerT *profiler)
+    GPUProfilerPimplInterface(ConcreteProfilerT &profiler)
         : profiler(profiler) {}
     virtual ~GPUProfilerPimplInterface() = default;
 
@@ -117,7 +117,7 @@ protected:
     virtual void doStop() = 0;
 
   protected:
-    ConcreteProfilerT *profiler;
+    ConcreteProfilerT &profiler;
   };
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 };

@@ -123,7 +123,7 @@ std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
 
 struct CuptiProfiler::CuptiProfilerPimpl
     : public GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface {
-  CuptiProfilerPimpl(CuptiProfiler *profiler)
+  CuptiProfilerPimpl(CuptiProfiler &profiler)
       : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~CuptiProfilerPimpl() = default;
 
@@ -253,7 +253,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   cuda::ctxGetCurrent<false>(&cuContext);
   if (cuContext)
     cuda::ctxSynchronize<true>();
-  profiler->correlation.flush(
+  profiler.correlation.flush(
       /*maxRetries=*/100, /*sleepMs=*/10,
       /*flush=*/[]() {
         cupti::activityFlushAll<true>(
@@ -278,7 +278,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
 }
 
 CuptiProfiler::CuptiProfiler() {
-  pImpl = std::make_unique<CuptiProfilerPimpl>(this);
+  pImpl = std::make_unique<CuptiProfilerPimpl>(*this);
 }
 
 CuptiProfiler::~CuptiProfiler() = default;

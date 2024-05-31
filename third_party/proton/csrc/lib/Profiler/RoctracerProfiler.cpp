@@ -175,7 +175,7 @@ const char *kernelName(uint32_t domain, uint32_t cid,
 
 struct RoctracerProfiler::RoctracerProfilerPimpl
     : public GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface {
-  RoctracerProfilerPimpl(RoctracerProfiler *profiler)
+  RoctracerProfilerPimpl(RoctracerProfiler &profiler)
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~RoctracerProfilerPimpl() = default;
 
@@ -273,7 +273,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doFlush() {
   // If flushing encounters an activity record still being written, flushing
   // stops. Use a subsequent flush when the record has completed being written
   // to resume the flush.
-  profiler->correlation.flush(
+  profiler.correlation.flush(
       /*maxRetries=*/100, /*sleepMs=*/10, /*flush=*/
       []() { roctracer::flushActivity<true>(); });
 }
@@ -286,7 +286,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {
 }
 
 RoctracerProfiler::RoctracerProfiler() {
-  pImpl = std::make_unique<RoctracerProfilerPimpl>(this);
+  pImpl = std::make_unique<RoctracerProfilerPimpl>(*this);
 }
 
 RoctracerProfiler::~RoctracerProfiler() = default;
