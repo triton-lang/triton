@@ -43,44 +43,49 @@ void addMetric(size_t scopeId, std::set<Data *> &dataSet,
   }
 }
 
-void processActivityExternalCorrelation(
-    std::map<uint32_t, size_t> &corrIdToExternId, CUpti_Activity *activity) {
+uint32_t
+processActivityExternalCorrelation(std::map<uint32_t, size_t> &corrIdToExternId,
+                                   CUpti_Activity *activity) {
   auto *externalActivity =
       reinterpret_cast<CUpti_ActivityExternalCorrelation *>(activity);
   corrIdToExternId[externalActivity->correlationId] =
       externalActivity->externalId;
+  return externalActivity->correlationId;
 }
 
-void processActivityKernel(std::map<uint32_t, size_t> &corrIdToExternId,
-                           std::set<Data *> &dataSet,
-                           CUpti_Activity *activity) {
+uint32_t processActivityKernel(std::map<uint32_t, size_t> &corrIdToExternId,
+                               std::set<Data *> &dataSet,
+                               CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
-  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end()) {
-    return;
-  }
+  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end())
+    return correlationId;
   auto externalId = corrIdToExternId[correlationId];
   addMetric(externalId, dataSet, activity);
   // Track correlation ids from the same stream and erase those < correlationId
   corrIdToExternId.erase(correlationId);
+  return correlationId;
 }
 
-void processActivity(std::map<uint32_t, size_t> &corrIdToExternId,
-                     std::set<Data *> &dataSet, CUpti_Activity *activity) {
+uint32_t processActivity(std::map<uint32_t, size_t> &corrIdToExternId,
+                         std::set<Data *> &dataSet, CUpti_Activity *activity) {
+  auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION: {
-    processActivityExternalCorrelation(corrIdToExternId, activity);
+    correlationId =
+        processActivityExternalCorrelation(corrIdToExternId, activity);
     break;
   }
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    processActivityKernel(corrIdToExternId, dataSet, activity);
+    correlationId = processActivityKernel(corrIdToExternId, dataSet, activity);
     break;
   }
   default:
     break;
   }
+  return correlationId;
 }
 
 std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
@@ -170,13 +175,15 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
       dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
   auto &pImpl = dynamic_cast<CuptiProfilerPimpl &>(*profiler.pImpl.get());
   auto &dataSet = profiler.dataSet;
-
+  uint32_t maxCorrelationId = 0;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
-      processActivity(pImpl.corrIdToExternId, dataSet, activity);
+      auto correlationId =
+          processActivity(pImpl.corrIdToExternId, dataSet, activity);
+      maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
     } else {
@@ -184,7 +191,9 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     }
   } while (true);
 
-  free(buffer);
+  std::free(buffer);
+
+  profiler.correlation.complete(maxCorrelationId);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
@@ -209,7 +218,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     profilerState.enterOp();
   } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
     profilerState.exitOp();
-    profiler.correlation.complete(callbackData->correlationId);
+    profiler.correlation.submit(callbackData->correlationId);
   }
 }
 
