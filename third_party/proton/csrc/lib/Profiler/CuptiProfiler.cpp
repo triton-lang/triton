@@ -134,8 +134,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
   void startOp(const Scope &scope);
   void stopOp(const Scope &scope);
-  void setOpInProgress(bool value);
-  bool isOpInProgress();
 
   void doStart();
   void doFlush();
