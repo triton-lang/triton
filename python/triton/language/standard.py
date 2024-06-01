@@ -106,9 +106,11 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     off_i = group_id * size_g
     # last group may have fewer rows
     size_g = core.minimum(size_i - off_i, size_g)
+    # linear index with respect to the first element in this group
+    ij = ij % size_gj
     # new row and column indices
-    new_i = off_i + (ij % size_g)
-    new_j = (ij % size_gj) // size_g
+    new_i = off_i + ij % size_g
+    new_j = ij // size_g
     return new_i, new_j
 
 
