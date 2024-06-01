@@ -281,11 +281,16 @@ static bool emitTransferBetweenRegistersAndShared(
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
   // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
   // shmem strides.  (The offsetX's appear in minor-to-major order.)
+  auto sharedLegacy =
+      cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
   SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
   for (int i = 0; i < rank; i++) {
     int dim = sharedOrder[i];
+    int64_t size = std::max(
+        int64_t{1},
+        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
     multiDimSharedSize.push_back(
-        {str_attr("offset" + std::to_string(dim)), shape[dim]});
+        {str_attr("offset" + std::to_string(dim)), size});
   }
   multiDimSharedSize.push_back({kBlock, sharedLayout->getInDimSize(kBlock)});
   sharedLayout = sharedLayout->reshapeIns(multiDimSharedSize);

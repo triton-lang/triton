@@ -385,7 +385,7 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
-// TODO: Lots more tests of InvertAndCompose
+// XXX: Lots more tests of InvertAndCompose
 TEST_F(LinearLayoutTest, InvertAndCompose_NonInjective) {
   LinearLayout l1({{S("in1"), {{2}, {1}, {4}}}}, {S("out")});
   LinearLayout l2({{S("in2"), {{0}, {2}, {1}, {4}}}}, {S("out")});
@@ -405,6 +405,85 @@ TEST_F(LinearLayoutTest, InvertAndCompose_NonInjective) {
   EXPECT_FALSE(composition.isSurjective());
 
   // L2 ∘ L2^-1 ∘ L1 == L1.
+  EXPECT_EQ(composition.compose(l2), l1);
+}
+
+TEST_F(LinearLayoutTest, InvertAndCompose_SmallerResult) {
+  // The domain of l2 is [0,16), but the codomain of the result is only [0,8),
+  // because there's no value v in the codomain of l1 such that l2^-1(v) >= 8.
+  LinearLayout l1({{S("in1"), {{1}, {2}, {4}}}}, {S("out")});
+  LinearLayout l2({{S("in2"), {{4}, {1}, {2}, {8}}}}, {S("out")});
+  // Pseudo-inverse of l2 is
+  //
+  //  out(1) = 2
+  //  out(2) = 4
+  //  out(4) = 1
+  //
+  // l1 is the identity, so composing with l1 gives back l2^-1.
+  LinearLayout composition = l1.invertAndCompose(l2);
+  EXPECT_EQ(composition,
+            LinearLayout({{S("in1"), {{2}, {4}, {1}}}}, {S("in2")}));
+  EXPECT_EQ(composition.compose(l2), l1);
+}
+
+TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedInDim) {
+  LinearLayout l1({{S("in1"), {{2}, {1}, {4}}}, {S("in2"), {{0}}}}, {S("out")});
+  LinearLayout l2({{S("in"), {{4}, {1}, {2}}}}, {S("out")});
+  // Inverse of l2 is
+  //   out(1) = 2
+  //   out(2) = 4
+  //   out(4) = 1
+  //
+  // Composing with l1 gives
+  //
+  //   l2^-1(l1(1, 0)) = l2^-1(2) = 4
+  //   l2^-1(l1(2, 0)) = l2^-1(1) = 2
+  //   l2^-1(l1(4, 0)) = l2^-1(4) = 1
+  //   l2^-1(l1(0, 1)) = l2^-1(0) = 0
+  LinearLayout composition = l1.invertAndCompose(l2);
+  EXPECT_EQ(composition,
+            LinearLayout({{S("in1"), {{4}, {2}, {1}}}, {S("in2"), {{0}}}},
+                         {S("in")}));
+  EXPECT_EQ(composition.compose(l2), l1);
+}
+
+TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastAtBeginningOfSecond) {
+  LinearLayout l1({{S("in"), {{1}, {2}, {4}}}}, {S("out")});
+  LinearLayout l2({{S("in"), {{0}, {4}, {1}, {2}}}}, {S("out")});
+  // Pseudo-inverse of l2 is
+  //  out(1) = 4
+  //  out(2) = 8
+  //  out(4) = 2
+  //
+  // l1 is the identity, so composing with l1 gives back l2^-1.
+  LinearLayout composition = l1.invertAndCompose(l2);
+  EXPECT_EQ(composition, LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {S("in")},
+                                      /*requireSurjective=*/false));
+  EXPECT_EQ(composition.compose(l2), l1);
+}
+
+TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastAtEndOfSecond) {
+  LinearLayout l1({{S("in1"), {{1}, {2}, {4}}}}, {S("out")});
+  LinearLayout l2({{S("in2"), {{4}, {1}, {2}, {0}}}}, {S("out")});
+  // Pseudo-inverse of l2 is
+  //
+  //  out(1) = 2
+  //  out(2) = 4
+  //  out(4) = 1
+  //
+  // l1 is the identity, so composing with l1 gives back l2^-1.
+  LinearLayout composition = l1.invertAndCompose(l2);
+  EXPECT_EQ(composition,
+            LinearLayout({{S("in1"), {{2}, {4}, {1}}}}, {S("in2")}));
+  EXPECT_EQ(composition.compose(l2), l1);
+}
+
+TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastBeginningAndEndOfSecond) {
+  LinearLayout l1({{S("in"), {{1}, {2}, {4}}}}, {S("out")});
+  LinearLayout l2({{S("in"), {{0}, {4}, {1}, {2}, {0}}}}, {S("out")});
+  LinearLayout composition = l1.invertAndCompose(l2);
+  EXPECT_EQ(composition, LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {S("in")},
+                                      /*requireSurjective=*/false));
   EXPECT_EQ(composition.compose(l2), l1);
 }
 

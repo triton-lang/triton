@@ -593,7 +593,8 @@ public:
   //
   // Notice the following requirements in order for this to work.
   //
-  //   - R and S must have the same output dimensions.
+  //   - R and S must have the same output dimension names (different order is
+  //     allowed).
   //   - S must be surjective, i.e. there must be some offset for each output
   //     dimension of S.  This way when we compose S^-1 with R, every possible
   //     2D index that we might get from R has some shmem offset.

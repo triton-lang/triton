@@ -102,7 +102,7 @@ void dumpMatrix(uint64_t *m, int numRows, int numCols) {
 // the bases of the given layout.  This can then be used by f2reduce.
 //
 // This function is called from the constructor of LinearLayout, so be careful
-// not to use any
+// not to use any functions that create LLs in here.
 std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
   int numRows = layout.getTotalOutDimSizeLog2();
   int numCols = layout.getTotalInDimSizeLog2();
@@ -652,8 +652,12 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   for (StringAttr dim : getInDimNames()) {
     retInDims.push_back({dim, getInDimSize(dim)});
   }
+  // XXX explain
+  int remainingOutDims = flatComposed.getTotalOutDimSize();
   for (StringAttr dim : outer.getInDimNames()) {
-    retOutDims.push_back({dim, outer.getInDimSize(dim)});
+    int size = std::min(remainingOutDims, outer.getInDimSize(dim));
+    retOutDims.push_back({dim, size});
+    remainingOutDims /= size;
   }
   return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
 }
