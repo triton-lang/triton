@@ -469,10 +469,12 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_4x4Warps) {
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
   auto mfmaNT = mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4},
                      /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
-
-  EXPECT_EQ(toLinearLayout({16, 16}, mfmaNT), std::nullopt);
-  EXPECT_EQ(toLinearLayout({16, 32}, mfmaNT), std::nullopt);
-  EXPECT_EQ(toLinearLayout({64, 16}, mfmaNT), std::nullopt);
+  EXPECT_DEBUG_DEATH(toLinearLayout({16, 16}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
+  EXPECT_DEBUG_DEATH(toLinearLayout({16, 32}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
+  EXPECT_DEBUG_DEATH(toLinearLayout({64, 16}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
   EXPECT_EQ(toLinearLayout({128, 128}, mfmaNT),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {8, 0}, {16, 0}, {64, 0}}},
@@ -525,9 +527,12 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
   auto mfmaNT = mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4},
                      /*mDim*/ 16, /*nDim*/ 16, /*isTranspose*/ false);
 
-  EXPECT_EQ(toLinearLayout({8, 8}, mfmaNT), std::nullopt);
-  EXPECT_EQ(toLinearLayout({8, 32}, mfmaNT), std::nullopt);
-  EXPECT_EQ(toLinearLayout({16, 8}, mfmaNT), std::nullopt);
+  EXPECT_DEBUG_DEATH(toLinearLayout({8, 8}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
+  EXPECT_DEBUG_DEATH(toLinearLayout({8, 32}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
+  EXPECT_DEBUG_DEATH(toLinearLayout({16, 8}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
   EXPECT_EQ(toLinearLayout({16, 16}, mfmaNT),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
@@ -542,9 +547,12 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
       mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4, 1},
            /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
 
-  EXPECT_EQ(toLinearLayout({32, 16, 16}, mfmaNT), std::nullopt);
-  EXPECT_EQ(toLinearLayout({32, 16, 32}, mfmaNT), std::nullopt);
-  EXPECT_EQ(toLinearLayout({32, 64, 16}, mfmaNT), std::nullopt);
+  EXPECT_DEBUG_DEATH(toLinearLayout({32, 16, 16}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
+  EXPECT_DEBUG_DEATH(toLinearLayout({32, 16, 32}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
+  EXPECT_DEBUG_DEATH(toLinearLayout({32, 64, 16}, mfmaNT),
+                     "Unsupported tensor shape for given mfma layout");
   EXPECT_EQ(toLinearLayout({1, 128, 128}, mfmaNT),
             LinearLayout({{S("register"),
                            {{0, 1, 0},

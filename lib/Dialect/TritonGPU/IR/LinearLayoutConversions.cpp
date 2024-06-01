@@ -398,19 +398,20 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
 
-std::optional<LinearLayout> mfmaToLinearLayout(ArrayRef<int64_t> shape,
-                                               AMDMfmaEncodingAttr mfma) {
+LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
+                                AMDMfmaEncodingAttr mfma) {
   int rank = shape.size();
   assert(rank == mfma.getWarpsPerCTA().size());
   MLIRContext *ctx = mfma.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
-  if (shape[rank - 2] < mfma.getMDim() || shape[rank - 1] < mfma.getNDim())
-    return std::nullopt;
+  assert(((shape[rank - 2] == 1 || shape[rank - 2] >= mfma.getMDim()) &&
+          (shape[rank - 1] == 1 || shape[rank - 1] >= mfma.getNDim())) &&
+         "Unsupported tensor shape for given mfma layout");
 
-  if ((mfma.getMDim() != 32 || mfma.getNDim() != 32) &&
-      (mfma.getMDim() != 16 || mfma.getNDim() != 16))
-    return std::nullopt;
+  assert(((mfma.getMDim() == 32 && mfma.getNDim() == 32) ||
+          (mfma.getMDim() == 16 || mfma.getNDim() == 16)) &&
+         "unsupported mfma type");
 
   auto rDim = S("register");
   auto lDim = S("lane");
@@ -432,7 +433,6 @@ std::optional<LinearLayout> mfmaToLinearLayout(ArrayRef<int64_t> shape,
   }
   if (rank == 3) {
     assert(order[2] == 0);
-    // use identity, because
     tileLayout *= LinearLayout::identity1D(1, rDim, outDimNames[order[2]]);
     tileLayout *= LinearLayout::identity1D(1, lDim, outDimNames[order[2]]);
   }

@@ -1497,8 +1497,8 @@ AMDMfmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   auto warpsPerCTA = getWarpsPerCTA();
   auto rank = warpsPerCTA.size();
   SmallVector<unsigned> shapePerCTATile(warpsPerCTA.begin(), warpsPerCTA.end());
-  shapePerCTATile[rank - 2] *= getMDim();
-  shapePerCTATile[rank - 1] *= getNDim();
+  shapePerCTATile[rank - 1] *= getMDim();
+  shapePerCTATile[rank - 2] *= getNDim();
   return shapePerCTATile;
 }
 
@@ -1618,9 +1618,9 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
 SmallVector<unsigned>
 AMDMfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   if (opIdx == 0) {
-    return {1, 4};
-  } else if (opIdx == 1) {
     return {4, 1};
+  } else if (opIdx == 1) {
+    return {1, 4};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
     return {};
