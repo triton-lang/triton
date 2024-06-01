@@ -279,7 +279,8 @@ jobs:
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -vs hopper/test_flashattention.py
           TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=../../triton/_C/libGPUHello.so \
-          python3 -m pytest test/unit/hopper/test_gpuhello.py
+          python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
+
 
       - name: Run interpreter tests
         if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
