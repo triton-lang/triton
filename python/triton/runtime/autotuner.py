@@ -239,15 +239,16 @@ class Config:
         self.pre_hook = pre_hook
 
     def all_kwargs(self):
-        return self.kwargs | {
-            k: v
-            for (k, v) in (
-                ("num_warps", self.num_warps),
-                ("num_ctas", self.num_ctas),
-                ("num_stages", self.num_stages),
-                ("maxnreg", self.maxnreg),
-            )
-            if v is not None
+        return {
+            **self.kwargs, **{
+                k: v
+                for (k, v) in (
+                    ("num_warps", self.num_warps),
+                    ("num_ctas", self.num_ctas),
+                    ("num_stages", self.num_stages),
+                    ("maxnreg", self.maxnreg),
+                ) if v is not None
+            }
         }
 
     def __str__(self):
