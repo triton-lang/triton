@@ -51,27 +51,31 @@ void addMetric(size_t scopeId, std::set<Data *> &dataSet,
   }
 }
 
-void processActivityKernel(std::map<uint32_t, size_t> &correlation,
+void processActivityKernel(std::mutex &corrIdToExternIdMutex,
+                           std::map<uint64_t, size_t> &corrIdToExternId,
                            std::set<Data *> &dataSet,
                            const roctracer_record_t *activity) {
   auto correlationId = activity->correlation_id;
-  // TODO: non-triton kernels
-  if (correlation.find(correlationId) == correlation.end()) {
+  std::unique_lock<std::mutex> lock(corrIdToExternIdMutex);
+  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end()) {
     return;
   }
-  auto externalId = correlation[correlationId];
+  auto externalId = corrIdToExternId[correlationId];
   addMetric(externalId, dataSet, activity);
   // Track correlation ids from the same stream and erase those < correlationId
-  correlation.erase(correlationId);
+  corrIdToExternId.erase(correlationId);
 }
 
-void processActivity(std::map<uint32_t, size_t> &externalCorrelation,
+void processActivity(std::mutex &corrIdToExternIdMutex,
+                     std::map<uint64_t, size_t> &corrIdToExternId,
+
                      std::set<Data *> &dataSet,
                      const roctracer_record_t *record) {
   switch (record->kind) {
   case 0x11F1: // Task - kernel enqueued by graph launch
   case kHipVdiCommandKernel: {
-    processActivityKernel(externalCorrelation, dataSet, record);
+    processActivityKernel(corrIdToExternIdMutex, corrIdToExternId, dataSet,
+                          record);
     break;
   }
   default:
@@ -108,19 +112,21 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
   return std::make_pair(isRuntimeApi, isDriverApi);
 }
 // C++ symbol demangle
-static inline const char *cxxDemangle(const char *symbol) {
-  size_t funcnamesize;
+static inline const std::string cxxDemangle(const char *symbol) {
+  size_t funcNameSize;
   int status;
-  const char *ret =
+  const char *name =
       (symbol != NULL)
-          ? abi::__cxa_demangle(symbol, NULL, &funcnamesize, &status)
+          ? abi::__cxa_demangle(symbol, NULL, &funcNameSize, &status)
           : symbol;
-  return (ret != NULL) ? ret : symbol;
+  auto ret = (name != NULL) ? std::string(name) : std::string(symbol);
+  std::free(reinterpret_cast<void *>(const_cast<char *>(name)));
+  return ret;
 }
 
-const char *kernelName(uint32_t domain, uint32_t cid,
-                       const void *callback_data) {
-  const char *name = "";
+const std::string kernelName(uint32_t domain, uint32_t cid,
+                             const void *callback_data) {
+  std::string name;
   if (domain == ACTIVITY_DOMAIN_HIP_API) {
     const hip_api_data_t *data = (const hip_api_data_t *)(callback_data);
     switch (cid) {
@@ -165,13 +171,23 @@ const char *kernelName(uint32_t domain, uint32_t cid,
     case HIP_API_ID_hipGraphLaunch: {
       name = "graphLaunch";
     } break;
-    default:;
+    default:
+      break;
     }
   }
   return name;
 }
 
 } // namespace
+
+enum CorrelationDomain {
+  begin,
+  Default = begin,
+  Domain0 = begin,
+  Domain1,
+  end,
+  size = end
+};
 
 struct RoctracerProfiler::RoctracerProfilerPimpl
     : public GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface {
@@ -192,7 +208,10 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
 
   const inline static size_t BufferSize = 64 * 1024 * 1024;
 
-  std::map<uint32_t, size_t> externalCorrelation;
+  inline static std::mutex corrIdToExternIdMutex;
+  inline static std::map<uint64_t, size_t> corrIdToExternId;
+  inline static thread_local std::deque<size_t>
+      externIdQueue[CorrelationDomain::size];
 };
 
 void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
@@ -203,22 +222,21 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
   }
   auto &profiler =
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
-  auto &correlation = profiler.correlation;
   if (domain == ACTIVITY_DOMAIN_HIP_API) {
     const hip_api_data_t *data = (const hip_api_data_t *)(callback_data);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
-      const char *name = kernelName(domain, cid, callback_data);
-      // roctracer::getOpString(ACTIVITY_DOMAIN_HIP_API, cid, 0);	//
-      // proper api name
+      const std::string name = kernelName(domain, cid, callback_data);
       auto scopeId = Scope::getNewScopeId();
       auto scope = Scope(scopeId, name);
       profilerState.record(scope);
       profilerState.enterOp();
+      std::unique_lock<std::mutex> lock(corrIdToExternIdMutex);
+      corrIdToExternId[data->correlation_id] = scopeId;
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
       profilerState.exitOp();
       // Track outstanding op for flush
-      correlation.submit(data->correlation_id);
+      profiler.correlation.submit(data->correlation_id);
     }
   }
 }
@@ -227,8 +245,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     const char *begin, const char *end, void *arg) {
   RoctracerProfiler &profiler =
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
-  auto &pImpl = dynamic_cast<RoctracerProfilerPimpl &>(*profiler.pImpl.get());
-  auto &externalCorrelation = pImpl.externalCorrelation;
   auto &dataSet = profiler.dataSet;
   auto &correlation = profiler.correlation;
 
@@ -243,15 +259,20 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     // data on stop
     maxCorrelationId =
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
-    processActivity(externalCorrelation, dataSet, record);
+    processActivity(corrIdToExternIdMutex, corrIdToExternId, dataSet, record);
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
 }
 
-void RoctracerProfiler::RoctracerProfilerPimpl::startOp(const Scope &scope) {}
+void RoctracerProfiler::RoctracerProfilerPimpl::startOp(const Scope &scope) {
+  // Track correlation id for the scope
+  externIdQueue[CorrelationDomain::Default].push_back(scope.scopeId);
+}
 
-void RoctracerProfiler::RoctracerProfilerPimpl::stopOp(const Scope &scope) {}
+void RoctracerProfiler::RoctracerProfilerPimpl::stopOp(const Scope &scope) {
+  externIdQueue[CorrelationDomain::Default].pop_back();
+}
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
   roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_HIP_API, apiCallback,

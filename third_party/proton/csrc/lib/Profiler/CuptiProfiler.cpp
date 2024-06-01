@@ -44,38 +44,38 @@ void addMetric(size_t scopeId, std::set<Data *> &dataSet,
 }
 
 void processActivityExternalCorrelation(
-    std::map<uint32_t, size_t> &externalCorrelation, CUpti_Activity *activity) {
+    std::map<uint32_t, size_t> &corrIdToExternId, CUpti_Activity *activity) {
   auto *externalActivity =
       reinterpret_cast<CUpti_ActivityExternalCorrelation *>(activity);
-  externalCorrelation[externalActivity->correlationId] =
+  corrIdToExternId[externalActivity->correlationId] =
       externalActivity->externalId;
 }
 
-void processActivityKernel(std::map<uint32_t, size_t> &correlation,
+void processActivityKernel(std::map<uint32_t, size_t> &corrIdToExternId,
                            std::set<Data *> &dataSet,
                            CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
-  if (correlation.find(correlationId) == correlation.end()) {
+  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end()) {
     return;
   }
-  auto externalId = correlation[correlationId];
+  auto externalId = corrIdToExternId[correlationId];
   addMetric(externalId, dataSet, activity);
   // Track correlation ids from the same stream and erase those < correlationId
-  correlation.erase(correlationId);
+  corrIdToExternId.erase(correlationId);
 }
 
-void processActivity(std::map<uint32_t, size_t> &externalCorrelation,
+void processActivity(std::map<uint32_t, size_t> &corrIdToExternId,
                      std::set<Data *> &dataSet, CUpti_Activity *activity) {
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION: {
-    processActivityExternalCorrelation(externalCorrelation, activity);
+    processActivityExternalCorrelation(corrIdToExternId, activity);
     break;
   }
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    processActivityKernel(externalCorrelation, dataSet, activity);
+    processActivityKernel(corrIdToExternId, dataSet, activity);
     break;
   }
   default:
@@ -146,7 +146,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
   const inline static size_t AlignSize = 8;
   const inline static size_t BufferSize = 64 * 1024 * 1024;
 
-  std::map<uint32_t, size_t> externalCorrelation;
+  std::map<uint32_t, size_t> corrIdToExternId;
   CUpti_SubscriberHandle subscriber{};
 };
 
@@ -169,7 +169,6 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   CuptiProfiler &profiler =
       dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
   auto &pImpl = dynamic_cast<CuptiProfilerPimpl &>(*profiler.pImpl.get());
-  auto &externalCorrelation = pImpl.externalCorrelation;
   auto &dataSet = profiler.dataSet;
 
   CUptiResult status;
@@ -177,7 +176,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
-      processActivity(externalCorrelation, dataSet, activity);
+      processActivity(pImpl.corrIdToExternId, dataSet, activity);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
     } else {
