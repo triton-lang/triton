@@ -304,6 +304,20 @@ scf::ForOp Prefetcher::createNewForOp() {
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
+    // If we're currently trying to sink a prefetched dot, we need to stop
+    // sinking it (by resetting the insertion point to the end) if we find
+    // control flow, or anything that depends on the dot op.
+    if (op.getNumRegions() > 0) {
+      builder.setInsertionPointToEnd(newForOp.getBody());
+    }
+    for (auto operand : op.getOperands()) {
+      if (auto def = operand.getDefiningOp()) {
+        auto dot = dyn_cast<triton::DotOp>(def);
+        if (dot && dots.contains(dot)) {
+          builder.setInsertionPointToEnd(newForOp.getBody());
+        }
+      }
+    }
     Operation *newOp = builder.clone(op, mapping);
     auto dot = dyn_cast<triton::DotOp>(&op);
     if (dot && dots.contains(dot)) {
@@ -342,6 +356,13 @@ scf::ForOp Prefetcher::createNewForOp() {
         prevDot = newOp;
         kOff += kShape;
         kRem -= kShape;
+        if (kRem == 0) {
+          // We want to delay issuing the last dot as long as possible, ideally
+          // until after the prefetch.  To accomplish this, set the insertion
+          // point above the dot.  If we find anything dependent on the dot (at
+          // the top of this loop), we resume inserting after it.
+          builder.setInsertionPoint(prevDot);
+        }
       }
     }
     // update mapping of results
@@ -366,6 +387,7 @@ scf::ForOp Prefetcher::createNewForOp() {
     yieldValues.push_back(bToYield);
   }
   // Update ops of yield
+  builder.setInsertionPointToEnd(newForOp.getBody());
   if (!yieldValues.empty())
     builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
   return newForOp;
