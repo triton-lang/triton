@@ -1268,7 +1268,7 @@ def trans(input: tensor, *dims, _builder=None):
     """
     Permutes the dimensions of a tensor.
 
-    If the parameter :code:`dims` is not specified, the function defaults to a (1,0) permutation, 
+    If the parameter :code:`dims` is not specified, the function defaults to a (1,0) permutation,
     effectively transposing a 2D tensor.
 
     :param input: The input tensor.
