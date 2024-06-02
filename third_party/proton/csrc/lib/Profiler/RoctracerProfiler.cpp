@@ -290,7 +290,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doFlush() {
   // Implement reliable flushing.
   // Wait for all dispatched ops to be reported.
   std::ignore = hip::deviceSynchronize<true>();
-  roctracer::flushActivity<true>();
   // If flushing encounters an activity record still being written, flushing
   // stops. Use a subsequent flush when the record has completed being written
   // to resume the flush.

@@ -11,13 +11,15 @@
 
 namespace proton {
 
+// Singleton<CongreteProfilerT>: Each concrete GPU profiler, e.g.,
+// CuptiProfiler, should be a singleton.
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
                     public OpInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
-  GPUProfiler();
-  virtual ~GPUProfiler();
+  GPUProfiler() = default;
+  virtual ~GPUProfiler() = default;
 
 protected:
   // OpInterface
@@ -38,7 +40,6 @@ protected:
   struct ProfilerState {
     ConcreteProfilerT &profiler;
     std::set<Data *> dataSet;
-    size_t level{0};
     bool isRecording{false};
     Scope scope{};
 
@@ -51,21 +52,15 @@ protected:
     }
 
     void enterOp() {
-      if (level == 0 && isRecording) {
-        profiler.enterOp(scope);
-        for (auto data : dataSet)
-          data->enterOp(scope);
-      }
-      level++;
+      profiler.enterOp(scope);
+      for (auto data : dataSet)
+        data->enterOp(scope);
     }
 
     void exitOp() {
-      level--;
-      if (level == 0 && isRecording) {
-        profiler.exitOp(scope);
-        for (auto data : dataSet)
-          data->exitOp(this->scope);
-      }
+      profiler.exitOp(scope);
+      for (auto data : dataSet)
+        data->exitOp(this->scope);
     }
   };
 
@@ -85,14 +80,16 @@ protected:
 
     template <typename FlushFnT>
     void flush(uint64_t maxRetries, uint64_t sleepMs, FlushFnT &&flushFn) {
+      flushFn();
       auto submittedId = maxSubmittedCorrelationId.load();
       auto completedId = maxCompletedCorrelationId.load();
       auto retries = maxRetries;
-      while ((completedId < submittedId) && --retries > 0) {
-        flushFn();
+      while ((completedId < submittedId) && retries > 0) {
         // sleep_for 0 is still valid and will yield the thread
         std::this_thread::sleep_for(std::chrono::microseconds(sleepMs));
+        flushFn();
         completedId = maxCompletedCorrelationId.load();
+        --retries;
       }
     }
   };
