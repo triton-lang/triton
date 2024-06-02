@@ -76,9 +76,8 @@ def ravel(x):
 @jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
-    Transforms indices of a row-major :code:`size_i * size_j` matrix into those
-    of one where the indices are col-major for each group of :code:`size_g`
-    rows.
+    Transforms the indices of a row-major `size_i * size_j` matrix into
+    the indices of a column-major matrix for each group of `size_g` rows.
 
     For example, for :code:`size_i = size_j = 4` and :code:`size_g = 2`, it will
     transform ::
