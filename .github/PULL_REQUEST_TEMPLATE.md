@@ -1,26 +1,28 @@
-# Pull Request Template
+The core Triton is a small number of people, and we receive many PRs (thank
+you!).  To help us review your code more quickly, **if you are a new
+contributor (less than 3 PRs merged) we ask that you fill out the following
+checklist and include it in your PR description.**
 
-Please ensure the following are completed before creating a PR.
+Fill out the checklist by replacing `[ ]` with `[x]`.
 
-- [ ] **PR Description** is written in clear, idiomatic English and follows the
-  [rules](https://cbea.ms/git-commit/#why-not-how) for a good PR description.
+- [ ] I am not making a trivial change, such as fixing a typo in a comment.
 
-  (The LLM of your choice can help copyedit your PR description.  You can even
-  give it your whole patch to analyze.)
+- [ ] I have written a PR description following these
+  [rules](https://cbea.ms/git-commit/#why-not-how).
 
-- [ ] **Pre-commit checks** pass.
-    ```bash
-    pre-commit install
-    pre-commit run --all-files
-    ```
+- [ ] I have used an LLM to copyedit my PR description and and code comments.
 
-- [ ] **Tests** have been added and/or updated.
-  - For changes to the backend: `/test/` (for `lit`), `/unittest/` (for
-    `gtest`), or occasionally end-to-end tests like in
-    `/python/test/unit/language/test_core.py`.
-  - For changes to the frontend: `/python/test/`
+- [ ] I have run `pre-commit run --from-ref origin/main --to-ref HEAD`.
 
-- [ ] **Documentation**
-  - [ ] The code contains comments where appropriate, written in clear,
-    idiomatic English. Again, an LLM can help.
-  - [ ] If appropriate, the Triton documentation have been updated.
+- Select one of the following.
+  - [ ] I have added tests.
+    - `/test` for `lit` tests
+    - `/unittest` for C++ tests
+    - `/python/test` for end-to-end tests
+  - [ ] This PR does not need a test because `FILL THIS IN`.
+
+- Select one of the following.
+  - [ ] I have not added any `lit` tests.
+  - [ ] The `lit` tests I have added are "minimal" -- they contain only the
+    instructions necessary to exercise the bug.  (Usually running Python code
+    and using the instructions it generates is not minimal.)
