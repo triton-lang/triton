@@ -1094,6 +1094,9 @@ def test_shapes_as_params(device):
         a = tl.arange(0, 32).reshape(4, 8).permute(1, 0)
         tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4)])
 
+        a = tl.arange(0, 32).reshape(4, 8).trans()
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4)])
+        
         a = tl.arange(0, 32).reshape(4, 8).reshape(32)
         tl.static_assert(a.shape == [tl.constexpr(32)])
 
