@@ -57,9 +57,8 @@ void processActivityKernel(std::mutex &corrIdToExternIdMutex,
                            const roctracer_record_t *activity) {
   auto correlationId = activity->correlation_id;
   std::unique_lock<std::mutex> lock(corrIdToExternIdMutex);
-  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end()) {
+  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end())
     return;
-  }
   auto externalId = corrIdToExternId[correlationId];
   addMetric(externalId, dataSet, activity);
   // Track correlation ids from the same stream and erase those < correlationId
@@ -180,14 +179,7 @@ const std::string kernelName(uint32_t domain, uint32_t cid,
 
 } // namespace
 
-enum CorrelationDomain {
-  begin,
-  Default = begin,
-  Domain0 = begin,
-  Domain1,
-  end,
-  size = end
-};
+enum CorrelationDomain { Default, Domain0, Domain1, Count };
 
 struct RoctracerProfiler::RoctracerProfilerPimpl
     : public GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface {
@@ -231,8 +223,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       auto scope = Scope(scopeId, name);
       profilerState.record(scope);
       profilerState.enterOp();
+      if (externIdQueue[CorrelationDomain::Domain0].empty())
+        return;
       std::unique_lock<std::mutex> lock(corrIdToExternIdMutex);
-      corrIdToExternId[data->correlation_id] = scopeId;
+      corrIdToExternId[data->correlation_id] =
+          externIdQueue[CorrelationDomain::Domain0].back();
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
       profilerState.exitOp();
       // Track outstanding op for flush
@@ -267,11 +262,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
 
 void RoctracerProfiler::RoctracerProfilerPimpl::startOp(const Scope &scope) {
   // Track correlation id for the scope
-  externIdQueue[CorrelationDomain::Default].push_back(scope.scopeId);
+  externIdQueue[CorrelationDomain::Domain0].push_back(scope.scopeId);
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::stopOp(const Scope &scope) {
-  externIdQueue[CorrelationDomain::Default].pop_back();
+  externIdQueue[CorrelationDomain::Domain0].pop_back();
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
