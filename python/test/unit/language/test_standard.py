@@ -75,7 +75,6 @@ def test_flip(M, N, dtype_str, device):
     assert (y == z).all(), (y, z)
 
 
-
 @pytest.mark.interpreter
 @pytest.mark.parametrize("size_i, size_j, size_g", [[5, 7, 3]])
 def test_swizzle2d(size_i, size_j, size_g, device):
@@ -89,12 +88,6 @@ def test_swizzle2d(size_i, size_j, size_g, device):
 
     output = torch.zeros(size_i, size_j).to(device)
     swizzle2d_kernel[(1, )](output, size_i, size_j, size_g)
-    expected_order = torch.tensor([
-        [0, 3, 6, 9, 12, 15, 18],
-        [1, 4, 7, 10, 13, 16, 19],
-        [2, 5, 8, 11, 14, 17, 20],
-        [21, 23, 25, 27, 29, 31, 33],
-        [22, 24, 26, 28, 30, 32, 34]
-    ]).to(device)
+    expected_order = torch.tensor([[0, 3, 6, 9, 12, 15, 18], [1, 4, 7, 10, 13, 16, 19], [2, 5, 8, 11, 14, 17, 20],
+                                   [21, 23, 25, 27, 29, 31, 33], [22, 24, 26, 28, 30, 32, 34]]).to(device)
     assert (output == expected_order).all(), (output, expected_order)
-    

@@ -4,8 +4,6 @@
 # expanding yaml anchors, because github actions don't support them
 # (https://github.com/actions/runner/issues/1182).  pre-commit will do this for
 # you automatically.
-
-
 name: Integration Tests
 on:
   workflow_dispatch:
@@ -36,6 +34,7 @@ jobs:
     steps:
       - name: Decide pre-submit integration test enablement
         # Always enable integration tests for pre-submit pull requests.
+
         if: github.event_name == 'pull_request'
         run: |
           echo "enable_integration=true" >> $GITHUB_ENV
@@ -83,15 +82,25 @@ jobs:
             echo "n_hours_since_last_run=false" >> $GITHUB_ENV
           fi
       # We want to run integration tests on the main branch (i.e. post-submit)
+
       # occasionally, because pre-submit CI caches will only read from caches
+
       # generated from the main branch (or the PR's branch), and we want these
+
       # caches to be recent.
+
       #
+
       # But we also don't want to run the tests on *every* commit, because this
+
       # would compete for resources with pre-commit CI (and the whole point of
+
       # caching is to speed up CI).
+
       #
+
       # As a compromise, run every N hours, or if a build dependency changes
+
       # (e.g.  we update the LLVM hash).
       - name: Decide whether to run integration tests post-submit
         if: |
@@ -133,6 +142,7 @@ jobs:
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
+
           # no shell to interpret them in the paths.
           path: |
             ~/.cache/pre-commit
@@ -175,6 +185,7 @@ jobs:
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
+
           # no shell to interpret them in the paths.
           path: |
             ~/.triton/llvm
@@ -183,14 +194,23 @@ jobs:
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
+
         # spent compiling.  Triton won't (well, should not) use these cached files
+
         # if something internal to Triton changes, because Triton's internal
+
         # source code is part of the cache key.
+
         #
+
         # Similarly, cache ~/.cache/ccache to speed up compilation.
+
         #
+
         # On branch `main` we always start from an empty cache, i.e. we skip the
+
         # "restore" step.  This is to prevent the caches from accumulating stale
+
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
         if: github.event_name != 'push'
@@ -200,9 +220,12 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           # Restore the most recent cache entry.
+
           restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
           # We expect this cache key never to hit and for us to fall back
+
           # unconditionally to the restore-key, so it doesn't actually matter
+
           # what we put here (so long as it doesn't hit an existing key).
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directory
@@ -265,9 +288,13 @@ jobs:
           cd third_party/proton
           python3 -m pytest test
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
+
         # to the cache so they can be used by other (non-main) CI runs.
+
         #
+
         # (It wouldn't be a problem to save the cache on every run, because github
+
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
         if: github.ref == 'refs/heads/main'
@@ -313,6 +340,7 @@ jobs:
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
+
           # no shell to interpret them in the paths.
           path: |
             ~/.triton/llvm
@@ -321,14 +349,23 @@ jobs:
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
+
         # spent compiling.  Triton won't (well, should not) use these cached files
+
         # if something internal to Triton changes, because Triton's internal
+
         # source code is part of the cache key.
+
         #
+
         # Similarly, cache ~/.cache/ccache to speed up compilation.
+
         #
+
         # On branch `main` we always start from an empty cache, i.e. we skip the
+
         # "restore" step.  This is to prevent the caches from accumulating stale
+
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
         if: github.event_name != 'push'
@@ -338,9 +375,12 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           # Restore the most recent cache entry.
+
           restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
           # We expect this cache key never to hit and for us to fall back
+
           # unconditionally to the restore-key, so it doesn't actually matter
+
           # what we put here (so long as it doesn't hit an existing key).
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directory
@@ -389,9 +429,13 @@ jobs:
           cd "build/$(ls build | grep -i cmake)"
           ctest -j32
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
+
         # to the cache so they can be used by other (non-main) CI runs.
+
         #
+
         # (It wouldn't be a problem to save the cache on every run, because github
+
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
         if: github.ref == 'refs/heads/main'
@@ -438,6 +482,7 @@ jobs:
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
+
           # no shell to interpret them in the paths.
           path: |
             ~/.triton/llvm
@@ -446,14 +491,23 @@ jobs:
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
+
         # spent compiling.  Triton won't (well, should not) use these cached files
+
         # if something internal to Triton changes, because Triton's internal
+
         # source code is part of the cache key.
+
         #
+
         # Similarly, cache ~/.cache/ccache to speed up compilation.
+
         #
+
         # On branch `main` we always start from an empty cache, i.e. we skip the
+
         # "restore" step.  This is to prevent the caches from accumulating stale
+
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
         if: github.event_name != 'push'
@@ -463,9 +517,12 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           # Restore the most recent cache entry.
+
           restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
           # We expect this cache key never to hit and for us to fall back
+
           # unconditionally to the restore-key, so it doesn't actually matter
+
           # what we put here (so long as it doesn't hit an existing key).
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directory
@@ -487,6 +544,7 @@ jobs:
           TRITON_BUILD_WITH_CCACHE: "true"
           TRITON_BUILD_WITH_O1: "true"
           # macos-latest has 3 vcpus and 7GB DRAM, to save memory we limit the number of jobs to 3
+
           # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
           MAX_JOBS: 3
         run: |
@@ -495,9 +553,13 @@ jobs:
           cd python
           python3 -m pip install --no-build-isolation .
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
+
         # to the cache so they can be used by other (non-main) CI runs.
+
         #
+
         # (It wouldn't be a problem to save the cache on every run, because github
+
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
         if: github.ref == 'refs/heads/main'
