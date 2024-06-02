@@ -119,7 +119,7 @@ class DependenciesFinder(ast.NodeVisitor):
     def visit_Call(self, node):
 
         def is_triton_builtin(func):
-            if inspect.isbuiltin(node.func):
+            if inspect.isbuiltin(func):
                 return True
             module = getattr(func, "__module__", "")
             return module.startswith(TRITON_MODULE)
