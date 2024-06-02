@@ -203,7 +203,7 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
   inline static std::mutex corrIdToExternIdMutex;
   inline static std::map<uint64_t, size_t> corrIdToExternId;
   inline static thread_local std::deque<size_t>
-      externIdQueue[CorrelationDomain::size];
+      externIdQueue[CorrelationDomain::Count];
 };
 
 void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
