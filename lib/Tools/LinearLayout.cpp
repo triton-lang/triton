@@ -573,7 +573,8 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   // Increase the number of rows in matOuter's storage, because we may add some
   // rows to it.
   std::unique_ptr<uint64_t[]> matOuter = [&] {
-    std::unique_ptr<uint64_t[]> mat = getMatrix(outer);
+    std::unique_ptr<uint64_t[]> mat =
+        getMatrix(outer.transposeOuts(this->getOutDimNames()));
     std::unique_ptr<uint64_t[]> expanded = std::unique_ptr<uint64_t[]>(
         new uint64_t[numRowsOuter + numColsOuter]());
     std::memcpy(expanded.get(), mat.get(), numRowsOuter * sizeof(uint64_t));
@@ -618,8 +619,8 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
                                  /*stride=*/1);
 
   // Check that the first half of the matrix is indeed the identity.
-  for (int r = 0; r < numRowsOuter; r++) {
-    for (int c = 0; c < numColsOuter; c++) {
+  for (int r = 0; r < std::min(numRowsOuter, numColsOuter); r++) {
+    for (int c = 0; c < std::min(numColsOuter, numRowsOuter); c++) {
       if (((m[r] >> c) & 1) != (r == c ? 1 : 0)) {
         llvm::report_fatal_error("First half of the matrix was not the "
                                  "identity, bug in invertAndCompose");
@@ -652,7 +653,13 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   for (StringAttr dim : getInDimNames()) {
     retInDims.push_back({dim, getInDimSize(dim)});
   }
-  // XXX explain
+
+  // The out-dim sizes are not simply outer.getInDimSize().  If the resulting
+  // layout is not surjective, it could be that the new layout is unable to map
+  // the high-order bits of the last out-dimension.  For example, if `outer` has
+  // in bases [1, 2, 0], then outer's in-dim size is 2^3=8, but the composition
+  // will have out-dim size 2^2=4, because there's no input to `outer` that maps
+  // to 8.
   int remainingOutDims = flatComposed.getTotalOutDimSize();
   for (StringAttr dim : outer.getInDimNames()) {
     int size = std::min(remainingOutDims, outer.getInDimSize(dim));

@@ -486,6 +486,20 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastBeginningAndEndOfSecond) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
+TEST_F(LinearLayoutTest, InvertAndCompose_Multidim) {
+  LinearLayout l1(
+      {{S("in1"), {{1, 0}, {0, 1}, {2, 0}, {3, 2}}}, {S("in2"), {{2, 2}}}},
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in3"), {{0, 1}, {1, 0}, {0, 0}, {0, 2}, {2, 1}}}},
+                  {S("out2"), S("out1")});
+
+  LinearLayout c1 = l1.invertAndCompose(l2);
+  EXPECT_EQ(c1.compose(l2), l1.transposeOuts(l2.getOutDimNames()));
+
+  LinearLayout c2 = l2.invertAndCompose(l1);
+  EXPECT_EQ(c2.compose(l1), l2.transposeOuts(l1.getOutDimNames()));
+}
+
 TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
   EXPECT_EQ(
       1,
