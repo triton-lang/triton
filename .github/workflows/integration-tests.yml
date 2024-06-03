@@ -234,6 +234,10 @@ jobs:
           lit -v "${LIT_TEST_DIR}"
       - name: Run python tests on CUDA
         run: |
+          SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/_C"
+          if [ ! -d "${SHARED_LIB_DIR}" ]; then
+            echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
+          fi
           cd python/test/unit
           python3 -m pytest -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           python3 -m pytest -n 8 language/test_subprocess.py
@@ -243,7 +247,7 @@ jobs:
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -vs hopper/test_flashattention.py
-          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=../../triton/_C/libGPUHello.so \
+          TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
           python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
       - name: Run interpreter tests
         if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
@@ -372,6 +376,10 @@ jobs:
           lit -v "${LIT_TEST_DIR}"
       - name: Run python tests on HIP
         run: |
+          SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/_C"
+          if [ ! -d "${SHARED_LIB_DIR}" ]; then
+            echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
+          fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 32 language operators \
@@ -380,7 +388,7 @@ jobs:
                  hopper/test_tma_store_gemm.py \
                  hopper/test_persistent_warp_specialized_fused-attention.py \
                  --ignore=language/test_line_info.py
-          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=../../triton/_C/libGPUHello.so \
+          TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
