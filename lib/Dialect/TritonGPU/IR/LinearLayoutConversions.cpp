@@ -561,7 +561,6 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
 
-  // XXX: Add tests for different elemBitWidths.
   int vec = 8 * 16 / elemBitWidth;
   if (vec != shared.getVec()) {
     llvm::errs() << "Illegal shared layout; expected `vec` to be " << vec

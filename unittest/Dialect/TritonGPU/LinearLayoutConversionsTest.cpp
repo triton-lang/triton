@@ -651,7 +651,7 @@ TEST_F(LinearLayoutConversionsTest, SharedSwizzled2D_Order01) {
 TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x16_4_2) {
   EXPECT_EQ(
       toLinearLayout({8, 16},
-                     shared(1, 4, 2, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                     shared(8, 4, 2, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
                      /*elemBitWidth=*/16),
       LinearLayout({{S("offset"),
                      {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 8}}},
@@ -662,7 +662,7 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x16_4_2) {
 TEST_F(LinearLayoutConversionsTest, LeadingOffset_128x16_4_2) {
   EXPECT_EQ(
       toLinearLayout({128, 16},
-                     shared(1, 4, 2, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                     shared(8, 4, 2, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
                      /*elemBitWidth=*/16),
       LinearLayout({{S("offset"),
                      {{0, 1},
@@ -683,7 +683,7 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_128x16_4_2) {
 TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x32_2_4) {
   EXPECT_EQ(
       toLinearLayout({8, 32},
-                     shared(1, 2, 4, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                     shared(8, 2, 4, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
                      /*elemBitWidth=*/16),
       LinearLayout(
           {{S("offset"),
@@ -694,7 +694,7 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x32_2_4) {
 
 TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8) {
   EXPECT_EQ(toLinearLayout(
-                {8, 64}, shared(1, 1, 8, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                {8, 64}, shared(8, 1, 8, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
                 /*elemBitWidth=*/16),
             LinearLayout({{S("offset"),
                            {{0, 1},
@@ -708,6 +708,24 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8) {
                             {4, 32}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8_32b) {
+  EXPECT_EQ(toLinearLayout(
+                {8, 64}, shared(4, 1, 8, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                /*elemBitWidth=*/32),
+            LinearLayout({{S("offset"),
+                           {{0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {1, 4},
+                            {2, 8},
+                            {4, 16},
+                            {0, 32}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}, /*requireSurjective=*/false));
 }
 
 } // anonymous namespace
