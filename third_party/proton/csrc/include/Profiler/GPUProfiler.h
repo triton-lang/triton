@@ -11,7 +11,7 @@
 
 namespace proton {
 
-// Singleton<CongreteProfilerT>: Each concrete GPU profiler, e.g.,
+// Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
 // CuptiProfiler, should be a singleton.
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
