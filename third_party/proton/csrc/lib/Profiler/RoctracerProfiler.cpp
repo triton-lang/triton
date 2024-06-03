@@ -198,11 +198,11 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
                           const void *callbackData, void *arg);
   static void activityCallback(const char *begin, const char *end, void *arg);
 
-  const inline static size_t BufferSize = 64 * 1024 * 1024;
+  const static size_t BufferSize = 64 * 1024 * 1024;
 
-  inline static std::mutex corrIdToExternIdMutex;
-  inline static std::map<uint64_t, size_t> corrIdToExternId;
-  inline static thread_local std::deque<size_t>
+  static std::mutex corrIdToExternIdMutex;
+  static std::map<uint64_t, size_t> corrIdToExternId;
+  static thread_local std::deque<size_t>
       externIdQueue[CorrelationDomain::Count];
 };
 
