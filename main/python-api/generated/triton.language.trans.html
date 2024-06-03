@@ -134,8 +134,8 @@
 <dt class="sig sig-object py" id="triton.language.trans">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">trans</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.language.tensor.html#triton.language.tensor" title="triton.language.core.tensor"><span class="pre">tensor</span></a></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">dims</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.trans" title="Link to this definition">¶</a></dt>
 <dd><p>Permutes the dimensions of a tensor.</p>
-<p>If no permutation is specified, tries to do a (1,0) permutation, i.e. tries
-to transpose a 2D tensor.</p>
+<p>If the parameter <code class="code docutils literal notranslate"><span class="pre">dims</span></code> is not specified, the function defaults to a (1,0) permutation,
+effectively transposing a 2D tensor.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
