@@ -252,7 +252,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       reinterpret_cast<const roctracer_record_t *>(end);
   uint64_t maxCorrelationId = 0;
 
-  while (record < endRecord) {
+  while (record != endRecord) {
     // Log latest completed correlation id.  Used to ensure we have flushed all
     // data on stop
     maxCorrelationId =

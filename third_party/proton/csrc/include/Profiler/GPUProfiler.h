@@ -85,7 +85,6 @@ protected:
       auto completedId = maxCompletedCorrelationId.load();
       auto retries = maxRetries;
       while ((completedId < submittedId) && retries > 0) {
-        // sleep_for 0 is still valid and will yield the thread
         std::this_thread::sleep_for(std::chrono::microseconds(sleepMs));
         flushFn();
         completedId = maxCompletedCorrelationId.load();
