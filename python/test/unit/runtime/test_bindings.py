@@ -2,6 +2,7 @@ import triton
 import triton.language as tl
 
 import torch
+import math
 
 
 @triton.jit
@@ -79,3 +80,26 @@ def test_module_walk():
 
     ttir_module = src.make_ir(options, codegen_fns, context)
     ttir_module.walk(walk_fn)
+
+
+def test_python_func_in_visit_call(device):
+
+    @triton.jit
+    def test_py_call_const_kernel(
+        in_ptr0,
+        out_ptr,
+        n_elements,
+        BLOCK_SIZE: "tl.constexpr",
+    ):
+        log2e: tl.constexpr = math.log2(math.e)
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(in_ptr0 + offsets, mask=mask)
+        output = x * log2e
+        tl.store(out_ptr + offsets, output, mask=mask)
+
+    x = torch.randn(4, device=device)
+    out = torch.zeros_like(x)
+    test_py_call_const_kernel[(4, )](x, out, 4, 4)
