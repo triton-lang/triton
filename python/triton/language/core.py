@@ -1176,7 +1176,7 @@ def num_programs(axis, _builder=None):
 
 @builtin
 def arange(start, end, _builder=None):
-    """
+    f"""
     Returns contiguous values within the half-open interval :code:`[start,
     end)`.  :code:`end - start` must be less than or equal to
     :code:`TRITON_MAX_TENSOR_NUMEL = {TRITON_MAX_TENSOR_NUMEL}`
