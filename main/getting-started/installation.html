@@ -103,7 +103,7 @@
              
   <section id="installation">
 <h1>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h1>
-<p>For supported platform/OS and supported hardware, review the <a class="reference external" href="https://github.com/openai/triton?tab=readme-ov-file#compatibility">Compatibility</a> section on Github.</p>
+<p>For supported platform/OS and supported hardware, review the <a class="reference external" href="https://github.com/triton-lang/triton?tab=readme-ov-file#compatibility">Compatibility</a> section on Github.</p>
 <section id="binary-distributions">
 <h2>Binary Distributions<a class="headerlink" href="#binary-distributions" title="Link to this heading">¶</a></h2>
 <p>You can install the latest stable release of Triton from pip:</p>
@@ -121,14 +121,14 @@
 <section id="python-package">
 <h3>Python Package<a class="headerlink" href="#python-package" title="Link to this heading">¶</a></h3>
 <p>You can install the Python package from source by running the following commands:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/openai/triton.git<span class="p">;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/triton-lang/triton.git<span class="p">;</span>
 <span class="nb">cd</span><span class="w"> </span>triton/python<span class="p">;</span>
 pip<span class="w"> </span>install<span class="w"> </span>ninja<span class="w"> </span>cmake<span class="w"> </span>wheel<span class="p">;</span><span class="w"> </span><span class="c1"># build-time dependencies</span>
 pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
 </pre></div>
 </div>
 <p>Note that, if llvm is not present on your system, the setup.py script will download the official LLVM static libraries and link against that.</p>
-<p>For building with a custom LLVM, review the <a class="reference external" href="https://github.com/openai/triton?tab=readme-ov-file#building-with-a-custom-llvm">Building with a custom LLVM</a> section on Github.</p>
+<p>For building with a custom LLVM, review the <a class="reference external" href="https://github.com/triton-lang/triton?tab=readme-ov-file#building-with-a-custom-llvm">Building with a custom LLVM</a> section on Github.</p>
 <p>You can then test your installation by running the unit tests:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s1">&#39;.[tests]&#39;</span>
 pytest<span class="w"> </span>-vs<span class="w"> </span>test/unit/

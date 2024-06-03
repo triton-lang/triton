@@ -5,7 +5,7 @@ Debugging Triton
 This tutorial provides guidance for debugging Triton programs.
 It is mostly documented for Triton users.
 Developers interested in exploring Triton's backend, including MLIR code transformation and LLVM code generation,
-can refer to this `section <https://github.com/openai/triton?tab=readme-ov-file#tips-for-hacking>`_ to explore debugging options.
+can refer to this `section <https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking>`_ to explore debugging options.
 
 ------------------------------------
 Using Triton's Debugging Operations

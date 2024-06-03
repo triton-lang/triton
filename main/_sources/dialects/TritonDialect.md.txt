@@ -44,6 +44,7 @@ can be changed without changing the underlying memory.
 | shape | `::llvm::ArrayRef<int64_t>` |  |
 | elementType | `Type` |  |
 | encoding | `Attribute` |  |
+| memorySpace | `Attribute` |  |
 | mutable_memory | `bool` |  |
 
 ### PointerType

@@ -47,9 +47,7 @@ operands are the same as tt.load.
 
 Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::gpu::SharedMemory}`
+Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -201,7 +199,7 @@ uses of the alloc.
 
 Because we assume a memdesc is dead at the first point that post-dominates
 its uses, ops that wait for an async operation on a memdesc to complete
-(such as triton_nvidia_gpu.dot_wait) should also take the memdesc as an
+(such as triton_nvidia_gpu.warp_group_dot_wait) should also take the memdesc as an
 operand.
 
 Traits: `VerifyTensorLayoutsTrait`
@@ -231,9 +229,7 @@ Load a tensor from the local memory descriptor into a distributed tensor.
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::gpu::SharedMemory}`
+Interfaces: `MemoryEffectOpInterface`
 
 #### Operands:
 
@@ -247,6 +243,30 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::gpu::Shar
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values
+
+### `triton_gpu.local_store` (triton::gpu::LocalStoreOp)
+
+_Store a distributed tensor into a buffer in local memory_
+
+
+Syntax:
+
+```
+operation ::= `triton_gpu.local_store` $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
+```
+
+Store a distributed tensor into a buffer in local memory.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | ranked tensor of floating-point or integer or ptr values
+| `dst` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
 
 ### `triton_gpu.memdesc_subview` (triton::gpu::MemDescSubviewOp)
 

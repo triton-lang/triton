@@ -72,7 +72,7 @@
 <li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
 <li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
 <li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
-<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.cuda.libdevice</cite>) function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
 </ul>
 </li>
@@ -210,11 +210,10 @@ It is important to remember that the order in which these blocks are computed do
 matter, since it affects the L2 cache hit rate of our program, and unfortunately, a
 simple row-major ordering</p>
 <blockquote>
-<div><div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">pid</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
-<span class="n">grid_m</span> <span class="o">=</span> <span class="p">(</span><span class="n">M</span> <span class="o">+</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">BLOCK_SIZE_M</span><span class="p">;</span>
-<span class="n">grid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">N</span> <span class="o">+</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">BLOCK_SIZE_N</span><span class="p">;</span>
-<span class="n">pid_m</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">/</span> <span class="n">grid_n</span><span class="p">;</span>
-<span class="n">pid_n</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">%</span> <span class="n">grid_n</span><span class="p">;</span>
+<div><div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">grid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+<span class="n">pid_m</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">grid_n</span>
+<span class="n">pid_n</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">%</span> <span class="n">grid_n</span>
 </pre></div>
 </div>
 </div></blockquote>
@@ -239,7 +238,7 @@ switching to the next column:</p>
 <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
 <span class="c1"># *Within groups*, programs are ordered in a column-major order</span>
 <span class="c1"># Row-id of the program in the *launch grid*</span>
-<span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+<span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">((</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
 <span class="c1"># Col-id of the program in the *launch grid*</span>
 <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
 </pre></div>
@@ -332,8 +331,7 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
 
 
 <span class="k">def</span> <span class="nf">get_autotune_config</span><span class="p">():</span>
-    <span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
-    <span class="k">if</span> <span class="n">target</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s1">&#39;cuda&#39;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">is_cuda</span><span class="p">():</span>
         <span class="k">return</span> <span class="n">get_cuda_autotune_config</span><span class="p">()</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">get_hip_autotune_config</span><span class="p">()</span>
@@ -379,7 +377,7 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
     <span class="n">group_id</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
     <span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
     <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
-    <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+    <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">((</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
     <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
 
     <span class="c1"># ----------------------------------------------------------</span>
@@ -426,10 +424,9 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
     <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_ptrs</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">c_mask</span><span class="p">)</span>
 
 
-<span class="c1"># We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.</span>
+<span class="c1"># We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `matmul_kernel`.</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span> <span class="nf">leaky_relu</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="mi">1</span>
     <span class="k">return</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">x</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="mf">0.01</span> <span class="o">*</span> <span class="n">x</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -591,69 +588,69 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 1    384.0   384.0   384.0   12.288000   12.288000
 2    512.0   512.0   512.0   26.214401   26.214401
 3    640.0   640.0   640.0   42.666665   42.666665
-4    768.0   768.0   768.0   68.056616   63.195428
-5    896.0   896.0   896.0   82.642822   93.661869
-6   1024.0  1024.0  1024.0  110.376426   99.864382
-7   1152.0  1152.0  1152.0  135.726544  135.726544
-8   1280.0  1280.0  1280.0  157.538463  163.840004
+4    768.0   768.0   768.0   68.056616   68.056616
+5    896.0   896.0   896.0   78.051553   87.808000
+6   1024.0  1024.0  1024.0  104.857603   99.864382
+7   1152.0  1152.0  1152.0  135.726544  129.825388
+8   1280.0  1280.0  1280.0  163.840004  163.840004
 9   1408.0  1408.0  1408.0  155.765024  132.970149
 10  1536.0  1536.0  1536.0  181.484314  157.286398
 11  1664.0  1664.0  1664.0  183.651271  183.651271
 12  1792.0  1792.0  1792.0  175.616000  208.137481
-13  1920.0  1920.0  1920.0  203.294114  170.666670
-14  2048.0  2048.0  2048.0  226.719125  195.083907
+13  1920.0  1920.0  1920.0  203.294114  168.585369
+14  2048.0  2048.0  2048.0  226.719125  192.841562
 15  2176.0  2176.0  2176.0  214.081356  214.081356
-16  2304.0  2304.0  2304.0  231.921091  236.513589
-17  2432.0  2432.0  2432.0  203.583068  205.069087
-18  2560.0  2560.0  2560.0  227.555548  218.453323
-19  2688.0  2688.0  2688.0  200.704002  202.850569
-20  2816.0  2816.0  2816.0  214.848312  213.795141
-21  2944.0  2944.0  2944.0  221.493479  226.527416
-22  3072.0  3072.0  3072.0  209.715208  212.071554
-23  3200.0  3200.0  3200.0  211.920530  223.776228
-24  3328.0  3328.0  3328.0  205.689424  208.670419
-25  3456.0  3456.0  3456.0  218.486642  223.948797
-26  3584.0  3584.0  3584.0  219.305830  213.069643
-27  3712.0  3712.0  3712.0  215.761000  220.038206
-28  3840.0  3840.0  3840.0  212.268710  211.456969
-29  3968.0  3968.0  3968.0  212.956259  217.511464
-30  4096.0  4096.0  4096.0  222.583299  219.310012
+16  2304.0  2304.0  2304.0  234.194828  234.194828
+17  2432.0  2432.0  2432.0  205.069087  205.069087
+18  2560.0  2560.0  2560.0  225.986210  218.453323
+19  2688.0  2688.0  2688.0  198.602388  201.771569
+20  2816.0  2816.0  2816.0  213.795141  213.795141
+21  2944.0  2944.0  2944.0  221.493479  222.482283
+22  3072.0  3072.0  3072.0  208.941345  211.280236
+23  3200.0  3200.0  3200.0  219.931269  217.687077
+24  3328.0  3328.0  3328.0  206.871539  208.067338
+25  3456.0  3456.0  3456.0  217.308808  223.328435
+26  3584.0  3584.0  3584.0  222.562856  213.069643
+27  3712.0  3712.0  3712.0  213.000737  221.011819
+28  3840.0  3840.0  3840.0  211.456969  210.250955
+29  3968.0  3968.0  3968.0  211.114084  219.073497
+30  4096.0  4096.0  4096.0  220.029067  216.829933
 matmul-performance-fp8:
          M       N       K      Triton
-0    256.0   256.0   256.0    3.276800
+0    256.0   256.0   256.0    2.978909
 1    384.0   384.0   384.0   10.053818
 2    512.0   512.0   512.0   20.164923
 3    640.0   640.0   640.0   34.133334
 4    768.0   768.0   768.0   42.130286
 5    896.0   896.0   896.0   61.083825
-6   1024.0  1024.0  1024.0   63.550060
-7   1152.0  1152.0  1152.0   82.943997
+6   1024.0  1024.0  1024.0   61.680940
+7   1152.0  1152.0  1152.0   80.702267
 8   1280.0  1280.0  1280.0  102.400003
 9   1408.0  1408.0  1408.0   82.602666
 10  1536.0  1536.0  1536.0   99.688560
 11  1664.0  1664.0  1664.0  116.868992
 12  1792.0  1792.0  1792.0  135.414749
-13  1920.0  1920.0  1920.0  101.647057
-14  2048.0  2048.0  2048.0  116.508440
-15  2176.0  2176.0  2176.0  121.961499
-16  2304.0  2304.0  2304.0  136.502131
-17  2432.0  2432.0  2432.0  134.423269
-18  2560.0  2560.0  2560.0  149.625575
+13  1920.0  1920.0  1920.0  100.905113
+14  2048.0  2048.0  2048.0  114.912434
+15  2176.0  2176.0  2176.0  121.226797
+16  2304.0  2304.0  2304.0  135.726544
+17  2432.0  2432.0  2432.0  133.783163
+18  2560.0  2560.0  2560.0  148.271497
 19  2688.0  2688.0  2688.0  118.540803
-20  2816.0  2816.0  2816.0  129.804192
-21  2944.0  2944.0  2944.0  139.988852
-22  3072.0  3072.0  3072.0  145.560681
-23  3200.0  3200.0  3200.0  140.659340
-24  3328.0  3328.0  3328.0  131.852184
-25  3456.0  3456.0  3456.0  140.700817
-26  3584.0  3584.0  3584.0  150.864752
-27  3712.0  3712.0  3712.0  141.899635
+20  2816.0  2816.0  2816.0  129.419013
+21  2944.0  2944.0  2944.0  140.779756
+22  3072.0  3072.0  3072.0  144.446699
+23  3200.0  3200.0  3200.0  140.969165
+24  3328.0  3328.0  3328.0  131.611151
+25  3456.0  3456.0  3456.0  138.763456
+26  3584.0  3584.0  3584.0  149.609643
+27  3712.0  3712.0  3712.0  141.097948
 28  3840.0  3840.0  3840.0  139.812890
-29  3968.0  3968.0  3968.0  148.809675
-30  4096.0  4096.0  4096.0  157.347868
+29  3968.0  3968.0  3968.0  147.460947
+30  4096.0  4096.0  4096.0  155.885867
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 16.410 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 17.827 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b51b68bc1c6b1a5e509f67800b6235af/03-matrix-multiplication.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">03-matrix-multiplication.ipynb</span></code></a></p>

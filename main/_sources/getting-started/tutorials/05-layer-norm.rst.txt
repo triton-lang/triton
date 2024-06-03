@@ -157,7 +157,7 @@ In Stage 1, the rows of X that have the same color share the same buffer and thu
 In Stage 2, the buffers are further reduced to compute the final :math:`\nabla_{w}` and :math:`\nabla_{b}`.
 In the following implementation, Stage 1 is implemented by the function :code:`_layer_norm_bwd_dx_fused` and Stage 2 is implemented by the function :code:`_layer_norm_bwd_dwdb`.
 
-.. GENERATED FROM PYTHON SOURCE LINES 128-219
+.. GENERATED FROM PYTHON SOURCE LINES 128-217
 
 .. code-block:: Python
 
@@ -170,13 +170,11 @@ In the following implementation, Stage 1 is implemented by the function :code:`_
                                  DB,  # pointer to the partial sum of biases gradient
                                  X,  # pointer to the input
                                  W,  # pointer to the weights
-                                 B,  # pointer to the biases
                                  Mean,  # pointer to the mean
                                  Rstd,  # pointer to the 1/std
                                  Lock,  # pointer to the lock
                                  stride,  # how much to increase the pointer when moving by 1 row
                                  N,  # number of columns in X
-                                 eps,  # epsilon to avoid division by zero
                                  GROUP_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
         # Map the program id to the elements of X, DX, and DY it should compute.
         row = tl.program_id(0)
@@ -259,7 +257,7 @@ In the following implementation, Stage 1 is implemented by the function :code:`_
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 220-226
+.. GENERATED FROM PYTHON SOURCE LINES 218-224
 
 Benchmark
 ---------
@@ -268,7 +266,7 @@ We can now compare the performance of our kernel against that of PyTorch.
 Here we focus on inputs that have Less than 64KB per feature.
 Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward pass.
 
-.. GENERATED FROM PYTHON SOURCE LINES 226-379
+.. GENERATED FROM PYTHON SOURCE LINES 224-370
 
 .. code-block:: Python
 
@@ -314,18 +312,18 @@ Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward p
             if N <= 1024: GROUP_SIZE_M = 256
             # allocate output
             locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device='cuda')
-            _dw = torch.empty((GROUP_SIZE_M, w.shape[0]), dtype=x.dtype, device=w.device)
-            _db = torch.empty((GROUP_SIZE_M, w.shape[0]), dtype=x.dtype, device=w.device)
-            dw = torch.empty((w.shape[0], ), dtype=w.dtype, device=w.device)
-            db = torch.empty((w.shape[0], ), dtype=w.dtype, device=w.device)
+            _dw = torch.empty((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
+            _db = torch.empty((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
+            dw = torch.empty((N, ), dtype=w.dtype, device=w.device)
+            db = torch.empty((N, ), dtype=w.dtype, device=w.device)
             dx = torch.empty_like(dy)
             # enqueue kernel using forward pass heuristics
             # also compute partial sums for DW and DB
             x_arg = x.reshape(-1, x.shape[-1])
             M, N = x_arg.shape
             _layer_norm_bwd_dx_fused[(M, )](  #
-                dx, dy, _dw, _db, x, w, b, m, v, locks,  #
-                x_arg.stride(0), N, ctx.eps,  #
+                dx, dy, _dw, _db, x, w, m, v, locks,  #
+                x_arg.stride(0), N,  #
                 BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
                 GROUP_SIZE_M=GROUP_SIZE_M,  #
                 num_warps=ctx.num_warps)
@@ -345,9 +343,9 @@ Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward p
         # create data
         x_shape = (M, N)
         w_shape = (x_shape[-1], )
-        weight = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-        bias = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-        x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
+        weight = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+        bias = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+        x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device=device)
         dy = .1 * torch.randn_like(x)
         x.requires_grad_(True)
         # forward pass
@@ -383,27 +381,23 @@ Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward p
         # create data
         x_shape = (M, N)
         w_shape = (x_shape[-1], )
-        weight = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-        bias = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-        x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
+        weight = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+        bias = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+        x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device=device)
         dy = .1 * torch.randn_like(x)
         x.requires_grad_(True)
         quantiles = [0.5, 0.2, 0.8]
-        # utility functions
-        if provider == 'triton':
 
-            def y_fwd():
+        def y_fwd():
+
+            if provider == "triton":
                 return layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
 
-        if provider == 'torch':
-
-            def y_fwd():
+            if provider == "torch":
                 return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
 
-        if provider == 'apex':
-            apex_layer_norm = apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
-
-            def y_fwd():
+            if provider == "apex":
+                apex_layer_norm = (apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype))
                 return apex_layer_norm(x)  # noqa: F811, E704
 
         # forward pass
@@ -412,11 +406,8 @@ Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward p
             ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles, rep=500)
         # backward pass
         if mode == 'backward':
-
-            def gbps(ms):
-                return 3 * x.numel() * x.element_size() / ms * 1e-6  # noqa: F811, E704
-
             y = y_fwd()
+            gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6  # noqa: F811, E704
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True), quantiles=quantiles,
                                                          grad_to_none=[x], rep=500)
         return gbps(ms), gbps(max_ms), gbps(min_ms)
@@ -440,41 +431,41 @@ Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward p
 
     layer-norm-backward:
               N       Triton       Torch
-    0    1024.0   183.402983  378.092307
-    1    1536.0   277.172945  449.560983
-    2    2048.0   378.092307  517.389457
-    3    2560.0   461.954908  574.205608
-    4    3072.0   646.736830  614.400016
-    5    3584.0   767.999989  547.872604
-    6    4096.0   826.084057  564.965515
-    7    4608.0   747.243211  570.061876
-    8    5120.0   803.137250  566.267298
-    9    5632.0   855.493696  565.556483
-    10   6144.0   899.121966  564.965499
-    11   6656.0   939.670592  568.484014
-    12   7168.0   983.040035  539.285244
-    13   7680.0  1007.213134  546.943612
-    14   8192.0  1034.778914  558.545450
-    15   8704.0   725.333308  557.055995
-    16   9216.0   752.326537  567.138460
-    17   9728.0   773.086092  572.235304
-    18  10240.0   800.521148  568.888888
-    19  10752.0   816.607619  554.941947
-    20  11264.0   839.552776  559.701851
-    21  11776.0   861.658551  568.659959
-    22  12288.0   885.621612  574.877186
-    23  12800.0   906.194714  578.531044
-    24  13312.0   918.068962  579.833026
-    25  13824.0   926.748629  580.027982
-    26  14336.0   940.065592  565.894762
-    27  14848.0   955.367323  570.163213
-    28  15360.0   972.664896  578.712698
-    29  15872.0   974.240388  581.569482
+    0    1024.0   201.442627  378.092307
+    1    1536.0   309.781521  444.144584
+    2    2048.0   413.042029  517.389457
+    3    2560.0   512.000013  574.205608
+    4    3072.0   635.586191  614.400016
+    5    3584.0   589.150662  547.872604
+    6    4096.0   792.774204  561.737163
+    7    4608.0   742.228190  570.061876
+    8    5120.0   797.922109  566.267298
+    9    5632.0   844.800021  565.556483
+    10   6144.0   877.714293  564.965499
+    11   6656.0   934.175401  566.468098
+    12   7168.0   971.932234  539.285244
+    13   7680.0   985.668461  546.943612
+    14   8192.0  1008.246151  555.389848
+    15   8704.0   705.729699  560.042913
+    16   9216.0   739.745803  568.596411
+    17   9728.0   765.481982  572.235304
+    18  10240.0   785.175727  575.550362
+    19  10752.0   811.471683  556.137917
+    20  11264.0   829.251512  558.545467
+    21  11776.0   838.646872  564.119791
+    22  12288.0   854.817372  576.000001
+    23  12800.0   872.727266  577.443635
+    24  13312.0   899.966206  578.782596
+    25  13824.0   913.983473  582.063184
+    26  14336.0   937.504086  565.894762
+    27  14848.0   937.768391  568.344496
+    28  15360.0   957.506513  580.535429
+    29  15872.0   933.647076  577.163619
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 380-384
+.. GENERATED FROM PYTHON SOURCE LINES 371-375
 
 References
 ----------
@@ -484,7 +475,7 @@ References
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 28.455 seconds)
+   **Total running time of the script:** (0 minutes 28.516 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_05-layer-norm.py:

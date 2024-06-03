@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Libdevice (tl.extra.cuda.libdevice) function &mdash; Triton  documentation</title>
+  <title>Libdevice (tl.extra.libdevice) function &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
@@ -58,7 +58,7 @@
 <li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
 <li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
 <li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
-<li class="toctree-l2 current"><a class="current reference internal" href="#">Libdevice (<cite>tl.extra.cuda.libdevice</cite>) function</a><ul>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Libdevice (<cite>tl.extra.libdevice</cite>) function</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#asin-kernel">asin Kernel</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#using-the-default-libdevice-library-path">Using the default libdevice library path</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#customize-the-libdevice-library-path">Customize the libdevice library path</a></li>
@@ -100,7 +100,7 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="index.html">Tutorials</a></li>
-      <li class="breadcrumb-item active">Libdevice (<cite>tl.extra.cuda.libdevice</cite>) function</li>
+      <li class="breadcrumb-item active">Libdevice (<cite>tl.extra.libdevice</cite>) function</li>
       <li class="wy-breadcrumbs-aside">
             <a href="../../_sources/getting-started/tutorials/07-extern-functions.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -115,11 +115,11 @@
 <p><a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-07-extern-functions-py"><span class="std std-ref">Go to the end</span></a>
 to download the full example code.</p>
 </div>
-<section class="sphx-glr-example-title" id="libdevice-tl-extra-cuda-libdevice-function">
-<span id="sphx-glr-getting-started-tutorials-07-extern-functions-py"></span><h1>Libdevice (<cite>tl.extra.cuda.libdevice</cite>) function<a class="headerlink" href="#libdevice-tl-extra-cuda-libdevice-function" title="Link to this heading">¶</a></h1>
+<section class="sphx-glr-example-title" id="libdevice-tl-extra-libdevice-function">
+<span id="sphx-glr-getting-started-tutorials-07-extern-functions-py"></span><h1>Libdevice (<cite>tl.extra.libdevice</cite>) function<a class="headerlink" href="#libdevice-tl-extra-libdevice-function" title="Link to this heading">¶</a></h1>
 <p>Triton can invoke a custom function from an external library.
 In this example, we will use the <cite>libdevice</cite> library to apply <cite>asin</cite> on a tensor.
-Please refer to <a class="reference external" href="https://docs.nvidia.com/cuda/libdevice-users-guide/index.html">https://docs.nvidia.com/cuda/libdevice-users-guide/index.html</a> regarding the semantics of all available libdevice functions.
+Please refer to <a class="reference external" href="https://docs.nvidia.com/cuda/libdevice-users-guide/index.html">https://docs.nvidia.com/cuda/libdevice-users-guide/index.html</a> (CUDA) and/or <a class="reference external" href="https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src">https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src</a> (HIP) regarding the semantics of all available libdevice functions.
 In <cite>libdevice.py</cite>, we try to aggregate functions with the same computation but different data types together.
 For example, both <cite>__nv_asin</cite> and <cite>__nv_asinf</cite> calculate the principal value of the arc sine of the input, but <cite>__nv_asin</cite> operates on <cite>double</cite> and <cite>__nv_asinf</cite> operates on <cite>float</cite>.
 Using triton, you can simply call <cite>tl.math.asin</cite>.
@@ -130,7 +130,7 @@ Triton automatically selects the correct underlying device function to invoke ba
 
 <span class="kn">import</span> <span class="nn">triton</span>
 <span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
-<span class="kn">from</span> <span class="nn">triton.language.extra.cuda</span> <span class="kn">import</span> <span class="n">libdevice</span>
+<span class="kn">from</span> <span class="nn">triton.language.extra</span> <span class="kn">import</span> <span class="n">libdevice</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
@@ -190,7 +190,7 @@ tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device=&#39;cuda:
 The maximum difference between torch and triton is 2.384185791015625e-07
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.209 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.247 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-07-extern-functions-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/859d98d69fb02c33053d474c27761677/07-extern-functions.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">07-extern-functions.ipynb</span></code></a></p>

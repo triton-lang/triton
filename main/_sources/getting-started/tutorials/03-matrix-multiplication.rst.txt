@@ -64,7 +64,7 @@ algorithm to multiply a (M, K) by a (K, N) matrix:
 
 where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.
 
-.. GENERATED FROM PYTHON SOURCE LINES 50-148
+.. GENERATED FROM PYTHON SOURCE LINES 50-147
 
 Compute Kernel
 --------------
@@ -120,11 +120,10 @@ simple row-major ordering
 
  .. code-block:: Python
 
-   pid = triton.program_id(0);
-   grid_m = (M + BLOCK_SIZE_M - 1) // BLOCK_SIZE_M;
-   grid_n = (N + BLOCK_SIZE_N - 1) // BLOCK_SIZE_N;
-   pid_m = pid / grid_n;
-   pid_n = pid % grid_n;
+   pid = tl.program_id(axis=0)
+   grid_n = tl.cdiv(N, BLOCK_SIZE_N)
+   pid_m = pid // grid_n
+   pid_n = pid % grid_n
 
 is just not going to cut it.
 
@@ -150,7 +149,7 @@ switching to the next column:
    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
    # *Within groups*, programs are ordered in a column-major order
    # Row-id of the program in the *launch grid*
-   pid_m = first_pid_m + (pid % group_size_m)
+   pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
    # Col-id of the program in the *launch grid*
    pid_n = (pid % num_pid_in_group) // group_size_m
 
@@ -165,12 +164,12 @@ In practice, this can improve the performance of our matrix multiplication kerne
 more than 10\% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 150-152
+.. GENERATED FROM PYTHON SOURCE LINES 149-151
 
 Final Result
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 152-328
+.. GENERATED FROM PYTHON SOURCE LINES 151-325
 
 .. code-block:: Python
 
@@ -249,8 +248,7 @@ Final Result
 
 
     def get_autotune_config():
-        target = triton.runtime.driver.active.get_current_target()
-        if target.backend == 'cuda':
+        if is_cuda():
             return get_cuda_autotune_config()
         else:
             return get_hip_autotune_config()
@@ -296,7 +294,7 @@ Final Result
         group_id = pid // num_pid_in_group
         first_pid_m = group_id * GROUP_SIZE_M
         group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-        pid_m = first_pid_m + (pid % group_size_m)
+        pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
         pid_n = (pid % num_pid_in_group) // group_size_m
 
         # ----------------------------------------------------------
@@ -343,10 +341,9 @@ Final Result
         tl.store(c_ptrs, c, mask=c_mask)
 
 
-    # We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
+    # We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `matmul_kernel`.
     @triton.jit
     def leaky_relu(x):
-        x = x + 1
         return tl.where(x >= 0, x, 0.01 * x)
 
 
@@ -357,12 +354,12 @@ Final Result
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 329-331
+.. GENERATED FROM PYTHON SOURCE LINES 326-328
 
 We can now create a convenience wrapper function that only takes two input tensors,
 and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 331-354
+.. GENERATED FROM PYTHON SOURCE LINES 328-351
 
 .. code-block:: Python
 
@@ -396,14 +393,14 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 355-359
+.. GENERATED FROM PYTHON SOURCE LINES 352-356
 
 Unit Test
 ---------
 
 We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
-.. GENERATED FROM PYTHON SOURCE LINES 359-394
+.. GENERATED FROM PYTHON SOURCE LINES 356-391
 
 .. code-block:: Python
 
@@ -488,7 +485,7 @@ We can test our custom matrix multiplication operation against a native torch im
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 395-403
+.. GENERATED FROM PYTHON SOURCE LINES 392-400
 
 Benchmark
 ---------
@@ -499,7 +496,7 @@ Square Matrix Performance
 We can now compare the performance of our kernel against that of cuBLAS or rocBLAS. Here we focus on square matrices,
 but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-.. GENERATED FROM PYTHON SOURCE LINES 403-445
+.. GENERATED FROM PYTHON SOURCE LINES 400-442
 
 .. code-block:: Python
 
@@ -576,66 +573,66 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
     1    384.0   384.0   384.0   12.288000   12.288000
     2    512.0   512.0   512.0   26.214401   26.214401
     3    640.0   640.0   640.0   42.666665   42.666665
-    4    768.0   768.0   768.0   68.056616   63.195428
-    5    896.0   896.0   896.0   82.642822   93.661869
-    6   1024.0  1024.0  1024.0  110.376426   99.864382
-    7   1152.0  1152.0  1152.0  135.726544  135.726544
-    8   1280.0  1280.0  1280.0  157.538463  163.840004
+    4    768.0   768.0   768.0   68.056616   68.056616
+    5    896.0   896.0   896.0   78.051553   87.808000
+    6   1024.0  1024.0  1024.0  104.857603   99.864382
+    7   1152.0  1152.0  1152.0  135.726544  129.825388
+    8   1280.0  1280.0  1280.0  163.840004  163.840004
     9   1408.0  1408.0  1408.0  155.765024  132.970149
     10  1536.0  1536.0  1536.0  181.484314  157.286398
     11  1664.0  1664.0  1664.0  183.651271  183.651271
     12  1792.0  1792.0  1792.0  175.616000  208.137481
-    13  1920.0  1920.0  1920.0  203.294114  170.666670
-    14  2048.0  2048.0  2048.0  226.719125  195.083907
+    13  1920.0  1920.0  1920.0  203.294114  168.585369
+    14  2048.0  2048.0  2048.0  226.719125  192.841562
     15  2176.0  2176.0  2176.0  214.081356  214.081356
-    16  2304.0  2304.0  2304.0  231.921091  236.513589
-    17  2432.0  2432.0  2432.0  203.583068  205.069087
-    18  2560.0  2560.0  2560.0  227.555548  218.453323
-    19  2688.0  2688.0  2688.0  200.704002  202.850569
-    20  2816.0  2816.0  2816.0  214.848312  213.795141
-    21  2944.0  2944.0  2944.0  221.493479  226.527416
-    22  3072.0  3072.0  3072.0  209.715208  212.071554
-    23  3200.0  3200.0  3200.0  211.920530  223.776228
-    24  3328.0  3328.0  3328.0  205.689424  208.670419
-    25  3456.0  3456.0  3456.0  218.486642  223.948797
-    26  3584.0  3584.0  3584.0  219.305830  213.069643
-    27  3712.0  3712.0  3712.0  215.761000  220.038206
-    28  3840.0  3840.0  3840.0  212.268710  211.456969
-    29  3968.0  3968.0  3968.0  212.956259  217.511464
-    30  4096.0  4096.0  4096.0  222.583299  219.310012
+    16  2304.0  2304.0  2304.0  234.194828  234.194828
+    17  2432.0  2432.0  2432.0  205.069087  205.069087
+    18  2560.0  2560.0  2560.0  225.986210  218.453323
+    19  2688.0  2688.0  2688.0  198.602388  201.771569
+    20  2816.0  2816.0  2816.0  213.795141  213.795141
+    21  2944.0  2944.0  2944.0  221.493479  222.482283
+    22  3072.0  3072.0  3072.0  208.941345  211.280236
+    23  3200.0  3200.0  3200.0  219.931269  217.687077
+    24  3328.0  3328.0  3328.0  206.871539  208.067338
+    25  3456.0  3456.0  3456.0  217.308808  223.328435
+    26  3584.0  3584.0  3584.0  222.562856  213.069643
+    27  3712.0  3712.0  3712.0  213.000737  221.011819
+    28  3840.0  3840.0  3840.0  211.456969  210.250955
+    29  3968.0  3968.0  3968.0  211.114084  219.073497
+    30  4096.0  4096.0  4096.0  220.029067  216.829933
     matmul-performance-fp8:
              M       N       K      Triton
-    0    256.0   256.0   256.0    3.276800
+    0    256.0   256.0   256.0    2.978909
     1    384.0   384.0   384.0   10.053818
     2    512.0   512.0   512.0   20.164923
     3    640.0   640.0   640.0   34.133334
     4    768.0   768.0   768.0   42.130286
     5    896.0   896.0   896.0   61.083825
-    6   1024.0  1024.0  1024.0   63.550060
-    7   1152.0  1152.0  1152.0   82.943997
+    6   1024.0  1024.0  1024.0   61.680940
+    7   1152.0  1152.0  1152.0   80.702267
     8   1280.0  1280.0  1280.0  102.400003
     9   1408.0  1408.0  1408.0   82.602666
     10  1536.0  1536.0  1536.0   99.688560
     11  1664.0  1664.0  1664.0  116.868992
     12  1792.0  1792.0  1792.0  135.414749
-    13  1920.0  1920.0  1920.0  101.647057
-    14  2048.0  2048.0  2048.0  116.508440
-    15  2176.0  2176.0  2176.0  121.961499
-    16  2304.0  2304.0  2304.0  136.502131
-    17  2432.0  2432.0  2432.0  134.423269
-    18  2560.0  2560.0  2560.0  149.625575
+    13  1920.0  1920.0  1920.0  100.905113
+    14  2048.0  2048.0  2048.0  114.912434
+    15  2176.0  2176.0  2176.0  121.226797
+    16  2304.0  2304.0  2304.0  135.726544
+    17  2432.0  2432.0  2432.0  133.783163
+    18  2560.0  2560.0  2560.0  148.271497
     19  2688.0  2688.0  2688.0  118.540803
-    20  2816.0  2816.0  2816.0  129.804192
-    21  2944.0  2944.0  2944.0  139.988852
-    22  3072.0  3072.0  3072.0  145.560681
-    23  3200.0  3200.0  3200.0  140.659340
-    24  3328.0  3328.0  3328.0  131.852184
-    25  3456.0  3456.0  3456.0  140.700817
-    26  3584.0  3584.0  3584.0  150.864752
-    27  3712.0  3712.0  3712.0  141.899635
+    20  2816.0  2816.0  2816.0  129.419013
+    21  2944.0  2944.0  2944.0  140.779756
+    22  3072.0  3072.0  3072.0  144.446699
+    23  3200.0  3200.0  3200.0  140.969165
+    24  3328.0  3328.0  3328.0  131.611151
+    25  3456.0  3456.0  3456.0  138.763456
+    26  3584.0  3584.0  3584.0  149.609643
+    27  3712.0  3712.0  3712.0  141.097948
     28  3840.0  3840.0  3840.0  139.812890
-    29  3968.0  3968.0  3968.0  148.809675
-    30  4096.0  4096.0  4096.0  157.347868
+    29  3968.0  3968.0  3968.0  147.460947
+    30  4096.0  4096.0  4096.0  155.885867
 
 
 
@@ -643,7 +640,7 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (2 minutes 16.410 seconds)
+   **Total running time of the script:** (2 minutes 17.827 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:

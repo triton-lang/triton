@@ -25,7 +25,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="triton" href="../../python-api/triton.html" />
-    <link rel="prev" title="Libdevice (tl.extra.cuda.libdevice) function" href="07-extern-functions.html" /> 
+    <link rel="prev" title="Libdevice (tl.extra.libdevice) function" href="07-extern-functions.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -58,7 +58,7 @@
 <li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
 <li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
 <li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
-<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.cuda.libdevice</cite>) function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Group GEMM</a></li>
 </ul>
 </li>
@@ -116,10 +116,10 @@ to download the full example code.</p>
 of gemms. The scheduling is static and we do it on device.</p>
 <img src="../../_images/sphx_glr_08-grouped-gemm_001.png" srcset="../../_images/sphx_glr_08-grouped-gemm_001.png" alt="08 grouped gemm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>group-gemm-performance:
         N    cuBLAS    Triton
-0   128.0  0.020480  0.014336
+0   128.0  0.021504  0.014336
 1   256.0  0.023552  0.018432
 2   512.0  0.032768  0.026624
-3  1024.0  0.071680  0.086016
+3  1024.0  0.071680  0.088064
 </pre></div>
 </div>
 <div class="line-block">
@@ -405,7 +405,7 @@ of gemms. The scheduling is static and we do it on device.</p>
 <span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 3.349 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 3.506 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6360f3425f2c39f9f330971830c25ba7/08-grouped-gemm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">08-grouped-gemm.ipynb</span></code></a></p>
@@ -421,7 +421,7 @@ of gemms. The scheduling is static and we do it on device.</p>
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="07-extern-functions.html" class="btn btn-neutral float-left" title="Libdevice (tl.extra.cuda.libdevice) function" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="07-extern-functions.html" class="btn btn-neutral float-left" title="Libdevice (tl.extra.libdevice) function" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="../../python-api/triton.html" class="btn btn-neutral float-right" title="triton" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

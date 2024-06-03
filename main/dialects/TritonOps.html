@@ -936,7 +936,7 @@ tf32: use TC with tf32 ops.
 tf32x3: implement the 3xTF32 trick. For more info see the pass in F32DotTC.cpp
 ieee: don’t use TC, implement dot in software.
 If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">DotLike</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id24">
@@ -960,10 +960,10 @@ If the GPU does not have Tensor cores or the inputs are not f32, this flag is ig
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">a</span></code></p></td>
-<td><p>TensorOrMemDesc instance</p></td>
+<td><p>ranked tensor of floating-point or integer values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">b</span></code></p></td>
-<td><p>TensorOrMemDesc instance</p></td>
+<td><p>ranked tensor of floating-point or integer values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">c</span></code></p></td>
 <td><p>ranked tensor of floating-point or integer values</p></td>

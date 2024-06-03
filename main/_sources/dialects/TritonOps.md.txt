@@ -505,7 +505,7 @@ tf32x3: implement the 3xTF32 trick. For more info see the pass in F32DotTC.cpp
 ieee: don't use TC, implement dot in software.
 If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.
 
-Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `DotLike`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -526,8 +526,8 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `a` | TensorOrMemDesc instance
-| `b` | TensorOrMemDesc instance
+| `a` | ranked tensor of floating-point or integer values
+| `b` | ranked tensor of floating-point or integer values
 | `c` | ranked tensor of floating-point or integer values
 
 #### Results:

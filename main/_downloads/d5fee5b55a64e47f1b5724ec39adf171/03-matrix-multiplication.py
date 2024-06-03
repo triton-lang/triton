@@ -101,11 +101,10 @@ You will specifically learn about:
 #
 #  .. code-block:: Python
 #
-#    pid = triton.program_id(0);
-#    grid_m = (M + BLOCK_SIZE_M - 1) // BLOCK_SIZE_M;
-#    grid_n = (N + BLOCK_SIZE_N - 1) // BLOCK_SIZE_N;
-#    pid_m = pid / grid_n;
-#    pid_n = pid % grid_n;
+#    pid = tl.program_id(axis=0)
+#    grid_n = tl.cdiv(N, BLOCK_SIZE_N)
+#    pid_m = pid // grid_n
+#    pid_n = pid % grid_n
 #
 # is just not going to cut it.
 #
@@ -131,7 +130,7 @@ You will specifically learn about:
 #    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
 #    # *Within groups*, programs are ordered in a column-major order
 #    # Row-id of the program in the *launch grid*
-#    pid_m = first_pid_m + (pid % group_size_m)
+#    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
 #    # Col-id of the program in the *launch grid*
 #    pid_n = (pid % num_pid_in_group) // group_size_m
 #
@@ -224,8 +223,7 @@ def get_hip_autotune_config():
 
 
 def get_autotune_config():
-    target = triton.runtime.driver.active.get_current_target()
-    if target.backend == 'cuda':
+    if is_cuda():
         return get_cuda_autotune_config()
     else:
         return get_hip_autotune_config()
@@ -271,7 +269,7 @@ def matmul_kernel(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     # ----------------------------------------------------------
@@ -318,10 +316,9 @@ def matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
+# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `matmul_kernel`.
 @triton.jit
 def leaky_relu(x):
-    x = x + 1
     return tl.where(x >= 0, x, 0.01 * x)
 
 

@@ -14,6 +14,7 @@
    .. autosummary::
    
       ~Config.__init__
+      ~Config.all_kwargs
    
    
 

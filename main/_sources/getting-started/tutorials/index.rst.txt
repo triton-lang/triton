@@ -124,7 +124,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="Libdevice (`tl.extra.cuda.libdevice`) function">
+    <div class="sphx-glr-thumbcontainer" tooltip="Libdevice (`tl.extra.libdevice`) function">
 
 .. only:: html
 
@@ -135,7 +135,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-      <div class="sphx-glr-thumbnail-title">Libdevice (`tl.extra.cuda.libdevice`) function</div>
+      <div class="sphx-glr-thumbnail-title">Libdevice (`tl.extra.libdevice`) function</div>
     </div>
 
 

@@ -65,7 +65,7 @@
 <li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
 <li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
 <li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
-<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.cuda.libdevice</cite>) function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
 </ul>
 </li>
@@ -135,9 +135,9 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
 
 <span class="kn">import</span> <span class="nn">triton</span>
 <span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
+<span class="kn">from</span> <span class="nn">triton.runtime</span> <span class="kn">import</span> <span class="n">driver</span>
 
 
-<span class="nd">@torch</span><span class="o">.</span><span class="n">jit</span><span class="o">.</span><span class="n">script</span>
 <span class="k">def</span> <span class="nf">naive_softmax</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute row-wise softmax of X using native pytorch</span>
 
@@ -169,61 +169,91 @@ but, as we will see later, it is still far from ideal.</p>
 </section>
 <section id="compute-kernel">
 <h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Link to this heading">¶</a></h2>
-<p>Our softmax kernel works as follows: each program loads a row of the input matrix X,
+<p>Our softmax kernel works as follows: each program loads a set of rows of the input matrix X strided by number of programs,
 normalizes it and writes back the result to the output Y.</p>
 <p>Note that one important limitation of Triton is that each block must have a
 power-of-two number of elements, so we need to internally “pad” each row and guard the
 memory operations properly if we want to handle any possible input shapes:</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">softmax_kernel</span><span class="p">(</span><span class="n">output_ptr</span><span class="p">,</span> <span class="n">input_ptr</span><span class="p">,</span> <span class="n">input_row_stride</span><span class="p">,</span> <span class="n">output_row_stride</span><span class="p">,</span> <span class="n">n_cols</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
-    <span class="c1"># The rows of the softmax are independent, so we parallelize across those</span>
-    <span class="n">row_idx</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="c1"># The stride represents how much we need to increase the pointer to advance 1 row</span>
-    <span class="n">row_start_ptr</span> <span class="o">=</span> <span class="n">input_ptr</span> <span class="o">+</span> <span class="n">row_idx</span> <span class="o">*</span> <span class="n">input_row_stride</span>
-    <span class="c1"># The block size is the next power of two greater than n_cols, so we can fit each</span>
-    <span class="c1"># row in a single block</span>
-    <span class="n">col_offsets</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
-    <span class="n">input_ptrs</span> <span class="o">=</span> <span class="n">row_start_ptr</span> <span class="o">+</span> <span class="n">col_offsets</span>
-    <span class="c1"># Load the row into SRAM, using a mask since BLOCK_SIZE may be &gt; than n_cols</span>
-    <span class="n">row</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">input_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">col_offsets</span> <span class="o">&lt;</span> <span class="n">n_cols</span><span class="p">,</span> <span class="n">other</span><span class="o">=-</span><span class="nb">float</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span><span class="p">))</span>
-    <span class="c1"># Subtract maximum for numerical stability</span>
-    <span class="n">row_minus_max</span> <span class="o">=</span> <span class="n">row</span> <span class="o">-</span> <span class="n">tl</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">row</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="c1"># Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)</span>
-    <span class="n">numerator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">row_minus_max</span><span class="p">)</span>
-    <span class="n">denominator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">numerator</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">softmax_output</span> <span class="o">=</span> <span class="n">numerator</span> <span class="o">/</span> <span class="n">denominator</span>
-    <span class="c1"># Write back output to DRAM</span>
-    <span class="n">output_row_start_ptr</span> <span class="o">=</span> <span class="n">output_ptr</span> <span class="o">+</span> <span class="n">row_idx</span> <span class="o">*</span> <span class="n">output_row_stride</span>
-    <span class="n">output_ptrs</span> <span class="o">=</span> <span class="n">output_row_start_ptr</span> <span class="o">+</span> <span class="n">col_offsets</span>
-    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">output_ptrs</span><span class="p">,</span> <span class="n">softmax_output</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">col_offsets</span> <span class="o">&lt;</span> <span class="n">n_cols</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">softmax_kernel</span><span class="p">(</span><span class="n">output_ptr</span><span class="p">,</span> <span class="n">input_ptr</span><span class="p">,</span> <span class="n">input_row_stride</span><span class="p">,</span> <span class="n">output_row_stride</span><span class="p">,</span> <span class="n">n_rows</span><span class="p">,</span> <span class="n">n_cols</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+                   <span class="n">num_stages</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="c1"># starting row of the program</span>
+    <span class="n">row_start</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">row_step</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">num_programs</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">row_idx</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">range</span><span class="p">(</span><span class="n">row_start</span><span class="p">,</span> <span class="n">n_rows</span><span class="p">,</span> <span class="n">row_step</span><span class="p">,</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">num_stages</span><span class="p">):</span>
+        <span class="c1"># The stride represents how much we need to increase the pointer to advance 1 row</span>
+        <span class="n">row_start_ptr</span> <span class="o">=</span> <span class="n">input_ptr</span> <span class="o">+</span> <span class="n">row_idx</span> <span class="o">*</span> <span class="n">input_row_stride</span>
+        <span class="c1"># The block size is the next power of two greater than n_cols, so we can fit each</span>
+        <span class="c1"># row in a single block</span>
+        <span class="n">col_offsets</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
+        <span class="n">input_ptrs</span> <span class="o">=</span> <span class="n">row_start_ptr</span> <span class="o">+</span> <span class="n">col_offsets</span>
+        <span class="c1"># Load the row into SRAM, using a mask since BLOCK_SIZE may be &gt; than n_cols</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="n">col_offsets</span> <span class="o">&lt;</span> <span class="n">n_cols</span>
+        <span class="n">row</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">input_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=-</span><span class="nb">float</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span><span class="p">))</span>
+        <span class="c1"># Subtract maximum for numerical stability</span>
+        <span class="n">row_minus_max</span> <span class="o">=</span> <span class="n">row</span> <span class="o">-</span> <span class="n">tl</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">row</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="c1"># Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)</span>
+        <span class="n">numerator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">row_minus_max</span><span class="p">)</span>
+        <span class="n">denominator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">numerator</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">softmax_output</span> <span class="o">=</span> <span class="n">numerator</span> <span class="o">/</span> <span class="n">denominator</span>
+        <span class="c1"># Write back output to DRAM</span>
+        <span class="n">output_row_start_ptr</span> <span class="o">=</span> <span class="n">output_ptr</span> <span class="o">+</span> <span class="n">row_idx</span> <span class="o">*</span> <span class="n">output_row_stride</span>
+        <span class="n">output_ptrs</span> <span class="o">=</span> <span class="n">output_row_start_ptr</span> <span class="o">+</span> <span class="n">col_offsets</span>
+        <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">output_ptrs</span><span class="p">,</span> <span class="n">softmax_output</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">device</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">current_device</span><span class="p">()</span>
+<span class="n">properties</span> <span class="o">=</span> <span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">NUM_SM</span> <span class="o">=</span> <span class="n">properties</span><span class="p">[</span><span class="s2">&quot;multiprocessor_count&quot;</span><span class="p">]</span>
+<span class="n">NUM_REGS</span> <span class="o">=</span> <span class="n">properties</span><span class="p">[</span><span class="s2">&quot;max_num_regs&quot;</span><span class="p">]</span>
+<span class="n">SIZE_SMEM</span> <span class="o">=</span> <span class="n">properties</span><span class="p">[</span><span class="s2">&quot;max_shared_mem&quot;</span><span class="p">]</span>
+<span class="n">WARP_SIZE</span> <span class="o">=</span> <span class="n">properties</span><span class="p">[</span><span class="s2">&quot;warpSize&quot;</span><span class="p">]</span>
+<span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
+<span class="n">kernels</span> <span class="o">=</span> <span class="p">{}</span>
+
+
+<span class="k">def</span> <span class="nf">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
     <span class="n">n_rows</span><span class="p">,</span> <span class="n">n_cols</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
-    <span class="c1"># The block size is the smallest power of two greater than the number of columns in `x`</span>
+
+    <span class="c1"># The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`</span>
     <span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">next_power_of_2</span><span class="p">(</span><span class="n">n_cols</span><span class="p">)</span>
+
     <span class="c1"># Another trick we can use is to ask the compiler to use more threads per row by</span>
     <span class="c1"># increasing the number of warps (`num_warps`) over which each row is distributed.</span>
     <span class="c1"># You will see in the next tutorial how to auto-tune this value in a more natural</span>
     <span class="c1"># way so you don&#39;t have to come up with manual heuristics yourself.</span>
-    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
-    <span class="k">if</span> <span class="n">BLOCK_SIZE</span> <span class="o">&gt;=</span> <span class="mi">2048</span><span class="p">:</span>
-        <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
-    <span class="k">if</span> <span class="n">BLOCK_SIZE</span> <span class="o">&gt;=</span> <span class="mi">4096</span><span class="p">:</span>
-        <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">16</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
+
+    <span class="c1"># Number of software piepling stages.</span>
+    <span class="n">num_stages</span> <span class="o">=</span> <span class="mi">4</span> <span class="k">if</span> <span class="n">SIZE_SMEM</span> <span class="o">&gt;</span> <span class="mi">200000</span> <span class="k">else</span> <span class="mi">2</span>
+
     <span class="c1"># Allocate output</span>
     <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-    <span class="c1"># Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o</span>
-    <span class="c1"># f the input matrix</span>
-    <span class="n">softmax_kernel</span><span class="p">[(</span><span class="n">n_rows</span><span class="p">,</span> <span class="p">)](</span>
+
+    <span class="c1"># pre-compile kernel to get register usage and compute thread occupancy.</span>
+    <span class="n">kernel</span><span class="p">,</span> <span class="n">num_programs</span> <span class="o">=</span> <span class="n">kernels</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">BLOCK_SIZE</span><span class="p">,</span> <span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">kernel</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">kernel</span> <span class="o">=</span> <span class="n">softmax_kernel</span><span class="o">.</span><span class="n">warmup</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">y</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">n_rows</span><span class="p">,</span> <span class="n">n_cols</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="n">BLOCK_SIZE</span><span class="p">,</span>
+                                       <span class="n">num_stages</span><span class="o">=</span><span class="n">num_stages</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span> <span class="n">grid</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="p">))</span>
+        <span class="n">kernel</span><span class="o">.</span><span class="n">_init_handles</span><span class="p">()</span>
+        <span class="n">n_regs</span> <span class="o">=</span> <span class="n">kernel</span><span class="o">.</span><span class="n">n_regs</span>
+        <span class="n">size_smem</span> <span class="o">=</span> <span class="n">kernel</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">shared</span>
+        <span class="n">occupancy</span> <span class="o">=</span> <span class="n">NUM_REGS</span> <span class="o">//</span> <span class="p">(</span><span class="n">n_regs</span> <span class="o">*</span> <span class="n">WARP_SIZE</span> <span class="o">*</span> <span class="n">num_warps</span><span class="p">)</span>
+        <span class="n">occupancy</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">occupancy</span><span class="p">,</span> <span class="n">SIZE_SMEM</span> <span class="o">//</span> <span class="n">size_smem</span><span class="p">)</span>
+        <span class="n">num_programs</span> <span class="o">=</span> <span class="n">NUM_SM</span> <span class="o">*</span> <span class="n">occupancy</span>
+        <span class="n">kernels</span><span class="p">[</span><span class="n">BLOCK_SIZE</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">kernel</span><span class="p">,</span> <span class="n">num_programs</span><span class="p">)</span>
+
+    <span class="n">num_programs</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_programs</span><span class="p">,</span> <span class="n">n_rows</span><span class="p">)</span>
+
+    <span class="c1"># Create a number of persistent programs.</span>
+    <span class="n">kernel</span><span class="p">[(</span><span class="n">num_programs</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)](</span>
         <span class="n">y</span><span class="p">,</span>
         <span class="n">x</span><span class="p">,</span>
         <span class="n">x</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
         <span class="n">y</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
+        <span class="n">n_rows</span><span class="p">,</span>
         <span class="n">n_cols</span><span class="p">,</span>
-        <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>
-        <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="n">BLOCK_SIZE</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">y</span>
 </pre></div>
@@ -251,52 +281,131 @@ We will then compare its performance against (1) <code class="code docutils lite
         <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;N&#39;</span><span class="p">],</span>  <span class="c1"># argument names to use as an x-axis for the plot</span>
         <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">128</span> <span class="o">*</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">100</span><span class="p">)],</span>  <span class="c1"># different possible values for `x_name`</span>
         <span class="n">line_arg</span><span class="o">=</span><span class="s1">&#39;provider&#39;</span><span class="p">,</span>  <span class="c1"># argument name whose value corresponds to a different line in the plot</span>
-        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span>
-            <span class="s1">&#39;triton&#39;</span><span class="p">,</span>
-            <span class="s1">&#39;torch-native&#39;</span><span class="p">,</span>
-            <span class="s1">&#39;torch-jit&#39;</span><span class="p">,</span>
-        <span class="p">],</span>  <span class="c1"># possible values for `line_arg``</span>
+        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;triton&#39;</span><span class="p">,</span> <span class="s1">&#39;torch&#39;</span><span class="p">],</span>  <span class="c1"># possible values for `line_arg``</span>
         <span class="n">line_names</span><span class="o">=</span><span class="p">[</span>
             <span class="s2">&quot;Triton&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;Torch (native)&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;Torch (jit)&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;Torch&quot;</span><span class="p">,</span>
         <span class="p">],</span>  <span class="c1"># label name for the lines</span>
-        <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;--&#39;</span><span class="p">)],</span>  <span class="c1"># line styles</span>
+        <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)],</span>  <span class="c1"># line styles</span>
         <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;GB/s&quot;</span><span class="p">,</span>  <span class="c1"># label name for the y-axis</span>
         <span class="n">plot_name</span><span class="o">=</span><span class="s2">&quot;softmax-performance&quot;</span><span class="p">,</span>  <span class="c1"># name for the plot. Used also as a file name for saving the plot.</span>
         <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;M&#39;</span><span class="p">:</span> <span class="mi">4096</span><span class="p">},</span>  <span class="c1"># values for function arguments not in `x_names` and `y_name`</span>
     <span class="p">))</span>
 <span class="k">def</span> <span class="nf">benchmark</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
     <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="n">quantiles</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]</span>
-    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;torch-native&#39;</span><span class="p">:</span>
-        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+    <span class="n">stream</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">Stream</span><span class="p">()</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">set_stream</span><span class="p">(</span><span class="n">stream</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;torch&#39;</span><span class="p">:</span>
+        <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">))</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton&#39;</span><span class="p">:</span>
-        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;torch-jit&#39;</span><span class="p">:</span>
-        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">naive_softmax</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+        <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">))</span>
     <span class="n">gbps</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">ms</span><span class="p">:</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">nelement</span><span class="p">()</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">*</span> <span class="mf">1e-9</span> <span class="o">/</span> <span class="p">(</span><span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-3</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">gbps</span><span class="p">(</span><span class="n">ms</span><span class="p">),</span> <span class="n">gbps</span><span class="p">(</span><span class="n">max_ms</span><span class="p">),</span> <span class="n">gbps</span><span class="p">(</span><span class="n">min_ms</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">gbps</span><span class="p">(</span><span class="n">ms</span><span class="p">)</span>
 
 
 <span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 <img src="../../_images/sphx_glr_02-fused-softmax_001.png" srcset="../../_images/sphx_glr_02-fused-softmax_001.png" alt="02 fused softmax" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>softmax-performance:
-          N       Triton  Torch (native)  Torch (jit)
-0     256.0   682.666643      744.727267   256.000001
-1     384.0   877.714274      819.200021   315.076934
-2     512.0   910.222190      963.764689   348.595735
-3     640.0   975.238103      975.238103   372.363633
-4     768.0  1068.521715     1023.999964   390.095241
-..      ...          ...             ...          ...
-93  12160.0  1601.316858     1508.217139   464.343688
-94  12288.0  1604.963246     1384.563337   464.794337
-95  12416.0  1602.064538     1394.077255   464.149533
-96  12544.0  1599.235121     1398.634134   464.055486
-97  12672.0  1602.782573     1393.484517   463.963376
-
-[98 rows x 4 columns]
+          N       Triton        Torch
+0     256.0   465.463076   675.883749
+1     384.0   603.079841   830.079190
+2     512.0   753.161944   914.066855
+3     640.0   794.511138   948.204968
+4     768.0   876.875005  1028.022329
+5     896.0   924.292555  1063.979061
+6    1024.0   992.233743  1107.052681
+7    1152.0  1106.869379   617.406361
+8    1280.0  1137.945170   667.999010
+9    1408.0  1162.981028   729.775076
+10   1536.0  1185.488174   786.231422
+11   1664.0  1216.467604   818.384227
+12   1792.0  1244.282941   858.164107
+13   1920.0  1255.540209   914.369932
+14   2048.0  1276.738954   964.849517
+15   2176.0  1264.639989   976.216613
+16   2304.0  1266.730342  1013.633062
+17   2432.0  1295.641882  1056.499041
+18   2560.0  1297.153183  1093.460116
+19   2688.0  1313.661261  1111.337888
+20   2816.0  1329.564965  1140.557943
+21   2944.0  1331.614829  1176.775172
+22   3072.0  1341.051904  1191.683308
+23   3200.0  1349.888142  1202.503826
+24   3328.0  1358.588367  1229.027717
+25   3456.0  1377.428691  1250.427581
+26   3584.0  1374.510821  1268.784121
+27   3712.0  1377.176722  1279.071948
+28   3840.0  1381.287203  1301.882679
+29   3968.0  1389.064106  1318.881448
+30   4096.0  1395.474538  1331.512185
+31   4224.0  1345.556647  1166.650002
+32   4352.0  1342.369741  1174.156135
+33   4480.0  1351.710851  1178.985727
+34   4608.0  1354.019193  1194.362631
+35   4736.0  1362.612599  1202.738098
+36   4864.0  1369.436098  1220.977976
+37   4992.0  1375.796474  1232.807729
+38   5120.0  1376.351827  1256.846607
+39   5248.0  1379.287461  1265.840070
+40   5376.0  1373.963366  1284.049845
+41   5504.0  1382.889222  1296.432798
+42   5632.0  1393.714894  1316.893384
+43   5760.0  1398.826036  1327.094235
+44   5888.0  1396.044465  1343.728873
+45   6016.0  1399.249264  1350.663263
+46   6144.0  1408.159052  1373.836110
+47   6272.0  1415.220403  1377.667866
+48   6400.0  1415.589407  1390.342081
+49   6528.0  1415.519673  1395.398534
+50   6656.0  1418.895634  1404.581657
+51   6784.0  1418.203402  1413.922009
+52   6912.0  1420.279835  1426.416621
+53   7040.0  1425.235022  1428.082469
+54   7168.0  1431.983130  1438.079289
+55   7296.0  1432.106994  1445.071214
+56   7424.0  1426.862629  1449.840203
+57   7552.0  1429.480220  1455.603978
+58   7680.0  1436.278797  1463.003647
+59   7808.0  1434.404832  1464.748231
+60   7936.0  1432.440983  1470.346752
+61   8064.0  1431.421053  1473.393801
+62   8192.0  1432.095196  1484.318597
+63   8320.0  1387.450876  1402.386272
+64   8448.0  1384.443465  1405.896562
+65   8576.0  1392.396541  1396.134852
+66   8704.0  1390.734237  1403.150266
+67   8832.0  1391.962230  1404.885386
+68   8960.0  1392.497146  1414.524497
+69   9088.0  1405.587214  1418.987296
+70   9216.0  1403.700211  1425.223331
+71   9344.0  1402.034764  1423.639872
+72   9472.0  1391.304006  1433.051585
+73   9600.0  1402.086866  1437.097020
+74   9728.0  1404.221575  1444.898518
+75   9856.0  1405.529715  1441.766156
+76   9984.0  1392.189223  1451.555775
+77  10112.0  1413.514547  1459.581911
+78  10240.0  1411.416652  1469.622297
+79  10368.0  1417.430944  1465.406049
+80  10496.0  1423.622408  1469.707135
+81  10624.0  1404.217003  1469.395778
+82  10752.0  1394.721768  1473.584987
+83  10880.0  1394.388858  1478.529736
+84  11008.0  1414.236727  1477.103531
+85  11136.0  1428.479102  1484.901506
+86  11264.0  1413.707974  1487.465253
+87  11392.0  1419.858471  1491.152346
+88  11520.0  1418.984065  1497.066641
+89  11648.0  1427.240185  1503.509443
+90  11776.0  1424.484961  1506.276858
+91  11904.0  1435.529476  1506.144435
+92  12032.0  1412.830212  1506.302588
+93  12160.0  1414.303931  1512.440974
+94  12288.0  1431.206105  1393.859097
+95  12416.0  1444.323508  1389.925161
+96  12544.0  1444.659330  1394.155304
+97  12672.0  1439.147480  1394.767174
 </pre></div>
 </div>
 <dl class="simple">
@@ -307,7 +416,7 @@ Note however that the PyTorch <cite>softmax</cite> operation is more general and
 </ul>
 </dd>
 </dl>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 38.896 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 35.652 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/034d953b6214fedce6ea03803c712b89/02-fused-softmax.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">02-fused-softmax.ipynb</span></code></a></p>

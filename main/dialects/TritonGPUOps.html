@@ -104,9 +104,13 @@
 <li class="toctree-l4"><a class="reference internal" href="#id12">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#triton-gpu-memdesc-subview-triton-gpu-memdescsubviewop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.memdesc_subview</span></code> (triton::gpu::MemDescSubviewOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#triton-gpu-local-store-triton-gpu-localstoreop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.local_store</span></code> (triton::gpu::LocalStoreOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id13">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id14">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#triton-gpu-memdesc-subview-triton-gpu-memdescsubviewop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.memdesc_subview</span></code> (triton::gpu::MemDescSubviewOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id14">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id15">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -204,8 +208,7 @@ This is analogue to tt.load except the data are copied to local memory pointed
 by by the memory descriptor instread of a distributed tensor. The rest of the
 operands are the same as tt.load.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
 <table>
@@ -409,7 +412,7 @@ compiler assumes it’s deallocated at the first point that post-dominates all
 uses of the alloc.</p>
 <p>Because we assume a memdesc is dead at the first point that post-dominates
 its uses, ops that wait for an async operation on a memdesc to complete
-(such as triton_nvidia_gpu.dot_wait) should also take the memdesc as an
+(such as triton_nvidia_gpu.warp_group_dot_wait) should also take the memdesc as an
 operand.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
@@ -439,8 +442,7 @@ operand.</p>
 </div>
 <p>Load a tensor from the local memory descriptor into a distributed tensor.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id11">
 <h3>Operands:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -475,6 +477,35 @@ operand.</p>
 </table>
 </section>
 </section>
+<section id="triton-gpu-local-store-triton-gpu-localstoreop">
+<h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.local_store</span></code> (triton::gpu::LocalStoreOp)<a class="headerlink" href="#triton-gpu-local-store-triton-gpu-localstoreop" title="Link to this heading">¶</a></h2>
+<p><em>Store a distributed tensor into a buffer in local memory</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.local_store` $src `,` $dst attr-dict `:` type($src) `-&gt;` qualified(type($dst))
+</pre></div>
+</div>
+<p>Store a distributed tensor into a buffer in local memory.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
+<section id="id13">
+<h3>Operands:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
+<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="triton-gpu-memdesc-subview-triton-gpu-memdescsubviewop">
 <h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.memdesc_subview</span></code> (triton::gpu::MemDescSubviewOp)<a class="headerlink" href="#triton-gpu-memdesc-subview-triton-gpu-memdescsubviewop" title="Link to this heading">¶</a></h2>
 <p><em>Take a subview of the descriptor.</em></p>
@@ -494,8 +525,8 @@ It doesn’t affect the underlying memory. The subview can be rank-reduced.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id13">
-<h3>Operands:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>Operands:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -512,8 +543,8 @@ It doesn’t affect the underlying memory. The subview can be rank-reduced.</p>
 </tbody>
 </table>
 </section>
-<section id="id14">
-<h3>Results:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<section id="id15">
+<h3>Results:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>

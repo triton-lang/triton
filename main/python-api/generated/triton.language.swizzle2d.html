@@ -125,9 +125,8 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.swizzle2d">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">swizzle2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">i</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">j</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size_i</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size_j</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size_g</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.swizzle2d" title="Link to this definition">¶</a></dt>
-<dd><p>Transforms indices of a row-major <code class="code docutils literal notranslate"><span class="pre">size_i</span> <span class="pre">*</span> <span class="pre">size_j</span></code> matrix into those
-of one where the indices are row-major for each group of <code class="code docutils literal notranslate"><span class="pre">size_j</span></code>
-rows.</p>
+<dd><p>Transforms the indices of a row-major <cite>size_i * size_j</cite> matrix into
+the indices of a column-major matrix for each group of <cite>size_g</cite> rows.</p>
 <p>For example, for <code class="code docutils literal notranslate"><span class="pre">size_i</span> <span class="pre">=</span> <span class="pre">size_j</span> <span class="pre">=</span> <span class="pre">4</span></code> and <code class="code docutils literal notranslate"><span class="pre">size_g</span> <span class="pre">=</span> <span class="pre">2</span></code>, it will
 transform</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">[[</span><span class="mi">0</span> <span class="p">,</span> <span class="mi">1</span> <span class="p">,</span> <span class="mi">2</span> <span class="p">,</span> <span class="mi">3</span> <span class="p">],</span>
