@@ -527,6 +527,10 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
                                                int32_t elemBitWidth) {
   assert(shared.getHasLeadingOffset());
 
+  // hasLeadingOffset layouts effectively ignore the shared layout's `vec` and
+  // generate their own, based on the dtype width.
+  assert(shared.getVec() == 1);
+
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   if (rank == 1) {
@@ -571,7 +575,6 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
     int row = 1 << logRow;
     // XXX: Add tests for this.
-    // XXX: Does this mean shared.vec must be 1?
     int vec = 8 * 16 / elemBitWidth;
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();

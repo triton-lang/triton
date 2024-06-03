@@ -385,7 +385,6 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
-// XXX: Lots more tests of InvertAndCompose
 TEST_F(LinearLayoutTest, InvertAndCompose_NonInjective) {
   LinearLayout l1({{S("in1"), {{2}, {1}, {4}}}}, {S("out")});
   LinearLayout l2({{S("in2"), {{0}, {2}, {1}, {4}}}}, {S("out")});
