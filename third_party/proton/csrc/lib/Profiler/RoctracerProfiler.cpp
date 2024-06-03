@@ -67,7 +67,6 @@ void processActivityKernel(std::mutex &corrIdToExternIdMutex,
 
 void processActivity(std::mutex &corrIdToExternIdMutex,
                      std::map<uint64_t, size_t> &corrIdToExternId,
-
                      std::set<Data *> &dataSet,
                      const roctracer_record_t *record) {
   switch (record->kind) {
@@ -198,11 +197,11 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
                           const void *callbackData, void *arg);
   static void activityCallback(const char *begin, const char *end, void *arg);
 
-  const static size_t BufferSize = 64 * 1024 * 1024;
+  inline const static size_t BufferSize = 64 * 1024 * 1024;
 
-  static std::mutex corrIdToExternIdMutex;
-  static std::map<uint64_t, size_t> corrIdToExternId;
-  static thread_local std::deque<size_t>
+  std::mutex corrIdToExternIdMutex;
+  std::map<uint64_t, size_t> corrIdToExternId;
+  inline static thread_local std::deque<size_t>
       externIdQueue[CorrelationDomain::Count];
 };
 
@@ -214,6 +213,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
   }
   auto &profiler =
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
+  auto &pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl &>(
+      *profiler.pImpl);
   if (domain == ACTIVITY_DOMAIN_HIP_API) {
     const hip_api_data_t *data = (const hip_api_data_t *)(callback_data);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
@@ -225,8 +226,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       profilerState.enterOp();
       if (externIdQueue[CorrelationDomain::Domain0].empty())
         return;
-      std::unique_lock<std::mutex> lock(corrIdToExternIdMutex);
-      corrIdToExternId[data->correlation_id] =
+      std::unique_lock<std::mutex> lock(pImpl.corrIdToExternIdMutex);
+      pImpl.corrIdToExternId[data->correlation_id] =
           externIdQueue[CorrelationDomain::Domain0].back();
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
       profilerState.exitOp();
@@ -238,8 +239,10 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
 
 void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     const char *begin, const char *end, void *arg) {
-  RoctracerProfiler &profiler =
+  auto &profiler =
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
+  auto &pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl &>(
+      *profiler.pImpl);
   auto &dataSet = profiler.dataSet;
   auto &correlation = profiler.correlation;
 
@@ -254,7 +257,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     // data on stop
     maxCorrelationId =
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
-    processActivity(corrIdToExternIdMutex, corrIdToExternId, dataSet, record);
+    processActivity(pImpl.corrIdToExternIdMutex, pImpl.corrIdToExternId,
+                    dataSet, record);
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
