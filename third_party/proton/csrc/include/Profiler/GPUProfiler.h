@@ -121,4 +121,4 @@ protected:
 
 } // namespace proton
 
-#endif // PROTON_PROFILER_CUPTI_PROFILER_H_
+#endif // PROTON_PROFILER_GPU_PROFILER_H_
