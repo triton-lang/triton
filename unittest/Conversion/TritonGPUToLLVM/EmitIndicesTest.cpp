@@ -1753,7 +1753,14 @@ INSTANTIATE_TEST_SUITE_P(TestCases, LoadSharedToDistributedLLTest,
                                          .shmemCTASplitNum = {1, 1},
                                          .shmemCTAOrder = {1, 0},
                                          .shmemHasLeadingOffset = true,
-                                         .shmemStrides = {128, 1},
+                                         // The legacy layout code assumes that
+                                         // the strides in the row/col
+                                         // dimensions are "dense" and match the
+                                         // order.  LLs can handle other
+                                         // strides, but obviously it won't
+                                         // match the legacy code, so we can't
+                                         // test it here.
+                                         .shmemStrides = {1, 128},
                                          .dst =
                                              BlockedLLTestParams{
                                                  .sizePerThread = {1, 1},
@@ -1797,7 +1804,7 @@ INSTANTIATE_TEST_SUITE_P(TestCases, LoadSharedToDistributedLLTest,
                                          .shmemCTASplitNum = {1, 1},
                                          .shmemCTAOrder = {1, 0},
                                          .shmemHasLeadingOffset = true,
-                                         .shmemStrides = {128, 1},
+                                         .shmemStrides = {1, 128},
                                          .dst =
                                              BlockedLLTestParams{
                                                  .sizePerThread = {1, 1},
@@ -1819,7 +1826,7 @@ INSTANTIATE_TEST_SUITE_P(TestCases, LoadSharedToDistributedLLTest,
                                          .shmemCTASplitNum = {1, 1},
                                          .shmemCTAOrder = {1, 0},
                                          .shmemHasLeadingOffset = true,
-                                         .shmemStrides = {128, 1},
+                                         .shmemStrides = {1, 128},
                                          .dst =
                                              BlockedLLTestParams{
                                                  .sizePerThread = {1, 1},
