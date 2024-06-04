@@ -248,16 +248,11 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
   return ret;
 }
 
-// elemLlvmTy should be dstTy's element type converted to an LLVM-dialect type.
-//
-// Calls perVectorCallback once for each group of register elems to transfer,
-// and passes the shmem address for that group.
-//
-// Returns true on success.
-static bool emitTransferBetweenRegistersAndShared(
+bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
-    Value shmemBase, ArrayRef<Value> shmemStrides, Location loc,
-    RewriterBase &rewriter, const TargetInfoBase &target,
+    std::optional<int32_t> maxVecElems, Value shmemBase,
+    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
 
@@ -327,7 +322,9 @@ static bool emitTransferBetweenRegistersAndShared(
   // calling getNumConsecutiveInOut(), we could flatten consecutive out-dims
   // which have known strides.  This would allow us to vectorize across multiple
   // shmem out dimensions where possible.
-  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
+  const int vecElems =
+      std::min(regToSharedLayout.getNumConsecutiveInOut(),
+               maxVecElems.value_or(std::numeric_limits<int>::max()));
 
   Value threadId = getThreadId(rewriter, loc);
   Value threadsPerWarp = i32_val(regToSharedLayout.getInDimSize(kLane));
@@ -369,8 +366,9 @@ std::optional<SmallVector<Value>> loadSharedToRegistersUsingLinearLayouts(
     const TargetInfoBase &target) {
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemLlvmTy, smemObj.getBase(), smemObj.getStrides(), loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj.getBase(),
+      smemObj.getStrides(), loc, rewriter, target,
+      [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
@@ -391,8 +389,8 @@ bool storeDistributedToSharedUsingLinearLayouts(
     ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
     Location loc, RewriterBase &rewriter, const TargetInfoBase &target) {
   bool success = emitTransferBetweenRegistersAndShared(
-      srcTy, dstTy, elemLlvmTy, smemBase, dstStrides, loc, rewriter, target,
-      [&](VectorType vecTy, Value vecAddr) {
+      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
+      dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
         ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
         srcVals = srcVals.drop_front(vecTy.getNumElements());
 

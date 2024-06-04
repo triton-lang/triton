@@ -1235,6 +1235,25 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return multiDimIdx;
 }
 
+// Emits IR to load data from shared memory into registers, or to store data
+// from registers into shared memory.
+//
+// You supply perVectorCallback, which is called once per group of register
+// elements to transfer.  You can use this callback to emit IR to load or store
+// data from or to shared memory.
+//
+// elemLlvmTy should be dstTy's element type converted to an LLVM-dialect type.
+//
+// If maxVecElems is provided, we won't vectorize more than this many elements.
+//
+// Returns true on success.
+[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
+    RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
+    std::optional<int32_t> maxVecElems, Value shmemBase,
+    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target,
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
+
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     Location loc, const TargetInfoBase &target, unsigned inVec,
     RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
