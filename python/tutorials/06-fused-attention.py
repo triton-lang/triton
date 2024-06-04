@@ -103,9 +103,9 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               stride_vz, stride_vh, stride_vk, stride_vn,  #
               stride_oz, stride_oh, stride_om, stride_on,  #
               Z, H, N_CTX,  #
+              HEAD_DIM: tl.constexpr,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
-              HEAD_DIM: tl.constexpr,  #
               STAGE: tl.constexpr  #
               ):
     tl.static_assert(BLOCK_N <= HEAD_DIM)
