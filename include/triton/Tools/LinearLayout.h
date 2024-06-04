@@ -2,6 +2,7 @@
 #define TRITON_TOOLS_LINEARLAYOUT_H
 
 #include <cstdint>
+#include <numeric>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -151,15 +152,19 @@ namespace mlir::triton {
 // ## Dimension order
 //
 // An LL's input and output dimensions have an order.  This order only affects
-// the reshapeIns/Outs operations, where the layout is logically flattened
-// according to the dimension order and then chopped up again.
+// the reshapeIns/Outs and similar operations, where the layout is logically
+// flattened according to the dimension order and then chopped up again.
 //
-// ## Surjectivity
+// ## Surjectivity and injectivity
 //
-// We require that all output values are covered by some input value, i.e. the
-// function L is surjective.  But multiple input values can map to the same
-// output value. This represents the idea that the same logical tensor element
-// can be stored in multiple places in the hardware.
+// Most LLs are surjective, i.e. all output values are covered by some input
+// value.  But occasionally you might create a nonsurjective layout, usually via
+// invertAndCompose.  We aggressively assert that LLs are surjective unless you
+// explicitly create one that's not.
+//
+// LLs are not, in general, injective.  There might exist multiple input values
+// that map to the same output value.  This represents the idea that the same
+// logical tensor element can be stored in multiple places in the hardware.
 //
 // ## Why map hardware loc -> tensor index and not the other way around?
 //
@@ -318,6 +323,7 @@ private:
       bases;
 
   llvm::SetVector<StringAttr> outDimNames;
+  bool surjective;
 
 public:
   using BasesT = decltype(bases);
@@ -342,7 +348,10 @@ public:
 
   // Creates a LinearLayout from a list of bases.  These are interpreted
   // according to the rules written for the member variable `bases`.
-  explicit LinearLayout(BasesT bases, ArrayRef<StringAttr> outDimNames);
+  //
+  // Assert-fails if requireSurjective is true and the bases are not surjective.
+  explicit LinearLayout(BasesT bases, ArrayRef<StringAttr> outDimNames,
+                        bool requireSurjective = true);
 
   // Construct a LinearLayout from an explicit list of bases.  (This constructor
   // is needed because llvm::MapVector does not have a constructor that accepts
@@ -363,9 +372,13 @@ public:
   //     {"in2", {/*L(in2=1)=*/{0,4}, /*L(in2=2)=*/{0,8}, /*L(in2=4)=*/{1,1}}},
   //   },
   //   {"out1", "out2"})
+  //
+  // Assert-fails if requireSurjective is true and the bases are not surjective.
   explicit LinearLayout(
       ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases,
-      ArrayRef<StringAttr> outDimNames);
+      ArrayRef<StringAttr> outDimNames, bool requireSurjective = true);
+
+  bool isSurjective() const { return surjective; }
 
   const BasesT &getBases() const { return bases; }
 
@@ -408,6 +421,9 @@ public:
     return 1 << getInDimSizeLog2(inDim);
   }
 
+  int32_t getTotalInDimSizeLog2() const;
+  int32_t getTotalInDimSize() const { return 1 << getTotalInDimSizeLog2(); }
+
   // getOutDimSize(dim) == s means that there exists an input value that will
   // produce each output value in [0,s).
   //
@@ -428,6 +444,28 @@ public:
     return 1 << getOutDimSizeLog2(outDim);
   }
 
+  int32_t getTotalOutDimSizeLog2() const;
+  int32_t getTotalOutDimSize() const { return 1 << getTotalOutDimSizeLog2(); }
+
+  // Finds the number of consecutive input elements in the first input dimension
+  // that map to consecutive output elements in the first output dimension.
+  //
+  // Mathematically, finds the maximum value V such that for any a, b, c, and
+  // for all v in [0,V),
+  //
+  //   L(a*V + v, b, c, ...) = L(a*V, b, c, ...) + (v, 0, ..., 0)
+  //
+  // Note that's +, not ⊕, in the RHS.  (Equivalently, we could use binary-or
+  // instead of +.  In other words, we require that L(a*V, b, c, ...) have no
+  // bits that overlap with v.)
+  //
+  // For example, if L maps (register, lane) to (dim1, dim0), then this tells
+  // you how many consecutive registers map to consecutive elements of dim1.
+  //
+  // This only works across the first (i.e. the most-minor) dimension of in/out.
+  // If you want it to work across more dimensions, flatten the layout.
+  int32_t getNumConsecutiveInOut() const;
+
   // Reorders the in/out dimensions of the layout.  This is mostly cosmetic
   // (affecting e.g. the order of getIn/OutDimNames), but it also affects the
   // behavior of reshape.
@@ -435,6 +473,30 @@ public:
   transposeIns(ArrayRef<StringAttr> newInDimOrder) const;
   [[nodiscard]] LinearLayout
   transposeOuts(ArrayRef<StringAttr> newOutDimOrder) const;
+
+  [[nodiscard]] LinearLayout reshapeIns(
+      ArrayRef<std::pair<StringAttr /*inDimName*/, int32_t /*size*/>> newInDims)
+      const;
+
+  // Reshapes to a single input dim (named whatever our first in-dim is named).
+  [[nodiscard]] LinearLayout flattenIns() const {
+    if (getNumInDims() == 0) {
+      return reshapeIns({});
+    }
+    return reshapeIns({{*getInDimNames().begin(), getTotalInDimSize()}});
+  }
+
+  [[nodiscard]] LinearLayout
+  reshapeOuts(ArrayRef<std::pair<StringAttr /*outDimName*/, int32_t /*size*/>>
+                  newOutDims) const;
+
+  // Reshapes to a single out dim (named whatever our first out-dim is named).
+  [[nodiscard]] LinearLayout flattenOuts() const {
+    if (getNumOutDims() == 0) {
+      return reshapeOuts({});
+    }
+    return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
+  }
 
   // Creates a new layout which, roughly speaking, is equivalent to one where
   // every element of the `outer` layout is replaced by a full instance of the
@@ -474,11 +536,19 @@ public:
   //
   // Requires: Any in/out dimensions which are in both outer and inner appear in
   // the same relative order.
+  //
+  // Postcondition: If both inner and outer are surjective, the result is
+  // surjective.
   friend LinearLayout operator*(LinearLayout inner, LinearLayout outer);
   LinearLayout &operator*=(LinearLayout outer) {
     *this = *this * outer;
     return *this;
   }
+
+  // TODO(jlebar): Implement the inverse of operator*, namely
+  //   std::optional<LinearLayout> divideLeft(const LinearLayout&);
+  //   std::optional<LinearLayout> divideRight(const LinearLayout&);
+  // In particular, these might subsume getNumConsecutiveInOut.
 
   // Computes and returns L(x, y, z).
   //
@@ -494,19 +564,48 @@ public:
   //  - let `outer` be O(x).
   //  - Then compose(outer) returns the layout (O∘L)(x), aka O(L(x)).
   //
-  // Requires: The output dimensions of this layout equal the input dimensions
-  // of outer (order doesn't matter).
+  // Requires:
+  //   - The output dimensions of this layout equal the input dimensions of
+  //     outer (order doesn't matter).
+  //   - For each output dim d of this layout, this->getOutDimSize(d) <=
+  //     outer.getInDimSize(d).
+  //
+  // Postcondition: The result is surjective iff `this` and `outer` are
+  // surjective and this->getOutDimSize(d) == outer.getInDimSize(d) for each of
+  // this->getOutDimNames().
+  //
   [[nodiscard]] LinearLayout compose(const LinearLayout &outer) const;
 
-  // TODO(jlebar): Not yet implemented.
-  // [[nodiscard]] LinearLayout reshapeIns(
-  //     std::vector<std::pair<StringAttr /*inDimName*/, int32_t /*size*/>>
-  //         newInDims) const;
-
-  // TODO(jlebar): Not yet implemented.
-  // [[nodiscard]] LinearLayout reshapeOuts(
-  //     std::vector<std::pair<StringAttr /*outDimName*/, int32_t /*size*/>>
-  //         newOutDims) const;
+  // Inverts or pseudo-inverts `outer` and composes it with `this`.
+  //
+  // For example, suppose you have the following two LLs.
+  //
+  //   - R is an LL representing registers, mapping (lane, warp) to a 2D index.
+  //   - S is an LL representing shared memory, mapping offset to a 2D index.
+  //
+  // Suppose you want to store tensor values from registers into shared memory.
+  // That is, given a (lane, warp), you want to know the corresponding shared
+  // memory offset to store into.
+  //
+  // This is equivalent to converting a (lane, warp) into a 2D index (i.e.
+  // applying R), then converting a 2D index into a shmem offset (i.e. applying
+  // the inverse of S).  R.invertAndCompose(S) computes this transformation.
+  //
+  // Notice the following requirements in order for this to work.
+  //
+  //   - R and S must have the same output dimension names (different order is
+  //     allowed).
+  //   - S must be surjective, i.e. there must be some offset for each output
+  //     dimension of S.  This way when we compose S^-1 with R, every possible
+  //     2D index that we might get from R has some shmem offset.
+  //   - The codomain of S must be at least as large as the codomain of R.
+  //     Otherwise, R could map some tensor index that is not stored in S.
+  //
+  // One requirement we *don't* have is that S is injective; we allow two shmem
+  // offsets to hold the same 2D index.  If S is not injective, there's
+  // ambiguity in which offset we choose for a given (lane, warp).  For now we
+  // don't place any guarantees on the choices made by this function.
+  [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
 
   std::string toString() const;
 
