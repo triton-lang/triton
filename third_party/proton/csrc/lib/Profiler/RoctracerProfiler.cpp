@@ -113,13 +113,13 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
 static inline const std::string cxxDemangle(const char *symbol) {
   size_t funcNameSize;
   int status;
-  const char *name =
-      (symbol != NULL)
-          ? abi::__cxa_demangle(symbol, NULL, &funcNameSize, &status)
-          : symbol;
-  auto ret = (name != NULL) ? std::string(name) : std::string(symbol);
-  std::free(reinterpret_cast<void *>(const_cast<char *>(name)));
-  return ret;
+  if (const char *name =
+          abi::__cxa_demangle(symbol, NULL, &funcNameSize, &status)) {
+    std::string ret(name);
+    std::free(reinterpret_cast<void *>(const_cast<char *>(name)));
+    return ret;
+  }
+  return std::string(symbol);
 }
 
 const std::string kernelName(uint32_t domain, uint32_t cid,
@@ -197,7 +197,7 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
                           const void *callbackData, void *arg);
   static void activityCallback(const char *begin, const char *end, void *arg);
 
-  inline const static size_t BufferSize = 64 * 1024 * 1024;
+  static constexpr size_t BufferSize = 64 * 1024 * 1024;
 
   std::mutex corrIdToExternIdMutex;
   std::map<uint64_t, size_t> corrIdToExternId;

@@ -146,8 +146,8 @@ struct CuptiProfiler::CuptiProfilerPimpl
   static void callbackFn(void *userData, CUpti_CallbackDomain domain,
                          CUpti_CallbackId cbId, const void *cbData);
 
-  inline const static size_t AlignSize = 8;
-  inline const static size_t BufferSize = 64 * 1024 * 1024;
+  static constexpr size_t AlignSize = 8;
+  static constexpr size_t BufferSize = 64 * 1024 * 1024;
 
   std::map<uint32_t, size_t> corrIdToExternId;
   CUpti_SubscriberHandle subscriber{};
