@@ -24,10 +24,10 @@ def function_1(i):
     i = i + 1
     cond: tl.constexpr = True
     if cond:
-        i = function_2(i)
+        FN: tl.constexpr = function_2
     else:
-        i = function_0(i)
-    return i
+        FN: tl.constexpr = function_0
+    return FN(i)
 
 
 @triton.jit
@@ -44,8 +44,7 @@ def combine_fn(a, b):
 @triton.jit
 def kernel(X, i, BLOCK: tl.constexpr):
     i = i + 1
-    FN: tl.constexpr = function_1
-    i = FN(i)
+    i = function_1(i)
     tl.store(X, i)
 
 
@@ -65,12 +64,12 @@ def kernel_with_combine_fn(X, BLOCK: tl.constexpr):
 
 def apply_src_change(target, old, new, to_modify):
     kernel.hash = None
+    function_0.hash = None
     function_1.hash = None
     function_2.hash = None
-    function_1.src = function_1.src.replace(old, new)
-    target.src = target.src.replace(old, new)
+    to_modify.src = to_modify.src.replace(old, new)
     ret = target.cache_key
-    target.src = target.src.replace(new, old)
+    to_modify.src = to_modify.src.replace(new, old)
     return ret
 
 
