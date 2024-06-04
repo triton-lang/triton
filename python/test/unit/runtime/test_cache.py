@@ -35,7 +35,8 @@ def combine_fn(a, b):
 @triton.jit
 def kernel(X, i, BLOCK: tl.constexpr):
     i = i + 1
-    i = function_1(i)
+    FN: tl.constexpr = function_1
+    i = FN(i)
     tl.store(X, i)
 
 
