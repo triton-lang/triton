@@ -3762,7 +3762,7 @@ def test_load_cache_modifier(cache, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_vectorization(N, num_ctas, device):
     block_size = 1024 * num_ctas
-    src = torch.empty(block_size, device=device)
+    src = torch.randn(block_size, device=device)
     dst = torch.empty(block_size, device=device)
 
     @triton.jit
@@ -3781,7 +3781,7 @@ def test_vectorization(N, num_ctas, device):
         assert "ld.global.v4.b32" in ptx
     else:
         assert "ld.global.b32" in ptx
-    # np.testing.assert_allclose(dst, src[:N])
+    torch.testing.assert_close(dst[:N], src[:N], atol=1e-6, rtol=0)
 
 
 @pytest.mark.interpreter
