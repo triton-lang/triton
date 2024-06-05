@@ -21,6 +21,7 @@ def test_torch(context):
         if context == "shadow":
             assert len(data[0]["children"]) == 1
             assert data[0]["children"][0]["frame"]["name"] == "test"
+            assert data[0]["children"][0]["children"][0]["metrics"]["Time (ns)"] > 0
         elif context == "python":
             assert len(data[0]["children"]) == 1
             # The last frame is the torch kernel
