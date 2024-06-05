@@ -208,14 +208,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::startOp(const Scope &scope) {
-  cupti::activityPushExternalCorrelationId<true>(
-      CUPTI_EXTERNAL_CORRELATION_KIND_CUSTOM0, scope.scopeId);
+  profiler.correlation.pushExternId(scope.scopeId);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::stopOp(const Scope &scope) {
-  uint64_t correlationId;
-  cupti::activityPopExternalCorrelationId<true>(
-      CUPTI_EXTERNAL_CORRELATION_KIND_CUSTOM0, &correlationId);
+  profiler.correlation.popExternId();
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {
