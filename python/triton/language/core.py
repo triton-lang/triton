@@ -1324,7 +1324,8 @@ def cat(input, other, can_reorder=False, _builder=None):
     :type other:
     :param reorder: Compiler hint. If true, the compiler is
         allowed to reorder elements while concatenating inputs.  Only use if the
-        order does not matter (e.g., result is only used in reduction ops)
+        order does not matter (e.g., result is only used in reduction ops).
+        Current implementation of `cat` supports only can_reorder=True.
     """
     return semantic.cat(input, other, can_reorder, _builder)
 
