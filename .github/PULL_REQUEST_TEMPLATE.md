@@ -1,8 +1,3 @@
-<!-- The core Triton is a small number of people, and we receive many PRs (thank
-you!).  To help us review your code more quickly, **if you are a new
-contributor (less than 3 PRs merged) we ask that you fill out the following
-checklist and include it in your PR description. -->
-
 <!-- The pull request template is referenced from https://github.com/apache/spark/blob/master/.github/PULL_REQUEST_TEMPLATE -->
 
 
@@ -37,7 +32,12 @@ If tests were not added, please describe why they were not added and/or why it w
 -->
 
 
-## Checklists
+<!-- The core Triton is a small number of people, and we receive many PRs (thank
+you!).  To help us review your code more quickly, **if you are a new
+contributor (less than 3 PRs merged) we ask that you fill out the following
+checklist and include it in your PR description. -->
+
+## Checklist
 
 <!-- Fill out the checklist by replacing `[ ]` with `[x]`. -->
 
