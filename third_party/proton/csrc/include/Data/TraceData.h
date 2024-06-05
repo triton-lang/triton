@@ -8,6 +8,7 @@ namespace proton {
 class TraceData : public Data {
 public:
   using Data::Data;
+  virtual ~TraceData() = default;
 
   void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
 
