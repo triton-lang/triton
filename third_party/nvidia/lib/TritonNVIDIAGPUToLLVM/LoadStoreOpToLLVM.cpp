@@ -818,64 +818,80 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(srcElems.size() == otherElems.size());
     }
 
-    // 128 bits is the max width for the cp.async PTX instruction.
-    int maxVec = std::min(getContiguity(op.getSrc()),
-                          128 / resElemTy.getIntOrFloatBitWidth());
+    // TODO: Explain this.
+    unsigned maxVec = getContiguity(op.getSrc());
+    if (mask) {
+      maxVec = std::min(maxVec, getMaskAlignment(mask));
+    }
 
-    int i = 0;
-    auto loadOneVec = [&](VectorType vecTy, Value shmemAddr) {
-      int vec = vecTy.getNumElements();
-      int srcIdx = i * vec;
-      i++;
-
-      PTXBuilder ptxBuilder;
-
-      // Tune CG and CA here.
-      auto byteWidth = resElemTy.getIntOrFloatBitWidth() * vec / 8;
-      CacheModifier srcCacheModifier =
-          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
-      assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
-
-      auto &copyAsyncOp =
-          *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-      auto *dstOperand = ptxBuilder.newAddrOperand(shmemAddr, "r");
-      auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[srcIdx], "l");
-      auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
-      auto *srcSize = copySize;
-      if (op.getMask()) {
-        // We don't use predicate in this case, setting src-size to 0
-        // if there's any mask. cp.async will automatically fill the
-        // remaining slots with 0 if cp-size > src-size.
-        // XXX(Keren): Always assume other = 0 for now.
-        //
-        // TODO(jlebar): This assumes that maskElems[i + 0] through
-        // maskElems[i + vec - 1] are all the same!
-        auto selectOp =
-            select(maskElems[srcIdx], i32_val(byteWidth), i32_val(0));
-        srcSize = ptxBuilder.newOperand(selectOp, "r");
-      }
-
-      // When 'other != 0' is supported, we will need to fold the op.getMask()
-      // and redundantDataMask() into the same predicate, the way it is done
-      // for LoadOp.
-      Value maskVal = redundantDataMask(srcTy, rewriter, loc, targetInfo);
-
-      // TODO: Masking does not work for CTA multicast with cp.async. This is
-      // a quick and dirty workaround to avoid the issue.
-      bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
-      if (!skipMaskForMultiCTA) {
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-            .predicate(maskVal);
-      } else {
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
-      }
-      ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
-    };
-
+    // Addresses to store into, one per `vecTy`.
+    VectorType vecTy;
+    SmallVector<Value> shmemAddrs;
     bool ok = emitTransferBetweenRegistersAndShared(
         srcTy, dstTy, resElemTy, maxVec, smemObj.base, smemObj.strides, loc,
-        rewriter, targetInfo, loadOneVec);
+        rewriter, targetInfo, [&](VectorType vecTy_, Value shmemAddr) {
+          vecTy = vecTy_;
+          shmemAddrs.push_back(shmemAddr);
+        });
     assert(ok);
+
+    int vecBytes = vecTy.getNumElements() * vecTy.getElementTypeBitWidth() / 8;
+    assert(llvm::isPowerOf2_32(vecBytes));
+    if (vecBytes < 4) {
+      return emitError(loc, "cp.async does not support transfers smaller than "
+                            "4 bytes; calculated this as ")
+             << vecBytes << " bytes";
+    }
+
+    for (int i = 0; i < shmemAddrs.size(); i++) {
+      // It's possible that vecTy is larger than 128 bits, in which case we have
+      // to use multiple cp.async instructions.
+      int wordBytes = std::min(vecBytes, 16);
+      int wordElems = wordBytes * 8 / vecTy.getElementTypeBitWidth();
+      int numWordsInVec = std::max(1, vecBytes / wordBytes);
+      for (int j = 0; j < numWordsInVec; j++) {
+        int elemIdx = i * vecTy.getNumElements() + j * wordElems;
+
+        // Tune CG and CA.
+        CacheModifier srcCacheModifier =
+            wordBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
+        assert(wordBytes == 16 || wordBytes == 8 || wordBytes == 4);
+
+        PTXBuilder ptxBuilder;
+        auto &copyAsyncOp =
+            *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
+        auto *dstOperand = ptxBuilder.newAddrOperand(shmemAddrs[i], "r",
+                                                     /*offset=*/j * wordBytes);
+        auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[elemIdx], "l");
+        auto *copySize = ptxBuilder.newConstantOperand(wordBytes);
+        auto *srcSize = copySize;
+        if (op.getMask()) {
+          // We don't use predicate in this case, setting src-size to 0
+          // if there's any mask. cp.async will automatically fill the
+          // remaining slots with 0 if cp-size > src-size.
+          // XXX(Keren): Always assume other = 0 for now.
+          auto selectOp =
+              select(maskElems[elemIdx], i32_val(wordBytes), i32_val(0));
+          srcSize = ptxBuilder.newOperand(selectOp, "r");
+        }
+
+        // When 'other != 0' is supported, we will need to fold the op.getMask()
+        // and redundantDataMask() into the same predicate, the way it is done
+        // for LoadOp.
+        Value maskVal = redundantDataMask(srcTy, rewriter, loc, targetInfo);
+
+        // TODO: Masking does not work for CTA multicast with cp.async. This is
+        // a quick and dirty workaround to avoid the issue.
+        bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
+        if (!skipMaskForMultiCTA) {
+          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+              .predicate(maskVal);
+        } else {
+          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        }
+        ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+      }
+    }
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(
