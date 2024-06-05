@@ -4,10 +4,12 @@
 #include "Context/Context.h"
 #include "Profiler.h"
 #include "Utility/Atomic.h"
-#include <thread>
+#include "Utility/Map.h"
 
 #include <atomic>
+#include <deque>
 #include <map>
+#include <thread>
 
 namespace proton {
 
@@ -67,6 +69,8 @@ protected:
   struct Correlation {
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
+    ThreadSafeMap<uint64_t, size_t> corrIdToExternId;
+    static thread_local std::deque<size_t> externIdQueue;
 
     Correlation() = default;
 
@@ -76,6 +80,17 @@ protected:
 
     void complete(const uint64_t correlationId) {
       atomicMax(maxCompletedCorrelationId, correlationId);
+    }
+
+    void pushExternId(size_t externId) { externIdQueue.push_back(externId); }
+
+    void popExternId() { externIdQueue.pop_front(); }
+
+    // Correlate the correlationId with the last externId
+    void correlate(uint64_t correlationId) {
+      if (externIdQueue.empty())
+        return;
+      corrIdToExternId[correlationId] = externIdQueue.back();
     }
 
     template <typename FlushFnT>
