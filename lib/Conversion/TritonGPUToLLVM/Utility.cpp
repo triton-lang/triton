@@ -296,10 +296,6 @@ bool emitTransferBetweenRegistersAndShared(
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
-  if (regToSharedLayout.getInDimSize(kBlock) !=
-      regToSharedLayout.getOutDimSize(kBlock)) {
-    return false;
-  }
   for (int i = 1; i < regToSharedLayout.getInDimSize(kBlock); i *= 2) {
     auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
         {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, i}})));
@@ -307,6 +303,12 @@ bool emitTransferBetweenRegistersAndShared(
     int32_t block = idx.back();
     if (!llvm::all_of(offsets, [&](auto offset) { return offset == 0; }) ||
         block != i) {
+      llvm::errs() << "XXX regLayout:\n" << regLayout->toString() << "\n";
+      llvm::errs() << "XXX sharedLayout:\n" << sharedLayout->toString() << "\n";
+      llvm::errs() << "XXX regToSharedLayout:\n"
+                   << regToSharedLayout.toString() << "\n";
+      llvm::errs() << "XXX can't handle this shared layout:\n"
+                   << regToSharedLayout;
       return false;
     }
   }
