@@ -193,7 +193,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
   const CUpti_CallbackData *callbackData =
       reinterpret_cast<const CUpti_CallbackData *>(cbData);
   if (callbackData->callbackSite == CUPTI_API_ENTER) {
-    if (callbackData->context) {
+    if (callbackData->context && !profilerState.isRecording) {
       // Valid context and outermost level of the kernel launch
       auto scopeId = Scope::getNewScopeId();
       auto scope = Scope(scopeId, callbackData->symbolName);
