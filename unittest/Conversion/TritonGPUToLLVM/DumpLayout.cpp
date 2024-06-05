@@ -156,8 +156,7 @@ int evalGEPOp(mlir::LLVM::GEPOp gepOp, int ctaid, int tid) {
   assert(gepOp.getNumOperands() == 2 && "Unrecognized format of GEPOp");
   int base = eval(gepOp.getBase(), ctaid, tid);
   int offset = eval(gepOp.getOperand(1), ctaid, tid);
-  auto llPtrTy = cast<LLVM::LLVMPointerType>(gepOp.getRes().getType());
-  int bytesPerElem = llPtrTy.getIntOrFloatBitWidth() / 8;
+  int bytesPerElem = gepOp.getElemType().getIntOrFloatBitWidth() / 8;
   return base + offset * bytesPerElem;
 }
 
@@ -196,6 +195,8 @@ int eval(Value value, int ctaid, int tid) {
     return evalInlineAsmOp(asmOp, ctaid, tid);
   } else if (auto gepOp = llvm::dyn_cast<mlir::LLVM::GEPOp>(op)) {
     return evalGEPOp(gepOp, ctaid, tid);
+  } else if (auto bitcastOp = llvm::dyn_cast<mlir::LLVM::BitcastOp>(op)) {
+    return eval(bitcastOp.getOperand(), ctaid, tid);
   } else if (auto selectOp = llvm::dyn_cast<mlir::LLVM::SelectOp>(op)) {
     return eval(selectOp.getCondition(), ctaid, tid)
                ? eval(selectOp.getTrueValue(), ctaid, tid)

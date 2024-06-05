@@ -323,7 +323,8 @@ Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
 }
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce) const {
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
   if (auto kind = matchReduxKind(op, computeCapability)) {
     // Based on benchmarking on A100 redux op gives a speed up only when doing
     // a single reduction (not partitioned) and when the mask is static.

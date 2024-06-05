@@ -87,10 +87,12 @@ public:
     if (!encoding)
       // encoding not available
       return resultVals;
-    if (!dyn_cast<BlockedEncodingAttr>(encoding) &&
-        !dyn_cast<SliceEncodingAttr>(encoding)) {
-      // TODO: constraining the ecndoing type here is necessary for avoiding
-      // crashes in the getElemsPerThread call below happening in the
+    Attribute baseEncoding = encoding;
+    while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
+      baseEncoding = sliced.getParent();
+    if (isa<NvidiaMmaEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
+      // TODO: this logic seems incorrect for mma layout. Skip for now.
+      // The following test crashes and some other miscompile:
       // test_core::test_fp8_dot_acc
       return resultVals;
     }

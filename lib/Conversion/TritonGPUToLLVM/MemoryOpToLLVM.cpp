@@ -23,8 +23,6 @@ void lowerDistributedToShared(Location loc, Value src, Value dst,
                               const TargetInfoBase &targetInfo) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
-  auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
-  auto srcLayout = srcTy.getEncoding();
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   assert(srcTy.getShape().size() <= 2 ||
          (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
@@ -32,12 +30,10 @@ void lowerDistributedToShared(Location loc, Value src, Value dst,
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto smemBase = smemObj.getBase();
-  int32_t elemSize = elemTy.getIntOrFloatBitWidth();
-  unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(src, inVals, dstStrides, dst, smemBase, elemTy, loc,
-                           rewriter, targetInfo);
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
+                           loc, rewriter, targetInfo);
 }
 
 struct LocalAllocOpConversion
