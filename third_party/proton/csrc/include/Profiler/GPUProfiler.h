@@ -54,16 +54,12 @@ protected:
     }
 
     void enterOp() {
-      if (isRecording)
-        return;
       profiler.enterOp(scope);
       for (auto data : dataSet)
         data->enterOp(scope);
     }
 
     void exitOp() {
-      if (!isRecording)
-        return;
       profiler.exitOp(scope);
       for (auto data : dataSet)
         data->exitOp(this->scope);
