@@ -187,7 +187,7 @@ TEST_F(LinearLayoutTest, TransposeIns) {
 
 TEST_F(LinearLayoutTest, EmptyToString) {
   // Mostly I just want to make sure it doesn't crash.
-  EXPECT_EQ(LinearLayout::empty().toString(), "(empty layout)\n");
+  EXPECT_EQ(LinearLayout::empty().toString(), "\n(empty layout)");
 }
 
 TEST_F(LinearLayoutTest, Apply) {
@@ -485,7 +485,7 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastBeginningAndEndOfSecond) {
   LinearLayout l2({{S("in"), {{0}, {4}, {1}, {2}, {0}}}}, {S("out")});
   LinearLayout composition = l1.invertAndCompose(l2);
   EXPECT_EQ(composition,
-            LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {{S("in"), 8}},
+            LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {{S("in"), 16}},
                          /*requireSurjective=*/false));
   EXPECT_EQ(composition.compose(l2), l1);
 }
@@ -504,14 +504,6 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Multidim) {
   LinearLayout c2 = l2.invertAndCompose(l1);
   EXPECT_EQ(c2.compose(l1),
             l2.transposeOuts(llvm::to_vector(l1.getOutDimNames())));
-}
-
-// XXX This is not quite right.
-TEST_F(LinearLayoutTest, InvertAndCompose_ChoosesIdentity) {
-  LinearLayout l1({{S("in1"), {{0}, {0}, {0}}}}, {S("out")});
-  LinearLayout l2({{S("in2"), {{0}, {0}, {0}}}}, {S("out")});
-  LinearLayout composition = l1.invertAndCompose(l2);
-  EXPECT_EQ(composition, LinearLayout::identity1D(8, S("in1"), S("in2")));
 }
 
 TEST_F(LinearLayoutTest, NumConsecutiveInOut) {

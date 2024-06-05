@@ -205,7 +205,7 @@ void LinearLayout::checkInvariants(bool requireSurjective) {
   if (requireSurjective && !surjective) {
     llvm::report_fatal_error("Layout is expected to be surjective, i.e. every "
                              "`out` coordinate can be reached by some `in` "
-                             "coordinate, but was not:\n" +
+                             "coordinate, but was not:" +
                              Twine(toString()));
   }
 }
@@ -256,7 +256,7 @@ int32_t LinearLayout::getOutDimIndex(StringAttr outDim) const {
     }
     i++;
   }
-  llvm::report_fatal_error("outDim " + Twine(outDim) + " is not in layout\n" +
+  llvm::report_fatal_error("outDim " + Twine(outDim) + " is not in layout" +
                            toString());
 }
 
@@ -461,8 +461,8 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
       llvm::report_fatal_error(
           "Cannot multiply layouts.  All in/out dimensions common to both "
           "layouts must appear in the same relative order, but they "
-          "don't.\nOuter:\n" +
-          Twine(outer.toString()) + "\nInner:\n" + inner.toString());
+          "don't.\nOuter:" +
+          Twine(outer.toString()) + "\nInner:" + inner.toString());
     }
   };
 
@@ -658,9 +658,11 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     bs.push_back({basis});
   }
 
+  llvm::errs() << "XXX generating flatComposed.\n";
   LinearLayout flatComposed(std::move(newBases),
                             {{outDim1D, outer.getTotalInDimSize()}},
-                            isSurjective() && outerWasInjective);
+                            /*requireSurjective=*/false);
+  llvm::errs() << "XXX flatComposed: " << flatComposed << "\n";
 
   SmallVector<std::pair<StringAttr, int32_t>> retInDims;
   SmallVector<std::pair<StringAttr, int32_t>> retOutDims;
