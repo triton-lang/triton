@@ -26,6 +26,9 @@ DEFINE_DISPATCH(ExternLibCupti, subscribe, cuptiSubscribe,
 DEFINE_DISPATCH(ExternLibCupti, enableDomain, cuptiEnableDomain, uint32_t,
                 CUpti_SubscriberHandle, CUpti_CallbackDomain)
 
+DEFINE_DISPATCH(ExternLibCupti, enableCallback, cuptiEnableCallback, uint32_t,
+                CUpti_SubscriberHandle, CUpti_CallbackDomain, CUpti_CallbackId);
+
 DEFINE_DISPATCH(ExternLibCupti, activityEnable, cuptiActivityEnable,
                 CUpti_ActivityKind)
 

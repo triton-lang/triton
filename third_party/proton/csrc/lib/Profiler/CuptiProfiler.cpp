@@ -88,40 +88,42 @@ uint32_t processActivity(std::map<uint32_t, size_t> &corrIdToExternId,
   return correlationId;
 }
 
-std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
-  bool isRuntimeApi = false;
-  bool isDriverApi = false;
-  switch (cbId) {
-  // TODO: switch to directly subscribe the APIs
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_v3020:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_ptsz_v7000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_ptsz_v7000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_v11060:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_ptsz_v11060:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_v9000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_ptsz_v9000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernelMultiDevice_v9000: {
-    isRuntimeApi = true;
-    break;
-  }
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunch:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice: {
-    isDriverApi = true;
-    break;
-  }
-  default:
-    break;
-  }
-  return std::make_pair(isRuntimeApi, isDriverApi);
+void setRuntimeCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
+#define CALLBACK_ENABLE(id)                                                    \
+  cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
+                              CUPTI_CB_DOMAIN_RUNTIME_API, id)
+
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_v3020);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_ptsz_v7000);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_ptsz_v7000);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_v11060);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_ptsz_v11060);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_v9000);
+  CALLBACK_ENABLE(
+      CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_ptsz_v9000);
+  CALLBACK_ENABLE(
+      CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernelMultiDevice_v9000);
+
+#undef CALLBACK_ENABLE
+}
+
+void setDriverCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
+#define CALLBACK_ENABLE(id)                                                    \
+  cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
+                              CUPTI_CB_DOMAIN_DRIVER_API, id)
+
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunch);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice);
+#undef CALLBACK_ENABLE
 }
 
 } // namespace
@@ -198,10 +200,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                                                    CUpti_CallbackDomain domain,
                                                    CUpti_CallbackId cbId,
                                                    const void *cbData) {
-  auto [isRuntimeAPI, isDriverAPI] = matchKernelCbId(cbId);
-  if (!(isRuntimeAPI || isDriverAPI)) {
-    return;
-  }
   CuptiProfiler &profiler =
       dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
   const CUpti_CallbackData *callbackData =
@@ -242,8 +240,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   // TODO: switch to directly subscribe the APIs and measure overhead
   cupti::subscribe<true>(&subscriber, callbackFn, nullptr);
-  cupti::enableDomain<true>(1, subscriber, CUPTI_CB_DOMAIN_DRIVER_API);
-  cupti::enableDomain<true>(1, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API);
+  setRuntimeCallbacks(subscriber, /*enable=*/true);
+  setDriverCallbacks(subscriber, /*enable=*/true);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
@@ -277,8 +275,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_RUNTIME);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
-  cupti::enableDomain<true>(0, subscriber, CUPTI_CB_DOMAIN_DRIVER_API);
-  cupti::enableDomain<true>(0, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API);
+  setRuntimeCallbacks(subscriber, /*enable=*/false);
+  setDriverCallbacks(subscriber, /*enable=*/false);
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
 }
