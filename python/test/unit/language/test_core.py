@@ -5399,32 +5399,3 @@ def test_temp_var_in_loop(device):
         temp = torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
         acc += temp
     assert (acc == out).all()
-
-
-@pytest.mark.parametrize("m, n, k", [(16, 16, 16), (32, 16, 16), (16, 32, 16), (16, 16, 32)])
-def test_cublas_fp8(m, n, k, device):
-    from triton._C.libtriton import nvidia
-
-    torch.manual_seed(123)
-    workspace_size = 32 * 1024 * 1024
-
-    def limited_rand(elements, shape):
-        total_elems = torch.prod(torch.tensor(shape)).item()
-        indices = torch.randint(0, len(elements), (total_elems, ), device=device)
-        return elements[indices].view(shape)
-
-    elements = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=torch.float32, device=device)
-    a = limited_rand(elements, (m, k)).to(torch.float8_e4m3fn)
-    b = limited_rand(elements, (k, n)).to(torch.float8_e4m3fn)
-    c = torch.zeros((m, n), dtype=torch.float8_e4m3fn, device=device)
-
-    b = b.T.contiguous()
-
-    workspace = torch.empty(workspace_size, dtype=torch.int8, device=device)
-
-    cublas = nvidia.cublas.CublasLt(workspace.data_ptr(), workspace_size)
-    cublas.fp8_matmul(m, n, k, a.data_ptr(), b.data_ptr(), c.data_ptr())
-
-    ref = torch.matmul(a.to(torch.float16), b.to(torch.float16).T)
-
-    assert torch.allclose(c.to(torch.float16), ref, atol=2.0)

@@ -1,4 +1,4 @@
-#include "Dialect/NVGPU/IR/Dialect.h"
+﻿#include "Dialect/NVGPU/IR/Dialect.h"
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "cublas_instance.h"
@@ -91,5 +91,52 @@ void init_triton_nvidia(py::module &&m) {
       .def(py::init<>([&](uint64_t workspace, size_t workspaceSize) {
         return new CublasLtInstance(workspace, workspaceSize);
       }))
-      .def("fp8_matmul", &CublasLtInstance::fp8Matmul);
+      .def("fp8_matmul", [](CublasLtInstance &self, py::object &A,
+                            py::object &B, py::object &C) {
+        auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
+        auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
+        auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
+
+        auto A_shape = A.attr("shape").cast<std::vector<int>>();
+        auto B_shape = B.attr("shape").cast<std::vector<int>>();
+        auto C_shape = C.attr("shape").cast<std::vector<int>>();
+
+        if (A_shape.size() != 2 || B_shape.size() != 2 || C_shape.size() != 2) {
+          throw std::runtime_error("Only 2D matrices are supported.");
+        }
+
+        int k = A_shape[1];
+        if (k != B_shape[1]) {
+          throw std::runtime_error("Matrix dimensions do not match. A is [" +
+                                   std::to_string(A_shape[0]) + ", " +
+                                   std::to_string(A_shape[1]) + "], B is [" +
+                                   std::to_string(B_shape[0]) + ", " +
+                                   std::to_string(B_shape[1]) +
+                                   "]. Expected A.shape[1] == B.shape[1]. Note "
+                                   "that B needs to be transposed.");
+        }
+
+        int m = A_shape[0];
+        if (m != C_shape[0]) {
+          throw std::runtime_error("Matrix dimensions do not match. A is [" +
+                                   std::to_string(A_shape[0]) + ", " +
+                                   std::to_string(A_shape[1]) + "], C is [" +
+                                   std::to_string(C_shape[0]) + ", " +
+                                   std::to_string(C_shape[1]) +
+                                   "]. Expected A.shape[0] == C.shape[0].");
+        }
+
+        int n = B_shape[0];
+        if (n != C_shape[1]) {
+          throw std::runtime_error("Matrix dimensions do not match. B is [" +
+                                   std::to_string(B_shape[0]) + ", " +
+                                   std::to_string(B_shape[1]) + "], C is [" +
+                                   std::to_string(C_shape[0]) + ", " +
+                                   std::to_string(C_shape[1]) +
+                                   "]. Expected B.shape[0] == C.shape[1]. Note "
+                                   "that B needs to be transposed.");
+        }
+
+        self.fp8Matmul(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr);
+      });
 }
