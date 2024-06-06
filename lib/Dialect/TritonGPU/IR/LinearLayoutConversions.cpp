@@ -191,7 +191,8 @@ LinearLayout shrinkCodomain(const LinearLayout &layout, StringAttr inDimName,
   }
 
   // Construct O'.
-  LinearLayout transform(std::move(newBases), layout.getOutDimNames());
+  LinearLayout transform(std::move(newBases),
+                         llvm::to_vector(layout.getOutDimNames()));
 
   // Compose O' with L.
   return layout.compose(transform);
@@ -306,12 +307,13 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
 
   LinearLayout cgaLayout =
       ensureLayoutNotLargerThan(makeCgaLayout(cgaLayoutAttr), labeledShape)
-          .transposeOuts(ctaLayout.getOutDimNames());
+          .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   // Calculate the shape of the ctaLayout, which is `shape` divided by the
   // cgaLayout's size.
   llvm::SmallDenseMap<StringAttr, int64_t> ctaShape;
-  assert(ctaLayout.getOutDimNames() == cgaLayout.getOutDimNames());
+  assert(llvm::to_vector(ctaLayout.getOutDimNames()) ==
+         llvm::to_vector(cgaLayout.getOutDimNames()));
   for (auto dim : ctaLayout.getOutDimNames()) {
     ctaShape[dim] =
         std::max(int64_t{1}, labeledShape[dim] / cgaLayout.getOutDimSize(dim));
@@ -404,7 +406,7 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   // this really does seem to be correct.
   ctaLayout *= identityND(S("warp"), mma.getWarpsPerCTA(), /*order=*/{0, 1},
                           {S("dim0"), S("dim1")})
-                   .transposeOuts(ctaLayout.getOutDimNames());
+                   .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
@@ -455,7 +457,8 @@ std::optional<LinearLayout> sliceToLinearLayout(ArrayRef<int64_t> shape,
   }
   bases[S("register")] = newRegBases;
 
-  LinearLayout ret = LinearLayout(std::move(bases), sliceLL.getOutDimNames());
+  LinearLayout ret =
+      LinearLayout(std::move(bases), llvm::to_vector(sliceLL.getOutDimNames()));
 
   // Match a hack in the legacy code that ensures that the number of registers
   // matches getTotalElemsPerThread.  Yup: We just removed all the zeros, now

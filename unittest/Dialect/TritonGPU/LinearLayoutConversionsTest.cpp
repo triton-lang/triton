@@ -725,7 +725,8 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8_32b) {
                             {4, 16},
                             {0, 32}}},
                           {S("block"), {}}},
-                         {S("dim0"), S("dim1")}, /*requireSurjective=*/false));
+                         {{S("dim0"), 8}, {S("dim1"), 64}},
+                         /*requireSurjective=*/false));
 }
 
 } // anonymous namespace
