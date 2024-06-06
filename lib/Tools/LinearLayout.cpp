@@ -658,11 +658,9 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     bs.push_back({basis});
   }
 
-  llvm::errs() << "XXX generating flatComposed.\n";
   LinearLayout flatComposed(std::move(newBases),
                             {{outDim1D, outer.getTotalInDimSize()}},
                             /*requireSurjective=*/false);
-  llvm::errs() << "XXX flatComposed: " << flatComposed << "\n";
 
   SmallVector<std::pair<StringAttr, int32_t>> retInDims;
   SmallVector<std::pair<StringAttr, int32_t>> retOutDims;

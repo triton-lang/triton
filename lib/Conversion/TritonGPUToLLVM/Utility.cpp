@@ -296,19 +296,26 @@ bool emitTransferBetweenRegistersAndShared(
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
-  for (int i = 1; i < regToSharedLayout.getInDimSize(kBlock); i *= 2) {
+  for (int inBlock = 1; inBlock < regToSharedLayout.getInDimSize(kBlock);
+       inBlock *= 2) {
     auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
-        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, i}})));
-    auto offsets = ArrayRef(idx).drop_back(1);
-    int32_t block = idx.back();
-    if (!llvm::all_of(offsets, [&](auto offset) { return offset == 0; }) ||
-        block != i) {
-      llvm::errs() << "XXX regLayout:\n" << regLayout->toString() << "\n";
-      llvm::errs() << "XXX sharedLayout:\n" << sharedLayout->toString() << "\n";
-      llvm::errs() << "XXX regToSharedLayout:\n"
-                   << regToSharedLayout.toString() << "\n";
-      llvm::errs() << "XXX can't handle this shared layout:\n"
-                   << regToSharedLayout;
+        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}})));
+    // offsetX1, ..., offsetXN must all be 0.
+    if (!llvm::all_of(ArrayRef(idx).drop_back(1),
+                      [&](auto offset) { return offset == 0; })) {
+      return false;
+    }
+
+    // We now have
+    //   regToSharedLayout(0, ..., block=inBlock) => (0, ..., block=outBlock).
+    // To confirm that there's no cross-block communication, we must also have
+    // outBlock == inBlock or outBlock == 0.
+    //
+    // The fact that outBlock == 0 works is nonobvious.  It occurs when the
+    // shared layout is broadcasted in its block dim, i.e. multiple blocks
+    // contain the same data.
+    int32_t outBlock = idx.back();
+    if (outBlock != inBlock && outBlock != 0) {
       return false;
     }
   }
