@@ -88,8 +88,8 @@ public:
     if (isOpInProgress()) {
       return;
     }
-    setOpInProgress(true);
     startOp(scope);
+    setOpInProgress(true);
   }
   void exitOp(const Scope &scope) {
     if (!isOpInProgress()) {

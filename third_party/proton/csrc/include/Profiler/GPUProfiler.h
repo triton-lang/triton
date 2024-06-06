@@ -40,7 +40,7 @@ protected:
 
     ProfilerState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    size_t record(size_t scopeId) {
+    void record(size_t scopeId) {
       std::set<Data *> dataSet = profiler.getDataSet();
       for (auto data : dataSet)
         data->addScope(scopeId);
@@ -48,14 +48,13 @@ protected:
     }
 
     void enterOp(size_t scopeId) {
-      auto scopeId = scope.scopeId;
-      if (profiler.isOpInprogress())
+      if (profiler.isOpInProgress())
         return;
       profiler.correlation.pushExternId(scopeId);
     }
 
     void exitOp() {
-      if (!profiler.isOpInprogress())
+      if (!profiler.isOpInProgress())
         return;
       profiler.correlation.popExternId();
     }
