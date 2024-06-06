@@ -80,8 +80,11 @@ public:
           sharedMemorySpace);
       auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
+      auto loadOp = llvm::dyn_cast_or_null<triton::LoadOp>(cvtOp->getOperand(0).getDefiningOp());
+      auto shouldHoist = loadOp == nullptr ? false : loadOp.getShouldHoist();
       auto newConvert = builder.create<triton::gpu::LocalLoadOp>(cvtOp.getLoc(),
-                                                                 dstType, tmp);
+                                                                 dstType, tmp,
+                                                                 nullptr, shouldHoist);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
     });

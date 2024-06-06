@@ -1545,7 +1545,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
 @builtin
 def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-         volatile=False, _builder=None):
+         volatile=False, hoist=False, _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
 
@@ -1586,6 +1586,8 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type eviction_policy: str, optional
     :param volatile: changes volatile option in NVIDIA PTX
     :type volatile: bool, optional
+    :param hoist: force to hoist load outside loop if is loop invariant
+    :type hoist: bool, optional
     """
     # `mask` and `other` can be constexpr
     mask = _constexpr_to_value(mask)
@@ -1598,8 +1600,9 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
+    hoist = _constexpr_to_value(hoist)
     return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
-                         volatile, _builder)
+                         volatile, hoist, _builder)
 
 
 @builtin

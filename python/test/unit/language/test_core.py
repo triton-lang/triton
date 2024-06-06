@@ -3758,6 +3758,24 @@ def test_load_cache_modifier(cache, device):
 
 
 @pytest.mark.interpreter
+def test_load_hoist_hint(device):
+    if is_hip() or not is_cuda():
+        pytest.skip("test_load_hoist_hint is not supported in HIP")
+    src = torch.empty(128, device=device)
+    dst = torch.empty(128, device=device)
+
+    @triton.jit
+    def _kernel(dst, src):
+        offsets = tl.arange(0, 128)
+        x = tl.load(src + offsets, hoist=True)
+        tl.store(dst + offsets, x)
+
+    pgm = _kernel[(1, )](dst, src)
+    ttgir = pgm.asm["ttgir"]
+    assert re.search(r"tt.load %.* {shouldHoist = true}", ttgir) is not None
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("N", [16, 10, 11, 1024])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_vectorization(N, num_ctas, device):

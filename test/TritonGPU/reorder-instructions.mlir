@@ -100,3 +100,26 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// -----
+
+// check that we hoist local_load outside the loop if it has hint
+// CHECK-LABEL: hoist_local_load_outside_loop
+//       CHECK: tt.load %{{.*}} 
+//       CHECK: triton_gpu.local_alloc %{{.*}} 
+//       CHECK: triton_gpu.local_load %{{.*}}
+//       CHECK: scf.for
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2]}>
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.target" = "cuda:80"} {
+  tt.func @hoist_local_load_outside_loop(%lb : index, %ub : index, %step : index, %a_ptr: tensor<32x32x!tt.ptr<f32>, #blocked>) {
+    %A = tt.load %a_ptr : tensor<32x32x!tt.ptr<f32>, #blocked>
+    scf.for %iv = %lb to %ub step %step {
+      %AS = triton_gpu.local_alloc %A : (tensor<32x32xf32, #blocked>) -> !tt.memdesc<32x32xf32, #shared>
+      %AD = triton_gpu.local_load %AS shouldHoist = true : !tt.memdesc<32x32xf32, #shared> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+      scf.yield
+    }
+    tt.return
+  }
+}

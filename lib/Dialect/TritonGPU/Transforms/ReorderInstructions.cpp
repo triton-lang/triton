@@ -28,8 +28,10 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 static bool willIncreaseRegisterPressure(Operation *op) {
-  if (isa<triton::gpu::LocalLoadOp>(op))
-    return true;
+  if (isa<triton::gpu::LocalLoadOp>(op)) {
+    auto localLoadOp = cast<triton::gpu::LocalLoadOp>(op);
+    return !localLoadOp.getShouldHoist();
+  }
   auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!cvt)
     return false;
@@ -97,6 +99,27 @@ public:
       if (!argOp)
         return;
       moveAfter(op, argOp);
+    });
+    // Move LocalLoadOp with loop invariant operand immediately
+    // before parent forOp if user provide hoist hint
+    m.walk([&](triton::gpu::LocalLoadOp op) {
+      auto localLoadOp = cast<triton::gpu::LocalLoadOp>(op);
+      if (!op.getShouldHoist())
+        return;
+      Operation *forOp = op->getParentOfType<scf::ForOp>();
+      if (!forOp)
+        return;
+      if (llvm::any_of(op->getOperands(),
+                       [&](Value operand) {
+                         Operation *def = operand.getDefiningOp();
+                         if (!def)
+                           return true;
+                         if (def->getParentOp() == op->getParentOp())
+                           return true;
+                          return false;
+                       }))
+        return;
+      op->moveBefore(forOp);
     });
     // Move transpositions just after their definition
     opToMove.clear();
