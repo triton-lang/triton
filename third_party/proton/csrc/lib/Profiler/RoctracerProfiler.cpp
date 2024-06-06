@@ -150,8 +150,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
       auto scopeId = Scope::getNewScopeId();
-      if (!profiler.isOpInProgress())
-        profilerState.record(scopeId);
+      profilerState.record(scopeId);
       profilerState.enterOp(scopeId);
       profiler.correlation.correlate(data->correlation_id);
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {

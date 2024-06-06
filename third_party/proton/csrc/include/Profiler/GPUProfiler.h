@@ -41,6 +41,8 @@ protected:
     ProfilerState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void record(size_t scopeId) {
+      if (profiler.isOpInProgress())
+        return;
       std::set<Data *> dataSet = profiler.getDataSet();
       for (auto data : dataSet)
         data->addScope(scopeId);

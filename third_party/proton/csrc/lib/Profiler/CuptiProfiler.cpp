@@ -206,8 +206,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       reinterpret_cast<const CUpti_CallbackData *>(cbData);
   if (callbackData->callbackSite == CUPTI_API_ENTER) {
     auto scopeId = Scope::getNewScopeId();
-    if (!profiler.isOpInProgress())
-      profilerState.record(scopeId);
+    profilerState.record(scopeId);
     profilerState.enterOp(scopeId);
     profiler.correlation.correlate(callbackData->correlationId);
   } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
