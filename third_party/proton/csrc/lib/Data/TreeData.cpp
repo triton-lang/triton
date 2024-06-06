@@ -117,6 +117,27 @@ void TreeData::startOp(const Scope &scope) {
 
 void TreeData::stopOp(const Scope &scope) {}
 
+void TreeData::addScope(size_t scopeId) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  std::vector<Context> contexts;
+  if (contextSource != nullptr)
+    contexts = contextSource->getContexts();
+  // Push a dummy context
+  contexts.push_back(Context{});
+  auto contextId = tree->addNode(contexts);
+  scopeIdToContextId[scopeId] = contextId;
+}
+
+void TreeData::setName(size_t scopeId, const std::string &name) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  auto scopeIdIt = scopeIdToContextId.find(scopeId);
+  // The profile data is deactived, ignore the metric
+  if (scopeIdIt == scopeIdToContextId.end())
+    return;
+  auto contextId = scopeIdIt->second;
+  tree->getNode(contextId).name = name;
+}
+
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);

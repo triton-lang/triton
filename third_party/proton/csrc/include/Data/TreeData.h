@@ -14,6 +14,10 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
+  void addScope(size_t scopeId) override;
+
+  void setName(size_t scopeId, const std::string &name) override;
+
   void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
 
   void addMetrics(size_t scopeId,

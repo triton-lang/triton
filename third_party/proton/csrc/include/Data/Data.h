@@ -12,11 +12,19 @@ namespace proton {
 
 enum class OutputFormat { Hatchet, Count };
 
-class Data : public InternalOpInterface {
+class Data : public ThreadLocalOpInterface {
 public:
   Data(const std::string &path, ContextSource *contextSource = nullptr)
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
+
+  /// Add a new scope to the data.
+  /// [MT] The implementation must be thread-safe.
+  virtual void addScope(size_t scopeId) = 0;
+
+  /// Set the name of a scope.
+  /// [MT] The implementation must be thread-safe.
+  virtual void setName(size_t scopeId, const std::string &name) = 0;
 
   /// Add a single metric to the data.
   /// [MT] The implementation must be thread-safe.
@@ -37,11 +45,12 @@ protected:
   /// [MT] Thread-safe.
   virtual void doDump(std::ostream &os, OutputFormat outputFormat) const = 0;
 
-protected:
   mutable std::shared_mutex mutex;
-
   const std::string path{};
   ContextSource *contextSource{};
+
+  class Profiler;
+  friend class Profiler;
 };
 
 OutputFormat parseOutputFormat(const std::string &outputFormat);

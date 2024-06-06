@@ -5,11 +5,13 @@
 #include "Profiler.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
+#include "Utility/Set.h"
 
 #include <atomic>
 #include <deque>
 #include <map>
 #include <thread>
+#include <vector>
 
 namespace proton {
 
@@ -17,7 +19,7 @@ namespace proton {
 // CuptiProfiler, should be a singleton.
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
-                    public OpInterface,
+                    public ThreadLocalOpInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;
@@ -28,12 +30,6 @@ protected:
   void startOp(const Scope &scope) override { pImpl->startOp(scope); }
   void stopOp(const Scope &scope) override { pImpl->stopOp(scope); }
 
-  void setOpInProgress(bool value) override {
-    profilerState.isRecording = value;
-  }
-
-  bool isOpInProgress() override { return profilerState.isRecording; }
-
   // Profiler
   virtual void doStart() override { pImpl->doStart(); }
   virtual void doFlush() override { pImpl->doFlush(); }
@@ -41,28 +37,27 @@ protected:
 
   struct ProfilerState {
     ConcreteProfilerT &profiler;
-    std::set<Data *> dataSet;
-    bool isRecording{false};
-    Scope scope{};
 
     ProfilerState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void record(const Scope &scope) {
-      this->scope = scope;
-      // Take a snapshot of the current dataset
-      this->dataSet = profiler.getDataSet();
+    size_t record(size_t scopeId) {
+      std::set<Data *> dataSet = profiler.getDataSet();
+      for (auto data : dataSet)
+        data->addScope(scopeId);
+      profiler.correlation.apiExternIds.insert(scopeId);
     }
 
-    void enterOp() {
-      profiler.enterOp(scope);
-      for (auto data : dataSet)
-        data->enterOp(scope);
+    void enterOp(size_t scopeId) {
+      auto scopeId = scope.scopeId;
+      if (profiler.isOpInprogress())
+        return;
+      profiler.correlation.pushExternId(scopeId);
     }
 
     void exitOp() {
-      profiler.exitOp(scope);
-      for (auto data : dataSet)
-        data->exitOp(this->scope);
+      if (!profiler.isOpInprogress())
+        return;
+      profiler.correlation.popExternId();
     }
   };
 
@@ -70,6 +65,7 @@ protected:
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     ThreadSafeMap<uint64_t, size_t> corrIdToExternId;
+    ThreadSafeSet<size_t> apiExternIds;
     static thread_local std::deque<size_t> externIdQueue;
 
     Correlation() = default;

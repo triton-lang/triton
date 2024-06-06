@@ -31,7 +31,7 @@ public:
     map[key] = value;
   }
 
-  bool find(const Key &key) {
+  bool contain(const Key &key) {
     std::shared_lock<std::shared_mutex> lock(mutex);
     auto it = map.find(key);
     if (it == map.end())
