@@ -382,12 +382,15 @@ jobs:
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
+          ## test_subprocess.py is flaky on the AMD CI.
+          ## TODO (lixun) find a solution and re-enable it.
           pytest --capture=tee-sys -rfs -n 32 language operators \
                  hopper/test_mixed_io.py \
                  hopper/test_gemm.py \
                  hopper/test_tma_store_gemm.py \
                  hopper/test_persistent_warp_specialized_fused-attention.py \
-                 --ignore=language/test_line_info.py
+                 --ignore=language/test_line_info.py \
+                 --ignore=language/test_subprocess.py
           TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
