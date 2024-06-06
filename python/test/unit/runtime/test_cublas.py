@@ -37,7 +37,7 @@ def test_cublas_fp8(m, n, k, device):
 
     workspace = torch.empty(workspace_size, dtype=torch.int8, device=device)
 
-    cublas = nvidia.cublas.CublasLt(workspace.data_ptr(), workspace_size)
+    cublas = nvidia.cublas.CublasLt(workspace)
     cublas.fp8_matmul(a, b, c)
 
     ref = torch.matmul(a.to(torch.float16), b.to(torch.float16).T)
