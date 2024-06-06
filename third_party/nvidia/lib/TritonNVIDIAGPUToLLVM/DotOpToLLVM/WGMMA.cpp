@@ -209,18 +209,9 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
   int numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0] * wpt[0]);
   int numRepK = ceil<unsigned>(shapePerCTA[1], instrShape[2]);
 
-  Value warp = udiv(thread, i32_val(32));
-
-  // Mask the warp with -4 because the descriptor should be calculated based on
-  // the first warp of the warpgroup.  But only do this when there are more than
-  // 4 warps.  `thread` is emitted as `threadId & (maxtid - 1)`.  If there are
-  // only 4 warps, then ptxas can tell that (warp & -4) is always 0.  It then
-  // seems to get rid of the shuffle below, and thus defeats the workaround that
-  // shuffle is in place for!
-  if (product(wpt) > 4) {
-    warp = and_(warp, i32_val(0xFFFFFFFC));
-  }
-
+  // The descriptor should be calculated based on the first warp of the
+  // warpgroup.
+  Value warp = and_(udiv(thread, i32_val(32)), i32_val(0xFFFFFFFC));
   // Workaround for a bug in ptxas 12.3 that cause a failure in
   // test_core.py::test_dot. The shuffle will force the compiler to treat the
   // value as uniform and prevent wrong optimizations.
@@ -509,26 +500,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   return success();
 }
 
-LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
+                           triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
-  auto AEnc = op.getA().getType().getEncoding();
-  auto BEnc = op.getB().getType().getEncoding();
-  assert((mlir::isa<SharedEncodingAttr, DotOperandEncodingAttr>(AEnc)));
-  assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
-         "Operand B should use Shared layout.");
-  return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
-                    op.getA(), op.getB(), op.getC(), op.getD(),              //
-                    adaptor.getA(), adaptor.getB(), adaptor.getC(),          //
-                    op.getInputPrecision() == InputPrecision::TF32,
-                    op.getMaxNumImpreciseAcc(), true, thread);
-}
-
-LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
-                                triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-                                const LLVMTypeConverter *typeConverter,
-                                ConversionPatternRewriter &rewriter,
-                                Value thread) {
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
   assert(mlir::isa<SharedEncodingAttr>(AEnc) ||
@@ -539,5 +514,5 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                     op.getA(), op.getB(), op.getC(), op.getD(),              //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),
                     op.getInputPrecision() == InputPrecision::TF32,
-                    op.getMaxNumImpreciseAcc(), false, thread);
+                    op.getMaxNumImpreciseAcc(), !op.getIsAsync(), thread);
 }

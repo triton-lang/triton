@@ -228,6 +228,20 @@ static SmallVector<unsigned> eraseOrder(ArrayRef<unsigned> order,
   return resOrder;
 }
 
+SmallVector<unsigned> getWarpOrder(Attribute layout) {
+  auto order = getOrder(layout);
+  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
+    if (mmaLayout.isHopper()) {
+      // Hopper MMA instructions force a warp order of [0, 1]. See docs:
+      // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#matrix-fragments-for-wgmma-mma-async-m64nnk8
+      auto it = std::find(order.begin(), order.end(), 0);
+      order.erase(it);
+      order.insert(order.begin(), 0);
+    }
+  }
+  return order;
+}
+
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
@@ -707,28 +721,22 @@ SmallVector<unsigned> SliceEncodingAttr::getCTAsPerCGA() const {
 SmallVector<unsigned> SliceEncodingAttr::getWarpsPerCTA() const {
   auto parent = getParent();
   auto parentWarpsPerCTA = ::getWarpsPerCTA(parent);
-  assert(parentWarpsPerCTA.size() == 2 ||
-         parentWarpsPerCTA[getDim()] == 1 &&
-             "getWarpsPerCTA only implemented for 2D slice layout or the "
-             "slice dim must have 1 warp in the parent layout");
   SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
   warpsPerCTA.erase(warpsPerCTA.begin() + getDim());
-  for (unsigned i = 0; i < warpsPerCTA.size(); i++)
-    warpsPerCTA[i] *= parentWarpsPerCTA[getDim()];
+  int32_t nextDim = getDim() < warpsPerCTA.size() ? getDim() : getDim() - 1;
+  warpsPerCTA[nextDim] *= parentWarpsPerCTA[getDim()];
   return warpsPerCTA;
 }
 SmallVector<unsigned> SliceEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> SliceEncodingAttr::getThreadsPerWarp() const {
   auto parent = getParent();
   auto parentThreadsPerWarp = ::getThreadsPerWarp(parent);
-  assert(parentThreadsPerWarp.size() == 2 &&
-         "getThreadsPerWarp only implemented for 2D slice layout");
   SmallVector<unsigned> threadsPerWarp = parentThreadsPerWarp;
   threadsPerWarp.erase(threadsPerWarp.begin() + getDim());
-  for (unsigned i = 0; i < threadsPerWarp.size(); i++)
-    threadsPerWarp[i] *= parentThreadsPerWarp[getDim()];
+  int32_t nextDim = getDim() < threadsPerWarp.size() ? getDim() : getDim() - 1;
+  threadsPerWarp[nextDim] *= parentThreadsPerWarp[getDim()];
   return threadsPerWarp;
 }
 SmallVector<unsigned> SliceEncodingAttr::getThreadOrder() const {
@@ -790,16 +798,22 @@ SmallVector<unsigned>
 AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                        Type eltTy) const {
   size_t rank = shape.size();
-  assert(rank == 2 && "Unexpected rank of wmma layout");
+  assert((rank == 2 || rank == 3) && "Unexpected rank of wmma layout");
 
   SmallVector<unsigned> elemsPerThread(rank);
   auto mnkDim = getMNKDimPerWMMAInstr();
   auto elemsPerThreadPerTile = getSizePerThread();
   auto warpsPerCTA = getWarpsPerCTA();
-  return {ceil<unsigned>(shape[0], mnkDim[0] * warpsPerCTA[0]) *
-              elemsPerThreadPerTile[0],
-          ceil<unsigned>(shape[1], mnkDim[1] * warpsPerCTA[1]) *
-              elemsPerThreadPerTile[1]};
+
+  if (rank == 3)
+    elemsPerThread[0] = ceil<unsigned>(shape[0], getWarpsPerCTA()[0]);
+  elemsPerThread[rank - 2] =
+      ceil<unsigned>(shape[rank - 2], mnkDim[0] * warpsPerCTA[rank - 2]) *
+      elemsPerThreadPerTile[rank - 2];
+  elemsPerThread[rank - 1] =
+      ceil<unsigned>(shape[rank - 1], mnkDim[1] * warpsPerCTA[rank - 1]) *
+      elemsPerThreadPerTile[rank - 1];
+  return elemsPerThread;
 }
 
 unsigned AMDWmmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
@@ -979,7 +993,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
   }
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
@@ -1495,7 +1509,7 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
@@ -1551,10 +1565,10 @@ AMDMfmaEncodingAttr::getMFMAInstrShapeForOperands(int kWidth, int opIdx) const {
   unsigned nDim = getNDim();
   assert((mDim == nDim) && (mDim == 32 || mDim == 16 || mDim == 4) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
-  constexpr int waveSize = 64; // MFMA is used on wave64 architectures only
+  constexpr int warpSize = 64; // MFMA is always based on the 64-wide warps.
   int kGroups = -1;
   if (mDim == nDim)
-    kGroups = waveSize / mDim;
+    kGroups = warpSize / mDim;
   if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
     kGroups = 1;
   int64_t kDim = kWidth * kGroups;
@@ -1591,9 +1605,8 @@ AMDMfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
 
 unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  constexpr int waveSize = 64;
   auto rep = getMFMARepForOperands(shape, kWidth, opIdx);
-  return rep[0] * rep[1] * rep[2] * kWidth;
+  return product(rep) * kWidth;
 }
 
 SmallVector<unsigned>
@@ -1632,8 +1645,14 @@ AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
+  auto warpsPerCTA = getWarpsPerCTA();
+  auto rank = warpsPerCTA.size();
+  SmallVector<unsigned> shapePerCTATile(warpsPerCTA.begin(), warpsPerCTA.end());
+
   auto mnkDim = getMNKDimPerWMMAInstr();
-  return {mnkDim[0] * getWarpsPerCTA()[0], mnkDim[1] * getWarpsPerCTA()[1]};
+  shapePerCTATile[rank - 2] *= mnkDim[0];
+  shapePerCTATile[rank - 1] *= mnkDim[1];
+  return shapePerCTATile;
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
@@ -1648,34 +1667,49 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadsPerWarp() const {
-  return {getMNKDimPerWMMAInstr()[0] / getSizePerThread()[0],
-          getMNKDimPerWMMAInstr()[1] / getSizePerThread()[1]};
+  auto rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> threads(rank, 1);
+  auto mnkInstr = getMNKDimPerWMMAInstr();
+  threads[rank - 2] = mnkInstr[0] / getSizePerThread()[rank - 2];
+  threads[rank - 1] = mnkInstr[1] / getSizePerThread()[rank - 1];
+  return threads;
 }
 
 SmallVector<unsigned> AMDWmmaEncodingAttr::getSizePerThread() const {
-  return {8, 1};
+  auto rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> sizePerThread(rank, 1);
+  sizePerThread[rank - 2] = 8;
+  sizePerThread[rank - 1] = 1;
+  return sizePerThread;
 }
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+  auto rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> sizePerThread(rank, 1);
   if (opIdx == 0) {
-    return {1, 16};
+    sizePerThread[rank - 2] = 1;
+    sizePerThread[rank - 1] = 16;
   } else if (opIdx == 1) {
-    return {16, 1};
+    sizePerThread[rank - 2] = 16;
+    sizePerThread[rank - 1] = 1;
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
   }
+  return sizePerThread;
 }
 
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
                                                       int opIdx) const {
   auto parentShapePerCTA = getShapePerCTATile(shape);
+  auto rank = shape.size();
+  assert(rank = 2);
   if (opIdx == 0) {
     return {parentShapePerCTA[0], static_cast<unsigned>(shape[1])};
   } else if (opIdx == 1) {
@@ -1688,7 +1722,7 @@ AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 unsigned AMDWmmaEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
   auto rep = getWMMARepForOperands(shape, eltTy, kWidth, opIdx);
-  return rep[0] * rep[1] * kWidth;
+  return product(rep) * kWidth;
 }
 
 SmallVector<int64_t>
@@ -1701,16 +1735,25 @@ AMDWmmaEncodingAttr::getWMMARepForOperands(ArrayRef<int64_t> operandShape,
                                            Type elemType, int kWidth,
                                            int opIdx) const {
   auto operandTileShape = getWMMAElemsPerInstrForOperands();
+  assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
+  auto rank = operandShape.size();
+  assert(rank == 2 || rank == 3);
+  int numRepBatch =
+      rank == 3 ? std::max<int64_t>(1, operandShape[0] / warpsPerCTA[0]) : 1;
   if (opIdx == 0)
-    return {std::max<int64_t>(1, operandShape[0] /
-                                     (operandTileShape[0] * warpsPerCTA[0])),
-            std::max<int64_t>(1, operandShape[1] / operandTileShape[1])};
+    return {
+        numRepBatch,
+        std::max<int64_t>(1, operandShape[rank - 2] /
+                                 (operandTileShape[0] * warpsPerCTA[rank - 2])),
+        std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
   else {
     assert(opIdx == 1);
-    return {std::max<int64_t>(1, operandShape[0] / operandTileShape[0]),
-            std::max<int64_t>(1, operandShape[1] /
-                                     (operandTileShape[1] * warpsPerCTA[1]))};
+    return {
+        numRepBatch,
+        std::max<int64_t>(1, operandShape[rank - 2] / operandTileShape[0]),
+        std::max<int64_t>(1, operandShape[rank - 1] / (operandTileShape[1] *
+                                                       warpsPerCTA[rank - 1]))};
   }
 }
 
@@ -1746,7 +1789,7 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpOrder() const {
-  return ::getOrder(*this);
+  return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadsPerWarp() const {
   auto rank = getWarpsPerCTA().size();
@@ -1787,7 +1830,10 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getSizePerThread() const {
   }
   if (isHopper()) {
     auto instrShape = getInstrShape();
-    // TODO(thomas): what are those magic numbers?
+    // WGMMA instructions have an order of [0, 1] with 4 warps, each with 8
+    // unique thread ids (32 in a warp group) per column. It is 1 warp wide with
+    // 4 unique thread ids in the row. So the size per thread is the instruction
+    // size divided by the number of unique thread ids.
     return SmallVector<unsigned>{instrShape[0] * 4 / 32, instrShape[1] / 4};
   }
   llvm_unreachable("Unexpected mma version");
@@ -2689,8 +2735,9 @@ struct CanonicalizeConvertFromConvert
     // for hopper MMAv3
     if (mlir::isa<SharedEncodingAttr>(dstType.getEncoding()) &&
         mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) &&
-        llvm::any_of(op.getResult().getUsers(),
-                     [](Operation *dot) { return isa<DotOp>(dot); })) {
+        llvm::any_of(op.getResult().getUsers(), [](Operation *dot) {
+          return dot->hasTrait<OpTrait::DotLike>();
+        })) {
       return failure();
     }
 
@@ -2832,7 +2879,7 @@ void AsyncCopyGlobalToLocalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
-                       SideEffects::DefaultResource::get());
+                       mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), getResult(),
                        mlir::triton::gpu::SharedMemory::get());
 }

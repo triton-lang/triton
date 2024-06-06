@@ -8,6 +8,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -24,7 +25,7 @@ using namespace triton;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                TensorOrMemDesc type,
+                                                RankedTensorType type,
                                                 int numWarps) {
   if (version == 1)
     return {16, 16};
@@ -441,8 +442,8 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp, nvidia_gpu::DotWaitOp>(
-          op)) {
+      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
+          nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     return encoding;
   }
 
@@ -471,7 +472,7 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
       isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::DotWaitOp>(op))
+          nvidia_gpu::WarpGroupDotWaitOp>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
@@ -816,6 +817,26 @@ bool isPureUnaryInlineAsm(Operation *op) {
     return false;
   return op->getNumOperands() == 1 && op->getNumResults() == 1 &&
          inlineAsmOp.getPure();
+}
+
+int getNVIDIAComputeCapability(Operation *module) {
+  assert(module->hasAttr(triton::AttrTargetName) &&
+         "Expected a target attribute on the module operation");
+
+  StringAttr targetAttr =
+      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+
+  StringRef ref = targetAttr.strref();
+  assert(ref.starts_with("cuda:") &&
+         "expected target attribute to be prefixed with \"cuda:\"");
+
+  StringRef capabilityStr = ref.drop_front(5); // drop the "cuda:"
+  int computeCapability;
+  bool parseError = capabilityStr.getAsInteger(10, computeCapability);
+  assert(!parseError &&
+         "invalid compute capability string in target attribute");
+
+  return computeCapability;
 }
 
 namespace {

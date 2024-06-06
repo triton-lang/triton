@@ -1,7 +1,7 @@
 #ifndef PROTON_DRIVER_GPU_CUPTI_H_
 #define PROTON_DRIVER_GPU_CUPTI_H_
 
-#include <cupti.h>
+#include "cupti.h"
 
 namespace proton {
 

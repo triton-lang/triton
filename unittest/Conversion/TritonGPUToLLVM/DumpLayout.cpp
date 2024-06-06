@@ -24,7 +24,6 @@
 #include "DumpLayout.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #ifdef AMD_TARGET
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
@@ -83,8 +82,6 @@ public:
   llvm::SmallVector<llvm::SmallVector<Value>>
   emitIndices(Attribute layout, llvm::ArrayRef<int64_t> shape,
               bool withCTAOffset) {
-    setWarpsPerCTA(product(triton::gpu::getNumWarpsPerCTA(layout)));
-
     auto type = RankedTensorType::get(shape, rewriter.getF16Type(), layout);
     return mlir::emitIndices(loc, rewriter, targetInfo, layout, type,
                              withCTAOffset);
@@ -94,8 +91,6 @@ public:
   emitDistributedToShared(Attribute srcLayout, SharedEncodingAttr sharedLayout,
                           Type elemTy, llvm::ArrayRef<int64_t> shape,
                           bool withCTAOffset) {
-    setWarpsPerCTA(product(triton::gpu::getWarpsPerCTA(sharedLayout)));
-
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
     SharedMemoryObject smemObj(getMockSmemBaseImpl(rewriter, loc), elemTy,
                                shape, sharedLayout.getOrder(), loc, rewriter);
@@ -105,14 +100,6 @@ public:
   }
 
 private:
-  void setWarpsPerCTA(int32_t warpsPerCTA) {
-    rewriter.getInsertionBlock()
-        ->getParent()
-        ->getParentOfType<ModuleOp>()
-        ->setAttr("triton_gpu.num-warps",
-                  rewriter.getI32IntegerAttr(warpsPerCTA));
-  }
-
   // Non-static members are initialized in declaration order
   MLIRContext *context;
   LowerToLLVMOptions option;
@@ -169,8 +156,7 @@ int evalGEPOp(mlir::LLVM::GEPOp gepOp, int ctaid, int tid) {
   assert(gepOp.getNumOperands() == 2 && "Unrecognized format of GEPOp");
   int base = eval(gepOp.getBase(), ctaid, tid);
   int offset = eval(gepOp.getOperand(1), ctaid, tid);
-  auto llPtrTy = cast<LLVM::LLVMPointerType>(gepOp.getRes().getType());
-  int bytesPerElem = llPtrTy.getIntOrFloatBitWidth() / 8;
+  int bytesPerElem = gepOp.getElemType().getIntOrFloatBitWidth() / 8;
   return base + offset * bytesPerElem;
 }
 
@@ -209,6 +195,8 @@ int eval(Value value, int ctaid, int tid) {
     return evalInlineAsmOp(asmOp, ctaid, tid);
   } else if (auto gepOp = llvm::dyn_cast<mlir::LLVM::GEPOp>(op)) {
     return evalGEPOp(gepOp, ctaid, tid);
+  } else if (auto bitcastOp = llvm::dyn_cast<mlir::LLVM::BitcastOp>(op)) {
+    return eval(bitcastOp.getOperand(), ctaid, tid);
   } else if (auto selectOp = llvm::dyn_cast<mlir::LLVM::SelectOp>(op)) {
     return eval(selectOp.getCondition(), ctaid, tid)
                ? eval(selectOp.getTrueValue(), ctaid, tid)

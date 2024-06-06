@@ -22,58 +22,22 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+namespace triton {
+namespace gpu {
+
+#define GEN_PASS_DEF_TRITONGPUREMOVELAYOUTCONVERSIONS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 #define DEBUG_TYPE "tritongpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace mlir::triton::gpu {
 namespace {
 
 // -----------------------------------------------------------------------------
 //
 // -----------------------------------------------------------------------------
-
-// dot(a, b, load(ptr)) -> add(load(ptr), dot(a, b, 0))
-class ConvertDotConvert : public RewritePattern {
-public:
-  ConvertDotConvert(MLIRContext *context)
-      : RewritePattern(ConvertLayoutOp::getOperationName(), 1, context) {}
-
-  LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const override {
-    auto dstOp = cast<ConvertLayoutOp>(op);
-    auto dotOp = dstOp.getSrc().getDefiningOp<DotOp>();
-    if (!dotOp)
-      return failure();
-    if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
-        std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
-      return failure();
-    auto cvtOp = dotOp.getOperand(2).getDefiningOp<ConvertLayoutOp>();
-    if (!cvtOp)
-      return failure();
-    if (!cvtOp.getSrc().getDefiningOp<LoadOp>())
-      return failure();
-    RankedTensorType dstTy = dstOp.getType();
-    RankedTensorType srcTy = cvtOp.getSrc().getType();
-    if (dstTy != srcTy)
-      return failure();
-
-    auto _0f = rewriter.create<arith::ConstantOp>(
-        op->getLoc(), dstTy.getElementType(),
-        rewriter.getZeroAttr(dstTy.getElementType()));
-    auto _0 = rewriter.create<SplatOp>(op->getLoc(), dotOp.getType(), _0f);
-    auto newDot = rewriter.create<DotOp>(
-        op->getLoc(), dotOp.getType(), dotOp.getOperand(0), dotOp.getOperand(1),
-        _0, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
-    auto newCvt = rewriter.create<ConvertLayoutOp>(op->getLoc(), dstTy,
-                                                   newDot.getResult());
-    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getSrc());
-    return success();
-  }
-};
 
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
 // based on the analysis. The algorithm is as follows.
@@ -282,7 +246,7 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOp, nvidia_gpu::DotAsyncOp, AtomicRMWOp, AtomicCASOp>(op))
+  if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
@@ -399,7 +363,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp, nvidia_gpu::DotWaitOp>(user)) {
+            ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -818,7 +782,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-          ConvertLayoutOp, nvidia_gpu::DotWaitOp>(op)) {
+          ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {
@@ -1132,8 +1096,16 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
-    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
-               ExpandDimsOp>(op);
+    if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
+            ExpandDimsOp>(op)) {
+      return true;
+    }
+    if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
+      auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
+      return getElementBitWidth(srcType) <
+             getElementBitWidth(fpToFpOp.getType());
+    }
+    return false;
   };
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
@@ -1220,13 +1192,12 @@ void hoistConvert(ModuleOp module) {
     layoutRemat.cleanup();
   });
 }
+} // namespace
 
 class TritonGPURemoveLayoutConversionsPass
-    : public TritonGPURemoveLayoutConversionsBase<
+    : public impl::TritonGPURemoveLayoutConversionsBase<
           TritonGPURemoveLayoutConversionsPass> {
 public:
-  TritonGPURemoveLayoutConversionsPass() = default;
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -1272,17 +1243,6 @@ public:
       m.dump();
     });
 
-    RewritePatternSet decomposePatterns(context);
-    decomposePatterns.add<ConvertDotConvert>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(decomposePatterns))
-            .failed()) {
-      signalPassFailure();
-    }
-    LLVM_DEBUG({
-      DBGS() << "Module after decomposing dot-converts:\n";
-      m.dump();
-    });
-
     // 4. Apply clean up patterns to remove remove dead convert and dead code
     // generated by the previous transformations.
     RewritePatternSet cleanUpPatterns2(context);
@@ -1300,10 +1260,6 @@ public:
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> createRemoveLayoutConversionsPass() {
-  return std::make_unique<TritonGPURemoveLayoutConversionsPass>();
-}
-
-} // namespace mlir::triton::gpu
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

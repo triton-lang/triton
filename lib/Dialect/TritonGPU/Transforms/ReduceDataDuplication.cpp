@@ -17,17 +17,18 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#define GEN_PASS_CLASSES
+
+namespace mlir {
+namespace triton {
+namespace gpu {
+
+#define GEN_PASS_DEF_TRITONGPUREDUCEDATADUPLICATION
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-using namespace mlir;
-
 class TritonGPUReduceDataDuplicationPass
-    : public TritonGPUReduceDataDuplicationBase<
+    : public impl::TritonGPUReduceDataDuplicationBase<
           TritonGPUReduceDataDuplicationPass> {
 public:
-  TritonGPUReduceDataDuplicationPass() = default;
-
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -69,12 +70,14 @@ public:
       } else {
         sharedOrder = srcOrder;
       }
+      auto sharedMemorySpace =
+          triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
       auto tmpType = triton::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
-              triton::gpu::getCTALayout(srcEncoding),
-              srcType.getElementType()));
+              triton::gpu::getCTALayout(srcEncoding), srcType.getElementType()),
+          sharedMemorySpace);
       auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
       auto newConvert = builder.create<triton::gpu::LocalLoadOp>(cvtOp.getLoc(),
@@ -85,6 +88,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createReduceDataDuplicationPass() {
-  return std::make_unique<TritonGPUReduceDataDuplicationPass>();
-}
+} // namespace gpu
+} // namespace triton
+} // namespace mlir

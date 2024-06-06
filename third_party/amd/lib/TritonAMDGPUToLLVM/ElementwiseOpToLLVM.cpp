@@ -10,8 +10,10 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::getElementType;
+using mlir::triton::gpu::getFunctionType;
 using mlir::triton::gpu::MultipleOperandsRange;
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
@@ -312,7 +314,7 @@ static Value convertFp32ToBf16(Location loc,
     auto as_int32 = bitcast(v, i32_ty);
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
-    return bitcast(truncated, i16_ty);
+    return bitcast(truncated, bf16_ty);
   }
   // Otherwise it is (rounding == RoundingMode::RTNE)
   auto as_uint32 = bitcast(v, i32_ty);
@@ -335,7 +337,7 @@ static Value convertFp32ToBf16(Location loc,
 
   auto shifted = lshr(i32_ty, res, i32_val(16));
   auto truncated = trunc(i16_ty, shifted);
-  return truncated;
+  return bitcast(truncated, bf16_ty);
 }
 
 static Value Fp8E5M2FNUZ_to_Fp16_oneValue(Location loc,
@@ -445,20 +447,20 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
   out0 = or_(i32_ty, out0, sign0);
   out1 = or_(i32_ty, out1, sign1);
 
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   out0 = bitcast(out0, bf16x2VecTy);
   out1 = bitcast(out1, bf16x2VecTy);
 
-  return {extract_element(i16_ty, out0, i32_val(0)),
-          extract_element(i16_ty, out0, i32_val(1)),
-          extract_element(i16_ty, out1, i32_val(0)),
-          extract_element(i16_ty, out1, i32_val(1))};
+  return {extract_element(bf16_ty, out0, i32_val(0)),
+          extract_element(bf16_ty, out0, i32_val(1)),
+          extract_element(bf16_ty, out1, i32_val(0)),
+          extract_element(bf16_ty, out1, i32_val(1))};
 }
 
 static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           const SmallVector<Value> &v) {
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = undef(bf16x2VecTy);
   Value bf16x2Vec1 = undef(bf16x2VecTy);
   bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
@@ -714,22 +716,22 @@ static SmallVector<Value> Fp8E4M3_to_Bf16(Location loc,
   Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
   Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
 
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = or_(i32_ty, sign0, b0);
   Value bf16x2Vec1 = or_(i32_ty, sign1, b1);
   bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
   bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
 
-  return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
+  return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
+          extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
+          extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
+          extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
 }
 
 static SmallVector<Value> Bf16_to_Fp8E4M3(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           const SmallVector<Value> &v) {
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = undef(bf16x2VecTy);
   Value bf16x2Vec1 = undef(bf16x2VecTy);
   bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
@@ -900,7 +902,7 @@ struct FpToFpOpConversion
     if (srcMap.count(key) == 0) {
       return mlir::failure();
     }
-    return mlir::FailureOr(srcMap.lookup(key));
+    return srcMap.lookup(key);
   }
 
   SmallVector<Value> createDestOps(triton::FpToFpOp op, OpAdaptor adaptor,
@@ -1102,7 +1104,7 @@ static SmallVector<Value> S8_to_Bf16(Location loc,
     f32Val = bitcast(f32Val, i32_ty);
     auto shifted = lshr(i32_ty, f32Val, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
-    outValues.push_back(truncated);
+    outValues.push_back(bitcast(truncated, bf16_ty));
   }
   return outValues;
 }
@@ -1213,23 +1215,66 @@ struct ExpOpConversionApprox
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // For non-FP32 input, call __nv_expf for higher-precision calculation
+    // For non-FP32 input, call __ocml_exp_f64 for higher-precision calculation
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
     const double log2e = 1.4426950408889634;
     Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
 
-    return {rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
-                                          adaptor.getAttributes().getValue())};
+    // Here we use llvm.exp2.f32 instead of math::Exp2Op. The latter
+    // flushes denorms by default, but we want to preserve denorms by default
+    // for expOp.
+    StringRef funcName = "llvm.exp2.f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {rewriter.create<LLVM::CallOp>(loc, funcOp, prod).getResult()};
   }
+};
+
+struct Exp2OpConversion
+    : ElementwiseOpConversionBase<mlir::math::Exp2Op, Exp2OpConversion> {
+  using ElementwiseOpConversionBase<
+      mlir::math::Exp2Op, Exp2OpConversion>::ElementwiseOpConversionBase;
+
+  explicit Exp2OpConversion(LLVMTypeConverter &typeConverter,
+                            ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
+                            PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(mlir::math::Exp2Op op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // For non-FP32 input, call __ocml_exp2_f64 for higher-precision calculation
+    if (elemTy.getIntOrFloatBitWidth() != 32)
+      return {};
+
+    // On AMD backend, both intrinsics are lowered to v_exp_f32 instruction,
+    // which flushes input and output denorms. `llvm.amdgcn.exp2.f32` provides
+    // direct access to v_exp_f32. For `llvm.exp2.f32`, the LLVM backend inserts
+    // instructions to handle denorms iff `allow_flush_denorm` is False.
+    StringRef funcName = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+  }
+
+private:
+  bool ftz;
 };
 
 } // namespace
 
 namespace mlir::triton::AMD {
 void populateElementwiseOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
 
@@ -1257,11 +1302,15 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    targetInfo.getISAFamily(), benefit);
 
-  // ExpOpConversionApprox will try using ex2.approx if the input type is
+  // ExpOpConversionApprox will try using __ocml_exp2_f32 if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
-  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
+  // later pass will call __ocml_exp_f64 for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  // Exp2OpConversion will use llvm.exp2.f32 or llvm.amdgcn.exp2.f32
+  // based on the ftz flag if the input type is FP32. For FP64 input,
+  // Exp2OpConversion will return failure and later pass will call
+  // __ocml_exp2_f64 for higher-precision calculation
+  patterns.add<Exp2OpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(

@@ -76,9 +76,8 @@ def ravel(x):
 @jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
-    Transforms indices of a row-major :code:`size_i * size_j` matrix into those
-    of one where the indices are col-major for each group of :code:`size_g`
-    rows.
+    Transforms the indices of a row-major `size_i * size_j` matrix into
+    the indices of a column-major matrix for each group of `size_g` rows.
 
     For example, for :code:`size_i = size_j = 4` and :code:`size_g = 2`, it will
     transform ::
@@ -106,9 +105,11 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     off_i = group_id * size_g
     # last group may have fewer rows
     size_g = core.minimum(size_i - off_i, size_g)
+    # linear index with respect to the first element in this group
+    ij = ij % size_gj
     # new row and column indices
-    new_i = off_i + (ij % size_g)
-    new_j = (ij % size_gj) // size_g
+    new_i = off_i + ij % size_g
+    new_j = ij // size_g
     return new_i, new_j
 
 
@@ -326,8 +327,8 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     y = core.reshape(x, shape)
     # slice left/right with 'stride' 2**(n_dims - i - 1)
     mask = core.arange(0, 2)[None, :, None]
-    left = core.broadcast_to(sum(y * (1 - mask), 1)[:, None, :], shape)
-    right = core.broadcast_to(sum(y * mask, 1)[:, None, :], shape)
+    left = core.broadcast_to(sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)
+    right = core.broadcast_to(sum(y * mask, 1)[:, None, :], shape).to(y.dtype)
     left = core.reshape(left, x.shape)
     right = core.reshape(right, x.shape)
     # actual compare-and-swap

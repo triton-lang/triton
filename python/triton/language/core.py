@@ -389,7 +389,7 @@ class pointer_type(dtype):
 
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
-            raise TypeError(f'element_ty is a {type(element_ty).__name__}.')
+            raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
         self.address_space = address_space
 
@@ -1176,10 +1176,10 @@ def num_programs(axis, _builder=None):
 
 @builtin
 def arange(start, end, _builder=None):
-    """
+    f"""
     Returns contiguous values within the half-open interval :code:`[start,
     end)`.  :code:`end - start` must be less than or equal to
-    :code:`TRITON_MAX_TENSOR_NUMEL = 131072`
+    :code:`TRITON_MAX_TENSOR_NUMEL = {TRITON_MAX_TENSOR_NUMEL}`
 
     :param start: Start of the interval. Must be a power of two.
     :type start: int32
@@ -1268,8 +1268,8 @@ def trans(input: tensor, *dims, _builder=None):
     """
     Permutes the dimensions of a tensor.
 
-    If no permutation is specified, tries to do a (1,0) permutation, i.e. tries
-    to transpose a 2D tensor.
+    If the parameter :code:`dims` is not specified, the function defaults to a (1,0) permutation,
+    effectively transposing a 2D tensor.
 
     :param input: The input tensor.
     :param dims: The desired ordering of dimensions.  For example,
@@ -1507,20 +1507,24 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     """
     Returns the matrix product of two blocks.
 
-    The two blocks must be two-dimensional and have compatible inner dimensions.
+    The two blocks must both be two-dimensional or three-dimensional and have compatible inner dimensions.
+    For three-dimensional blocks, `tl.dot` performs the batched matrix product,
+    where the first dimension of each block represents the batch dimension.
 
     :param input: The first tensor to be multiplied.
-    :type input: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second tensor to be multiplied.
-    :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
-    :param input_precision: How to exercise the Tenors cores for f32 x f32. If
+    :type other: 2D or 3D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :param acc: The accumulator tensor. If not None, the result is added to this tensor.
+    :type acc: 2D or 3D tensor of scalar-type in {:code:`float16`, :code:`float32`, :code:`int32`}
+    :param input_precision: How to exercise the Tensor Cores for f32 x f32. If
       the device does not have Tensor Cores or the inputs are not of dtype f32,
-      this option is ignored.  For devices that do have tensor cores, the
+      this option is ignored. For devices that do have tensor cores, the
       default precision is tf32.
-    :param allow_tf32: *Deprecated.*  If true, input_precision is set to "tf32".
+    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
+    :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
-    :type other: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
     """
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is None:

@@ -134,13 +134,11 @@ def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
                              DB,  # pointer to the partial sum of biases gradient
                              X,  # pointer to the input
                              W,  # pointer to the weights
-                             B,  # pointer to the biases
                              Mean,  # pointer to the mean
                              Rstd,  # pointer to the 1/std
                              Lock,  # pointer to the lock
                              stride,  # how much to increase the pointer when moving by 1 row
                              N,  # number of columns in X
-                             eps,  # epsilon to avoid division by zero
                              GROUP_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     # Map the program id to the elements of X, DX, and DY it should compute.
     row = tl.program_id(0)
@@ -234,8 +232,8 @@ class LayerNorm(torch.autograd.Function):
         # reshape input data into 2D tensor
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
-        mean = torch.empty((M, ), dtype=torch.float32, device='cuda')
-        rstd = torch.empty((M, ), dtype=torch.float32, device='cuda')
+        mean = torch.empty((M, ), dtype=torch.float32, device=x.device)
+        rstd = torch.empty((M, ), dtype=torch.float32, device=x.device)
         # Less than 64KB per feature: enqueue fused kernel
         MAX_FUSED_SIZE = 65536 // x.element_size()
         BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
@@ -264,19 +262,19 @@ class LayerNorm(torch.autograd.Function):
         if N <= 4096: GROUP_SIZE_M = 128
         if N <= 1024: GROUP_SIZE_M = 256
         # allocate output
-        locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device='cuda')
-        _dw = torch.empty((GROUP_SIZE_M, w.shape[0]), dtype=x.dtype, device=w.device)
-        _db = torch.empty((GROUP_SIZE_M, w.shape[0]), dtype=x.dtype, device=w.device)
-        dw = torch.empty((w.shape[0], ), dtype=w.dtype, device=w.device)
-        db = torch.empty((w.shape[0], ), dtype=w.dtype, device=w.device)
+        locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device=w.device)
+        _dw = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
+        _db = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
+        dw = torch.empty((N, ), dtype=w.dtype, device=w.device)
+        db = torch.empty((N, ), dtype=w.dtype, device=w.device)
         dx = torch.empty_like(dy)
         # enqueue kernel using forward pass heuristics
         # also compute partial sums for DW and DB
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
         _layer_norm_bwd_dx_fused[(M, )](  #
-            dx, dy, _dw, _db, x, w, b, m, v, locks,  #
-            x_arg.stride(0), N, ctx.eps,  #
+            dx, dy, _dw, _db, x, w, m, v, locks,  #
+            x_arg.stride(0), N,  #
             BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
             GROUP_SIZE_M=GROUP_SIZE_M,  #
             num_warps=ctx.num_warps)
@@ -296,9 +294,9 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
-    weight = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    bias = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
+    weight = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+    bias = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device=device)
     dy = .1 * torch.randn_like(x)
     x.requires_grad_(True)
     # forward pass
@@ -334,9 +332,9 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
-    weight = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    bias = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
+    weight = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+    bias = torch.rand(w_shape, dtype=dtype, device=device, requires_grad=True)
+    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device=device)
     dy = .1 * torch.randn_like(x)
     x.requires_grad_(True)
     quantiles = [0.5, 0.2, 0.8]

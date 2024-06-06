@@ -63,8 +63,9 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch) {
+  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz) {
     this->arch = targetArch.str();
+    this->ftz = ftz;
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -145,48 +146,60 @@ struct ConvertTritonAMDGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    int benefit = patternBenefitPrioritizeOverLLVMConversions;
-    auto populatePatterns1 = [&](auto populateFunc) {
+    int commonBenefit = patternBenefitPrioritizeOverLLVMConversions;
+    // Make benefit for AMD specific patterns higher so they apply before common
+    // patterns
+    int AMDBenefit = commonBenefit + 1;
+    auto populatePatterns1 = [&](auto populateFunc, int benefit) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, benefit);
     };
 
-    auto populatePatterns5 = [&](auto populateFunc) {
+    auto populatePatterns5 = [&](auto populateFunc, int benefit) {
       populateFunc(typeConverter, patterns, benefit);
     };
 
-    auto populatePatterns6 = [&](auto populateFunc) {
+    auto populatePatterns6 = [&](auto populateFunc, int benefit) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, targetInfo, benefit);
     };
 
-    auto populatePatterns7 = [&](auto populateFunc) {
+    auto populatePatterns7 = [&](auto populateFunc, int benefit) {
       populateFunc(typeConverter, patterns, targetInfo, benefit);
     };
 
     AMD::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                patterns, numWarps,
-                                               axisInfoAnalysis, benefit);
+                                               axisInfoAnalysis, AMDBenefit);
+    mlir::triton::populateConvertLayoutOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, commonBenefit);
     AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                     axisInfoAnalysis, benefit);
-    populatePatterns6(AMD::populateElementwiseOpToLLVMPatterns);
+                                     axisInfoAnalysis, AMDBenefit);
+    AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
+                                             axisInfoAnalysis, allocation,
+                                             targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           numWarps, axisInfoAnalysis, benefit);
-    populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns);
-    populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns);
-    populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns);
-    populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns);
+                                           numWarps, axisInfoAnalysis,
+                                           AMDBenefit);
+    populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
+                      commonBenefit);
+    populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns,
+                      commonBenefit);
+    populatePatterns5(mlir::triton::populateViewOpToLLVMPatterns,
+                      commonBenefit);
+    populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns,
+                      commonBenefit);
     mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, targetInfo,
-                                                patterns, benefit);
+                                                patterns, commonBenefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
-                                                   patterns, benefit);
+                                                   patterns, commonBenefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
-                                                targetInfo, benefit);
+                                                targetInfo, commonBenefit);
     mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                     benefit);
+                                                     commonBenefit);
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
-                                              targetInfo, benefit);
-    AMD::populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
+                                              targetInfo, commonBenefit);
+    AMD::populateSPMDOpToLLVMPattern(typeConverter, patterns, AMDBenefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
@@ -200,7 +213,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
-                                               targetInfo, benefit);
+                                               targetInfo, commonBenefit);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
@@ -233,8 +246,8 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef targetArch) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch);
+createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
 }
 
 } // namespace triton

@@ -323,7 +323,8 @@ Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
 }
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce) const {
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
   if (auto kind = matchReduxKind(op, computeCapability)) {
     // Based on benchmarking on A100 redux op gives a speed up only when doing
     // a single reduction (not partitioned) and when the mask is static.
@@ -430,16 +431,21 @@ void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
                             int line) const {
   auto funcOp = getAssertfailDeclaration(rewriter);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  Value messageString =
-      LLVM::addStringToModule(loc, rewriter, "assertMessage_", message);
-  Value fileString =
-      LLVM::addStringToModule(loc, rewriter, "assertFile_", file);
-  Value funcString =
-      LLVM::addStringToModule(loc, rewriter, "assertFunc_", func);
+  llvm::SmallString<64> messageString(message), fileString(file),
+      funcString(func);
+  messageString.push_back('\0');
+  fileString.push_back('\0');
+  funcString.push_back('\0');
+  Value messageStringVal =
+      LLVM::addStringToModule(loc, rewriter, "assertMessage_", messageString);
+  Value fileStringVal =
+      LLVM::addStringToModule(loc, rewriter, "assertFile_", fileString);
+  Value funcStringVal =
+      LLVM::addStringToModule(loc, rewriter, "assertFunc_", funcString);
   Value lineNumber = i32_val(line);
   Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
-  SmallVector<Value> operands = {messageString, fileString, lineNumber,
-                                 funcString, charSize};
+  SmallVector<Value> operands = {messageStringVal, fileStringVal, lineNumber,
+                                 funcStringVal, charSize};
   call(funcOp, operands);
 }
 

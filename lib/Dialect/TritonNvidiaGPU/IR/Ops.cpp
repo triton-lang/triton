@@ -32,8 +32,8 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-// -- DotAsyncOp --
-mlir::LogicalResult DotAsyncOp::inferReturnTypes(
+// -- WarpGroupDotOp --
+mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
@@ -57,7 +57,7 @@ mlir::LogicalResult DotAsyncOp::inferReturnTypes(
   return mlir::success();
 }
 
-void DotAsyncOp::getEffects(
+void WarpGroupDotOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   auto a = getA();
@@ -70,8 +70,8 @@ void DotAsyncOp::getEffects(
                          mlir::triton::gpu::SharedMemory::get());
 }
 
-// -- DotWaitOp --
-LogicalResult DotWaitOp::inferReturnTypes(
+// -- WarpGroupDotWaitOp --
+LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
     ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
     ::mlir::ValueRange operands, ::mlir::DictionaryAttr attributes,
     ::mlir::OpaqueProperties properties, ::mlir::RegionRange regions,
@@ -138,6 +138,17 @@ LogicalResult WaitBarrierOp::verify() {
   return success();
 }
 
+void WaitBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getAlloc(),
+                       mlir::triton::gpu::SharedMemory::get());
+  // Need a side effect to prevent compiler from reordering and removing
+  // the wait operation.
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::SideEffects::DefaultResource::get());
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))
@@ -151,7 +162,7 @@ void AsyncTMACopyGlobalToLocalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), getDescPtr(),
-                       SideEffects::DefaultResource::get());
+                       mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), getBarrier(),
                        mlir::triton::gpu::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), getResult(),
@@ -163,7 +174,7 @@ void AsyncTMACopyLocalToGlobalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), getDescPtr(),
-                       SideEffects::DefaultResource::get());
+                       mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
                        mlir::triton::gpu::SharedMemory::get());
 }
