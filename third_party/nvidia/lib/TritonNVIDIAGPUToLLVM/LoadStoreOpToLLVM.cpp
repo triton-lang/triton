@@ -809,11 +809,10 @@ struct AsyncCopyGlobalToLocalOpConversion
     // %other
     SmallVector<Value> otherElems;
     if (llOther) {
-      // FIXME(Keren): always assume other is 0 for now
+      // FIXME(Keren): assume other is 0 for now.
+      //
       // It's not necessary for now because the pipeline pass will skip
       // generating insert_slice_async if the load op has any "other" tensor.
-      assert(false &&
-             "insert_slice_async: nonzero `other` value is not supported yet");
       otherElems = unpackLLElements(loc, llOther, rewriter);
       assert(srcElems.size() == otherElems.size());
     }
