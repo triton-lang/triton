@@ -232,8 +232,8 @@ class LayerNorm(torch.autograd.Function):
         # reshape input data into 2D tensor
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
-        mean = torch.empty((M, ), dtype=torch.float32, device='cuda')
-        rstd = torch.empty((M, ), dtype=torch.float32, device='cuda')
+        mean = torch.empty((M, ), dtype=torch.float32, device=x.device)
+        rstd = torch.empty((M, ), dtype=torch.float32, device=x.device)
         # Less than 64KB per feature: enqueue fused kernel
         MAX_FUSED_SIZE = 65536 // x.element_size()
         BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
@@ -262,9 +262,9 @@ class LayerNorm(torch.autograd.Function):
         if N <= 4096: GROUP_SIZE_M = 128
         if N <= 1024: GROUP_SIZE_M = 256
         # allocate output
-        locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device='cuda')
-        _dw = torch.empty((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
-        _db = torch.empty((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
+        locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device=w.device)
+        _dw = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
+        _db = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
         dw = torch.empty((N, ), dtype=w.dtype, device=w.device)
         db = torch.empty((N, ), dtype=w.dtype, device=w.device)
         dx = torch.empty_like(dy)
