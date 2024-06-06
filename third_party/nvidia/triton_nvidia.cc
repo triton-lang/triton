@@ -94,6 +94,7 @@ void init_triton_nvidia(py::module &&m) {
                         workspace.attr("element_size")().cast<size_t>();
         return new CublasLtInstance(wrk_ptr, wrk_size);
       }))
+      .def("fp8_matmul_raw", &CublasLtInstance::fp8Matmul)
       .def("fp8_matmul", [](CublasLtInstance &self, py::object &A,
                             py::object &B, py::object &C) {
         auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
