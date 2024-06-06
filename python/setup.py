@@ -242,7 +242,7 @@ def get_thirdparty_packages(packages: list):
     return thirdparty_cmake_args
 
 
-def download_and_copy(name, src_path, variable, version, url_func, dst_path=None):
+def download_and_copy(name, src_path, variable, version, url_func):
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
