@@ -11,42 +11,11 @@
 
 namespace proton {
 
+template <>
+thread_local GPUProfiler<CuptiProfiler>::ProfilerState
+    GPUProfiler<CuptiProfiler>::profilerState(CuptiProfiler::instance());
+
 namespace {
-struct CuptiState {
-  CuptiProfiler *profiler;
-  std::set<Data *> dataSet;
-  size_t level{0};
-  bool isRecording{false};
-  Scope scope{};
-
-  void record(const Scope &scope, CuptiProfiler *profiler) {
-    this->scope = scope;
-    this->profiler = profiler;
-    this->dataSet = profiler->getDataSet();
-  }
-
-  void reset() {
-    dataSet.clear();
-    level = 0;
-    scope = Scope();
-  }
-
-  void enterOp() {
-    profiler->enterOp(scope);
-    for (auto data : dataSet) {
-      data->enterOp(scope);
-    }
-  }
-
-  void exitOp() {
-    profiler->exitOp(scope);
-    for (auto data : dataSet) {
-      data->exitOp(this->scope);
-    }
-  }
-};
-
-static thread_local CuptiState cuptiState;
 
 std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
   std::shared_ptr<Metric> metric;
@@ -74,45 +43,49 @@ void addMetric(size_t scopeId, std::set<Data *> &dataSet,
   }
 }
 
-void processActivityExternalCorrelation(std::map<uint32_t, size_t> &correlation,
-                                        CUpti_Activity *activity) {
-  auto *externalCorrelation =
+uint32_t
+processActivityExternalCorrelation(std::map<uint32_t, size_t> &corrIdToExternId,
+                                   CUpti_Activity *activity) {
+  auto *externalActivity =
       reinterpret_cast<CUpti_ActivityExternalCorrelation *>(activity);
-  correlation[externalCorrelation->correlationId] =
-      externalCorrelation->externalId;
+  corrIdToExternId[externalActivity->correlationId] =
+      externalActivity->externalId;
+  return externalActivity->correlationId;
 }
 
-void processActivityKernel(std::map<uint32_t, size_t> &correlation,
-                           std::set<Data *> &dataSet,
-                           CUpti_Activity *activity) {
+uint32_t processActivityKernel(std::map<uint32_t, size_t> &corrIdToExternId,
+                               std::set<Data *> &dataSet,
+                               CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
-  // TODO: non-triton kernels
-  if (correlation.find(correlationId) == correlation.end()) {
-    return;
-  }
-  auto externalId = correlation[correlationId];
+  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end())
+    return correlationId;
+  auto externalId = corrIdToExternId[correlationId];
   addMetric(externalId, dataSet, activity);
   // Track correlation ids from the same stream and erase those < correlationId
-  correlation.erase(correlationId);
+  corrIdToExternId.erase(correlationId);
+  return correlationId;
 }
 
-void processActivity(std::map<uint32_t, size_t> &correlation,
-                     std::set<Data *> &dataSet, CUpti_Activity *activity) {
+uint32_t processActivity(std::map<uint32_t, size_t> &corrIdToExternId,
+                         std::set<Data *> &dataSet, CUpti_Activity *activity) {
+  auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION: {
-    processActivityExternalCorrelation(correlation, activity);
+    correlationId =
+        processActivityExternalCorrelation(corrIdToExternId, activity);
     break;
   }
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    processActivityKernel(correlation, dataSet, activity);
+    correlationId = processActivityKernel(corrIdToExternId, dataSet, activity);
     break;
   }
   default:
     break;
   }
+  return correlationId;
 }
 
 std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
@@ -153,14 +126,14 @@ std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
 
 } // namespace
 
-struct CuptiProfiler::CuptiProfilerPimpl {
-  CuptiProfilerPimpl() = default;
+struct CuptiProfiler::CuptiProfilerPimpl
+    : public GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface {
+  CuptiProfilerPimpl(CuptiProfiler &profiler)
+      : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~CuptiProfilerPimpl() = default;
 
   void startOp(const Scope &scope);
   void stopOp(const Scope &scope);
-  void setOpInProgress(bool value);
-  bool isOpInProgress();
 
   void doStart();
   void doFlush();
@@ -173,10 +146,10 @@ struct CuptiProfiler::CuptiProfilerPimpl {
   static void callbackFn(void *userData, CUpti_CallbackDomain domain,
                          CUpti_CallbackId cbId, const void *cbData);
 
-  const inline static size_t AlignSize = 8;
-  const inline static size_t BufferSize = 64 * 1024 * 1024;
+  static constexpr size_t AlignSize = 8;
+  static constexpr size_t BufferSize = 64 * 1024 * 1024;
 
-  std::map<uint32_t, size_t> correlation;
+  std::map<uint32_t, size_t> corrIdToExternId;
   CUpti_SubscriberHandle subscriber{};
 };
 
@@ -198,15 +171,17 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t validSize) {
   CuptiProfiler &profiler =
       dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
-  auto &correlation = profiler.pImpl->correlation;
+  auto &pImpl = dynamic_cast<CuptiProfilerPimpl &>(*profiler.pImpl.get());
   auto &dataSet = profiler.dataSet;
-
+  uint32_t maxCorrelationId = 0;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
-      processActivity(correlation, dataSet, activity);
+      auto correlationId =
+          processActivity(pImpl.corrIdToExternId, dataSet, activity);
+      maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
     } else {
@@ -214,7 +189,9 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     }
   } while (true);
 
-  free(buffer);
+  std::free(buffer);
+
+  profiler.correlation.complete(maxCorrelationId);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
@@ -230,22 +207,16 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
   const CUpti_CallbackData *callbackData =
       reinterpret_cast<const CUpti_CallbackData *>(cbData);
   if (callbackData->callbackSite == CUPTI_API_ENTER) {
-    if (callbackData->context && cuptiState.level == 0) {
+    if (callbackData->context) {
       // Valid context and outermost level of the kernel launch
       auto scopeId = Scope::getNewScopeId();
       auto scope = Scope(scopeId, callbackData->symbolName);
-      cuptiState.record(scope, &profiler);
-      cuptiState.enterOp();
+      profilerState.record(scope);
     }
-    cuptiState.level++;
+    profilerState.enterOp();
   } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-    cuptiState.level--;
-    if (cuptiState.level == 0) {
-      if (cuptiState.isRecording) {
-        cuptiState.exitOp();
-      }
-      cuptiState.reset();
-    }
+    profilerState.exitOp();
+    profiler.correlation.submit(callbackData->correlationId);
   }
 }
 
@@ -258,14 +229,6 @@ void CuptiProfiler::CuptiProfilerPimpl::stopOp(const Scope &scope) {
   uint64_t correlationId;
   cupti::activityPopExternalCorrelationId<true>(
       CUPTI_EXTERNAL_CORRELATION_KIND_CUSTOM0, &correlationId);
-}
-
-void CuptiProfiler::CuptiProfilerPimpl::setOpInProgress(bool value) {
-  cuptiState.isRecording = value;
-}
-
-bool CuptiProfiler::CuptiProfilerPimpl::isOpInProgress() {
-  return cuptiState.isRecording;
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {
@@ -284,12 +247,28 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
-  CUcontext cu_context = nullptr;
-  cuda::ctxGetCurrent<false>(&cu_context);
-  if (cu_context) {
+  // cuptiActivityFlushAll returns the activity records associated with all
+  // contexts/streams.
+  // This is a blocking call but it doesn’t issue any CUDA synchronization calls
+  // implicitly thus it’s not guaranteed that all activities are completed on
+  // the underlying devices.
+  // We do an "oppurtunistic" synchronization here to try to ensure that all
+  // activities are completed on the current context.
+  // If the current context is not set, we don't do any synchronization.
+  CUcontext cuContext = nullptr;
+  cuda::ctxGetCurrent<false>(&cuContext);
+  if (cuContext)
     cuda::ctxSynchronize<true>();
-  }
-  cupti::activityFlushAll<true>(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
+  profiler.correlation.flush(
+      /*maxRetries=*/100, /*sleepMs=*/10,
+      /*flush=*/[]() {
+        cupti::activityFlushAll<true>(
+            /*flag=*/0);
+      });
+  // CUPTI_ACTIVITY_FLAG_FLUSH_FORCED is used to ensure that even incomplete
+  // activities are flushed so that the next profiling session can start with
+  // new activities.
+  cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
@@ -304,25 +283,10 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   cupti::finalize<true>();
 }
 
-CuptiProfiler::CuptiProfiler()
-    : pImpl(std::make_unique<CuptiProfilerPimpl>()) {}
-
-CuptiProfiler::~CuptiProfiler() = default;
-
-void CuptiProfiler::startOp(const Scope &scope) { pImpl->startOp(scope); }
-
-void CuptiProfiler::stopOp(const Scope &scope) { pImpl->stopOp(scope); }
-
-void CuptiProfiler::setOpInProgress(bool value) {
-  pImpl->setOpInProgress(value);
+CuptiProfiler::CuptiProfiler() {
+  pImpl = std::make_unique<CuptiProfilerPimpl>(*this);
 }
 
-bool CuptiProfiler::isOpInProgress() { return pImpl->isOpInProgress(); }
-
-void CuptiProfiler::doStart() { pImpl->doStart(); }
-
-void CuptiProfiler::doFlush() { pImpl->doFlush(); }
-
-void CuptiProfiler::doStop() { pImpl->doStop(); }
+CuptiProfiler::~CuptiProfiler() = default;
 
 } // namespace proton

@@ -33,7 +33,8 @@ public:
 
   virtual bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
-                          unsigned numLaneToReduce) const = 0;
+                          unsigned numLaneToReduce,
+                          unsigned interleave) const = 0;
 
   virtual bool processReplicaUsingStMatrix(
       ConversionPatternRewriter &rewriter, Location loc, Value smemBase,

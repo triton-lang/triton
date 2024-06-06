@@ -90,14 +90,10 @@ private:
     auto smemObj = getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
         typeConverter->convertType(srcTy.getElementType()), rewriter);
-    auto elemTy = typeConverter->convertType(dstTy.getElementType());
+    auto elemLlvmTy = typeConverter->convertType(dstTy.getElementType());
 
-    auto srcStrides =
-        getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
-
-    SmallVector<Value> outVals =
-        loadSharedToDistributed(op.getResult(), op.getSrc(), smemObj, elemTy,
-                                loc, rewriter, targetInfo);
+    SmallVector<Value> outVals = loadSharedToDistributed(
+        dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
