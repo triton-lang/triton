@@ -332,39 +332,113 @@ private:
     unsigned numThreads =
         product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) *
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
-    Value threadIsNeeded = icmp_slt(threadId, i32_val(elems));
-    Value readOffset = threadId;
-    for (unsigned round = 0; round < elemsPerThread; ++round) {
-      SmallVector<Value> acc(op.getNumOperands());
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        auto elemTy = getElementType(op, i);
-        Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
-                            smemBases[i], readOffset);
-        acc[i] = targetInfo.loadShared(rewriter, loc, getTypeConverter(),
-                                       readPtr, elemTy, threadIsNeeded);
-      }
-      warpReduce(rewriter, loc, acc, op, sizeInterWarps, 1 /* interleave */);
-      // only the first thread in each sizeInterWarps is writing
-      Value writeOffset = readOffset;
-      SmallVector<Value> writePtrs(op.getNumOperands());
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        auto elemTy = getElementType(op, i);
-        writePtrs[i] = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
-                           smemBases[i], writeOffset);
-      }
+    unsigned threadsPerWarp =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    // single step reduction if sizeInterWarps <= #threads/warp
+    if (sizeInterWarps <= threadsPerWarp) {
+      unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
+      Value threadIsNeeded = icmp_slt(threadId, i32_val(elems));
+      Value readOffset = threadId;
+      for (unsigned round = 0; round < elemsPerThread; ++round) {
+        SmallVector<Value> acc(op.getNumOperands());
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          auto elemTy = getElementType(op, i);
+          Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
+                              smemBases[i], readOffset);
+          acc[i] = targetInfo.loadShared(rewriter, loc, getTypeConverter(),
+                                         readPtr, elemTy, threadIsNeeded);
+        }
+        warpReduce(rewriter, loc, acc, op, sizeInterWarps, 1 /* interleave */);
+        // only the first thread in each sizeInterWarps is writing
+        Value writeOffset = readOffset;
+        SmallVector<Value> writePtrs(op.getNumOperands());
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          auto elemTy = getElementType(op, i);
+          writePtrs[i] = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
+                             smemBases[i], writeOffset);
+        }
 
-      Value laneIdModSizeInterWarps = urem(laneId, i32_val(sizeInterWarps));
-      Value laneIdModSizeInterWarpsIsZero =
-          icmp_eq(laneIdModSizeInterWarps, zero);
-      Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
+        Value laneIdModSizeInterWarps = urem(laneId, i32_val(sizeInterWarps));
+        Value laneIdModSizeInterWarpsIsZero =
+            icmp_eq(laneIdModSizeInterWarps, zero);
+        Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
 
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        targetInfo.storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          targetInfo.storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
+        }
+
+        if (round != elemsPerThread - 1) {
+          readOffset = add(readOffset, i32_val(numThreads));
+        }
       }
+    } else { // perform batched reduction if reduction size > #threads/warp
+      // the algorithm only works when the interwarpsize is power of 2
+      assert(((sizeInterWarps - 1) & sizeInterWarps) == 0 &&
+             "sizeInterWarps must be 2^m.");
+      assert(threadsPerWarp > 1 &&
+             "threadsPerWarp must be larger than 1 to do warp reduce.");
 
-      if (round != elemsPerThread - 1) {
-        readOffset = add(readOffset, i32_val(numThreads));
+      // It is a batched reduce with the initial problem shape [elems /
+      // sizeInterWarps, sizeInterWarps]. The threadsPerWarp is 2^n. The
+      // sizeInterWarps is 2^m. With the horizontal warp reduction, the problem
+      // size is [elems / sizeInterWarps, N] -> [elems / sizeInterWarps, ceil(N,
+      // threadsPerWarp)] in each reduce iteration.
+      unsigned problemBatchSize = elems / sizeInterWarps;
+      for (unsigned problemSize = sizeInterWarps; problemSize > 0;
+           problemSize = problemSize / threadsPerWarp) {
+        unsigned reduceLaneNumber = std::min(problemSize, threadsPerWarp);
+        unsigned totalProblemSizePerIter = problemSize * problemBatchSize;
+        unsigned elemsPerThread =
+            mlir::ceil<unsigned>(totalProblemSizePerIter, numThreads);
+
+        // The problem stride in each iteration is [sizeInterWarps /
+        // problemSize]
+        Value readOffset = mul(threadId, i32_val(sizeInterWarps / problemSize));
+
+        for (unsigned round = 0; round < elemsPerThread; ++round) {
+          Value threadIsNeeded = icmp_slt(readOffset, i32_val(elems));
+
+          SmallVector<Value> acc(op.getNumOperands());
+          for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+            auto elemTy = getElementType(op, i);
+            Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
+                                smemBases[i], readOffset);
+            acc[i] = targetInfo.loadShared(rewriter, loc, getTypeConverter(),
+                                           readPtr, elemTy, threadIsNeeded);
+          }
+          warpReduce(rewriter, loc, acc, op, reduceLaneNumber,
+                     1 /* interleave */);
+
+          Value writeOffset = readOffset;
+          SmallVector<Value> writePtrs(op.getNumOperands());
+          for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+            auto elemTy = getElementType(op, i);
+            writePtrs[i] = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
+                               smemBases[i], writeOffset);
+          }
+
+          // only the first thread in each reduceLaneNumber is writing
+          Value threadIdModSizeReduceLanes =
+              urem(threadId, i32_val(reduceLaneNumber));
+          Value threadIdModSizeReduceLanesIsZero =
+              icmp_eq(threadIdModSizeReduceLanes, zero);
+          Value pred = and_(threadIsNeeded, threadIdModSizeReduceLanesIsZero);
+
+          for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+            targetInfo.storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
+          }
+
+          if (round != elemsPerThread - 1) {
+            readOffset =
+                add(readOffset,
+                    i32_val(numThreads * (sizeInterWarps / problemSize)));
+          }
+        }
+
+        if (problemSize > threadsPerWarp) {
+          // More reduce iteration required. Synchronize here.
+          sync(rewriter, loc, op);
+        }
       }
     }
   }
