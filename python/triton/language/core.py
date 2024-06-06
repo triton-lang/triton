@@ -1324,7 +1324,8 @@ def cat(input, other, can_reorder=False, _builder=None):
     :type other:
     :param reorder: Compiler hint. If true, the compiler is
         allowed to reorder elements while concatenating inputs.  Only use if the
-        order does not matter (e.g., result is only used in reduction ops)
+        order does not matter (e.g., result is only used in reduction ops).
+        Current implementation of `cat` supports only can_reorder=True.
     """
     return semantic.cat(input, other, can_reorder, _builder)
 
@@ -1581,7 +1582,9 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type boundary_check: tuple of ints, optional
     :param padding_option: should be one of {"", "zero", "nan"}, do padding while out of bound
     :param cache_modifier: changes cache option in NVIDIA PTX
-    :type cache_modifier: str, optional
+    :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
+        cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
+        [cache operator](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators) for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional
     :param volatile: changes volatile option in NVIDIA PTX
