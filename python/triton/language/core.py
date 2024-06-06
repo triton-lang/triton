@@ -1212,8 +1212,8 @@ def full(shape, value, dtype, _builder=None):
     Returns a tensor filled with the scalar value for the given :code:`shape` and :code:`dtype`.
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
-    :value value: A scalar value to fill the array with
     :type shape: tuple of ints
+    :param value: A scalar value to fill the array with
     :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
@@ -1319,9 +1319,9 @@ def cat(input, other, can_reorder=False, _builder=None):
     Concatenate the given blocks
 
     :param input: The first input tensor.
-    :type input:
+    :type input: Tensor
     :param other: The second input tensor.
-    :type other:
+    :type other: Tensor
     :param reorder: Compiler hint. If true, the compiler is
         allowed to reorder elements while concatenating inputs.  Only use if the
         order does not matter (e.g., result is only used in reduction ops).
@@ -1663,9 +1663,11 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
     :type boundary_check: tuple of ints, optional
     :param cache_modifier: changes cache option in NVIDIA PTX
-    :type cache_modifier: str, optional
+    :type cache_modifier: str, optional, should be one of {"", ".wb", ".cg", ".cs", ".wt"}, where ".wb" stands for
+        cache write-back all coherent levels, ".cg" stands for cache global, ".cs" stands for cache streaming, ".wt"
+        stands for cache write-through, see [cache operator](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators) for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
-    :type eviction_policy: str, optional
+    :type eviction_policy: str, optional, should be one of {"", "evict_first", "evict_last"}
     """
     # `value` can be constexpr
     value = _to_tensor(value, _builder)
