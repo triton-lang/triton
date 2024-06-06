@@ -20,11 +20,7 @@ public:
 
   /// Add a new scope to the data.
   /// [MT] The implementation must be thread-safe.
-  virtual void addScope(size_t scopeId) = 0;
-
-  /// Set the name of a scope.
-  /// [MT] The implementation must be thread-safe.
-  virtual void setName(size_t scopeId, const std::string &name) = 0;
+  virtual void addScope(size_t scopeId, const std::string &name = "") = 0;
 
   /// Add a single metric to the data.
   /// [MT] The implementation must be thread-safe.

@@ -47,10 +47,10 @@ void addMetric(size_t scopeId, std::set<Data *> &dataSet,
     data->addMetric(scopeId, convertActivityToMetric(activity));
 }
 
-void setName(size_t externId, std::set<Data *> &dataSet,
+void addName(size_t externId, std::set<Data *> &dataSet,
              const std::string &name) {
   for (auto *data : dataSet)
-    data->setName(externId, name);
+    data->addScope(externId, name);
 }
 
 uint32_t
@@ -65,7 +65,7 @@ processActivityKernel(ThreadSafeMap<uint64_t, size_t> &corrIdToExternId,
   auto externId = corrIdToExternId.at(correlationId);
   if (apiExternId.contain(externId)) {
     // It's triggered by a CUDA op but not triton op
-    setName(externId, dataSet, kernel->name);
+    addName(externId, dataSet, kernel->name);
   }
   addMetric(externId, dataSet, activity);
   // Track correlation ids from the same stream and erase those < correlationId

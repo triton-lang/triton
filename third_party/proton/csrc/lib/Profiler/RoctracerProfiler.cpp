@@ -55,10 +55,10 @@ void addMetric(size_t scopeId, std::set<Data *> &dataSet,
   }
 }
 
-void setName(size_t externId, std::set<Data *> &dataSet,
+void addName(size_t externId, std::set<Data *> &dataSet,
              const std::string &name) {
   for (auto *data : dataSet)
-    data->setName(externId, name);
+    data->addScope(externId, name);
 }
 
 void processActivityKernel(size_t externId, std::set<Data *> &dataSet,
@@ -67,7 +67,7 @@ void processActivityKernel(size_t externId, std::set<Data *> &dataSet,
     return;
   auto correlationId = activity->correlation_id;
   if (isAPI)
-    setName(externId, dataSet, activity->kernel_name);
+    addName(externId, dataSet, activity->kernel_name);
   addMetric(externId, dataSet, activity);
 }
 
