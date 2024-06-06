@@ -55,7 +55,7 @@ void addName(size_t externId, std::set<Data *> &dataSet,
 
 uint32_t
 processActivityKernel(ThreadSafeMap<uint64_t, size_t> &corrIdToExternId,
-                      ThreadSafeSet<size_t> &apiExternId,
+                      ThreadSafeSet<size_t> &apiExternIds,
                       std::set<Data *> &dataSet, CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
@@ -63,9 +63,10 @@ processActivityKernel(ThreadSafeMap<uint64_t, size_t> &corrIdToExternId,
   if (!corrIdToExternId.contain(correlationId))
     return correlationId;
   auto externId = corrIdToExternId.at(correlationId);
-  if (apiExternId.contain(externId)) {
+  if (apiExternIds.contain(externId)) {
     // It's triggered by a CUDA op but not triton op
     addName(externId, dataSet, kernel->name);
+    apiExternIds.erase(externId);
   }
   addMetric(externId, dataSet, activity);
   // Track correlation ids from the same stream and erase those < correlationId
@@ -74,14 +75,14 @@ processActivityKernel(ThreadSafeMap<uint64_t, size_t> &corrIdToExternId,
 }
 
 uint32_t processActivity(ThreadSafeMap<uint64_t, size_t> &corrIdToExternId,
-                         ThreadSafeSet<size_t> &apiExternId,
+                         ThreadSafeSet<size_t> &apiExternIds,
                          std::set<Data *> &dataSet, CUpti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    correlationId =
-        processActivityKernel(corrIdToExternId, apiExternId, dataSet, activity);
+    correlationId = processActivityKernel(corrIdToExternId, apiExternIds,
+                                          dataSet, activity);
     break;
   }
   default:
@@ -216,11 +217,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::startOp(const Scope &scope) {
-  profilerState.enterOp(scope.scopeId);
+  profiler.correlation.pushExternId(scope.scopeId);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::stopOp(const Scope &scope) {
-  profilerState.exitOp();
+  profiler.correlation.popExternId();
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {

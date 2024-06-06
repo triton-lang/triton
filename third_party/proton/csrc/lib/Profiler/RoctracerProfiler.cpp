@@ -188,17 +188,18 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     // Track correlation ids from the same stream and erase those <
     // correlationId
     correlation.corrIdToExternId.erase(record->correlation_id);
+    correlation.apiExternIds.erase(externId);
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::startOp(const Scope &scope) {
-  profilerState.enterOp(scope.scopeId);
+  profiler.correlation.pushExternId(scope.scopeId);
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::stopOp(const Scope &scope) {
-  profilerState.exitOp();
+  profiler.correlation.popExternId();
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {

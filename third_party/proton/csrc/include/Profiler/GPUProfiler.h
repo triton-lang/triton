@@ -53,12 +53,14 @@ protected:
       if (profiler.isOpInProgress())
         return;
       profiler.correlation.pushExternId(scopeId);
+      profiler.setOpInProgress(true);
     }
 
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
       profiler.correlation.popExternId();
+      profiler.setOpInProgress(false);
     }
   };
 
