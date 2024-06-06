@@ -60,9 +60,6 @@ public:
   }
 
   size_t addNode(const std::vector<Context> &indices) {
-    if (indices.empty()) {
-      throw std::runtime_error("Indices is empty");
-    }
     auto parentId = TreeNode::RootId;
     for (auto index : indices) {
       parentId = addNode(index, parentId);
