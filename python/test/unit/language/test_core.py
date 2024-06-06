@@ -4822,11 +4822,6 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if (M == 1 or N == 1) and interm_layout:
-        # TODO(jlebar): These OOB accesses don't even hit an assert in the
-        # compiler, and some of them return the wrong result instead of
-        # crashing!
-        pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if is_hip():
