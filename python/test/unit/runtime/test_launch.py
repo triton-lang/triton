@@ -18,8 +18,9 @@ import triton.language as tl
 def test_grid() -> None:
 
     def grid(META):
-        kernel = META["COMPILED_KERNEL"]
-        assert kernel
+        assert "num_warps" in META
+        assert "n_regs" in META
+        assert "size_smem" in META
         return (1, 1)
 
     @triton.jit

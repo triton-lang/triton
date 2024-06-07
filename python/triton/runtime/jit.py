@@ -663,8 +663,9 @@ class JITFunction(KernelInterface[T]):
                 # TODO(jlebar): In the new launch API, pass the compiler flags as a
                 # second parameter to `grid`.
                 kernel._init_handles()
-                assert "COMPILED_KERNEL" not in bound_args, "special argument COMPILED_KERNEL should not be used"
-                bound_args["COMPILED_KERNEL"] = kernel
+                bound_args["num_warps"] = kernel.metadata.num_warps
+                bound_args["n_regs"] = kernel.n_regs
+                bound_args["size_smem"] = kernel.metadata.shared
                 grid = grid(bound_args)
             grid_size = len(grid)
             grid_0 = grid[0]
