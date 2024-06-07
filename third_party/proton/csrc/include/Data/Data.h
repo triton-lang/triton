@@ -44,9 +44,6 @@ protected:
   mutable std::shared_mutex mutex;
   const std::string path{};
   ContextSource *contextSource{};
-
-  class Profiler;
-  friend class Profiler;
 };
 
 OutputFormat parseOutputFormat(const std::string &outputFormat);
