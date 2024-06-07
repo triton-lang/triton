@@ -14,8 +14,8 @@ struct ExternLibHsa : public ExternLibBase {
 
 void *ExternLibHsa::lib = nullptr;
 
-DEFINE_DISPATCH(ExternLibHsa, agentGetInfo, hsa_agent_get_info,
-                hsa_agent_t, hsa_agent_info_t, void *);
+DEFINE_DISPATCH(ExternLibHsa, agentGetInfo, hsa_agent_get_info, hsa_agent_t,
+                hsa_agent_info_t, void *);
 
 hsa_status_t iterateAgents(hsa_status_t (*callback)(hsa_agent_t agent,
                                                     void *data),
