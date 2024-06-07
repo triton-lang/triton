@@ -9,9 +9,9 @@
 
 #include <atomic>
 #include <deque>
-#include <map>
 #include <thread>
-#include <vector>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace proton {
 
@@ -25,10 +25,16 @@ public:
   GPUProfiler() = default;
   virtual ~GPUProfiler() = default;
 
+  using CorrIdToExternIdMap =
+      ThreadSafeMap<uint64_t, size_t, std::unordered_map<uint64_t, size_t>>;
+  using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
+
 protected:
   // OpInterface
-  void startOp(const Scope &scope) override { pImpl->startOp(scope); }
-  void stopOp(const Scope &scope) override { pImpl->stopOp(scope); }
+  void startOp(const Scope &scope) override {
+    this->correlation.pushExternId(scope.scopeId);
+  }
+  void stopOp(const Scope &scope) override { this->correlation.popExternId(); }
 
   // Profiler
   virtual void doStart() override { pImpl->doStart(); }
@@ -67,8 +73,8 @@ protected:
   struct Correlation {
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
-    ThreadSafeMap<uint64_t, size_t> corrIdToExternId;
-    ThreadSafeSet<size_t> apiExternIds;
+    CorrIdToExternIdMap corrIdToExternId;
+    ApiExternIdSet apiExternIds;
     static thread_local std::deque<size_t> externIdQueue;
 
     Correlation() = default;
@@ -120,8 +126,6 @@ protected:
         : profiler(profiler) {}
     virtual ~GPUProfilerPimplInterface() = default;
 
-    virtual void startOp(const Scope &scope) = 0;
-    virtual void stopOp(const Scope &scope) = 0;
     virtual void doStart() = 0;
     virtual void doFlush() = 0;
     virtual void doStop() = 0;

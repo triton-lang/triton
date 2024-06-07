@@ -7,7 +7,9 @@
 namespace proton {
 
 /// A simple thread safe map with read/write lock.
-template <typename Key, typename Value> class ThreadSafeMap {
+template <typename Key, typename Value,
+          typename Container = std::map<Key, Value>>
+class ThreadSafeMap {
 public:
   ThreadSafeMap() = default;
 
@@ -50,7 +52,7 @@ public:
   }
 
 private:
-  std::map<Key, Value> map;
+  Container map;
   std::shared_mutex mutex;
 };
 

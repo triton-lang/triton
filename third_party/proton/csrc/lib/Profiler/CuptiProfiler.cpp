@@ -54,8 +54,8 @@ void addName(size_t externId, std::set<Data *> &dataSet,
 }
 
 uint32_t
-processActivityKernel(ThreadSafeMap<uint64_t, size_t> &corrIdToExternId,
-                      ThreadSafeSet<size_t> &apiExternIds,
+processActivityKernel(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+                      CuptiProfiler::ApiExternIdSet &apiExternIds,
                       std::set<Data *> &dataSet, CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
@@ -74,8 +74,8 @@ processActivityKernel(ThreadSafeMap<uint64_t, size_t> &corrIdToExternId,
   return correlationId;
 }
 
-uint32_t processActivity(ThreadSafeMap<uint64_t, size_t> &corrIdToExternId,
-                         ThreadSafeSet<size_t> &apiExternIds,
+uint32_t processActivity(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+                         CuptiProfiler::ApiExternIdSet &apiExternIds,
                          std::set<Data *> &dataSet, CUpti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->kind) {
@@ -137,12 +137,9 @@ struct CuptiProfiler::CuptiProfilerPimpl
       : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~CuptiProfilerPimpl() = default;
 
-  void startOp(const Scope &scope);
-  void stopOp(const Scope &scope);
-
-  void doStart();
-  void doFlush();
-  void doStop();
+  void doStart() override;
+  void doFlush() override;
+  void doStop() override;
 
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize,
                           size_t *maxNumRecords);
@@ -173,8 +170,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        uint8_t *buffer,
                                                        size_t size,
                                                        size_t validSize) {
-  CuptiProfiler &profiler =
-      dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
+  CuptiProfiler &profiler = profilerState.profiler;
   auto &dataSet = profiler.dataSet;
   uint32_t maxCorrelationId = 0;
   CUptiResult status;
@@ -214,14 +210,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     profilerState.exitOp();
     profiler.correlation.submit(callbackData->correlationId);
   }
-}
-
-void CuptiProfiler::CuptiProfilerPimpl::startOp(const Scope &scope) {
-  profiler.correlation.pushExternId(scope.scopeId);
-}
-
-void CuptiProfiler::CuptiProfilerPimpl::stopOp(const Scope &scope) {
-  profiler.correlation.popExternId();
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {

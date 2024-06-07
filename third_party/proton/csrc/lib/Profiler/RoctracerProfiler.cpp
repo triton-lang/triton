@@ -121,12 +121,9 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~RoctracerProfilerPimpl() = default;
 
-  void startOp(const Scope &scope);
-  void stopOp(const Scope &scope);
-
-  void doStart();
-  void doFlush();
-  void doStop();
+  void doStart() override;
+  void doFlush() override;
+  void doStop() override;
 
   static void apiCallback(uint32_t domain, uint32_t cid,
                           const void *callbackData, void *arg);
@@ -192,14 +189,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
-}
-
-void RoctracerProfiler::RoctracerProfilerPimpl::startOp(const Scope &scope) {
-  profiler.correlation.pushExternId(scope.scopeId);
-}
-
-void RoctracerProfiler::RoctracerProfilerPimpl::stopOp(const Scope &scope) {
-  profiler.correlation.popExternId();
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
