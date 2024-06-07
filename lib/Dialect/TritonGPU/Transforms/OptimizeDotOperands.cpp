@@ -214,11 +214,6 @@ public:
       return failure();
 
     auto dot = *allocOp->getUsers().begin();
-    auto dotEnc = dyn_cast<NvidiaMmaEncodingAttr>(
-        cast<RankedTensorType>(dot->getResult(0).getType()).getEncoding());
-    if (!dotEnc || dotEnc.getVersionMajor() != 3)
-      return failure();
-
     if (!allocOp.getSrc())
       return failure();
 
