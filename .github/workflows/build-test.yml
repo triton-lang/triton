@@ -1,0 +1,73 @@
+name: Build and test
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on:
+      - glados
+      - cpu
+      - intel
+      - x86
+    steps:
+      - name: Print inputs
+        run: |
+          echo "${{ toJSON(github.event.inputs) }}"
+          echo INSTALL_IPEX=${{ env.INSTALL_IPEX }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Run pre-commit checks
+        run: |
+          pip install --upgrade pre-commit
+
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
+
+          python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
+
+    build-test:
+      name: Build and test
+      runs-on:
+        - glados
+        - cpu
+        - intel
+        - x86
+      strategy:
+        matrix:
+          python: ['3.11']
+      steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+
+        - name: Install Python ${{ matrix.python }}
+          uses: actions/setup-python@v5
+          with:
+            python-version: ${{ matrix.python }}
+            cache: pip
+
+        - name: Install pip dependencies
+          run: |
+            python3 -m pip install --upgrade pip
+            python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+        - name: Install Triton
+          run: |
+            echo "PATH is '$PATH'"
+            cd python
+            python3 -m pip install --no-build-isolation -vvv '.[tests]'
+        - name: Run python unit tests
+          run: |
+            cd python/test/unit
+            python -m pytest -n 32 --device cpu python/test/unit/language/test_core.py -m cpu
