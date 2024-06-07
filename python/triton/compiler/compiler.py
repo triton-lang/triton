@@ -361,8 +361,11 @@ class CompiledKernel:
         # (e.g., checking amount of shared memory on current device)
         self.module = None
         self.function = None
+        self._handles_initialized = False
 
     def _init_handles(self):
+        if self._handles_initialized:
+            return
         if self.module is not None:
             return
         device = driver.active.get_current_device()
@@ -375,6 +378,7 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
+        self._handles_initialized = True
 
     def __getattribute__(self, name):
         if name == 'run':
