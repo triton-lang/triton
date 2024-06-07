@@ -510,7 +510,7 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
     int vec = shared.getVec();
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
-    bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+    bases2D.push_back({row, (vec * ((row / perPhase) % maxPhase)) % numCols});
   }
   LinearLayout ctaLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
