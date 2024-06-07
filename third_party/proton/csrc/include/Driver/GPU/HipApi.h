@@ -14,6 +14,8 @@ template <bool CheckSuccess>
 hipError_t deviceGetAttribute(int *value, hipDeviceAttribute_t attribute,
                               int deviceId);
 
+template <bool CheckSuccess> hipError_t getDeviceCount(int * count);
+
 Device getDevice(uint64_t index);
 
 const char *getKernelNameRef(const hipFunction_t f);
