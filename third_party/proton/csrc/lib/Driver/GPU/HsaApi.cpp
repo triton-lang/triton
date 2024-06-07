@@ -15,10 +15,13 @@ struct ExternLibHsa : public ExternLibBase {
 void *ExternLibHsa::lib = nullptr;
 
 DEFINE_DISPATCH(ExternLibHsa, hsa::agentGetInfo, hsa_agent_get_info,
-                  hsa_agent_t, hsa_agent_info_t, void*);
+                hsa_agent_t, hsa_agent_info_t, void *);
 
-hsa_status_t iterateAgents(hsa_status_t (*callback)(hsa_agent_t agent, void* data), void* data) {
-  typedef hsa_status_t (*hsa_iterate_agents_t)(hsa_status_t (*)(hsa_agent_t, void*), void* data);
+hsa_status_t iterateAgents(hsa_status_t (*callback)(hsa_agent_t agent,
+                                                    void *data),
+                           void *data) {
+  typedef hsa_status_t (*hsa_iterate_agents_t)(
+      hsa_status_t (*)(hsa_agent_t, void *), void *data);
   static hsa_iterate_agents_t func = nullptr;
   Dispatch<ExternLibHsa>::init(ExternLibHsa::name, &ExternLibHsa::lib);
   if (func == nullptr)

@@ -9,10 +9,12 @@ namespace proton {
 namespace hsa {
 
 template <bool CheckSuccess>
-hsa_status_t agentGetInfo(hsa_agent_t agent, hsa_agent_info_t attribute, void* value);
+hsa_status_t agentGetInfo(hsa_agent_t agent, hsa_agent_info_t attribute,
+                          void *value);
 
-hsa_status_t iterateAgents(
-               hsa_status_t (*callback)(hsa_agent_t agent, void* data), void* data);
+hsa_status_t iterateAgents(hsa_status_t (*callback)(hsa_agent_t agent,
+                                                    void *data),
+                           void *data);
 
 } // namespace hsa
 
