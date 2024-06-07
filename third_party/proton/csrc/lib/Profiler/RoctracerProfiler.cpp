@@ -31,7 +31,7 @@ thread_local std::deque<size_t>
 
 namespace {
 
-class DeviceInfo {
+class DeviceInfo : public Singleton<DeviceInfo> {
 public:
   DeviceInfo() : deviceOffset(getDeviceOffset()) {}
   int mapDeviceId(int id) { return id - deviceOffset; }
@@ -65,8 +65,6 @@ private:
   const int deviceOffset;
 };
 
-DeviceInfo deviceInfo;
-
 std::shared_ptr<Metric>
 convertActivityToMetric(const roctracer_record_t *activity) {
   std::shared_ptr<Metric> metric;
@@ -75,7 +73,8 @@ convertActivityToMetric(const roctracer_record_t *activity) {
     metric = std::make_shared<KernelMetric>(
         static_cast<uint64_t>(activity->begin_ns),
         static_cast<uint64_t>(activity->end_ns), 1,
-        static_cast<uint64_t>(deviceInfo.mapDeviceId(activity->device_id)),
+        static_cast<uint64_t>(
+            DeviceInfo::instance().mapDeviceId(activity->device_id)),
         static_cast<uint64_t>(DeviceType::HIP));
     break;
   }
