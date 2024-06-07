@@ -399,15 +399,15 @@ jobs:
 
           # Run runtime tests serially to avoid race condition with cache handling
           python3 -m pytest -s runtime
+      - name: Run Proton tests
+        run: |
+          cd third_party/proton
+          python3 -m pytest test
       - name: Run C++ unittests
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
           ctest -j32
-      - name: Run Proton tests
-        run: |
-          cd third_party/proton
-          python3 -m pytest test          
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #

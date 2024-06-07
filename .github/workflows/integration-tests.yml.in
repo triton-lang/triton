@@ -407,7 +407,7 @@ jobs:
       - name: Run Proton tests
         run: |
           cd third_party/proton
-          python3 -m pytest test          
+          python3 -m pytest test
 
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
