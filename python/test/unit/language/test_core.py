@@ -3856,6 +3856,33 @@ def test_store_cache_modifier(cache, device):
         assert 'st.global.wt' in ptx
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("eviction_policy", ["", "evict_last", "evict_first"])
+def test_store_eviction_policy(eviction_policy, device):
+    src = torch.empty(128, device=device)
+    dst = torch.empty(128, device=device)
+
+    @triton.jit
+    def _kernel(dst, src, POLICY: tl.constexpr):
+        offsets = tl.arange(0, 128)
+        x = tl.load(src + offsets)
+        tl.store(dst + offsets, x, eviction_policy=POLICY)
+
+    if not is_cuda():
+        return
+    pgm = _kernel[(1, )](dst, src, POLICY=eviction_policy)
+    ptx = pgm.asm['ptx']
+    if eviction_policy == '':
+        assert 'evict_last' not in ptx
+        assert 'evict_first' not in ptx
+    if eviction_policy == 'evict_last':
+        assert 'evict_last' in ptx
+        assert 'evict_first' not in ptx
+    if eviction_policy == 'evict_first':
+        assert 'evict_last' not in ptx
+        assert 'evict_first' in ptx
+
+
 # ---------------
 # test default
 # ---------------
@@ -5391,3 +5418,22 @@ def test_temp_var_in_loop(device):
         temp = torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
         acc += temp
     assert (acc == out).all()
+
+
+@pytest.mark.interpreter
+def test_num_programs(device):
+    # Assuming that the kernel is launched with a grid of (11, 21, 31)
+    grid = (11, 21, 31)
+    input = torch.empty((3, ), dtype=torch.int32, device=device)
+
+    @triton.jit
+    def kernel(input):
+        num_programs_0 = tl.num_programs(0)
+        num_programs_1 = tl.num_programs(1)
+        num_programs_2 = tl.num_programs(2)
+        tl.store(input, num_programs_0)
+        tl.store(input + 1, num_programs_1)
+        tl.store(input + 2, num_programs_2)
+
+    kernel[grid](input)
+    assert torch.all(input == torch.tensor(grid, device=device))
