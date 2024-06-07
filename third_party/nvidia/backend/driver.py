@@ -4,6 +4,7 @@ import hashlib
 import sysconfig
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -15,7 +16,16 @@ include_dir = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
 
+# Extract major and minor version of Python
+major, minor = sys.version_info[:2]
+
+# Generate the library name by concatenating 'python' with the major and minor version
+python_version_str = f"python{major}{minor}"
+
+# Append the generated library name to the libraries list
+
 if os.name == "nt":
+    libraries.append(python_version_str)
     include_dir += [os.path.join(os.environ.get("CUDA_PATH"), "include")]
 
 
@@ -142,7 +152,7 @@ def make_launcher(constants, signature, ids):
             "int8_t": "b",
             "int16_t": "h",
             "int32_t": "i",
-            "int64_t": "l",
+            "int64_t": "L",
             "uint8_t": "B",
             "uint16_t": "H",
             "uint32_t": "I",
@@ -227,7 +237,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 #endif
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
+  void *params[] = {{{', '.join(f'&arg{i}' for i in params) if params else 'NULL'}}};
   if (gridX*gridY*gridZ > 0) {{
     if (num_ctas == 1) {{
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));

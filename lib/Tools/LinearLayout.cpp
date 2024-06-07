@@ -38,6 +38,16 @@ void dumpMatrix(uint64_t *m, int numRows, int numCols) {
   }
 }
 
+static inline uint32_t countTrailingZeros(uint32_t x) {
+#ifdef _MSC_VER
+    unsigned long index;
+    _BitScanForward(&index, x);
+    return index;
+#else
+    return __builtin_ctz(x);
+#endif
+}
+
 // Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
 // the bases of the given layout.  This can then be used by f2reduce.
 //
@@ -312,7 +322,7 @@ int32_t LinearLayout::getNumConsecutiveInOut() const {
       }
     }
   }
-  int32_t trailingZeros = otherBits != 0 ? __builtin_ctz(otherBits) : 31;
+  int32_t trailingZeros = otherBits != 0 ? countTrailingZeros(otherBits) : 31;
 
   return 1 << std::min(consec, trailingZeros);
 }

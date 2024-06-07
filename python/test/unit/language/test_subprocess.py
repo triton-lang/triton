@@ -48,8 +48,7 @@ def test_print(func_type: str, data_type: str):
         # Only check if there's no error
         assert err == b''
         return
-
-    outs = [line for line in outs.decode("UTF-8").split("\n") if line]
+    outs = [line for line in outs.decode("UTF-8").replace('\r', '').split("\n") if line]
     # The total number of elements in the 1-D tensor to print.
     N = 128
 

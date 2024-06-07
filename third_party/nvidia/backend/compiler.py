@@ -297,7 +297,7 @@ class CUDABackend(BaseBackend):
             cmd += [f'--gpu-name=sm_{capability}{suffix}', fsrc.name, '-o', fbin]
 
             try:
-                subprocess.run(cmd, check=True, stderr=flog)
+                subprocess.run(cmd, check=True, stdout=flog, stderr=flog)
             except subprocess.CalledProcessError as e:
                 with open(flog.name) as log_file:
                     log = log_file.read()

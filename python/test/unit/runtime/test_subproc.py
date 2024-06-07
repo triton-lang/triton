@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 from triton.compiler import ASTSource
 
-tmpdir = ".tmp"
+tmpdir = os.path.abspath(".tmp")
 
 target = triton.runtime.driver.active.get_current_target()
 

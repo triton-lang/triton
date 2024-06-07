@@ -6,7 +6,8 @@ import os
 import shutil
 import subprocess
 import setuptools
-
+import platform
+from .CLFinder import initialize_visual_studio_env
 
 @contextlib.contextmanager
 def quiet():
@@ -22,10 +23,13 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     if cc in ["cl", "clang-cl"]:
         cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
+        cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
+        cc_cmd += [f"/OUT:{out}"]
+        cc_cmd += [f"/IMPLIB:{os.path.join(os.path.dirname(out), 'main.lib')}"]
+        cc_cmd += [f"/PDB:{os.path.join(os.path.dirname(out), 'main.pdb')}"]
         cc_cmd += [f"/LIBPATH:{dir}" for dir in library_dirs]
         cc_cmd += [f'{lib}.lib' for lib in libraries]
-        cc_cmd += [f"/OUT:{out}"]
     else:
         cc_cmd = [cc, src, "-O3", "-shared", "-fPIC"]
         cc_cmd += [f'-l{lib}' for lib in libraries]
@@ -48,6 +52,9 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
+        if platform.system() == "Windows":
+            cc = "cl"
+            initialize_visual_studio_env(["[17.0,18.0)", "[16.0,17.0)"])
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10

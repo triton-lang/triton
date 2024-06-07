@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction
 
-tmpdir = ".tmp"
+tmpdir = os.path.abspath(".tmp")
 
 
 @triton.jit

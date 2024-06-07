@@ -215,9 +215,8 @@ void init_triton_ir(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
-  py::class_<Type>(m, "type", py::module_local())
-      .def("is_integer",
-           [](Type &self, unsigned width) { return self.isInteger(width); })
+   py::class_<Type>(m, "type", py::module_local())
+      .def("is_integer", static_cast<bool (Type::*)() const>(&Type::isInteger))
       .def("is_fp16", &Type::isF16)
       .def("__str__", [](Type &self) {
         std::string str;
@@ -225,7 +224,7 @@ void init_triton_ir(py::module &&m) {
         self.print(os);
         return os.str();
       });
-
+      
   py::class_<FunctionType>(m, "function_type", py::module_local())
       .def("param_types", [](FunctionType &self) {
         return std::vector<Type>(self.getInputs().begin(),
@@ -1617,7 +1616,7 @@ void init_triton_ir(py::module &&m) {
                           });
 
           ::llvm::DebugFlag = true;
-          ::llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+          llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
         }
 
         bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");

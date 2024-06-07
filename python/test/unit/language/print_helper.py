@@ -119,7 +119,7 @@ def test_print(func: str, data_type: str):
        func != "print_multiple_args" and func != "device_print_multiple_args" and \
        func != "device_print_pointer":
         assert_close(y, x)
-
+    torch.cuda.synchronize()
 
 if __name__ == "__main__":
     test_print(sys.argv[1], sys.argv[2])

@@ -2,6 +2,14 @@
 #include <stdlib.h>
 #include "f2reduce.h"
 
+#ifdef _WIN32
+#include <xmmintrin.h> // For _mm_prefetch
+#define __restrict__ __restrict
+#define __builtin_prefetch(addr) _mm_prefetch(reinterpret_cast<const char *>(addr), _MM_HINT_T0)
+#define ATRIBUTE_NOINLINE __declspec(noinline)
+#else
+#define ATRIBUTE_NOINLINE __attribute__((noinline))
+#endif
 namespace {
 
 void swap_rows(uint64_t* __restrict__ x, uint64_t* __restrict__ y, uint64_t n) {
@@ -12,7 +20,7 @@ void swap_rows(uint64_t* __restrict__ x, uint64_t* __restrict__ y, uint64_t n) {
 
 // the noinline attribute is necessary for gcc to properly vectorise this:
 template<uint64_t N>
-__attribute__ ((noinline)) void memxor_lop7(uint64_t* __restrict__ dst,
+ATRIBUTE_NOINLINE void memxor_lop7(uint64_t* __restrict__ dst,
     const uint64_t* __restrict__ src1,
     const uint64_t* __restrict__ src2,
     const uint64_t* __restrict__ src3,
@@ -25,7 +33,7 @@ __attribute__ ((noinline)) void memxor_lop7(uint64_t* __restrict__ dst,
 }
 
 template<uint64_t N>
-__attribute__ ((noinline)) void memxor_lop5(uint64_t* __restrict__ dst,
+ATRIBUTE_NOINLINE void memxor_lop5(uint64_t *__restrict__ dst,
     const uint64_t* __restrict__ src1,
     const uint64_t* __restrict__ src2,
     const uint64_t* __restrict__ src3,
@@ -36,7 +44,7 @@ __attribute__ ((noinline)) void memxor_lop5(uint64_t* __restrict__ dst,
 }
 
 template<uint64_t N>
-__attribute__ ((noinline)) void memxor_lop3(uint64_t* __restrict__ dst,
+ATRIBUTE_NOINLINE void memxor_lop3(uint64_t *__restrict__ dst,
     const uint64_t* __restrict__ src1,
     const uint64_t* __restrict__ src2) {
     for (uint64_t i = 0; i < N; i++) {

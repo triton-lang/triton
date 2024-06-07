@@ -15,7 +15,7 @@ def triton_():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_reproducer():
-    tmpdir = ".tmp"
+    tmpdir = os.path.abspath(".tmp")
     reproducer = 'triton-reproducer.mlir'
     if os.path.exists(tmpdir):
         shutil.rmtree(tmpdir, ignore_errors=True)
