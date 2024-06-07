@@ -1,10 +1,9 @@
 #include "triton/Tools/LinearLayout.h"
-#include "mlir/Support/LLVM.h"
-#include "llvm/Support/MathExtras.h"
 
+#include "mlir/Support/LLVM.h"
+#include "llvm/Support/Signals.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <iterator>
 
 namespace mlir {
 std::ostream &operator<<(std::ostream &os, StringAttr str) {
@@ -539,3 +538,9 @@ TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
 
 } // anonymous namespace
 } // namespace mlir::triton
+
+int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}
