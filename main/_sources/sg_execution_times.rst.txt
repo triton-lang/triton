@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**04:32.251** total execution time for 8 files **from all galleries**:
+**04:34.676** total execution time for 8 files **from all galleries**:
 
 .. container::
 
@@ -33,26 +33,26 @@ Computation times
      - Time
      - Mem (MB)
    * - :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``../python/tutorials/03-matrix-multiplication.py``)
-     - 02:17.145
+     - 02:15.662
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``../python/tutorials/06-fused-attention.py``)
-     - 00:53.144
+     - 00:52.581
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``../python/tutorials/02-fused-softmax.py``)
-     - 00:42.878
+     - 00:35.214
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``../python/tutorials/05-layer-norm.py``)
-     - 00:28.596
+     - 00:28.459
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``../python/tutorials/01-vector-add.py``)
-     - 00:06.069
+     - 00:18.338
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_08-grouped-gemm.py` (``../python/tutorials/08-grouped-gemm.py``)
-     - 00:03.406
+     - 00:03.411
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``../python/tutorials/04-low-memory-dropout.py``)
-     - 00:00.769
+     - 00:00.757
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_07-extern-functions.py` (``../python/tutorials/07-extern-functions.py``)
-     - 00:00.243
+     - 00:00.254
      - 0.0

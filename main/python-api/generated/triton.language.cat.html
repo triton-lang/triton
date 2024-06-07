@@ -135,7 +135,8 @@
 <li><p><strong>other</strong> – The second input tensor.</p></li>
 <li><p><strong>reorder</strong> – Compiler hint. If true, the compiler is
 allowed to reorder elements while concatenating inputs.  Only use if the
-order does not matter (e.g., result is only used in reduction ops)</p></li>
+order does not matter (e.g., result is only used in reduction ops).
+Current implementation of <cite>cat</cite> supports only can_reorder=True.</p></li>
 </ul>
 </dd>
 </dl>
