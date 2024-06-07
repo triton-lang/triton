@@ -148,7 +148,7 @@ def check_cuda_or_hip(device):
     # CUDA and HIP both use pytorch device 'cuda'.  Other backends like Intel
     # GPU do not.
     if device not in ['cuda']:
-        pytest.skip("Only for cuda")
+        pytest.skip("Only for cuda or HIP")
 
 
 def check_type_supported(dtype, device):
@@ -2559,9 +2559,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         pytest.skip("Skipping test because it runs out of shared memory")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
-    if epilogue_kind == 'expand_reduce2d' and isinstance(src_layout, MmaLayout):
-        pytest.skip(
-            "Currently MmaLayout combined with slice encoding and reduce op trigger device illegal memory access")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout[2] = 16 if dtype_str == "float16" else 8
@@ -2579,7 +2576,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     num_warps = src_layout.warps_per_cta[0] * src_layout.warps_per_cta[1]
     if num_warps == 8:
         blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 2], [0, 1], [1, 1], [1, 1], [0, 1])
-    one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [4], [0], [1], [1], [0])
+    one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
 
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
     other_axis = 1 - axis
