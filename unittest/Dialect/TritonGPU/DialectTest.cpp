@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/Support/Signals.h"
 
 namespace {
 
@@ -520,3 +521,9 @@ TEST_F(InferLayoutTest, FuzzReshape) {
 
 } // anonymous namespace
 } // namespace mlir::triton::gpu
+
+int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}
