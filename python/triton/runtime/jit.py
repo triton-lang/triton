@@ -841,6 +841,7 @@ def jit(
            * python primitives,
            * builtins within the triton package,
            * arguments to this function,
+           * meta-parameters through keyword arguments or the :code:`META` dictionary argument,
            * other jit'd functions
 
     :param fn: the function to be jit-compiled
