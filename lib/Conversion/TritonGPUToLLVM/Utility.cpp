@@ -248,16 +248,11 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
   return ret;
 }
 
-// elemLlvmTy should be dstTy's element type converted to an LLVM-dialect type.
-//
-// Calls perVectorCallback once for each group of register elems to transfer,
-// and passes the shmem address for that group.
-//
-// Returns true on success.
-static bool emitTransferBetweenRegistersAndShared(
+bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
-    Value shmemBase, ArrayRef<Value> shmemStrides, Location loc,
-    RewriterBase &rewriter, const TargetInfoBase &target,
+    std::optional<int32_t> maxVecElems, Value shmemBase,
+    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
 
@@ -301,17 +296,26 @@ static bool emitTransferBetweenRegistersAndShared(
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
-  if (regToSharedLayout.getInDimSize(kBlock) !=
-      regToSharedLayout.getOutDimSize(kBlock)) {
-    return false;
-  }
-  for (int i = 1; i < regToSharedLayout.getInDimSize(kBlock); i *= 2) {
+  for (int inBlock = 1; inBlock < regToSharedLayout.getInDimSize(kBlock);
+       inBlock *= 2) {
     auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
-        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, i}})));
-    auto offsets = ArrayRef(idx).drop_back(1);
-    int32_t block = idx.back();
-    if (!llvm::all_of(offsets, [&](auto offset) { return offset == 0; }) ||
-        block != i) {
+        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}})));
+    // offsetX1, ..., offsetXN must all be 0.
+    if (!llvm::all_of(ArrayRef(idx).drop_back(1),
+                      [&](auto offset) { return offset == 0; })) {
+      return false;
+    }
+
+    // We now have
+    //   regToSharedLayout(0, ..., block=inBlock) => (0, ..., block=outBlock).
+    // To confirm that there's no cross-block communication, we must also have
+    // outBlock == inBlock or outBlock == 0.
+    //
+    // The fact that outBlock == 0 works is nonobvious.  It occurs when the
+    // shared layout is broadcasted in its block dim, i.e. multiple blocks
+    // contain the same data.
+    int32_t outBlock = idx.back();
+    if (outBlock != inBlock && outBlock != 0) {
       return false;
     }
   }
@@ -327,7 +331,9 @@ static bool emitTransferBetweenRegistersAndShared(
   // calling getNumConsecutiveInOut(), we could flatten consecutive out-dims
   // which have known strides.  This would allow us to vectorize across multiple
   // shmem out dimensions where possible.
-  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
+  const int vecElems =
+      std::min(regToSharedLayout.getNumConsecutiveInOut(),
+               maxVecElems.value_or(std::numeric_limits<int>::max()));
 
   Value threadId = getThreadId(rewriter, loc);
   Value threadsPerWarp = i32_val(regToSharedLayout.getInDimSize(kLane));
@@ -369,8 +375,9 @@ std::optional<SmallVector<Value>> loadSharedToRegistersUsingLinearLayouts(
     const TargetInfoBase &target) {
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemLlvmTy, smemObj.getBase(), smemObj.getStrides(), loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj.getBase(),
+      smemObj.getStrides(), loc, rewriter, target,
+      [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
@@ -391,8 +398,8 @@ bool storeDistributedToSharedUsingLinearLayouts(
     ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
     Location loc, RewriterBase &rewriter, const TargetInfoBase &target) {
   bool success = emitTransferBetweenRegistersAndShared(
-      srcTy, dstTy, elemLlvmTy, smemBase, dstStrides, loc, rewriter, target,
-      [&](VectorType vecTy, Value vecAddr) {
+      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
+      dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
         ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
         srcVals = srcVals.drop_front(vecTy.getNumElements());
 

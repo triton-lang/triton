@@ -35,11 +35,10 @@
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
+namespace mlir::triton::gpu {
 
 //===----------------------------------------------------------------------===//
 // EmitIndicesTest
@@ -1840,15 +1839,10 @@ INSTANTIATE_TEST_SUITE_P(TestCases, LoadSharedToDistributedLLTest,
                                      },
                                  })));
 
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
-
-//===----------------------------------------------------------------------===//
-// Main
-//===----------------------------------------------------------------------===//
+} // namespace mlir::triton::gpu
 
 int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
