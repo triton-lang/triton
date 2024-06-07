@@ -4,6 +4,7 @@
 #include "Context/Context.h"
 #include "Data.h"
 #include <stdexcept>
+#include <unordered_map>
 
 namespace proton {
 
@@ -36,7 +37,7 @@ private:
   class Tree;
   std::unique_ptr<Tree> tree;
   // ScopeId -> ContextId
-  std::map<size_t, size_t> scopeIdToContextId;
+  std::unordered_map<size_t, size_t> scopeIdToContextId;
 };
 
 } // namespace proton
