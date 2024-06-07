@@ -71,6 +71,21 @@ def test_memory_leak() -> None:
         tracemalloc.stop()
 
 
+def test_grid() -> None:
+
+    def grid(META):
+        kernel = META["COMPILED_KERNEL"]
+        assert kernel
+        return (1, 1)
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    # launch kernel
+    kernel[grid](6)
+
+
 # LATENCY_THRESHOLD_US = 46
 
 # def test_kernel_launch_latency() -> None:
