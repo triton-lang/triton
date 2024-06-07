@@ -1214,6 +1214,7 @@ def full(shape, value, dtype, _builder=None):
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
     :type shape: tuple of ints
     :param value: A scalar value to fill the array with
+    :type value: scalar
     :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """

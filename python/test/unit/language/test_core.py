@@ -5430,7 +5430,7 @@ def test_temp_var_in_loop(device):
 
 @pytest.mark.interpreter
 def test_num_programs(device):
-    # Assuming that the kernel is launched with a grid of (2, 3, 4)
+    # Assuming that the kernel is launched with a grid of (11, 21, 31)
     grid = (11, 21, 31)
     input = torch.empty((3, ), dtype=torch.int32, device=device)
 
