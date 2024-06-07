@@ -625,6 +625,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
 //
 def TT_DotOp : TT_Op<"dot", [Pure,
                              DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                             DotLike,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot";
@@ -640,8 +641,8 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 
     let arguments = (
       ins
-      TT_TensorOrMemDesc:$a,
-      TT_TensorOrMemDesc:$b,
+      TT_FpIntTensor:$a,
+      TT_FpIntTensor:$b,
       TT_FpIntTensor:$c,
       DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
       DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc

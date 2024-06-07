@@ -40,10 +40,6 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](mlir::Float8E5M2FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
-  // Internally store bfloat16 as int16
-  addConversion([&](BFloat16Type type) -> std::optional<Type> {
-    return IntegerType::get(type.getContext(), 16);
-  });
 }
 
 Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(

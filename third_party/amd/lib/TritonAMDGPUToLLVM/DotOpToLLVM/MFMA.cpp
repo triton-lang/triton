@@ -71,7 +71,7 @@ struct DotOpMFMAConversionHelper {
   }
 
   int getNumSubmatrices(Type elementType, int mDim, int nDim) const {
-    if (mDim == 64 && nDim == 4 || mDim == 4 && nDim == 64)
+    if ((mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64))
       return 1;
     assert(mDim == nDim);
     switch (mDim) {
@@ -278,11 +278,18 @@ struct DotOpMFMAConversionHelper {
     int kpack = kWidth / kBase;
     SmallVector<Value> results;
     auto vecTy = vec_ty(type, kBase);
+    if (type.isBF16())
+      vecTy = vec_ty(i16_ty, kBase);
     for (int k = 0; k < kpack; ++k) {
       Value vec = undef(vecTy);
       for (int elemId = 0; elemId < kBase; ++elemId) {
         auto val = extract_element(type, rawElems, i32_val(elemId + k * kBase));
-        vec = insert_element(vecTy, vec, val, i32_val(elemId));
+        if (type.isBF16()) {
+          // rocdl.mfma.f32.32x32x8bf16.1k calls for input of i16 type
+          auto cast = bitcast(val, i16_ty);
+          vec = insert_element(vecTy, vec, cast, i32_val(elemId));
+        } else
+          vec = insert_element(vecTy, vec, val, i32_val(elemId));
       }
       if (type.getIntOrFloatBitWidth() == 8) {
         if (4 == kBase)
@@ -329,7 +336,7 @@ struct DotOpMFMAConversionHelper {
             if (type.getIntOrFloatBitWidth() == 8) {
               vals = extractOperands(rawElems, kWidth, kBase, i8_ty);
             } else if (type.isBF16()) {
-              vals = extractOperands(rawElems, kWidth, kBase, i16_ty);
+              vals = extractOperands(rawElems, kWidth, kBase, bf16_ty);
             } else {
               assert(type.isF16() && "Unsupported data type");
               vals = extractOperands(rawElems, kWidth, kBase, f16_ty);

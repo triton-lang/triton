@@ -73,6 +73,30 @@ class DependenciesFinder(ast.NodeVisitor):
     def ret(self):
         return self.hasher.hexdigest()
 
+    def _is_triton_builtin(self, node, func):
+        if inspect.isbuiltin(node.func):
+            return True
+        module = getattr(func, "__module__", "")
+        return module.startswith(TRITON_MODULE)
+
+    def _update_hash(self, func):
+        if isinstance(func, JITFunction):
+            # Merge our used_global_vals with those of the called function,
+            # after checking that all overlapping values are consistent.
+            for k in self.used_global_vals.keys() & func.used_global_vals.keys():
+                var_name, _ = k
+                v1, _ = self.used_global_vals[k]
+                v2, _ = func.used_global_vals[k]
+                if v1 != v2:
+                    raise RuntimeError(
+                        f"Global variable {var_name} has value {v1} when compiling {self.name}, but inner kernel {func.__name__} has conflicting value {v2} from when it was first compiled.  This is not allowed."
+                    )
+            self.used_global_vals.update(func.used_global_vals)
+            # update hash
+            func_key = func.cache_key
+            func_key += str(getattr(func, "noinline", False))
+            self.hasher.update(func_key.encode("utf-8"))
+
     def visit_Name(self, node):
         if type(node.ctx) == ast.Store:
             return node.id
@@ -101,6 +125,7 @@ class DependenciesFinder(ast.NodeVisitor):
             ):
             self.used_global_vals[(node.id, id(self.globals))] = (val, self.globals)
 
+        self._update_hash(val)
         return val
 
     def visit_Tuple(self, node):
@@ -114,52 +139,9 @@ class DependenciesFinder(ast.NodeVisitor):
             lhs = self.visit(lhs.value)
         if lhs is None or (getattr(lhs, "__name__", "") == TRITON_MODULE):
             return None
-        return getattr(lhs, node.attr)
-
-    def visit_Call(self, node):
-
-        def is_triton_builtin(func):
-            if inspect.isbuiltin(node.func):
-                return True
-            module = getattr(func, "__module__", "")
-            return module.startswith(TRITON_MODULE)
-
-        func = self.visit(node.func)
-        assert func is None or is_triton_builtin(func) or isinstance(
-            func, JITFunction
-        ), f'Function "{func.__name__}" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this'
-
-        # Traverse arguments as well as node.func so we can find JITFunctions
-        # passed to tl.reduce or tl.associative_scan as the combine_fn
-        for obj in itertools.chain(
-            (func, ),
-                map(self.visit, node.args),
-            (self.visit(kw.value) for kw in node.keywords),
-        ):
-            if not isinstance(obj, JITFunction):
-                continue
-            if is_triton_builtin(obj):
-                continue
-
-            func_cache_key = obj.cache_key
-
-            # Merge our used_global_vals with those of the called function,
-            # after checking that all overlapping values are consistent.
-            for k in self.used_global_vals.keys() & obj.used_global_vals.keys():
-                var_name, _ = k
-                v1, _ = self.used_global_vals[k]
-                v2, _ = obj.used_global_vals[k]
-                if v1 != v2:
-                    raise RuntimeError(
-                        f"Global variable {var_name} has value {v1} when compiling {self.name}, but inner kernel {func.__name__} has conflicting value {v2} from when it was first compiled.  This is not allowed."
-                    )
-
-            self.used_global_vals.update(obj.used_global_vals)
-
-            noinline = str(getattr(obj, "noinline", False))
-
-            key = func_cache_key + noinline
-            self.hasher.update(key.encode("utf-8"))
+        ret = getattr(lhs, node.attr)
+        self._update_hash(ret)
+        return ret
 
     def visit_FunctionDef(self, node):
         # Save the local name, which may hide the global name.

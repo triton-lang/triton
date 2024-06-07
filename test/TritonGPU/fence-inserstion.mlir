@@ -12,7 +12,7 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     %0 = triton_gpu.local_alloc %arg0 : (tensor<128x128xf16, #blocked>) -> !tt.memdesc<128x128xf16, #shared>
     %1 = triton_gpu.local_alloc %arg1 : (tensor<128x64xf16, #blocked2>) -> !tt.memdesc<128x64xf16, #shared1>
     // CHECK: triton_nvidia_gpu.fence_async_shared
-    %2 = tt.dot %0, %1, %cst : !tt.memdesc<128x128xf16, #shared> * !tt.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
+    %2 = triton_nvidia_gpu.warp_group_dot %0, %1, %cst : !tt.memdesc<128x128xf16, #shared> * !tt.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
     tt.return
   }
 }
@@ -36,10 +36,10 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     // CHECK: triton_nvidia_gpu.fence_async_shared
     // CHECK: scf.for
     // CHECK-NOT: triton_nvidia_gpu.fence_async_shared
-    // CHECK:   tt.dot
+    // CHECK:   triton_nvidia_gpu.warp_group_dot
     scf.for %iv0 = %c0_i32 to %c64_i32 step %c32_i32 : i32 {
       scf.for %iv1 = %c0_i32 to %c64_i32 step %c32_i32 : i32 {
-        %2 = tt.dot %0, %1, %cst : !tt.memdesc<128x128xf16, #shared> * !tt.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
+        %2 = triton_nvidia_gpu.warp_group_dot %0, %1, %cst : !tt.memdesc<128x128xf16, #shared> * !tt.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
       }
     }
     tt.return

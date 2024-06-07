@@ -188,15 +188,6 @@ public:
   }
 };
 
-static bool isMMAv3Dot(Operation *op) {
-  auto dot = dyn_cast<tt::DotOp>(op);
-  if (!dot)
-    return false;
-  auto enc =
-      mlir::dyn_cast<ttg::NvidiaMmaEncodingAttr>(dot.getType().getEncoding());
-  return enc && enc.isHopper();
-}
-
 // Replace the ForOp's yield with a new one with the given operands appended.
 static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   // Fix up the yield op.
@@ -245,9 +236,11 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   auto view =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
   Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
@@ -316,6 +309,8 @@ static void createTMAAsyncCopy(
     llvm::MapVector<Operation *, LoadInfo> &loadToInfo, int numStages) {
   assert(phase && "Phase value is required for TMA async copy.");
   OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
@@ -324,7 +319,7 @@ static void createTMAAsyncCopy(
   copyOffsets[0] = insertIdx;
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   auto view =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
 
@@ -506,7 +501,7 @@ loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
       };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!isa<tt::DotOp>(op))
+    if (!op.hasTrait<OpTrait::DotLike>())
       continue;
     seen.clear();
     dfs(&op, 0, &op);
@@ -583,7 +578,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         continue;
     }
 
-    if (auto dot = dyn_cast<tt::DotOp>(use)) {
+    if (use->hasTrait<OpTrait::DotLike>()) {
       loadInfo.usedByDot = true;
       if (loadIsMMAv3(op)) {
         loadInfo.loadIsMMAV3 = true;
@@ -592,7 +587,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
         loadInfo.sharedEncoding =
             getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
-      } else {
+      } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
         loadInfo.sharedEncoding =
             getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
 
@@ -642,7 +637,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
     // If we still don't have a shared encoding, try a "generic" shared
     // encoding.
-    if (!loadInfo.sharedEncoding && !isMMAv3Dot(use)) {
+    if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
       loadInfo.sharedEncoding =
           getSharedEncoding(op, /*isMMAV3=*/loadInfo.loadIsMMAV3)
               .value_or(nullptr);
@@ -906,11 +901,14 @@ static void scheduleRemainingToLastStage(scf::ForOp forOp,
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
                          ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
   OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
   Type memdescType = mlir::triton::MemDescType::get(
-      bufferShape, ty.getElementType(), sharedEnc, /*mutableMemory*/ true);
+      bufferShape, ty.getElementType(), sharedEnc, sharedMemorySpace,
+      /*mutableMemory*/ true);
   Value alloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
       loadOp->getLoc(), memdescType, Value());
   return alloc;
@@ -919,6 +917,8 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
 // Create an allocation to hold the mbarriers.
 static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   Location loc = forOp.getLoc();
   auto context = forOp.getContext();
   auto barrierCTALayout =
@@ -926,11 +926,12 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
                               /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding =
       ttg::SharedEncodingAttr::get(context, 1, 1, 1, {0}, barrierCTALayout);
-  Type barrierMemDescType =
-      tt::MemDescType::get({distance}, builder.getI64Type(), barrierEncoding,
-                           /*mutableMemory=*/true);
-  Type singleBarrierMemDescType = tt::MemDescType::get(
-      {1}, builder.getI64Type(), barrierEncoding, /*mutableMemory=*/true);
+  Type barrierMemDescType = tt::MemDescType::get(
+      {distance}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
+      /*mutableMemory=*/true);
+  Type singleBarrierMemDescType =
+      tt::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
+                           sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
       loc, barrierMemDescType, Value());
   for (unsigned i = 0; i < distance; i++) {
@@ -1026,9 +1027,12 @@ static void createTMABarrierAndWait(
     barriers.push_back(barrierAlloc);
     Location loc = forOp.getLoc();
     OpBuilder builder(forOp);
+    Attribute sharedMemorySpace =
+        triton::gpu::SharedMemorySpaceAttr::get(builder.getContext());
     tt::MemDescType barrierTy = tt::MemDescType::get(
         {1}, builder.getI64Type(),
         cast<tt::MemDescType>(barrierAlloc.getType()).getEncoding(),
+        sharedMemorySpace,
         /*mutableMemory=*/true);
     builder.setInsertionPoint(group[0]->loadOp);
     Value barrier = builder.create<ttg::MemDescSubviewOp>(
@@ -1167,6 +1171,8 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
 
 static void invalidateBarriers(OpBuilder &builder,
                                SmallVector<Value> &barriers) {
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(builder.getContext());
   for (Value barrier : barriers) {
     int numBarriers = cast<tt::MemDescType>(barrier.getType()).getShape()[0];
     for (int i = 0; i < numBarriers; i++) {
@@ -1174,6 +1180,7 @@ static void invalidateBarriers(OpBuilder &builder,
       tt::MemDescType barrierTy = tt::MemDescType::get(
           {1}, builder.getI64Type(),
           cast<tt::MemDescType>(barrier.getType()).getEncoding(),
+          sharedMemorySpace,
           /*mutableMemory=*/true);
       Value barrierView = builder.create<ttg::MemDescSubviewOp>(
           barrier.getLoc(), barrierTy, barrier, idx);
@@ -1393,16 +1400,17 @@ void mlir::triton::updateWaits(ModuleOp module) {
 // also adds some MemDesc's to the wait.  The idea is that if you have
 //
 //   %alloc = ttg.local_alloc ...
-//   %a = ttng.dot_async %alloc
-//   %a1 = ttng.dot_wait %a
+//   %a = ttng.warp_group_dot %alloc
+//   %a1 = ttng.warp_group_dot_wait %a
 //
 // then we want the wait to depend on %alloc as well as %a.  This extends the
 // live range of %alloc, so that it won't be destroyed until after the dot is
 // waited on.
 //
-// Specifically, this function finds all dot_async ops that elements of `values`
-// depend on.  Then it adds the MemDesc operands of those dots to the wait.
-static void threadValuesThroughWait(ttng::DotWaitOp wait,
+// Specifically, this function finds all warp_group_dot ops that elements of
+// `values` depend on.  Then it adds the MemDesc operands of those dots to the
+// wait.
+static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
                                     MutableArrayRef<Value> values) {
   IRRewriter builder(wait.getContext());
   builder.setInsertionPoint(wait);
@@ -1419,12 +1427,12 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
   newOperands.insert(values.begin(), values.end());
 
   // Find memdefs depended on by `values` through async dot ops.
-  SmallVector<ttng::DotAsyncOp> asyncDots;
+  SmallVector<ttng::WarpGroupDotOp> asyncDots;
   for (Value v : values) {
     BackwardSliceOptions options;
     options.omitBlockArguments = true;
     options.filter = [&](Operation *op) {
-      if (auto dot = dyn_cast<ttng::DotAsyncOp>(op)) {
+      if (auto dot = dyn_cast<ttng::WarpGroupDotOp>(op)) {
         asyncDots.push_back(dot);
         return false;
       }
@@ -1434,7 +1442,7 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
     getBackwardSlice(v, &slice, options);
   }
 
-  for (ttng::DotAsyncOp dot : asyncDots) {
+  for (ttng::WarpGroupDotOp dot : asyncDots) {
     for (Value operand : dot.getOperands()) {
       if (isa<tt::MemDescType>(operand.getType())) {
         newOperands.insert(operand);
@@ -1444,7 +1452,7 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
 
   // We can't use replaceWithNewOp because we're changing the number of return
   // values in the operation.
-  auto newWait = builder.create<ttng::DotWaitOp>(
+  auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
       wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
 
   auto dominatedByNewWait = [&](OpOperand &operand) {
@@ -1465,13 +1473,14 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
   wait->erase();
 }
 
-// Determines whether a given MMAv3 dot op, represented as ttng.dot_async, needs
-// a wait immediately after it.
+// Determines whether a given MMAv3 dot op, represented as ttng.warp_group_dot,
+// needs a wait immediately after it.
 //
 // In PTX, MMAv3 exists only as an asynchronous op.  In Triton, we can represent
-// MMAv3 ops as either tt.dot (synchronous) or ttng.dot_async.  But even if we
-// use ttng.dot_async, the conservative thing is to make a dot "effectively
-// synchronous" by inserting a `ttng.dot_wait {pendings=0}` right after it.
+// MMAv3 ops as either ttng.warp_group_dot {isAsync=True} or ttng.warp_group_dot
+// {isAsync=False}.  But even if we use ttng.warp_group_dot {isAsync=True}, the
+// conservative thing is to make a dot "effectively synchronous" by inserting a
+// `ttng.warp_group_dot_wait {pendings=0}` right after it.
 //
 // We can omit the wait and create a "properly async" dot if all of the
 // following are true.
@@ -1483,28 +1492,29 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
 //     and will be synced with a `wait 0` at the beginning of the `if` block.
 //
 //  3. During iteration i, between the start of the loop up until the first
-//     `ttng.dot_wait {pendings=0}` op, the result of the dot from iteration i-1
-//     is consumed only by other MMAv3 dots as the `c` operand.
+//     `ttng.warp_group_dot_wait {pendings=0}` op, the result of the dot from
+//     iteration i-1 is consumed only by other MMAv3 dots as the `c` operand.
 //
 //     This is safe because the following pseudo-PTX is valid:
 //
-//        %accum = dot_async %a1, %b1, %c1
-//        %accum = dot_async %a2, %b2, %accum
+//        %accum = warp_group_dot %a1, %b1, %c1
+//        %accum = warp_group_dot %a2, %b2, %accum
 //
 //     That is, the second async dot can use the result of the first one without
 //     an intervening wait.  However, the only operation that can legally read
-//     %accum before the wait is another dot_async, and this only works for the
-//     `c` operand, not `a` or `b`.  See
+//     %accum before the wait is another warp_group_dot, and this only works for
+//     the `c` operand, not `a` or `b`.  See
 //     https://docs.nvidia.com/cuda/parallel-thread-execution/#asynchronous-warpgroup-level-matrix-instructions-wgmma-fence
-//     (ttng::DotAsyncOp corresponds to wgmma.fence followed by one or more
-//     wgmma.async ops, so our understanding is that the two ttng::DotAsyncOps
-//     don't have to correspond to wgmma.async ops with the same shapes as
-//     specified in the docs, because there's an intervening fence.)
+//     (ttng::WarpGroupDotOp corresponds to wgmma.fence followed by one or more
+//     wgmma.async ops, so our understanding is that the two
+//     ttng::WarpGroupDotOps don't have to correspond to wgmma.async ops with
+//     the same shapes as specified in the docs, because there's an intervening
+//     fence.)
 //
 // If the op can be properly async, this function returns the index of the dot
 // in the loop's iter_args.  (Rule (2) above ensures this is well-defined.)
 //
-static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
+static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
                                                 scf::ForOp forOp) {
   LDBG("Considering whether to make MMAv3 dot properly async: " << dotOp);
 
@@ -1578,16 +1588,17 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
   // Rule 3a: Are the only users of the dot's result from iteration i-1 other
   // MMAv3 dots?  If so, we're done, this dot can be properly async.
   if (llvm::all_of(iterArg.getUses(), [&](OpOperand &use) {
-        return isa<ttng::DotAsyncOp>(use.getOwner()) &&
+        return isa<ttng::WarpGroupDotOp>(use.getOwner()) &&
                use.getOperandNumber() == 2;
       })) {
     return iterArgIdx;
   }
 
   // Rule 3b: Are all users of the dot's result from iteration i-1 after the
-  // first `dot_wait {pendings=0}` op?  If so, the dot can be properly async,
-  // but we have to thread its result from iteration i-1 through the wait.
-  auto waitOps = forOp.getBody()->getOps<ttng::DotWaitOp>();
+  // first `warp_group_dot_wait {pendings=0}` op?  If so, the dot can be
+  // properly async, but we have to thread its result from iteration i-1 through
+  // the wait.
+  auto waitOps = forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>();
   auto firstWaitOpIter = llvm::find_if(
       waitOps, [&](auto waitOp) { return waitOp.getPendings() == 0; });
   if (firstWaitOpIter != waitOps.end() &&
@@ -1598,7 +1609,8 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
         }
         return (*firstWaitOpIter)->isBeforeInBlock(user);
       })) {
-    LDBG("MMAv3 dot can be properly async because it follows a dot_wait "
+    LDBG("MMAv3 dot can be properly async because it follows a "
+         "warp_group_dot_wait "
          "{pendings=0}.\n"
          << "  wait: " << *firstWaitOpIter << "\n"
          << "  dot: " << dotOp);
@@ -1613,16 +1625,16 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
 
 // If necessary, insert a dot-wait inside the loop, waiting for the results of
 // the properly-async dots from iteration i-1 to complete.  (We pipeline to
-// depth 2, so there are at most 2 copies of each dot_async in flight at a
+// depth 2, so there are at most 2 copies of each warp_group_dot in flight at a
 // time.)
 //
-// We can skip inserting the wait if we have a `dot_wait {pendings=0}` somewhere
-// in the loop.  To see why, consider:
+// We can skip inserting the wait if we have a `warp_group_dot_wait
+// {pendings=0}` somewhere in the loop.  To see why, consider:
 //
-//   dot_async
-//   dot_async; wait 0  // synchronous dot
-//   dot_async
-//   dot_async
+//   warp_group_dot
+//   warp_group_dot; wait 0  // synchronous dot
+//   warp_group_dot
+//   warp_group_dot
 //
 // In this example, there are three properly-async dots, so we'd normally put
 // `wait 3` at the end of the loop, meaning "wait until there are 3 or fewer
@@ -1630,13 +1642,13 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::DotAsyncOp dotOp,
 // completes, there are only *two* pending async dots from this iteration, so
 // this wait would do nothing.  This is true in general, no matter where the
 // `wait 0` appears.
-static void insertAsyncDotWaitInLoop(
+static void insertAsyncWarpGroupDotWaitInLoop(
     scf::ForOp forOp,
     const llvm::MapVector<Operation *, int /*iterArgIdx*/> &properlyAsyncDots) {
   if (properlyAsyncDots.empty())
     return;
 
-  if (llvm::any_of(forOp.getBody()->getOps<ttng::DotWaitOp>(),
+  if (llvm::any_of(forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>(),
                    [](auto wait) { return wait.getPendings() == 0; })) {
     return;
   }
@@ -1660,8 +1672,8 @@ static void insertAsyncDotWaitInLoop(
 
     for (auto [block, users] : blockToUsers) {
       OpBuilder builder(block, block->begin());
-      auto newWait = builder.create<ttng::DotWaitOp>(asyncDot->getLoc(),
-                                                     ArrayRef<Value>{}, 0);
+      auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
+          asyncDot->getLoc(), ArrayRef<Value>{}, 0);
 
       threadValuesThroughWait(newWait, users);
     }
@@ -1678,9 +1690,9 @@ static void insertAsyncDotWaitInLoop(
   IRRewriter builder(forOp.getContext());
   auto lastAsyncDot = properlyAsyncDots.back().first;
   builder.setInsertionPointAfter(lastAsyncDot);
-  auto wait = builder.create<ttng::DotWaitOp>(lastAsyncDot->getLoc(),
-                                              /*inputs=*/ArrayRef<Value>{},
-                                              properlyAsyncDots.size());
+  auto wait = builder.create<ttng::WarpGroupDotWaitOp>(
+      lastAsyncDot->getLoc(),
+      /*inputs=*/ArrayRef<Value>{}, properlyAsyncDots.size());
 
   // Thread the results of the async dots through the wait.
   SmallVector<Value> addlWaitOperands;
@@ -1690,49 +1702,40 @@ static void insertAsyncDotWaitInLoop(
   threadValuesThroughWait(wait, addlWaitOperands);
 }
 
-// Convert MMAv3 tt::DotOps (i.e. Hopper wgmma) into ttng::DotAsyncOps and
-// insert ttng::DotWaitOps as necessary.
+// Convert MMAv3 ttng::WarpGroupDotOps {isAsync = False} (i.e. Hopper wgmma)
+// into ttng::WarpGroupDotOps {isAsync = True} and insert
+// ttng::WarpGroupDotWaitOps as necessary.
 //
 // We assume we have space for each dot to be pipelined to depth 2, i.e. each
-// dot op in the loop can have at most 2 dot_async ops in flight at once.  (Each
-// dot_async op usually corresponds to a series of wgmma.async ops.)
+// dot op in the loop can have at most 2 warp_group_dot ops in flight at once.
+// (Each warp_group_dot op usually corresponds to a series of wgmma.async ops.)
 void triton::asyncLaunchDots(scf::ForOp forOp) {
   LDBG("Original loop:\n" << *forOp);
 
-  // First, change every MMAv3 tt.dot into ttng.dot_async.  The rest of this
-  // function is concerned with inserting ttng.dot_wait ops in the appropriate
-  // places.
-  //
-  // It's not strictly necessary to convert every dot into dot_async:
-  // Synchronous MMAv3 dots can be represented equally well as `tt.dot` or
-  // `ttng.dot_async; wait 0`.  But this makes things easier elsewhere.
+  // First, change every MMAv3 ttng.warp_group_dot {isAsync=false}
+  // into ttng.warp_group_dot {isAsync=true}.
+  // The rest of this function is concerned with inserting
+  // ttng.warp_group_dot_wait ops in the appropriate places.
   //
   // We call those dots that don't need to be followed immediately by a `wait 0`
   // "properly async", or sometimes just "async".
-  IRRewriter builder(forOp.getContext());
-  for (auto dotOp : llvm::to_vector(forOp.getBody()->getOps<tt::DotOp>())) {
-    if (isMMAv3Dot(dotOp)) {
-      builder.setInsertionPoint(dotOp);
-      builder.replaceOpWithNewOp<ttng::DotAsyncOp>(
-          dotOp, dotOp.getA(), dotOp.getB(), dotOp.getC(),
-          dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
-    }
-  }
-
+  //
   // For each dot, determine whether it can be properly async, or if it needs a
   // sync immediately after.  If it can be properly async, we know its only use
   // is in the loop's `yield` statement; asyncDots maps the op to its index in
   // the yield op.
+  IRRewriter builder(forOp.getContext());
   llvm::MapVector<Operation *, int /*iterArgIdx*/> properlyAsyncDots;
-  for (auto dotOp : forOp.getBody()->getOps<ttng::DotAsyncOp>()) {
-    if (auto iterArgIdx = dotCanBeProperlyAsync(dotOp, forOp)) {
-      properlyAsyncDots[dotOp] = *iterArgIdx;
+  for (auto WarpGroupDotOp : forOp.getBody()->getOps<ttng::WarpGroupDotOp>()) {
+    WarpGroupDotOp.setIsAsync(true);
+    if (auto iterArgIdx = dotCanBeProperlyAsync(WarpGroupDotOp, forOp)) {
+      properlyAsyncDots[WarpGroupDotOp] = *iterArgIdx;
     } else {
-      builder.setInsertionPointAfter(dotOp);
-      auto wait =
-          builder.create<ttng::DotWaitOp>(dotOp.getLoc(), ArrayRef<Value>{},
-                                          /*pendings=*/0);
-      SmallVector<Value> waitOperands = {dotOp.getResult()};
+      builder.setInsertionPointAfter(WarpGroupDotOp);
+      auto wait = builder.create<ttng::WarpGroupDotWaitOp>(
+          WarpGroupDotOp.getLoc(), ArrayRef<Value>{},
+          /*pendings=*/0);
+      SmallVector<Value> waitOperands = {WarpGroupDotOp.getResult()};
       threadValuesThroughWait(wait, waitOperands);
     }
   }
@@ -1746,7 +1749,7 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // iteration's set of asynchronous dots (and their corresponding async copies
   // from global to shmem) can't start until the first iteration's set has
   // completed.
-  insertAsyncDotWaitInLoop(forOp, properlyAsyncDots);
+  insertAsyncWarpGroupDotWaitInLoop(forOp, properlyAsyncDots);
 
   // Finally, insert a wait after the loop, waiting for dots from the final
   // iteration of the loop.
@@ -1756,7 +1759,7 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   }
   // Wait until there are 0 outstanding async dot ops.
   builder.setInsertionPointAfter(forOp);
-  auto dotWaitAfterLoop =
-      builder.create<ttng::DotWaitOp>(forOp.getLoc(), ArrayRef<Value>{}, 0);
-  threadValuesThroughWait(dotWaitAfterLoop, waitOperands);
+  auto WarpGroupDotWaitAfterLoop = builder.create<ttng::WarpGroupDotWaitOp>(
+      forOp.getLoc(), ArrayRef<Value>{}, 0);
+  threadValuesThroughWait(WarpGroupDotWaitAfterLoop, waitOperands);
 }

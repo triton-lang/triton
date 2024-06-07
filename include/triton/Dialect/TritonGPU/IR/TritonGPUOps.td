@@ -144,6 +144,12 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
   let arguments = (ins Optional<TT_Tensor>:$src);
 
+  let extraClassDeclaration = [{
+    bool isSharedMemoryAlloc() {
+      return getType().getMemorySpace() &&
+             isa<SharedMemorySpaceAttr>(getType().getMemorySpace());
+    }
+  }];
   let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 
   let results = (outs TT_MemDescType:$result);
@@ -163,7 +169,7 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
 
     Because we assume a memdesc is dead at the first point that post-dominates
     its uses, ops that wait for an async operation on a memdesc to complete
-    (such as triton_nvidia_gpu.dot_wait) should also take the memdesc as an
+    (such as triton_nvidia_gpu.warp_group_dot_wait) should also take the memdesc as an
     operand.
   }];
 

@@ -114,8 +114,8 @@ struct LoadStoreConversionBase {
   }
 
 protected:
-  ModuleAxisInfoAnalysis &axisAnalysisPass;
   const AMD::TargetInfo &targetInfo;
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,

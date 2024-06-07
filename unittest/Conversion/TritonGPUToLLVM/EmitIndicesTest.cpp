@@ -29,16 +29,16 @@
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
+namespace mlir::triton::gpu {
 
 //===----------------------------------------------------------------------===//
 // EmitIndicesTest
@@ -733,18 +733,20 @@ TEST_F(EmitIndicesTest, LayoutVisualizer_Wmma) {
   ofs << dumpDistributedLayout(wmmaLayout, shape, /*multiCTA=*/false);
 }
 
+// Checks that result of emitIndices with and without linear layouts is the
+// same.
+//
 // This is only for "distributed" layouts, i.e. layouts whose values are stored
 // in registers distributed among threads in blocks.
 template <typename LayoutT, typename ParamsT>
-class DistributedLegacyVsLinearLayoutsTest
-    : public EmitIndicesTest,
-      public ::testing::WithParamInterface<ParamsT> {
+class DistributedLLTest : public EmitIndicesTest,
+                          public ::testing::WithParamInterface<ParamsT> {
 protected:
   void DoIt();
 };
 
 template <typename LayoutT, typename ParamsT>
-void DistributedLegacyVsLinearLayoutsTest<LayoutT, ParamsT>::DoIt() {
+void DistributedLLTest<LayoutT, ParamsT>::DoIt() {
   ParamsT params = this->GetParam();
   LayoutT legacyLayout = params.getEncoding();
   auto type = RankedTensorType::get(params.shape, FloatType::getF16(&context),
@@ -884,7 +886,7 @@ void DistributedLegacyVsLinearLayoutsTest<LayoutT, ParamsT>::DoIt() {
   }
 }
 
-struct BlockedLegacyVsLinearLayoutsTestParams {
+struct BlockedLLTestParams {
   std::vector<int64_t> shape;
   std::vector<unsigned> sizePerThread;
   std::vector<unsigned> threadsPerWarp;
@@ -901,8 +903,7 @@ struct BlockedLegacyVsLinearLayoutsTestParams {
   }
 };
 
-std::ostream &operator<<(std::ostream &os,
-                         const BlockedLegacyVsLinearLayoutsTestParams &params) {
+std::ostream &operator<<(std::ostream &os, const BlockedLLTestParams &params) {
   std::string str;
   llvm::raw_string_ostream llvm_os(str);
   llvm_os << "shape=" << triton::join(params.shape, "x")
@@ -911,118 +912,116 @@ std::ostream &operator<<(std::ostream &os,
   return os;
 }
 
-class BlockedLegacyVsLinearLayoutsTest
-    : public DistributedLegacyVsLinearLayoutsTest<
-          BlockedEncodingAttr, BlockedLegacyVsLinearLayoutsTestParams> {};
+class BlockedLLTest
+    : public DistributedLLTest<BlockedEncodingAttr, BlockedLLTestParams> {};
 
-TEST_P(BlockedLegacyVsLinearLayoutsTest, DoIt) { DoIt(); }
+TEST_P(BlockedLLTest, DoIt) { DoIt(); }
 
-INSTANTIATE_TEST_SUITE_P(
-    TestCases, BlockedLegacyVsLinearLayoutsTest,
-    ::testing::ValuesIn(std::vector<BlockedLegacyVsLinearLayoutsTestParams>({
-        {
-            .shape = {128, 16},
-            .sizePerThread = {1, 4},
-            .threadsPerWarp = {8, 4},
-            .warpsPerCTA = {4, 1},
-            .order = {1, 0},
-            .CTAsPerCGA = {2, 2},
-            .CTASplitNum = {2, 1},
-            .CTAOrder = {1, 0},
-        },
-        {
-            .shape = {1, 128},
-            .sizePerThread = {8, 1},
-            .threadsPerWarp = {8, 4},
-            .warpsPerCTA = {1, 4},
-            .order = {0, 1},
-            .CTAsPerCGA = {1, 2},
-            .CTASplitNum = {1, 2},
-            .CTAOrder = {1, 0},
-        },
-        {
-            .shape = {64, 1},
-            .sizePerThread = {8, 1},
-            .threadsPerWarp = {8, 4},
-            .warpsPerCTA = {1, 4},
-            .order = {0, 1},
-            .CTAsPerCGA = {1, 2},
-            .CTASplitNum = {1, 2},
-            .CTAOrder = {1, 0},
-        },
-        {
-            .shape = {128, 1},
-            .sizePerThread = {1, 8},
-            .threadsPerWarp = {4, 8},
-            .warpsPerCTA = {4, 1},
-            .order = {1, 0},
-            .CTAsPerCGA = {1, 2},
-            .CTASplitNum = {1, 1},
-            .CTAOrder = {1, 0},
-        },
-        {
-            .shape = {1, 64},
-            .sizePerThread = {1, 8},
-            .threadsPerWarp = {4, 8},
-            .warpsPerCTA = {4, 1},
-            .order = {1, 0},
-            .CTAsPerCGA = {1, 2},
-            .CTASplitNum = {1, 1},
-            .CTAOrder = {1, 0},
-        },
-        {
-            .shape = {128, 1},
-            .sizePerThread = {1, 1},
-            .threadsPerWarp = {1, 32},
-            .warpsPerCTA = {2, 2},
-            .order = {1, 0},
-            .CTAsPerCGA = {1, 2},
-            .CTASplitNum = {1, 2},
-            .CTAOrder = {1, 0},
-        },
-        {
-            .shape = {1, 128},
-            .sizePerThread = {1, 1},
-            .threadsPerWarp = {1, 32},
-            .warpsPerCTA = {2, 2},
-            .order = {1, 0},
-            .CTAsPerCGA = {1, 2},
-            .CTASplitNum = {1, 2},
-            .CTAOrder = {1, 0},
-        },
-        {
-            .shape = {1},
-            .sizePerThread = {1},
-            .threadsPerWarp = {32},
-            .warpsPerCTA = {4},
-            .order = {0},
-            .CTAsPerCGA = {2},
-            .CTASplitNum = {2},
-            .CTAOrder = {0},
-        },
-        {
-            .shape = {128, 128},
-            .sizePerThread = {2, 2},
-            .threadsPerWarp = {4, 8},
-            .warpsPerCTA = {2, 2},
-            .order = {0, 1},
-            .CTAsPerCGA = {2, 2},
-            .CTASplitNum = {2, 2},
-            .CTAOrder = {0, 1},
-        },
-        {
-            .shape = {1024, 128},
-            .sizePerThread = {2, 2},
-            .threadsPerWarp = {4, 8},
-            .warpsPerCTA = {2, 2},
-            .order = {1, 0},
-            .CTAsPerCGA = {2, 2},
-            .CTASplitNum = {2, 2},
-            .CTAOrder = {1, 0},
-        },
-    })));
+INSTANTIATE_TEST_SUITE_P(TestCases, BlockedLLTest,
+                         ::testing::ValuesIn(std::vector<BlockedLLTestParams>({
+                             {
+                                 .shape = {128, 16},
+                                 .sizePerThread = {1, 4},
+                                 .threadsPerWarp = {8, 4},
+                                 .warpsPerCTA = {4, 1},
+                                 .order = {1, 0},
+                                 .CTAsPerCGA = {2, 2},
+                                 .CTASplitNum = {2, 1},
+                                 .CTAOrder = {1, 0},
+                             },
+                             {
+                                 .shape = {1, 128},
+                                 .sizePerThread = {8, 1},
+                                 .threadsPerWarp = {8, 4},
+                                 .warpsPerCTA = {1, 4},
+                                 .order = {0, 1},
+                                 .CTAsPerCGA = {1, 2},
+                                 .CTASplitNum = {1, 2},
+                                 .CTAOrder = {1, 0},
+                             },
+                             {
+                                 .shape = {64, 1},
+                                 .sizePerThread = {8, 1},
+                                 .threadsPerWarp = {8, 4},
+                                 .warpsPerCTA = {1, 4},
+                                 .order = {0, 1},
+                                 .CTAsPerCGA = {1, 2},
+                                 .CTASplitNum = {1, 2},
+                                 .CTAOrder = {1, 0},
+                             },
+                             {
+                                 .shape = {128, 1},
+                                 .sizePerThread = {1, 8},
+                                 .threadsPerWarp = {4, 8},
+                                 .warpsPerCTA = {4, 1},
+                                 .order = {1, 0},
+                                 .CTAsPerCGA = {1, 2},
+                                 .CTASplitNum = {1, 1},
+                                 .CTAOrder = {1, 0},
+                             },
+                             {
+                                 .shape = {1, 64},
+                                 .sizePerThread = {1, 8},
+                                 .threadsPerWarp = {4, 8},
+                                 .warpsPerCTA = {4, 1},
+                                 .order = {1, 0},
+                                 .CTAsPerCGA = {1, 2},
+                                 .CTASplitNum = {1, 1},
+                                 .CTAOrder = {1, 0},
+                             },
+                             {
+                                 .shape = {128, 1},
+                                 .sizePerThread = {1, 1},
+                                 .threadsPerWarp = {1, 32},
+                                 .warpsPerCTA = {2, 2},
+                                 .order = {1, 0},
+                                 .CTAsPerCGA = {1, 2},
+                                 .CTASplitNum = {1, 2},
+                                 .CTAOrder = {1, 0},
+                             },
+                             {
+                                 .shape = {1, 128},
+                                 .sizePerThread = {1, 1},
+                                 .threadsPerWarp = {1, 32},
+                                 .warpsPerCTA = {2, 2},
+                                 .order = {1, 0},
+                                 .CTAsPerCGA = {1, 2},
+                                 .CTASplitNum = {1, 2},
+                                 .CTAOrder = {1, 0},
+                             },
+                             {
+                                 .shape = {1},
+                                 .sizePerThread = {1},
+                                 .threadsPerWarp = {32},
+                                 .warpsPerCTA = {4},
+                                 .order = {0},
+                                 .CTAsPerCGA = {2},
+                                 .CTASplitNum = {2},
+                                 .CTAOrder = {0},
+                             },
+                             {
+                                 .shape = {128, 128},
+                                 .sizePerThread = {2, 2},
+                                 .threadsPerWarp = {4, 8},
+                                 .warpsPerCTA = {2, 2},
+                                 .order = {0, 1},
+                                 .CTAsPerCGA = {2, 2},
+                                 .CTASplitNum = {2, 2},
+                                 .CTAOrder = {0, 1},
+                             },
+                             {
+                                 .shape = {1024, 128},
+                                 .sizePerThread = {2, 2},
+                                 .threadsPerWarp = {4, 8},
+                                 .warpsPerCTA = {2, 2},
+                                 .order = {1, 0},
+                                 .CTAsPerCGA = {2, 2},
+                                 .CTASplitNum = {2, 2},
+                                 .CTAOrder = {1, 0},
+                             },
+                         })));
 
-struct NvidiaMmaVsLinearLayoutsTestParams {
+struct NvidiaMmaLLTestParams {
   std::vector<int64_t> shape;
   unsigned versionMajor;
   unsigned versionMinor;
@@ -1041,7 +1040,7 @@ struct NvidiaMmaVsLinearLayoutsTestParams {
 };
 
 std::ostream &operator<<(std::ostream &os,
-                         const NvidiaMmaVsLinearLayoutsTestParams &params) {
+                         const NvidiaMmaLLTestParams &params) {
   std::string str;
   llvm::raw_string_ostream llvm_os(str);
   llvm_os << "shape=" << triton::join(params.shape, "x")
@@ -1050,15 +1049,14 @@ std::ostream &operator<<(std::ostream &os,
   return os;
 }
 
-class NvidiaMmaVsLinearLayoutsTest
-    : public DistributedLegacyVsLinearLayoutsTest<
-          NvidiaMmaEncodingAttr, NvidiaMmaVsLinearLayoutsTestParams> {};
+class NvidiaMmaLLTest
+    : public DistributedLLTest<NvidiaMmaEncodingAttr, NvidiaMmaLLTestParams> {};
 
-TEST_P(NvidiaMmaVsLinearLayoutsTest, DoIt) { DoIt(); }
+TEST_P(NvidiaMmaLLTest, DoIt) { DoIt(); }
 
 INSTANTIATE_TEST_SUITE_P(
-    MMAv2, NvidiaMmaVsLinearLayoutsTest,
-    ::testing::ValuesIn(std::vector<NvidiaMmaVsLinearLayoutsTestParams>({
+    MMAv2, NvidiaMmaLLTest,
+    ::testing::ValuesIn(std::vector<NvidiaMmaLLTestParams>({
         {
             .shape = {16, 8},
             .versionMajor = 2,
@@ -1187,8 +1185,8 @@ INSTANTIATE_TEST_SUITE_P(
         },
     })));
 
-std::vector<NvidiaMmaVsLinearLayoutsTestParams> makeNvidiaMmaV3TestCases() {
-  std::vector<NvidiaMmaVsLinearLayoutsTestParams> testCases;
+std::vector<NvidiaMmaLLTestParams> makeNvidiaMmaV3TestCases() {
+  std::vector<NvidiaMmaLLTestParams> testCases;
   auto addTests = [&](ArrayRef<unsigned> instrShape, unsigned warpsPerCGA_dim0,
                       ArrayRef<std::vector<int64_t>> shapes) {
     for (const auto &shape : shapes) {
@@ -1244,15 +1242,13 @@ std::vector<NvidiaMmaVsLinearLayoutsTestParams> makeNvidiaMmaV3TestCases() {
   return testCases;
 }
 
-INSTANTIATE_TEST_SUITE_P(MMAv3, NvidiaMmaVsLinearLayoutsTest,
+INSTANTIATE_TEST_SUITE_P(MMAv3, NvidiaMmaLLTest,
                          ::testing::ValuesIn(makeNvidiaMmaV3TestCases()));
 
-struct SliceVsLinearLayoutsTestParams {
+struct SliceLLTestParams {
   std::vector<int64_t> shape;
   int64_t sliceDim;
-  std::variant<BlockedLegacyVsLinearLayoutsTestParams,
-               NvidiaMmaVsLinearLayoutsTestParams>
-      parent;
+  std::variant<BlockedLLTestParams, NvidiaMmaLLTestParams> parent;
 
   SliceEncodingAttr getEncoding() const {
     return std::visit(
@@ -1264,8 +1260,7 @@ struct SliceVsLinearLayoutsTestParams {
   }
 };
 
-std::ostream &operator<<(std::ostream &os,
-                         const SliceVsLinearLayoutsTestParams &params) {
+std::ostream &operator<<(std::ostream &os, const SliceLLTestParams &params) {
   std::string str;
   llvm::raw_string_ostream llvm_os(str);
   llvm_os << "shape=" << triton::join(params.shape, "x")
@@ -1275,195 +1270,579 @@ std::ostream &operator<<(std::ostream &os,
 }
 
 class SliceVsLinearLayoutsTest
-    : public DistributedLegacyVsLinearLayoutsTest<
-          SliceEncodingAttr, SliceVsLinearLayoutsTestParams> {};
+    : public DistributedLLTest<SliceEncodingAttr, SliceLLTestParams> {};
 
 TEST_P(SliceVsLinearLayoutsTest, DoIt) { DoIt(); }
 
 INSTANTIATE_TEST_SUITE_P(TestCases, SliceVsLinearLayoutsTest,
                          ::testing::ValuesIn(
-                             std::vector<SliceVsLinearLayoutsTestParams>({
+                             std::vector<SliceLLTestParams>(
                                  {
-                                     .shape = {128},
-                                     .sliceDim = 0,
-                                     .parent =
-                                         BlockedLegacyVsLinearLayoutsTestParams{
-                                             .sizePerThread = {2, 4},
-                                             .threadsPerWarp = {4, 2},
-                                             .warpsPerCTA = {2, 2},
-                                             .order = {1, 0},
-                                             .CTAsPerCGA = {2, 2},
-                                             .CTASplitNum = {2, 2},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {128},
-                                     .sliceDim = 1,
-                                     .parent =
-                                         BlockedLegacyVsLinearLayoutsTestParams{
-                                             .sizePerThread = {2, 4},
-                                             .threadsPerWarp = {4, 2},
-                                             .warpsPerCTA = {2, 2},
-                                             .order = {1, 0},
-                                             .CTAsPerCGA = {2, 2},
-                                             .CTASplitNum = {2, 2},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
+                                     {
+                                         .shape = {128},
+                                         .sliceDim = 0,
+                                         .parent =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {2, 4},
+                                                 .threadsPerWarp = {4, 2},
+                                                 .warpsPerCTA = {2, 2},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {2, 2},
+                                                 .CTASplitNum = {2, 2},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128},
+                                         .sliceDim = 1,
+                                         .parent =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {2, 4},
+                                                 .threadsPerWarp = {4, 2},
+                                                 .warpsPerCTA = {2, 2},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {2, 2},
+                                                 .CTASplitNum = {2, 2},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
 
-                                 {
-                                     .shape = {32},
-                                     .sliceDim = 1,
-                                     .parent =
-                                         BlockedLegacyVsLinearLayoutsTestParams{
-                                             .sizePerThread = {1, 1},
-                                             .threadsPerWarp = {32, 1},
-                                             .warpsPerCTA = {4, 1},
-                                             .order = {0, 1},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {32},
-                                     .sliceDim = 0,
-                                     .parent =
-                                         BlockedLegacyVsLinearLayoutsTestParams{
-                                             .sizePerThread = {1, 1},
-                                             .threadsPerWarp = {32, 1},
-                                             .warpsPerCTA = {4, 1},
-                                             .order = {0, 1},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {32},
-                                     .sliceDim = 1,
-                                     .parent =
-                                         BlockedLegacyVsLinearLayoutsTestParams{
-                                             .sizePerThread = {1, 4},
-                                             .threadsPerWarp = {8, 4},
-                                             .warpsPerCTA = {2, 2},
-                                             .order = {0, 1},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {32},
-                                     .sliceDim = 0,
-                                     .parent =
-                                         BlockedLegacyVsLinearLayoutsTestParams{
-                                             .sizePerThread = {1, 4},
-                                             .threadsPerWarp = {8, 4},
-                                             .warpsPerCTA = {2, 2},
-                                             .order = {0, 1},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {1},
-                                     .sliceDim = 0,
-                                     .parent =
-                                         BlockedLegacyVsLinearLayoutsTestParams{
-                                             .sizePerThread = {1, 4},
-                                             .threadsPerWarp = {8, 4},
-                                             .warpsPerCTA = {2, 2},
-                                             .order = {0, 1},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
+                                     {
+                                         .shape = {32},
+                                         .sliceDim = 1,
+                                         .parent =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {32, 1},
+                                                 .warpsPerCTA = {4, 1},
+                                                 .order = {0, 1},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {32},
+                                         .sliceDim = 0,
+                                         .parent =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {32, 1},
+                                                 .warpsPerCTA = {4, 1},
+                                                 .order = {0, 1},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {32},
+                                         .sliceDim = 1,
+                                         .parent =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 4},
+                                                 .threadsPerWarp = {8, 4},
+                                                 .warpsPerCTA = {2, 2},
+                                                 .order = {0, 1},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {32},
+                                         .sliceDim = 0,
+                                         .parent =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 4},
+                                                 .threadsPerWarp = {8, 4},
+                                                 .warpsPerCTA = {2, 2},
+                                                 .order = {0, 1},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {1},
+                                         .sliceDim = 0,
+                                         .parent =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 4},
+                                                 .threadsPerWarp = {8, 4},
+                                                 .warpsPerCTA = {2, 2},
+                                                 .order = {0, 1},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
 
-                                 {
-                                     .shape = {16},
-                                     .sliceDim = 0,
-                                     .parent =
-                                         NvidiaMmaVsLinearLayoutsTestParams{
-                                             .versionMajor = 2,
-                                             .versionMinor = 0,
-                                             .warpsPerCTA = {2, 2},
-                                             .instrShape = {16, 8},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {128},
-                                     .sliceDim = 0,
-                                     .parent =
-                                         NvidiaMmaVsLinearLayoutsTestParams{
-                                             .versionMajor = 2,
-                                             .versionMinor = 0,
-                                             .warpsPerCTA = {2, 2},
-                                             .instrShape = {16, 8},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {16},
-                                     .sliceDim = 1,
-                                     .parent =
-                                         NvidiaMmaVsLinearLayoutsTestParams{
-                                             .versionMajor = 2,
-                                             .versionMinor = 0,
-                                             .warpsPerCTA = {2, 2},
-                                             .instrShape = {16, 8},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {128},
-                                     .sliceDim = 1,
-                                     .parent =
-                                         NvidiaMmaVsLinearLayoutsTestParams{
-                                             .versionMajor = 2,
-                                             .versionMinor = 0,
-                                             .warpsPerCTA = {2, 2},
-                                             .instrShape = {16, 8},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                                 {
-                                     .shape = {128},
-                                     .sliceDim = 0,
-                                     .parent =
-                                         NvidiaMmaVsLinearLayoutsTestParams{
-                                             .versionMajor = 3,
-                                             .versionMinor = 0,
-                                             .warpsPerCTA = {4, 4},
-                                             .instrShape = {16, 16, 16},
-                                             .CTAsPerCGA = {1, 1},
-                                             .CTASplitNum = {1, 1},
-                                             .CTAOrder = {1, 0},
-                                         },
-                                 },
-                             })));
+                                     {
+                                         .shape = {16},
+                                         .sliceDim = 0,
+                                         .parent =
+                                             NvidiaMmaLLTestParams{
+                                                 .versionMajor = 2,
+                                                 .versionMinor = 0,
+                                                 .warpsPerCTA = {2, 2},
+                                                 .instrShape = {16, 8},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128},
+                                         .sliceDim = 0,
+                                         .parent =
+                                             NvidiaMmaLLTestParams{
+                                                 .versionMajor = 2,
+                                                 .versionMinor = 0,
+                                                 .warpsPerCTA = {2, 2},
+                                                 .instrShape = {16, 8},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {16},
+                                         .sliceDim = 1,
+                                         .parent =
+                                             NvidiaMmaLLTestParams{
+                                                 .versionMajor = 2,
+                                                 .versionMinor = 0,
+                                                 .warpsPerCTA = {2, 2},
+                                                 .instrShape = {16, 8},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128},
+                                         .sliceDim = 1,
+                                         .parent =
+                                             NvidiaMmaLLTestParams{
+                                                 .versionMajor = 2,
+                                                 .versionMinor = 0,
+                                                 .warpsPerCTA = {2, 2},
+                                                 .instrShape = {16, 8},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128},
+                                         .sliceDim = 0,
+                                         .parent =
+                                             NvidiaMmaLLTestParams{
+                                                 .versionMajor = 3,
+                                                 .versionMinor = 0,
+                                                 .warpsPerCTA = {4, 4},
+                                                 .instrShape = {16, 16, 16},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                 })));
 
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+struct LoadSharedToDistributedLLTestParams {
+  std::vector<int64_t> shape;
+  unsigned shmemVec;
+  unsigned shmemPerPhase;
+  unsigned shmemMaxPhase;
+  std::vector<unsigned> shmemOrder;
+  std::vector<unsigned> shmemCTAsPerCGA;
+  std::vector<unsigned> shmemCTASplitNum;
+  std::vector<unsigned> shmemCTAOrder;
+  bool shmemHasLeadingOffset;
+  std::vector<unsigned> shmemStrides;
+  std::variant<BlockedLLTestParams, NvidiaMmaLLTestParams> dst;
 
-//===----------------------------------------------------------------------===//
-// Main
-//===----------------------------------------------------------------------===//
+  Attribute getSrcEncoding() const {
+    return SharedEncodingAttr::get(
+        getContext(), shmemVec, shmemPerPhase, shmemMaxPhase, shmemOrder,
+        CTALayoutAttr::get(getContext(), shmemCTAsPerCGA, shmemCTASplitNum,
+                           shmemCTAOrder),
+        shmemHasLeadingOffset);
+  }
+
+  Attribute getDstEncoding() const {
+    return std::visit(
+        [&](const auto &dstParams) -> Attribute {
+          return dstParams.getEncoding();
+        },
+        dst);
+  }
+};
+
+std::ostream &operator<<(std::ostream &os,
+                         const LoadSharedToDistributedLLTestParams &params) {
+  std::string str;
+  llvm::raw_string_ostream llvm_os(str);
+  llvm_os << "shape=" << triton::join(params.shape, "x")
+          << ", src=" << params.getSrcEncoding()
+          << ", dst=" << params.getDstEncoding()
+          << ", strides=" << triton::join(params.shmemStrides, "x");
+  os << str;
+  return os;
+}
+
+class LoadSharedToDistributedLLTest
+    : public ::testing::TestWithParam<LoadSharedToDistributedLLTestParams> {};
+
+TEST_P(LoadSharedToDistributedLLTest, DoIt) {
+  MLIRContext *ctx = getContext();
+
+  auto params = GetParam();
+
+  Attribute srcEncoding = params.getSrcEncoding();
+  Attribute dstEncoding = params.getDstEncoding();
+
+  mlir::OpBuilder builder(ctx);
+  Location loc = UnknownLoc::get(ctx);
+  auto mlirModule = mlir::ModuleOp::create(loc);
+  mlirModule->setAttr(
+      "triton_gpu.num-warps",
+      builder.getI32IntegerAttr(product(getWarpsPerCTA(dstEncoding))));
+
+  auto func = builder.create<mlir::triton::FuncOp>(
+      loc, "test_func", builder.getFunctionType({}, {}));
+  mlirModule.push_back(func);
+  auto *block = func.addEntryBlock();
+  IRRewriter rewriter(ctx);
+  rewriter.setInsertionPointToStart(block);
+
+  NVIDIA::TargetInfo target(90);
+
+  int rank = params.shape.size();
+  Type elemLlvmTy = builder.getI32Type();
+  auto dstTy = RankedTensorType::get(params.shape, elemLlvmTy, dstEncoding);
+  auto srcTy = MemDescType::get(params.shape, elemLlvmTy, srcEncoding,
+                                SharedMemorySpaceAttr::get(ctx));
+  Value base = i32_val(1000000);
+  SmallVector<Value> shmemStridesValues;
+  for (auto stride : params.shmemStrides) {
+    shmemStridesValues.push_back(i32_val(stride));
+  }
+  SharedMemoryObject shmemObj =
+      SharedMemoryObject(base, elemLlvmTy, shmemStridesValues,
+                         std::vector<Value>(rank, i32_val(0)));
+
+  auto getPtrsAndVecOffs = [&](bool allowLLs,
+                               SmallVector<std::pair<Value, int64_t>> &ret) {
+    SmallVector<Value> vals = loadSharedToDistributed(
+        dstTy, srcTy, elemLlvmTy, shmemObj, loc, rewriter, target, allowLLs);
+    for (Value v : vals) {
+      auto ee = dyn_cast<LLVM::ExtractElementOp>(v.getDefiningOp());
+      ASSERT_TRUE(!!ee);
+      auto addr =
+          dyn_cast<LLVM::LoadOp>(ee.getVector().getDefiningOp()).getAddr();
+      ASSERT_TRUE(!!addr);
+      auto pos = dyn_cast<LLVM::ConstantOp>(ee.getPosition().getDefiningOp());
+      ASSERT_TRUE(!!pos);
+      auto posAttr = dyn_cast<IntegerAttr>(pos.getValue());
+      ASSERT_TRUE(!!posAttr);
+      ret.push_back({addr, posAttr.getInt()});
+    }
+  };
+
+  SmallVector<std::pair<Value, int64_t>> ptrsAndVecOffsLegacy;
+  getPtrsAndVecOffs(/*allowLLs=*/false, ptrsAndVecOffsLegacy);
+  SmallVector<std::pair<Value, int64_t>> ptrsAndVecOffsLL;
+  getPtrsAndVecOffs(/*allowLLs=*/true, ptrsAndVecOffsLL);
+
+  // This test takes a long time if we check all indices.  But for linear
+  // layouts, we really should only need to check powers of 2.  We wrap the
+  // loops in this `iterate` function so we can easily change between checking
+  // all indices and just the powers of 2.
+  constexpr bool checkAllElems = false;
+  bool stopIterating = false;
+  auto iterate = [&](int n, auto fn) {
+    if (checkAllElems) {
+      for (int i = 0; i < n && !stopIterating; i++) {
+        fn(i);
+      }
+    } else {
+      if (n > 0 && !stopIterating) {
+        fn(0);
+      }
+      for (int i = 0; (1 << i) < n && !stopIterating; i++) {
+        fn(1 << i);
+      }
+    }
+  };
+
+  const int numCTAs = product(getCTAsPerCGA(dstEncoding));
+  const int threadsPerCTA = product(getThreadsPerWarp(dstEncoding)) *
+                            product(getWarpsPerCTA(dstEncoding));
+  int numFailures = 0;
+  constexpr int kMaxFailures = 128;
+  ASSERT_EQ(ptrsAndVecOffsLegacy.size(), ptrsAndVecOffsLL.size());
+  for (int i = 0; i < ptrsAndVecOffsLegacy.size(); i++) {
+    SCOPED_TRACE("Register " + std::to_string(i));
+    EXPECT_EQ(ptrsAndVecOffsLegacy[i].second, ptrsAndVecOffsLL[i].second);
+    iterate(numCTAs, [&](int ctaId) {
+      SCOPED_TRACE("CTA " + std::to_string(ctaId));
+      iterate(threadsPerCTA, [&](int threadId) {
+        SCOPED_TRACE("Thread " + std::to_string(threadId));
+        int llValue = evalValue(ptrsAndVecOffsLL[i].first, ctaId, threadId);
+        int legacyValue =
+            evalValue(ptrsAndVecOffsLegacy[i].first, ctaId, threadId);
+        EXPECT_EQ(llValue, legacyValue);
+        if (llValue != legacyValue) {
+          ++numFailures;
+        }
+        if (numFailures > kMaxFailures) {
+          llvm::errs() << "Too many failures, aborting\n";
+          stopIterating = true;
+        }
+      });
+    });
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(TestCases, LoadSharedToDistributedLLTest,
+                         ::testing::ValuesIn(
+                             std::vector<LoadSharedToDistributedLLTestParams>(
+                                 {
+                                     {
+                                         .shape = {128},
+                                         .shmemVec = 1,
+                                         .shmemPerPhase = 1,
+                                         .shmemMaxPhase = 1,
+                                         .shmemOrder = {0},
+                                         .shmemCTAsPerCGA = {1},
+                                         .shmemCTASplitNum = {1},
+                                         .shmemCTAOrder = {0},
+                                         .shmemHasLeadingOffset = false,
+                                         .shmemStrides = {1},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1},
+                                                 .threadsPerWarp = {32},
+                                                 .warpsPerCTA = {4},
+                                                 .order = {0},
+                                                 .CTAsPerCGA = {1},
+                                                 .CTASplitNum = {1},
+                                                 .CTAOrder = {0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128, 128},
+                                         .shmemVec = 1,
+                                         .shmemPerPhase = 1,
+                                         .shmemMaxPhase = 1,
+                                         .shmemOrder = {0, 1},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = false,
+                                         .shmemStrides = {128, 1},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {8, 4},
+                                                 .warpsPerCTA = {4, 4},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128, 128},
+                                         .shmemVec = 1,
+                                         .shmemPerPhase = 2,
+                                         .shmemMaxPhase = 8,
+                                         .shmemOrder = {0, 1},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = false,
+                                         .shmemStrides = {128, 1},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {4, 8},
+                                                 .warpsPerCTA = {4, 4},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128, 128},
+                                         .shmemVec = 1,
+                                         .shmemPerPhase = 2,
+                                         .shmemMaxPhase = 8,
+                                         .shmemOrder = {0, 1},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = false,
+                                         .shmemStrides = {128, 1},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {1, 32},
+                                                 .warpsPerCTA = {4, 2},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {16, 16},
+                                         .shmemVec = 1,
+                                         .shmemPerPhase = 1,
+                                         .shmemMaxPhase = 1,
+                                         .shmemOrder = {1, 0},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = false,
+                                         .shmemStrides = {1024, 1},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {4, 8},
+                                                 .warpsPerCTA = {1, 1},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {64, 64},
+                                         .shmemVec = 1,
+                                         .shmemPerPhase = 1,
+                                         .shmemMaxPhase = 1,
+                                         .shmemOrder = {1, 0},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = false,
+                                         .shmemStrides = {64, 1},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {8, 1},
+                                                 .threadsPerWarp = {16, 2},
+                                                 .warpsPerCTA = {1, 4},
+                                                 .order = {0, 1},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128, 128},
+                                         .shmemVec = 4,
+                                         .shmemPerPhase = 4,
+                                         .shmemMaxPhase = 2,
+                                         .shmemOrder = {0, 1},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = true,
+                                         // The legacy layout code assumes that
+                                         // the strides in the row/col
+                                         // dimensions are "dense" and match the
+                                         // order.  LLs can handle other
+                                         // strides, but obviously it won't
+                                         // match the legacy code, so we can't
+                                         // test it here.
+                                         .shmemStrides = {1, 128},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {32, 32},
+                                                 .warpsPerCTA = {4, 4},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128, 128},
+                                         .shmemVec = 4,
+                                         .shmemPerPhase = 4,
+                                         .shmemMaxPhase = 2,
+                                         .shmemOrder = {1, 0},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = true,
+                                         .shmemStrides = {128, 1},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {32, 32},
+                                                 .warpsPerCTA = {4, 4},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128, 128},
+                                         .shmemVec = 4,
+                                         .shmemPerPhase = 2,
+                                         .shmemMaxPhase = 4,
+                                         .shmemOrder = {0, 1},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = true,
+                                         .shmemStrides = {1, 128},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {32, 32},
+                                                 .warpsPerCTA = {4, 4},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                     {
+                                         .shape = {128, 128},
+                                         .shmemVec = 4,
+                                         .shmemPerPhase = 1,
+                                         .shmemMaxPhase = 8,
+                                         .shmemOrder = {0, 1},
+                                         .shmemCTAsPerCGA = {1, 1},
+                                         .shmemCTASplitNum = {1, 1},
+                                         .shmemCTAOrder = {1, 0},
+                                         .shmemHasLeadingOffset = true,
+                                         .shmemStrides = {1, 128},
+                                         .dst =
+                                             BlockedLLTestParams{
+                                                 .sizePerThread = {1, 1},
+                                                 .threadsPerWarp = {32, 32},
+                                                 .warpsPerCTA = {4, 4},
+                                                 .order = {1, 0},
+                                                 .CTAsPerCGA = {1, 1},
+                                                 .CTASplitNum = {1, 1},
+                                                 .CTAOrder = {1, 0},
+                                             },
+                                     },
+                                 })));
+
+} // namespace mlir::triton::gpu
 
 int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

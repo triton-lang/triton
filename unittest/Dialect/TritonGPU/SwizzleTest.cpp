@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
 
 using namespace mlir;
@@ -56,3 +57,9 @@ INSTANTIATE_TEST_SUITE_P(TestDotOperands, SwizzleDotOperandTestFixture,
                                            ParamT{{32, 32}, 1, 16, {8, 2, 4}},
                                            ParamT{{16, 16}, 0, 16, {8, 4, 2}},
                                            ParamT{{16, 16}, 1, 16, {8, 4, 2}}));
+
+int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

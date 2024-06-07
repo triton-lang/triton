@@ -19,23 +19,21 @@ namespace {
 
 // Get the highest version supported for the hardware and the dot.
 static int getMMAVersionSafe(int computeCapability, DotOp op) {
-  int baseVersion = 0;
+  // List supported mma version in order of preference.
+  SmallVector<int> versionsSupported;
   if (computeCapability < 75) {
-    baseVersion = 1;
+    versionsSupported = {1};
   } else if (computeCapability < 90) {
-    baseVersion = 2;
+    versionsSupported = {2};
   } else if (computeCapability < 100) {
-    baseVersion = 3;
+    versionsSupported = {3, 2};
   } else {
     assert(false && "computeCapability not supported");
   }
-
-  for (; baseVersion >= 1; baseVersion--) {
-    if (supportMMA(op, baseVersion)) {
+  for (int baseVersion : versionsSupported) {
+    if (supportMMA(op, baseVersion))
       return baseVersion;
-    }
   }
-
   return 0;
 }
 
@@ -122,7 +120,41 @@ warpsPerTileV3(DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
   return ret;
 }
 
-class BlockedToMMA : public mlir::RewritePattern {
+// Returns a shared memory allocation that can be used by a dotMMA op for the
+// given value.
+static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
+                                       int opIdx, bool allowTranspose) {
+  OpBuilder::InsertionGuard g(rewriter);
+  Value arg = v;
+  if (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>())
+    arg = cvtOp.getSrc();
+  auto argType = cast<RankedTensorType>(arg.getType());
+  assert(argType.getEncoding() && "unexpected tensor type");
+  auto newOrder = getOrder(argType.getEncoding());
+
+  // If the MMA op doesn't support transpose pick the layout expected by the MMA
+  // op.
+  if (!allowTranspose) {
+    if (opIdx == 1) {
+      newOrder = {0, 1};
+    } else {
+      newOrder = {1, 0};
+    }
+  }
+
+  Attribute SharedMemorySpace =
+      SharedMemorySpaceAttr::get(argType.getContext());
+  auto CTALayout = getCTALayout(argType.getEncoding());
+  auto newLayout =
+      SharedEncodingAttr::get(argType.getContext(), argType.getShape(),
+                              newOrder, CTALayout, argType.getElementType());
+  auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
+                                  newLayout, SharedMemorySpace);
+  rewriter.setInsertionPointAfterValue(arg);
+  return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
+}
+
+class BlockedToMMA : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
   mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
   mutable llvm::DenseMap<Operation *, unsigned> dotOpInstNs;
@@ -170,8 +202,8 @@ class BlockedToMMA : public mlir::RewritePattern {
 
 public:
   BlockedToMMA(mlir::MLIRContext *context, int computeCapability)
-      : mlir::RewritePattern(DotOp::getOperationName(), 2, context),
-        computeCapability(computeCapability) {}
+      : OpRewritePattern<DotOp>(context), computeCapability(computeCapability) {
+  }
 
   static SmallVector<unsigned, 3>
   getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
@@ -187,44 +219,11 @@ public:
     }
   }
 
-  static Value getMMAv3Operand(Value v, mlir::PatternRewriter &rewriter,
-                               int opIdx) {
-    OpBuilder::InsertionGuard g(rewriter);
-    Value arg = v;
-    if (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>())
-      arg = cvtOp.getSrc();
-    auto argType = cast<RankedTensorType>(arg.getType());
-    auto eltType = argType.getElementType();
-    assert(argType.getEncoding() && "unexpected tensor type");
-    auto newOrder = getOrder(argType.getEncoding());
-
-    // MMAv3 with transpose only supports f16 and bf16 data type
-    // fallback to MMAv3 without transpose for other data types
-    if (!eltType.isF16() && !eltType.isBF16()) {
-      if (opIdx == 1) {
-        newOrder = {0, 1};
-      } else {
-        newOrder = {1, 0};
-      }
-    }
-
-    auto CTALayout = getCTALayout(argType.getEncoding());
-    auto newLayout =
-        SharedEncodingAttr::get(argType.getContext(), argType.getShape(),
-                                newOrder, CTALayout, argType.getElementType());
-    auto newType = MemDescType::get(argType.getShape(),
-                                    argType.getElementType(), newLayout);
-    rewriter.setInsertionPointAfterValue(arg);
-    return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
-  }
-
   mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
+  matchAndRewrite(triton::DotOp dotOp,
                   mlir::PatternRewriter &rewriter) const override {
     if (computeCapability < 70)
       return failure();
-    auto dotOp = cast<DotOp>(op);
-    auto ctx = op->getContext();
     // TODO: Check data-types and SM compatibility
     RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
@@ -233,12 +232,12 @@ public:
 
     // get MMA encoding for the given number of warps
     auto retShapePerCTA = getShapePerCTA(oldRetType);
-    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    auto mod = dotOp->getParentOfType<mlir::ModuleOp>();
     int numWarps = TritonGPUDialect::getNumWarps(mod);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
 
     int versionMajor = getMMAVersionSafe(computeCapability, dotOp);
-    if (!versionMajor)
+    if (!(versionMajor >= 1 && versionMajor <= 3))
       return failure();
 
     auto instrShape = mmaVersionToInstrShape(versionMajor, retShapePerCTA,
@@ -281,7 +280,8 @@ public:
           oldRetType.getContext(), versionMajor, numWarps, CTALayout,
           instrShape, oldAType.getShape(), oldBType.getShape(), retShapePerCTA,
           isARow, isBRow, mmaV1Counter++);
-    } else if (versionMajor == 2 || versionMajor == 3) {
+    } else {
+      assert(versionMajor == 2 || versionMajor == 3);
       int versionMinor = computeCapability == 75 ? 1 : 0;
       auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
                                           numWarps, instrShape);
@@ -296,15 +296,21 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
+    Operation *newDot = nullptr;
     if (versionMajor == 3) {
-      a = getMMAv3Operand(a, rewriter, 0);
-      b = getMMAv3Operand(b, rewriter, 1);
+      auto eltType = dotOp.getA().getType().getElementType();
+      // In MMAV3 tranpose is only supported for f16 and bf16.
+      bool allowTranspose = eltType.isF16() || eltType.isBF16();
+      a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
+      b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
+      newDot = rewriter.create<triton::nvidia_gpu::WarpGroupDotOp>(
+          dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.getInputPrecision(),
+          dotOp.getMaxNumImpreciseAcc(), false);
     } else {
-
       // convert operands
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
-      Type minType = IntegerType::get(ctx, minBitwidth);
+      Type minType = rewriter.getIntegerType(minBitwidth);
       // convert A operand
       auto newAEncoding = DotOperandEncodingAttr::get(
           oldAType.getContext(), 0, newRetType.getEncoding(),
@@ -319,14 +325,13 @@ public:
       auto newBType = RankedTensorType::get(
           oldBType.getShape(), oldBType.getElementType(), newBEncoding);
       b = rewriter.create<ConvertLayoutOp>(b.getLoc(), newBType, b);
+      newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b, newAcc,
+                                      dotOp.getInputPrecision(),
+                                      dotOp.getMaxNumImpreciseAcc());
     }
     // convert dot instruction
-    auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                         newAcc, dotOp.getInputPrecision(),
-                                         dotOp.getMaxNumImpreciseAcc());
-
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, oldRetType,
-                                                 newDot.getResult());
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType,
+                                                 newDot->getResult(0));
     return success();
   }
 };

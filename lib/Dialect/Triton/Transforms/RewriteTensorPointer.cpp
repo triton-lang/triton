@@ -441,7 +441,7 @@ public:
     for (auto &opInFor : *op.getBody()) {
       auto *newOp = builder.clone(opInFor, mapping);
       for (unsigned i = 0; i < opInFor.getNumResults(); ++i)
-        mapping.map(op->getResult(i), newOp->getResult(i));
+        mapping.map(opInFor.getResult(i), newOp->getResult(i));
     }
 
     // Replace later usages

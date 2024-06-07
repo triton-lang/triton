@@ -389,7 +389,7 @@ class pointer_type(dtype):
 
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
-            raise TypeError(f'element_ty is a {type(element_ty).__name__}.')
+            raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
         self.address_space = address_space
 
@@ -1176,10 +1176,10 @@ def num_programs(axis, _builder=None):
 
 @builtin
 def arange(start, end, _builder=None):
-    """
+    f"""
     Returns contiguous values within the half-open interval :code:`[start,
     end)`.  :code:`end - start` must be less than or equal to
-    :code:`TRITON_MAX_TENSOR_NUMEL = 131072`
+    :code:`TRITON_MAX_TENSOR_NUMEL = {TRITON_MAX_TENSOR_NUMEL}`
 
     :param start: Start of the interval. Must be a power of two.
     :type start: int32
@@ -1212,8 +1212,9 @@ def full(shape, value, dtype, _builder=None):
     Returns a tensor filled with the scalar value for the given :code:`shape` and :code:`dtype`.
 
     :param shape: Shape of the new array, e.g., (8, 16) or (8, )
-    :value value: A scalar value to fill the array with
     :type shape: tuple of ints
+    :param value: A scalar value to fill the array with
+    :type value: scalar
     :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
@@ -1268,8 +1269,8 @@ def trans(input: tensor, *dims, _builder=None):
     """
     Permutes the dimensions of a tensor.
 
-    If no permutation is specified, tries to do a (1,0) permutation, i.e. tries
-    to transpose a 2D tensor.
+    If the parameter :code:`dims` is not specified, the function defaults to a (1,0) permutation,
+    effectively transposing a 2D tensor.
 
     :param input: The input tensor.
     :param dims: The desired ordering of dimensions.  For example,
@@ -1319,12 +1320,13 @@ def cat(input, other, can_reorder=False, _builder=None):
     Concatenate the given blocks
 
     :param input: The first input tensor.
-    :type input:
+    :type input: Tensor
     :param other: The second input tensor.
-    :type other:
+    :type other: Tensor
     :param reorder: Compiler hint. If true, the compiler is
         allowed to reorder elements while concatenating inputs.  Only use if the
-        order does not matter (e.g., result is only used in reduction ops)
+        order does not matter (e.g., result is only used in reduction ops).
+        Current implementation of `cat` supports only can_reorder=True.
     """
     return semantic.cat(input, other, can_reorder, _builder)
 
@@ -1507,18 +1509,22 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     """
     Returns the matrix product of two blocks.
 
-    The two blocks must be two-dimensional and have compatible inner dimensions.
+    The two blocks must both be two-dimensional or three-dimensional and have compatible inner dimensions.
+    For three-dimensional blocks, `tl.dot` performs the batched matrix product,
+    where the first dimension of each block represents the batch dimension.
 
     :param input: The first tensor to be multiplied.
-    :type input: 2D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second tensor to be multiplied.
-    :type other: 2D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type other: 2D or 3D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :param acc: The accumulator tensor. If not None, the result is added to this tensor.
+    :type acc: 2D or 3D tensor of scalar-type in {:code:`float16`, :code:`float32`, :code:`int32`}
     :param input_precision: How to exercise the Tensor Cores for f32 x f32. If
       the device does not have Tensor Cores or the inputs are not of dtype f32,
-      this option is ignored.  For devices that do have tensor cores, the
+      this option is ignored. For devices that do have tensor cores, the
       default precision is tf32.
     :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
-    :param allow_tf32: *Deprecated.*  If true, input_precision is set to "tf32".
+    :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
     """
@@ -1577,7 +1583,9 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type boundary_check: tuple of ints, optional
     :param padding_option: should be one of {"", "zero", "nan"}, do padding while out of bound
     :param cache_modifier: changes cache option in NVIDIA PTX
-    :type cache_modifier: str, optional
+    :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
+        cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
+        [cache operator](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators) for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional
     :param volatile: changes volatile option in NVIDIA PTX
@@ -1656,9 +1664,11 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
     :type boundary_check: tuple of ints, optional
     :param cache_modifier: changes cache option in NVIDIA PTX
-    :type cache_modifier: str, optional
+    :type cache_modifier: str, optional, should be one of {"", ".wb", ".cg", ".cs", ".wt"}, where ".wb" stands for
+        cache write-back all coherent levels, ".cg" stands for cache global, ".cs" stands for cache streaming, ".wt"
+        stands for cache write-through, see [cache operator](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators) for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
-    :type eviction_policy: str, optional
+    :type eviction_policy: str, optional, should be one of {"", "evict_first", "evict_last"}
     """
     # `value` can be constexpr
     value = _to_tensor(value, _builder)

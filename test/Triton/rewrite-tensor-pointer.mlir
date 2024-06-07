@@ -81,3 +81,20 @@ tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, 
   tt.store %45, %30, %54 : tensor<128x32x!tt.ptr<f16>>
   tt.return
 }
+
+// -----
+
+tt.func public @asm_in_loop(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c0_i64 = arith.constant 0 : i64
+  %c128_i64 = arith.constant 128 : i64
+  %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+  %1 = tt.make_tensor_ptr %arg0, [%c128_i64, %c128_i64], [%c128_i64, %c0_i64], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<128x128xbf16>>
+  %2:1 = scf.for %arg1 = %c0_i32 to %c1_i32 step %c1_i32 iter_args(%arg2 = %1) -> (!tt.ptr<tensor<128x128xbf16>>)  : i32 {
+    %3:2 = tt.elementwise_inline_asm "asm_multiple_results" {constraints = "=r,=r,r", packed_element = 1 : i32, pure = true} %0 : tensor<16xi32> -> tensor<16xi16>, tensor<16xi16>
+    %4 = tt.advance %arg2, [%c0_i32, %c0_i32] : <tensor<128x128xbf16>>
+    scf.yield %4 : !tt.ptr<tensor<128x128xbf16>>
+  }
+  tt.return
+}

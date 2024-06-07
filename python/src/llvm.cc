@@ -14,6 +14,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/TargetSelect.h"
@@ -301,6 +302,22 @@ void init_triton_llvm(py::module &&m) {
 
         PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
                        instrCbPtr);
+
+        std::string pluginFile =
+            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
+
+        if (!pluginFile.empty()) {
+          // TODO: Add some logging here that we inserted a pass into the LLVM
+          // pass pipeline
+          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+          if (!passPlugin) {
+            llvm::Error Err = passPlugin.takeError();
+            std::string ErrMsg =
+                "Pass Plugin Error: " + llvm::toString(std::move(Err));
+            throw std::runtime_error(ErrMsg);
+          }
+          passPlugin->registerPassBuilderCallbacks(pb);
+        }
 
         pb.registerModuleAnalyses(mam);
         pb.registerCGSCCAnalyses(cgam);
