@@ -3,7 +3,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-
+#include "llvm/Support/Signals.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -725,8 +725,24 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8_32b) {
                             {4, 16},
                             {0, 32}}},
                           {S("block"), {}}},
-                         {S("dim0"), S("dim1")}, /*requireSurjective=*/false));
+                         {{S("dim0"), 8}, {S("dim1"), 64}},
+                         /*requireSurjective=*/false));
+}
+
+TEST_F(LinearLayoutConversionsTest, Shared1DSwizzle) {
+  EXPECT_EQ(toLinearLayout(
+                {64, 1}, shared(2, 2, 4, false, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                /*elemBitWidth=*/16),
+            LinearLayout::identity1D(64, S("offset"), S("dim0")) *
+                LinearLayout::identity1D(1, S("offset"), S("dim1")) *
+                LinearLayout::identity1D(1, S("block"), S("dim0")));
 }
 
 } // anonymous namespace
 } // namespace mlir::triton::gpu
+
+int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

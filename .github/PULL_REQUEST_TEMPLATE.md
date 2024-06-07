@@ -1,9 +1,10 @@
 The core Triton is a small number of people, and we receive many PRs (thank
 you!).  To help us review your code more quickly, **if you are a new
-contributor (less than 3 PRs merged) we ask that you fill out the following
-checklist and include it in your PR description.**
+contributor (less than 3 PRs merged) we ask that you complete the following
+tasks and include the filled-out checklist in your PR description.**
 
-Fill out the checklist by replacing `[ ]` with `[x]`.
+Complete the following tasks before sending your PR, and replace `[ ]` with
+`[x]` to indicate you have done them.
 
 - [ ] I am not making a trivial change, such as fixing a typo in a comment.
 

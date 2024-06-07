@@ -21,6 +21,8 @@ DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
 DEFINE_DISPATCH(ExternLibHip, deviceGetAttribute, hipDeviceGetAttribute, int *,
                 hipDeviceAttribute_t, int);
 
+DEFINE_DISPATCH(ExternLibHip, getDeviceCount, hipGetDeviceCount, int *);
+
 Device getDevice(uint64_t index) {
   int clockRate;
   (void)hip::deviceGetAttribute<true>(&clockRate, hipDeviceAttributeClockRate,

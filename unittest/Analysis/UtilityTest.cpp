@@ -1,9 +1,6 @@
-//===- UtilityTest.cpp - Tests for
-// Utility----------------------------------===//
-//
-//===----------------------------------------------------------------------===//
-
 #include "triton/Dialect/Triton/IR/Utility.h"
+
+#include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
 
 namespace mlir {
@@ -27,3 +24,9 @@ TEST(Analysis, reorder) {
 }
 
 } // namespace mlir
+
+int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

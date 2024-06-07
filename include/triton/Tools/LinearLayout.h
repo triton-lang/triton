@@ -322,7 +322,7 @@ private:
                   /*size=getInDimSizeLog2(inDim)*/>
       bases;
 
-  llvm::SetVector<StringAttr> outDimNames;
+  llvm::MapVector<StringAttr, int32_t /*size*/> outDims;
   bool surjective;
 
 public:
@@ -349,9 +349,38 @@ public:
   // Creates a LinearLayout from a list of bases.  These are interpreted
   // according to the rules written for the member variable `bases`.
   //
-  // Assert-fails if requireSurjective is true and the bases are not surjective.
-  explicit LinearLayout(BasesT bases, ArrayRef<StringAttr> outDimNames,
-                        bool requireSurjective = true);
+  // Calculates the out-dim sizes according to the bases.  Consider the
+  // following example.
+  //
+  //   L(in1=1) = (out1=1, out2=0)
+  //   L(in1=2) = (out1=5, out2=1)
+  //   L(in1=4) = (out1=2, out2=2)
+  //
+  // To calculate the out-dim sizes, we first find the largest values for out1
+  // and out2, namely 5 and 2, then round these up to the next power of 2,
+  // namely 8 and 4.  These are the out-dim sizes.
+  //
+  // Assert-fails if the layout is not surjective given these out-dim sizes.
+  // That is, every possible out-dim in range [0, size) must be produced by
+  // xor'ing some combination of bases.
+  explicit LinearLayout(BasesT bases, ArrayRef<StringAttr> outDimNames);
+
+  // Creates a LinearLayout given a list of bases and the explicit out-dimension
+  // sizes.  Allows the layout to be non-surjective.
+  //
+  // To see why we need to explicitly pass out-dim sizes when creating a
+  // non-surjective layout, consider the following example.
+  //
+  //   L(in1=1) = 1
+  //   L(in1=2) = 4
+  //
+  // If we naively infer the out-dim sizes from these bases, we'd infer a size
+  // of nextPow2(4) = 8.  But given that the layout is non-surjective, who is to
+  // say that the codomain is not (say) [0,32)?  We can't tell, thus we need to
+  // be explicit about the sizes.
+  explicit LinearLayout(BasesT bases,
+                        ArrayRef<std::pair<StringAttr, int32_t>> outDims,
+                        bool requireSurjective);
 
   // Construct a LinearLayout from an explicit list of bases.  (This constructor
   // is needed because llvm::MapVector does not have a constructor that accepts
@@ -373,10 +402,14 @@ public:
   //   },
   //   {"out1", "out2"})
   //
-  // Assert-fails if requireSurjective is true and the bases are not surjective.
+  // The overload that infers out-dim sizes assert-fails if the layout is not
+  // surjective.
   explicit LinearLayout(
       ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases,
-      ArrayRef<StringAttr> outDimNames, bool requireSurjective = true);
+      ArrayRef<StringAttr> outDimNames);
+  explicit LinearLayout(
+      ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>> bases,
+      ArrayRef<std::pair<StringAttr, int32_t>> outDims, bool requireSurjective);
 
   bool isSurjective() const { return surjective; }
 
@@ -399,21 +432,17 @@ public:
   // These are in minor-to-major order, although if you don't flatten the dims
   // (e.g. by reshaping) then the order doesn't really affect anything.
   auto getInDimNames() const { return llvm::make_first_range(bases); }
-  ArrayRef<StringAttr> getOutDimNames() const {
-    return outDimNames.getArrayRef();
-  }
+  auto getOutDimNames() const { return llvm::make_first_range(outDims); }
 
   // Gets the position that this outDim occupies in getOutDimNames().  Asserts
   // if the dim is not present.
   int32_t getOutDimIndex(StringAttr outDim) const;
 
   bool hasInDim(StringAttr inDim) const { return bases.contains(inDim); }
-  bool hasOutDim(StringAttr outDim) const {
-    return outDimNames.contains(outDim);
-  }
+  bool hasOutDim(StringAttr outDim) const { return outDims.contains(outDim); }
 
   int32_t getNumInDims() const { return bases.size(); }
-  int32_t getNumOutDims() const { return outDimNames.size(); }
+  int32_t getNumOutDims() const { return outDims.size(); }
 
   // Asserts if the dimension is not present.
   int32_t getInDimSizeLog2(StringAttr inDim) const;
@@ -613,6 +642,9 @@ public:
   friend bool operator!=(LinearLayout lhs, LinearLayout rhs) {
     return !(lhs == rhs);
   }
+
+private:
+  void checkInvariants(bool requireSurjective);
 };
 
 inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
