@@ -293,7 +293,7 @@ class CUDABackend(BaseBackend):
             cmd += [fmad] if fmad != '' else []
             cmd += ['-v']
             if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1":
-              cmd += ["-opt-level", "0"]
+                cmd += ["-opt-level", "0"]
             cmd += [f'--gpu-name=sm_{capability}{suffix}', fsrc.name, '-o', fbin]
 
             try:

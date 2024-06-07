@@ -1,7 +1,7 @@
+#include <atomic>
 #include <iostream>
 #include <map>
 #include <memory>
-#include <atomic>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <type_traits>
@@ -23,7 +23,8 @@ std::map<MemSemantic, int> mem_semantic_map = {
 // Use compiler builtin atomics instead of std::atomic which requires
 // each variable to be declared as atomic.
 // Currently work for clang and gcc.
-template <bool is_min, typename T> T atomic_cmp(std::atomic<T> *ptr, T val, std::memory_order order) {
+template <bool is_min, typename T>
+T atomic_cmp(std::atomic<T> *ptr, T val, std::memory_order order) {
   auto cmp = [](T old, T val) {
     if constexpr (is_min) {
       return old > val;
@@ -87,12 +88,13 @@ protected:
   void applyAt(void *loc, size_t i) override final {
     if (mask[i]) {
       std::atomic<DType> *atomic_ptr = static_cast<std::atomic<DType> *>(loc);
-      *(static_cast<DType *>(ret) + i) = applyAtMasked(atomic_ptr,
-                        *(static_cast<const DType *>(val) + i), std::memory_order(order));
+      *(static_cast<DType *>(ret) + i) =
+          applyAtMasked(atomic_ptr, *(static_cast<const DType *>(val) + i),
+                        std::memory_order(order));
     }
   }
 
-  virtual DType applyAtMasked(std::atomic<DType>* loc, const DType value,
+  virtual DType applyAtMasked(std::atomic<DType> *loc, const DType value,
                               std::memory_order order) = 0;
 
   const void *val;
@@ -113,7 +115,8 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType>* loc, const DType value, std::memory_order order) override {
+  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+                      std::memory_order order) override {
     return std::atomic_fetch_add(loc, value);
   }
 };
@@ -125,9 +128,9 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType>* loc, const DType value,
+  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
                       std::memory_order order) override {
-    
+
     return atomic_fadd(loc, value, order);
   }
 };
@@ -139,7 +142,7 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType>* loc, const DType value,
+  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
                       std::memory_order order) override {
     return std::atomic_fetch_and(loc, value);
   }
@@ -152,7 +155,7 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType>* loc, const DType value,
+  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
                       std::memory_order order) override {
     return std::atomic_fetch_or(loc, value);
   }
@@ -165,7 +168,7 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType>* loc, const DType value,
+  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
                       std::memory_order order) override {
     return std::atomic_fetch_xor(loc, value);
   }
@@ -179,7 +182,7 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType>* loc, const DType value,
+  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
                       std::memory_order order) override {
     return atomic_cmp</*is_min=*/false>(loc, value, order);
   }
@@ -193,9 +196,9 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType>* loc, const DType value,
+  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
                       std::memory_order order) override {
-    return atomic_cmp</*is_min=*/true>(loc, value,  order);
+    return atomic_cmp</*is_min=*/true>(loc, value, order);
   }
 };
 
@@ -206,7 +209,7 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType>* loc, const DType value,
+  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
                       std::memory_order order) override {
     return loc->exchange(value, order);
   }
@@ -232,16 +235,18 @@ protected:
       atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
                                           std::memory_order(order),
                                           std::memory_order(order));
-      
+
     } else if (itemsize == 2) {
-      std::atomic<uint16_t> *atomic_loc = reinterpret_cast<std::atomic<uint16_t> *>(loc);
+      std::atomic<uint16_t> *atomic_loc =
+          reinterpret_cast<std::atomic<uint16_t> *>(loc);
       uint16_t desired_val = *(static_cast<const uint16_t *>(desired) + i);
       uint16_t *expected_uint = static_cast<uint16_t *>(expected);
       atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
                                           std::memory_order(order),
                                           std::memory_order(order));
     } else if (itemsize == 4) {
-      std::atomic<uint32_t> *atomic_loc = reinterpret_cast<std::atomic<uint32_t> *>(loc);
+      std::atomic<uint32_t> *atomic_loc =
+          reinterpret_cast<std::atomic<uint32_t> *>(loc);
       uint32_t desired_val = *(static_cast<const uint32_t *>(desired) + i);
       uint32_t *expected_uint = static_cast<uint32_t *>(expected);
       atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
@@ -256,7 +261,6 @@ protected:
                                           std::memory_order(order),
                                           std::memory_order(order));
 
-   
     } else {
       // The ‘__atomic’ builtins can be used with any integral scalar or pointer
       // type that is 1, 2, 4, or 8 bytes in length. 16-byte integral types are

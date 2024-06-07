@@ -107,7 +107,8 @@ unsigned getElementBitWidth(RankedTensorType type) {
   return typeForMem.getIntOrFloatBitWidth();
 }
 
-unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
+unsigned
+getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());

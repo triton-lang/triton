@@ -121,5 +121,6 @@ def test_print(func: str, data_type: str):
         assert_close(y, x)
     torch.cuda.synchronize()
 
+
 if __name__ == "__main__":
     test_print(sys.argv[1], sys.argv[2])

@@ -112,5 +112,6 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, casual, seq_par, provid
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
 
+
 # only works on post-Ampere GPUs right now
 # bench_flash_attention.run(save_path='.', print_data=True)

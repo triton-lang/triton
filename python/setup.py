@@ -94,18 +94,16 @@ def find_vswhere():
         return vswhere_path
     return None
 
+
 def find_visual_studio(version_ranges):
     vswhere = find_vswhere()
     if not vswhere:
         raise FileNotFoundError("vswhere.exe not found.")
-    
+
     for version_range in version_ranges:
         command = [
-            str(vswhere),
-            "-version", version_range,
-            "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "-property", "installationPath",
-            "-prerelease"
+            str(vswhere), "-version", version_range, "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property", "installationPath", "-prerelease"
         ]
 
         try:
@@ -114,8 +112,9 @@ def find_visual_studio(version_ranges):
                 return output
         except subprocess.CalledProcessError:
             continue
-    
+
     return None
+
 
 def set_env_vars(vs_path, arch="x64"):
     vcvarsall_path = Path(vs_path) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
@@ -124,11 +123,12 @@ def set_env_vars(vs_path, arch="x64"):
 
     command = f'call "{vcvarsall_path}" {arch} && set'
     output = subprocess.check_output(command, shell=True, text=True)
-    
+
     for line in output.splitlines():
         if '=' in line:
             var, value = line.split('=', 1)
             os.environ[var] = value
+
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
 def check_env_flag(name: str, default: str = "") -> bool:
@@ -187,7 +187,7 @@ def get_json_package_info():
 # llvm
 def get_llvm_package_info():
     system = platform.system()
-    arch = {"x86_64": "x64",  "AMD64": "64" , "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
+    arch = {"x86_64": "x64", "AMD64": "64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     if system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
@@ -291,7 +291,7 @@ def download_and_copy(name, src_path, variable, version, url_func):
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
-    arch = {"x86_64": "64","AMD64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
+    arch = {"x86_64": "64", "AMD64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
     supported = {"Linux": "linux", "Windows": "win"}
     is_supported = system in supported
     if is_supported:
@@ -538,7 +538,7 @@ download_and_copy(
 
 backends = ["nvidia", "amd"]
 if os.name == "nt":
-   backends = ["nvidia"]
+    backends = ["nvidia"]
 backends = [*BackendInstaller.copy(backends), *BackendInstaller.copy_externals()]
 
 

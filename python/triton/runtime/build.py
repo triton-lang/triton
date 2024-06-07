@@ -9,6 +9,7 @@ import setuptools
 import platform
 from .CLFinder import initialize_visual_studio_env
 
+
 @contextlib.contextmanager
 def quiet():
     old_stdout, old_stderr = sys.stdout, sys.stderr

@@ -40,11 +40,11 @@ void dumpMatrix(uint64_t *m, int numRows, int numCols) {
 
 static inline uint32_t countTrailingZeros(uint32_t x) {
 #ifdef _MSC_VER
-    unsigned long index;
-    _BitScanForward(&index, x);
-    return index;
+  unsigned long index;
+  _BitScanForward(&index, x);
+  return index;
 #else
-    return __builtin_ctz(x);
+  return __builtin_ctz(x);
 #endif
 }
 

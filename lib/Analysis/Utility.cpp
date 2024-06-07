@@ -230,7 +230,8 @@ unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
-  SmallVector<unsigned> sizePerThreads = triton::gpu::getContigPerThread(getEncoding());
+  SmallVector<unsigned> sizePerThreads =
+      triton::gpu::getContigPerThread(getEncoding());
   sizePerThreads[getAxis()] = 1;
   return product<unsigned>(sizePerThreads);
 }
@@ -592,7 +593,8 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
   auto mfmaLayout = dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcLayout);
-  auto dotOperandLayout = dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstLayout);
+  auto dotOperandLayout =
+      dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstLayout);
   if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
     return false;
   // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
@@ -600,7 +602,8 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   // layout when opIdx == 1.
   return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
          dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
-         dotOperandLayout.getKWidth() == triton::gpu::getContigPerThread(mfmaLayout)[1] &&
+         dotOperandLayout.getKWidth() ==
+             triton::gpu::getContigPerThread(mfmaLayout)[1] &&
          dotOperandLayout.getParent() == mfmaLayout &&
          (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());

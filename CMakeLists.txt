@@ -280,7 +280,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Link triton with its dependencies
   target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
-  if(WIN32) 
+  if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
     set_target_properties(triton PROPERTIES PREFIX "lib")
