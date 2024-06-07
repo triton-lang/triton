@@ -1,4 +1,7 @@
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Signals.h"
 #include <pybind11/pybind11.h>
+
 namespace py = pybind11;
 
 #define FOR_EACH_1(MACRO, X) MACRO(X)
@@ -41,6 +44,7 @@ FOR_EACH_P(DECLARE_BACKEND, TRITON_BACKENDS_TUPLE)
 
 PYBIND11_MODULE(libtriton, m) {
   m.doc() = "Python bindings to the C++ Triton API";
+  llvm::sys::PrintStackTraceOnErrorSignal("triton_python");
   init_triton_env_vars(m);
   init_triton_ir(m.def_submodule("ir"));
   init_triton_passes(m.def_submodule("passes"));
