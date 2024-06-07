@@ -31,33 +31,41 @@ thread_local std::deque<size_t>
 
 namespace {
 
-// Node to device id mapping
-int deviceOffset = 0x7fffffff;
+class DeviceInfo {
+public:
+  DeviceInfo() : deviceOffset(getDeviceOffset()) {}
+  int mapDeviceId(int id) { return id - deviceOffset; }
 
-void createDeviceMap() {
-  int dc = 0;
-  auto ret = hip::getDeviceCount<true>(&dc);
-  hsa::iterateAgents(
-      [](hsa_agent_t agent, void *data) {
-        auto &deviceOffset = *static_cast<int *>(data);
-        int nodeId;
-        hsa::agentGetInfo<true>(
-            agent,
-            static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DRIVER_NODE_ID),
-            &nodeId);
-        int deviceType;
-        hsa::agentGetInfo<true>(
-            agent, static_cast<hsa_agent_info_t>(HSA_AGENT_INFO_DEVICE),
-            &deviceType);
-        if ((nodeId < deviceOffset) && (deviceType == HSA_DEVICE_TYPE_GPU))
-          deviceOffset = nodeId;
+private:
+  int getDeviceOffset() {
+    int offset = 0x7fffffff;
+    int dc = 0;
+    auto ret = hip::getDeviceCount<true>(&dc);
+    hsa::iterateAgents(
+        [](hsa_agent_t agent, void *data) {
+          auto &offset = *static_cast<int *>(data);
+          int nodeId;
+          hsa::agentGetInfo<true>(
+              agent,
+              static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DRIVER_NODE_ID),
+              &nodeId);
+          int deviceType;
+          hsa::agentGetInfo<true>(
+              agent, static_cast<hsa_agent_info_t>(HSA_AGENT_INFO_DEVICE),
+              &deviceType);
+          if ((nodeId < offset) && (deviceType == HSA_DEVICE_TYPE_GPU))
+            offset = nodeId;
 
-        return HSA_STATUS_SUCCESS;
-      },
-      &deviceOffset);
+          return HSA_STATUS_SUCCESS;
+        },
+        &offset);
+    return offset;
+  }
+
+  const int deviceOffset;
 };
 
-int mapDeviceId(int id) { return id - deviceOffset; };
+DeviceInfo deviceInfo;
 
 std::shared_ptr<Metric>
 convertActivityToMetric(const roctracer_record_t *activity) {
@@ -67,7 +75,7 @@ convertActivityToMetric(const roctracer_record_t *activity) {
     metric = std::make_shared<KernelMetric>(
         static_cast<uint64_t>(activity->begin_ns),
         static_cast<uint64_t>(activity->end_ns), 1,
-        static_cast<uint64_t>(mapDeviceId(activity->device_id)),
+        static_cast<uint64_t>(deviceInfo.mapDeviceId(activity->device_id)),
         static_cast<uint64_t>(DeviceType::HIP));
     break;
   }
@@ -253,7 +261,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {
 
 RoctracerProfiler::RoctracerProfiler() {
   pImpl = std::make_unique<RoctracerProfilerPimpl>(*this);
-  createDeviceMap();
 }
 
 RoctracerProfiler::~RoctracerProfiler() = default;
