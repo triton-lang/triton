@@ -725,7 +725,17 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8_32b) {
                             {4, 16},
                             {0, 32}}},
                           {S("block"), {}}},
-                         {S("dim0"), S("dim1")}, /*requireSurjective=*/false));
+                         {{S("dim0"), 8}, {S("dim1"), 64}},
+                         /*requireSurjective=*/false));
+}
+
+TEST_F(LinearLayoutConversionsTest, Shared1DSwizzle) {
+  EXPECT_EQ(toLinearLayout(
+                {64, 1}, shared(2, 2, 4, false, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                /*elemBitWidth=*/16),
+            LinearLayout::identity1D(64, S("offset"), S("dim0")) *
+                LinearLayout::identity1D(1, S("offset"), S("dim1")) *
+                LinearLayout::identity1D(1, S("block"), S("dim0")));
 }
 
 } // anonymous namespace

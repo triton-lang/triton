@@ -187,7 +187,7 @@ TEST_F(LinearLayoutTest, TransposeIns) {
 
 TEST_F(LinearLayoutTest, EmptyToString) {
   // Mostly I just want to make sure it doesn't crash.
-  EXPECT_EQ(LinearLayout::empty().toString(), "(empty layout)\n");
+  EXPECT_EQ(LinearLayout::empty().toString(), "\n(empty layout)");
 }
 
 TEST_F(LinearLayoutTest, Apply) {
@@ -196,7 +196,7 @@ TEST_F(LinearLayoutTest, Apply) {
           {S("in1"), {{4, 2}, {2, 1}, {1, 0}}},
           {S("in2"), {{1, 2}, {2, 1}}},
       },
-      {S("out1"), S("out2")}, /*requireSurjective=*/false);
+      {{S("out1"), 8}, {S("out2"), 4}}, /*requireSurjective=*/false);
   EXPECT_THAT(layout.apply({{S("in1"), 0}, {S("in2"), 0}}),
               ElementsAre(Pair(S("out1"), 0), Pair(S("out2"), 0)));
   EXPECT_THAT(layout.apply({{S("in2"), 0}, {S("in1"), 1}}),
@@ -236,7 +236,7 @@ TEST_F(LinearLayoutTest, Compose) {
                     {S("in1"), {{3, 3}, {1, 1}}},
                     {S("in2"), {{2, 2}, {0, 3}}},
                 },
-                {S("out3"), S("out4")}, /*requireSurjective=*/false));
+                {{S("out3"), 4}, {S("out4"), 4}}, /*requireSurjective=*/false));
   EXPECT_FALSE(composition.isSurjective());
 }
 
@@ -345,11 +345,12 @@ TEST_F(LinearLayoutTest, ReshapeOutsDegenerateOut) {
 
 TEST_F(LinearLayoutTest, FlattenOuts) {
   LinearLayout ll({{S("in1"), {{1, 0}, {4, 1}, {8, 4}}}, {S("in2"), {{3, 2}}}},
-                  {S("out1"), S("out2")}, /*requireSurjective=*/false);
+                  {{S("out1"), 16}, {S("out2"), 8}},
+                  /*requireSurjective=*/false);
   EXPECT_EQ(ll.flattenOuts(),
             LinearLayout({{S("in1"), {{1}, {4 + 16}, {8 + 4 * 16}}},
                           {S("in2"), {{3 + 2 * 16}}}},
-                         {S("out1")}, /*requireSurjective=*/false));
+                         {{S("out1"), 16 * 8}}, /*requireSurjective=*/false));
 }
 
 TEST_F(LinearLayoutTest, FlattenOutsEdgeCases) {
@@ -399,8 +400,9 @@ TEST_F(LinearLayoutTest, InvertAndCompose_NonInjective) {
   //   l2^-1(l1(2)) = l2^-1(0) = 4
   //   l2^-1(l1(4)) = l2^-1(4) = 8
   LinearLayout composition = l1.invertAndCompose(l2);
-  EXPECT_EQ(composition, LinearLayout({{S("in1"), {{2}, {4}, {8}}}}, {S("in2")},
-                                      /*requireSurjective=*/false));
+  EXPECT_EQ(composition,
+            LinearLayout({{S("in1"), {{2}, {4}, {8}}}}, {{S("in2"), 16}},
+                         /*requireSurjective=*/false));
   EXPECT_FALSE(composition.isSurjective());
 
   // L2 ∘ L2^-1 ∘ L1 == L1.
@@ -456,8 +458,9 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastAtBeginningOfSecond) {
   //
   // l1 is the identity, so composing with l1 gives back l2^-1.
   LinearLayout composition = l1.invertAndCompose(l2);
-  EXPECT_EQ(composition, LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {S("in")},
-                                      /*requireSurjective=*/false));
+  EXPECT_EQ(composition,
+            LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {{S("in"), 16}},
+                         /*requireSurjective=*/false));
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
@@ -481,8 +484,9 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastBeginningAndEndOfSecond) {
   LinearLayout l1({{S("in"), {{1}, {2}, {4}}}}, {S("out")});
   LinearLayout l2({{S("in"), {{0}, {4}, {1}, {2}, {0}}}}, {S("out")});
   LinearLayout composition = l1.invertAndCompose(l2);
-  EXPECT_EQ(composition, LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {S("in")},
-                                      /*requireSurjective=*/false));
+  EXPECT_EQ(composition,
+            LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {{S("in"), 16}},
+                         /*requireSurjective=*/false));
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
@@ -494,10 +498,12 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Multidim) {
                   {S("out2"), S("out1")});
 
   LinearLayout c1 = l1.invertAndCompose(l2);
-  EXPECT_EQ(c1.compose(l2), l1.transposeOuts(l2.getOutDimNames()));
+  EXPECT_EQ(c1.compose(l2),
+            l1.transposeOuts(llvm::to_vector(l2.getOutDimNames())));
 
   LinearLayout c2 = l2.invertAndCompose(l1);
-  EXPECT_EQ(c2.compose(l1), l2.transposeOuts(l1.getOutDimNames()));
+  EXPECT_EQ(c2.compose(l1),
+            l2.transposeOuts(llvm::to_vector(l1.getOutDimNames())));
 }
 
 TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
