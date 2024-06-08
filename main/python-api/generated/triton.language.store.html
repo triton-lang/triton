@@ -160,8 +160,10 @@ of data is stored.  In this case:</p>
 <li><p><strong>value</strong> (<em>Block</em>) – The tensor of elements to be stored</p></li>
 <li><p><strong>mask</strong> (<em>Block</em><em> of </em><em>triton.int1</em><em>, </em><em>optional</em>) – If <cite>mask[idx]</cite> is false, do not store <cite>value[idx]</cite> at <cite>pointer[idx]</cite></p></li>
 <li><p><strong>boundary_check</strong> (<em>tuple</em><em> of </em><em>ints</em><em>, </em><em>optional</em>) – tuple of integers, indicating the dimensions which should do the boundary check</p></li>
-<li><p><strong>cache_modifier</strong> (<em>str</em><em>, </em><em>optional</em>) – changes cache option in NVIDIA PTX</p></li>
-<li><p><strong>eviction_policy</strong> (<em>str</em><em>, </em><em>optional</em>) – changes eviction policy in NVIDIA PTX</p></li>
+<li><p><strong>cache_modifier</strong> (str, optional, should be one of {“”, “.wb”, “.cg”, “.cs”, “.wt”}, where “.wb” stands for
+cache write-back all coherent levels, “.cg” stands for cache global, “.cs” stands for cache streaming, “.wt”
+stands for cache write-through, see [cache operator](<a class="reference external" href="https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators">https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators</a>) for more details.) – changes cache option in NVIDIA PTX</p></li>
+<li><p><strong>eviction_policy</strong> (<em>str</em><em>, </em><em>optional</em><em>, </em><em>should be one</em><em> of </em><em>{&quot;&quot;</em><em>, </em><em>&quot;evict_first&quot;</em><em>, </em><em>&quot;evict_last&quot;}</em>) – changes eviction policy in NVIDIA PTX</p></li>
 </ul>
 </dd>
 </dl>

@@ -127,7 +127,17 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.sort">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">constexpr</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">descending</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">constexpr</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">constexpr[0]</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.sort" title="Link to this definition">¶</a></dt>
-<dd><p>This function can also be called as a member function on <a class="reference internal" href="triton.language.tensor.html#triton.language.tensor" title="triton.language.tensor"><code class="xref py py-class docutils literal notranslate"><span class="pre">tensor</span></code></a>,
+<dd><p>Sorts a tensor along a specified dimension using the bitonic merge-sort algorithm.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> (<em>Tensor</em>) – The input tensor to be sorted.</p></li>
+<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – The dimension along which to sort the tensor. If None, the tensor is sorted along the last dimension. Currently, only sorting along the last dimension is supported.</p></li>
+<li><p><strong>descending</strong> (<em>bool</em><em>, </em><em>optional</em>) – If set to True, the tensor is sorted in descending order. If set to False, the tensor is sorted in ascending order.</p></li>
+</ul>
+</dd>
+</dl>
+<p>This function can also be called as a member function on <a class="reference internal" href="triton.language.tensor.html#triton.language.tensor" title="triton.language.tensor"><code class="xref py py-class docutils literal notranslate"><span class="pre">tensor</span></code></a>,
 as <code class="code docutils literal notranslate"><span class="pre">x.sort(...)</span></code> instead of
 <code class="code docutils literal notranslate"><span class="pre">sort(x,</span> <span class="pre">...)</span></code>.</p>
 </dd></dl>
