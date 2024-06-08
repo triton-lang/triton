@@ -214,7 +214,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
-  cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   // TODO: switch to directly subscribe the APIs and measure overhead
   cupti::subscribe<true>(&subscriber, callbackFn, nullptr);
@@ -248,7 +247,6 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
-  cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   setRuntimeCallbacks(subscriber, /*enable=*/false);
   setDriverCallbacks(subscriber, /*enable=*/false);
