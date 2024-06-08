@@ -15,10 +15,8 @@ def is_cuda():
 
 @pytest.mark.parametrize("m, n, k", [(16, 16, 16), (32, 16, 16), (16, 32, 16), (16, 16, 32)])
 def test_cublas_fp8(m, n, k, device):
-    if is_cuda():
-        capability = torch.cuda.get_device_capability()
-        if capability[0] < 9 and capability[1] < 9:
-            pytest.skip("test_cublas_fp8 is only supported on CUDA with cc >= 89")
+    if not (is_cuda() and torch.cuda.get_device_capability()[0] >= 9):
+        pytest.skip("test_cublas_fp8 is only supported on CUDA with cc >= 90")
 
     from triton._C.libtriton import nvidia
 
