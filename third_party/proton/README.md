@@ -14,12 +14,11 @@ cd triton/python
 pip install .
 ```
 
-To not build Proton, you can set the `TRITON_BUILD_PROTON` environment variable to `OFF`:
+To **not build** Proton, you can set the `TRITON_BUILD_PROTON` environment variable to `OFF`:
 
 ```bash
 TRITON_BUILD_PROTON=OFF pip install .
 ```
-
 
 ## Usage
 
@@ -146,3 +145,27 @@ More options can be found by running the following command.
 ```bash
 proton-viewer -h
 ```
+
+## Proton *vs* nsys
+
+- Runtime overhead (~2x lower)
+
+Proton has a much lower profiling overhead than nsys. Even for workload with a large number of small GPU kernels, proton only triggers ~1.3x overhead, while nsys triggers >2.5x overhead.
+
+For GPU-bound workload, both proton and nsys has similar overhead, with little impact on the workload.
+
+The low overhead of proton is due to its less profiling metrics and callbacks compared to nsys.
+
+- Profile size (significantly smaller)
+
+nsys traces and records every GPU kernel, while proton aggregates the metrics of GPU kernels under the same calling context.
+
+As a result, proton's profile size can be up to thousands of times smaller than nsys's profile size, depending on the running time.
+
+- Portability (support different GPUs)
+
+Proton is designed to be portable and can be used on AMD GPUs. nsys only supports NVIDIA GPUs.
+
+- Insights (more insightful on triton kernels)
+
+Proton can register hooks to analyze the metadata of triton kernels, while nsys cannot.
