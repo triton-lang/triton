@@ -21,7 +21,8 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
     if capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability >= 80")
     if D_HEAD == 128:
-        if triton.runtime.driver.active.utils.get_device_properties(torch.cuda.current_device())["max_shared_mem"] < 131072:
+        if triton.runtime.driver.active.utils.get_device_properties(
+                torch.cuda.current_device())["max_shared_mem"] < 131072:
             pytest.skip(
                 "Skipping tests with head_dim = 128 due to insufficient shared memory (less than 128 KB per SM) on this GPU."
             )
