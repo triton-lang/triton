@@ -362,11 +362,6 @@ def bench(K, reps=10):
 
     proton.deactivate(0)
 
-    # print(f"{cublas_result=}")
-    # print(f"{naive_result=}")
-    # print(f"{persistent_result=}")
-    # print(f"{tma_persistent_result=}")
-
 
 def validate(M, N, K):
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
