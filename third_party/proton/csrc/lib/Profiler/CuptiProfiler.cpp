@@ -210,7 +210,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     if (callbackData->context) {
       // Valid context and outermost level of the kernel launch
       auto scopeId = Scope::getNewScopeId();
-      auto scope = Scope(scopeId, callbackData->symbolName);
+      auto scope = Scope(
+          scopeId, callbackData->symbolName ? callbackData->symbolName : "");
       profilerState.record(scope);
     }
     profilerState.enterOp();
