@@ -33,12 +33,14 @@ namespace {
 
 class DeviceInfo : public Singleton<DeviceInfo> {
 public:
-  DeviceInfo() : deviceOffset(getDeviceOffset()) {}
-  int mapDeviceId(int id) { return id - deviceOffset; }
+  DeviceInfo() = default;
+  int mapDeviceId(int id) {
+    std::call_once(deviceOffsetFlag, [this]() { initDeviceOffset(); });
+    return id - deviceOffset;
+  }
 
 private:
-  int getDeviceOffset() {
-    int offset = 0x7fffffff;
+  void initDeviceOffset() {
     int dc = 0;
     auto ret = hip::getDeviceCount<true>(&dc);
     hsa::iterateAgents(
@@ -58,11 +60,11 @@ private:
 
           return HSA_STATUS_SUCCESS;
         },
-        &offset);
-    return offset;
+        &deviceOffset);
   }
 
-  const int deviceOffset;
+  std::once_flag deviceOffsetFlag;
+  int deviceOffset = 0x7fffffff;
 };
 
 std::shared_ptr<Metric>
