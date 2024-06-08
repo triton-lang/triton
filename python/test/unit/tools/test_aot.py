@@ -263,7 +263,11 @@ def link_aot_kernels(dir):
 
     # link all desired configs
     h_files = glob.glob(os.path.join(dir, "*.h"))
-    subprocess.run([sys.executable, linker_path] + h_files + ["-o", "kernel"], check=True, cwd=dir)
+    print(linker_path)
+    print(h_files)
+    result = subprocess.run([sys.executable, linker_path] + h_files + ["-o", "kernel"], check=True, cwd=dir, capture_output=True, text=True)
+    print("Linker stdout:", result.stdout)
+    print("Linker stderr:", result.stderr)
 
 
 def generate_matmul_test_data(dir, M, N, K):
