@@ -372,7 +372,7 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
 @jit
 def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     """
-    Sorts a tensor along a specified dimension using the bitonic merge-sort algorithm.
+    Sorts a tensor along a specified dimension.
 
     :param x: The input tensor to be sorted.
     :type x: Tensor

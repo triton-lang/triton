@@ -1,4 +1,5 @@
 import argparse
+import sys
 import time
 
 import numpy as np
@@ -8,6 +9,10 @@ import triton.language as tl
 import triton.profiler as proton
 
 from triton._C.libtriton import nvidia
+
+if not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 9):
+    print("This tutorial fp8_matmul is only supported on CUDA with cc >= 90")
+    sys.exit(0)
 
 cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
 cublas = nvidia.cublas.CublasLt(cublas_workspace)
