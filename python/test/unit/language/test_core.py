@@ -3272,7 +3272,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
 
     capability = torch.cuda.get_device_capability()
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32" and capability not in {(8, 0), (8, 7), (9, 0)}:
-        pytest.skip("Skipping tests with B = 8 and M = 64 due to insufficient shared memory on this GPU")
+        pytest.skip("Skipping tests with B = 8, M = 64, in_type = float32, out_type = float32 due to insufficient shared memory (less than 128 KB per SM) on this GPU.")
 
     @triton.jit
     def kernel(
