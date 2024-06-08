@@ -21,7 +21,7 @@
 namespace proton {
 
 template <>
-thread_local GPUProfiler<RoctracerProfiler>::ProfilerState
+thread_local GPUProfiler<RoctracerProfiler>::ThreadState
     GPUProfiler<RoctracerProfiler>::profilerState(
         RoctracerProfiler::instance());
 
@@ -35,6 +35,9 @@ class DeviceInfo : public Singleton<DeviceInfo> {
 public:
   DeviceInfo() = default;
   int mapDeviceId(int id) {
+    // Lazy initialization of device offset by calling hip API.
+    // Otherwise on nvidia platforms, the HSA call will fail because of no
+    // available libraries.
     std::call_once(deviceOffsetFlag, [this]() { initDeviceOffset(); });
     return id - deviceOffset;
   }

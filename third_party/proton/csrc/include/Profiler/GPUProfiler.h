@@ -41,10 +41,10 @@ protected:
   virtual void doFlush() override { pImpl->doFlush(); }
   virtual void doStop() override { pImpl->doStop(); }
 
-  struct ProfilerState {
+  struct ThreadState {
     ConcreteProfilerT &profiler;
 
-    ProfilerState(ConcreteProfilerT &profiler) : profiler(profiler) {}
+    ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void record(size_t scopeId) {
       if (profiler.isOpInProgress())
@@ -73,7 +73,11 @@ protected:
   struct Correlation {
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
+    // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
+    // A set of kernels triggered by GPU runtime APIs (e.g., torch
+    // kernels) other than Triton.
+    // It stores a subset of external ids in corrIdToExternId.
     ApiExternIdSet apiExternIds;
     static thread_local std::deque<size_t> externIdQueue;
 
@@ -113,7 +117,7 @@ protected:
     }
   };
 
-  static thread_local ProfilerState profilerState;
+  static thread_local ThreadState profilerState;
   Correlation correlation;
 
   // Use the pimpl idiom to hide the implementation details. This lets us avoid

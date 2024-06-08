@@ -13,7 +13,7 @@
 namespace proton {
 
 template <>
-thread_local GPUProfiler<CuptiProfiler>::ProfilerState
+thread_local GPUProfiler<CuptiProfiler>::ThreadState
     GPUProfiler<CuptiProfiler>::profilerState(CuptiProfiler::instance());
 
 template <>
