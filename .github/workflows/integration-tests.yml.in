@@ -180,8 +180,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: "true"
+
+      - name: Checkout submodules
+        run: |
+          git submodule update --init --recursive
 
       - &compute-cache-keys-step
         name: Compute cache keys
