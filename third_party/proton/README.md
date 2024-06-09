@@ -148,15 +148,15 @@ proton-viewer -h
 
 ## Proton *vs* nsys
 
-- Runtime overhead (~2x lower)
+- Runtime overhead (up to 1.5x)
 
-Proton has a much lower profiling overhead than nsys. Even for workload with a large number of small GPU kernels, proton only triggers ~1.3x overhead, while nsys triggers >2.5x overhead.
+Proton has a lower profiling overhead than nsys. Even for workload with a large number of small GPU kernels, proton triggers less than ~1.5x overhead.
 
 For GPU-bound workload, both proton and nsys has similar overhead, with little impact on the workload.
 
-The low overhead of proton is due to its less profiling metrics and callbacks compared to nsys.
+The lower overhead of proton is due to its less profiling metrics and callbacks compared to nsys.
 
-- Profile size (significantly smaller)
+- Profile size (significantly smaller than nsys)
 
 nsys traces and records every GPU kernel, while proton aggregates the metrics of GPU kernels under the same calling context.
 
@@ -166,6 +166,6 @@ As a result, proton's profile size can be up to thousands of times smaller than 
 
 Proton is designed to be portable and can be used on AMD GPUs. nsys only supports NVIDIA GPUs.
 
-- Insights (more insightful on triton kernels)
+- Insights (more insightful than nsys on triton kernels)
 
 Proton can register hooks to analyze the metadata of triton kernels, while nsys cannot. **Note** that the hooks do add additional overhead to proton.
