@@ -9,7 +9,6 @@ jobs:
     name: Pre-commit checks
     runs-on:
       - glados
-      - cpu
       - intel
       - x86
     steps:
@@ -25,7 +24,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
 
       - name: Run pre-commit checks
         run: |
@@ -38,36 +36,38 @@ jobs:
 
           python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
 
-    build-test:
-      name: Build and test
-      runs-on:
-        - glados
-        - cpu
-        - intel
-        - x86
-      strategy:
-        matrix:
-          python: ['3.11']
-      steps:
-        - name: Checkout repository
-          uses: actions/checkout@v4
+  build-test:
+    name: Build and test
+    runs-on:
+      - glados
+      - intel
+      - x86
+    strategy:
+      matrix:
+        python: ['3.11']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-        - name: Install Python ${{ matrix.python }}
-          uses: actions/setup-python@v5
-          with:
-            python-version: ${{ matrix.python }}
-            cache: pip
+      - name: Install Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
 
-        - name: Install pip dependencies
-          run: |
-            python3 -m pip install --upgrade pip
-            python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
-        - name: Install Triton
-          run: |
-            echo "PATH is '$PATH'"
-            cd python
-            python3 -m pip install --no-build-isolation -vvv '.[tests]'
-        - name: Run python unit tests
-          run: |
-            cd python/test/unit
-            python -m pytest -n 32 --device cpu python/test/unit/language/test_core.py -m cpu
+      - name: Install pip and apt dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+          sudo apt-get update
+          sudo apt-get install -y zlib1g-dev
+          pip install torch==2.1.2
+
+      - name: Install Triton
+        run: |
+          echo "PATH is '$PATH'"
+          cd python
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Run python unit tests
+        run: |
+          python -m pytest -n 32 --device cpu python/test/unit/language/test_core.py -m cpu
