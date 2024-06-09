@@ -168,4 +168,4 @@ Proton is designed to be portable and can be used on AMD GPUs. nsys only support
 
 - Insights (more insightful on triton kernels)
 
-Proton can register hooks to analyze the metadata of triton kernels, while nsys cannot.
+Proton can register hooks to analyze the metadata of triton kernels, while nsys cannot. **Note** that the hooks do add additional overhead to proton.
