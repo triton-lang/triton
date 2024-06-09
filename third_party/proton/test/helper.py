@@ -1,14 +1,9 @@
-import triton
 import triton.profiler as proton
-import triton.language as tl
 
 import torch
 import sys
 
-
-@triton.jit
-def custom_add(a_ptr):
-    tl.store(a_ptr, 1.0)
+from helper_kernels import custom_add
 
 
 def main():
