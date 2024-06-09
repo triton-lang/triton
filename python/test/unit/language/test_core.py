@@ -1440,11 +1440,13 @@ def test_atomic_rmw_predicate(num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("shape, axis, num_ctas", [(shape, axis, num_ctas)
-                                                   for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
-                                                   for axis in [0, 1]
-                                                   for num_ctas in num_ctas_list])
-def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
+@pytest.mark.parametrize("shape, axis, num_ctas, dtype_x_str",
+                         [(shape, axis, num_ctas, dtype_x_str)
+                          for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
+                          for axis in [0, 1]
+                          for num_ctas in num_ctas_list
+                          for dtype_x_str in ['float32', 'uint64', 'int64', 'float64']])
+def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
     shape0, shape1 = shape
     # triton kernel
 
@@ -1460,15 +1462,15 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
             tl.atomic_add(Z + off1, z)
 
     rs = RandomState(17)
-    x = numpy_random((shape0, shape1), dtype_str="float32", rs=rs)
+    x = numpy_random((shape0, shape1), dtype_str=dtype_x_str, rs=rs)  # use dtype here
     # reference result
     z_ref = np.sum(x, axis=axis, keepdims=False)
     # triton result
     x_tri = to_triton(x, device=device)
     z_shape = (shape0, ) if axis == 1 else (shape1, )
-    z_tri = to_triton(np.zeros(z_shape, dtype="float32"), device=device)
+    z_tri = to_triton(np.zeros(z_shape, dtype=getattr(np, dtype_x_str)), device=device)  # use dtype here
     kernel[(1, )](z_tri, x_tri, axis, shape0, shape1, num_ctas=num_ctas)
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)  # you may need to adjust rtol for different dtypes
 
 
 @pytest.mark.interpreter

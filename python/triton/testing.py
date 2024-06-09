@@ -161,6 +161,20 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=''):
+    """
+    Asserts that two inputs are close within a certain tolerance.
+
+    :param x: The first input.
+    :type x: scala, list, numpy.ndarray, or torch.Tensor
+    :param y: The second input.
+    :type y: scala, list, numpy.ndarray, or torch.Tensor
+    :param atol: The absolute tolerance. Default value is 1e-2.
+    :type atol: float, optional
+    :param rtol: The relative tolerance. Default value is 0.
+    :type rtol: float, optional
+    :param err_msg: The error message to use if the assertion fails.
+    :type err_msg: str
+    """
     import numpy as np
     import torch
 
