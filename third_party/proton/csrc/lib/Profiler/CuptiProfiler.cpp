@@ -158,12 +158,12 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
   static constexpr size_t AlignSize = 8;
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
-  // Buffer size limit: 16MB * 50 = 0.8GB
-  // Initially we allocate four buffers of 16MB each.
+  // Buffer size limit: 2MB * 250 = 0.5GB
+  // Initially we allocate 10 buffers of 16MB each.
   // If the buffer pool is exhausted, we allocate a new buffer of 16MB.
-  static constexpr size_t DeviceBufferSize = 16 * 1024 * 1024;
-  static constexpr size_t PreAllocateDeviceBufferSize = 4;
-  static constexpr size_t DeviceBufferPoolLimit = 50;
+  static constexpr size_t DeviceBufferSize = 2 * 1024 * 1024;
+  static constexpr size_t PreAllocateDeviceBufferSize = 10;
+  static constexpr size_t DeviceBufferPoolLimit = 250;
   static constexpr size_t AttributeSize = sizeof(size_t);
 
   CUpti_SubscriberHandle subscriber{};
