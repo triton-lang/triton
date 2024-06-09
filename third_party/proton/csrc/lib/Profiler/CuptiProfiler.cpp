@@ -129,14 +129,6 @@ void setDriverCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
 #undef CALLBACK_ENABLE
 }
 
-template <typename ValueType>
-void setAttribute(CUpti_ActivityAttribute attr, size_t valueSize,
-                  ValueType value) {
-  size_t size = valueSize;
-  void *data = &value;
-  cupti::activitySetAttribute<true>(attr, &size, data);
-}
-
 } // namespace
 
 struct CuptiProfiler::CuptiProfilerPimpl
@@ -158,12 +150,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
   static constexpr size_t AlignSize = 8;
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
-  // Buffer size limit: 2MB * 250 = 0.5GB
-  // Initially we allocate 10 buffers of 16MB each.
-  // If the buffer pool is exhausted, we allocate a new buffer of 16MB.
-  static constexpr size_t DeviceBufferSize = 2 * 1024 * 1024;
-  static constexpr size_t PreAllocateDeviceBufferSize = 10;
-  static constexpr size_t DeviceBufferPoolLimit = 250;
   static constexpr size_t AttributeSize = sizeof(size_t);
 
   CUpti_SubscriberHandle subscriber{};
@@ -228,12 +214,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {
-  setAttribute(CUPTI_ACTIVITY_ATTR_DEVICE_BUFFER_SIZE, AttributeSize,
-               DeviceBufferSize);
-  setAttribute(CUPTI_ACTIVITY_ATTR_DEVICE_BUFFER_POOL_LIMIT, AttributeSize,
-               DeviceBufferPoolLimit);
-  setAttribute(CUPTI_ACTIVITY_ATTR_DEVICE_BUFFER_PRE_ALLOCATE_VALUE,
-               AttributeSize, PreAllocateDeviceBufferSize);
   cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   // TODO: switch to directly subscribe the APIs and measure overhead
