@@ -177,10 +177,10 @@ jobs:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
           path: |
-            $HOME/.triton/llvm
-            $HOME/.triton/nvidia
-            $HOME/.triton/pybind11
-            $HOME/.triton/json
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/pybind11
+            ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
         # spent compiling.  Triton won't (well, should not) use these cached files
@@ -315,10 +315,10 @@ jobs:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
           path: |
-            $HOME/.triton/llvm
-            $HOME/.triton/nvidia
-            $HOME/.triton/pybind11
-            $HOME/.triton/json
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/pybind11
+            ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
         # spent compiling.  Triton won't (well, should not) use these cached files
@@ -440,10 +440,10 @@ jobs:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
           path: |
-            $HOME/.triton/llvm
-            $HOME/.triton/nvidia
-            $HOME/.triton/pybind11
-            $HOME/.triton/json
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/pybind11
+            ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
         # spent compiling.  Triton won't (well, should not) use these cached files
