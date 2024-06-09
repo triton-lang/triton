@@ -105,7 +105,7 @@ jobs:
         if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
-            echo '::set-output name=matrix-CUDA::[["a100-runner-set"]]'
+            echo '::set-output name=matrix-CUDA::[["a100-runner-set", "A100"], ["self-hosted", "H100"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
