@@ -25,6 +25,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertDotOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertControlFlowOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertHistogramOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertReductionOp();
+std::unique_ptr<OperationPass<ModuleOp>> createConvertScanOp();
 
 void tritonToTritonCPUPipelineBuilder(OpPassManager &pm);
 void registerTritonToTritonCPUPipeline();
