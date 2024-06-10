@@ -23,5 +23,5 @@ Complete the following tasks before sending your PR, and replace `[ ]` with
 - Select one of the following.
   - [ ] I have not added any `lit` tests.
   - [ ] The `lit` tests I have added follow these [best practices](https://mlir.llvm.org/getting_started/TestingGuide/#filecheck-best-practices),
-    including "Tests should be minimal part". (Usually running Python code
+    including the "tests should be minimal" section. (Usually running Python code
     and using the instructions it generates is not minimal.)
