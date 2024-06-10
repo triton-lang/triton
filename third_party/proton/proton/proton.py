@@ -38,6 +38,8 @@ def execute_as_main(script, args):
 
     original_argv = sys.argv
     sys.argv = [script] + args
+    # Append the script's directory in case the script uses relative imports
+    sys.path.append(os.path.dirname(script_path))
 
     # Execute in the isolated environment
     try:

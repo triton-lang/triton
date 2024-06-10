@@ -58,6 +58,15 @@ def exp2(arg0, _builder=None):
 
 
 @core.extern
+def exp(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__ocml_exp_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_exp_f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def fast_dividef(arg0, arg1, _builder=None):
     return core.extern_elementwise("", "", [arg0, arg1], {
         (core.dtype("fp32"), core.dtype("fp32")): ("__triton_hip_fast_fdividef", core.dtype("fp32")),
@@ -296,6 +305,15 @@ def atanh(arg0, _builder=None):
 
 
 @core.extern
+def expm1(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__ocml_expm1_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_expm1_f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def hypot(arg0, arg1, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1], {
@@ -310,6 +328,15 @@ def j0(arg0, _builder=None):
         "", "", [arg0], {
             (core.dtype("fp32"), ): ("__ocml_j0_f32", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__ocml_j0_f64", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def j1(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__ocml_j1_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__ocml_j1_f64", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
 
 

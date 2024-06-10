@@ -11,3 +11,4 @@ triton.testing
     do_bench
     do_bench_cudagraph
     perf_report
+    assert_close
