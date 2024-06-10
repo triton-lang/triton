@@ -415,37 +415,69 @@ LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
                                 AMDMfmaEncodingAttr mfma) {
   int rank = shape.size();
   assert(rank == mfma.getWarpsPerCTA().size());
-  MLIRContext *ctx = mfma.getContext();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
-  assert(((shape[rank - 2] == 1 || shape[rank - 2] >= mfma.getMDim()) &&
-          (shape[rank - 1] == 1 || shape[rank - 1] >= mfma.getNDim())) &&
-         "Unsupported tensor shape for given mfma layout");
+  bool hasBatchDim = rank == 3;
+  int mIndex = 0 + hasBatchDim;
+  int nIndex = 1 + hasBatchDim;
+  (void)mIndex, (void)nIndex;
+
+  assert(((shape[mIndex] == 1 || shape[mIndex] >= mfma.getMDim()) &&
+          (shape[nIndex] == 1 || shape[nIndex] >= mfma.getNDim())) &&
+         "unsupported tensor shape for given mfma layout");
 
   assert(((mfma.getMDim() == 32 && mfma.getNDim() == 32) ||
           (mfma.getMDim() == 16 || mfma.getNDim() == 16)) &&
          "unsupported mfma type");
 
-  auto rDim = S("register");
-  auto lDim = S("lane");
-  auto wDim = S("warp");
+  MLIRContext *ctx = mfma.getContext();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
-  auto order = triton::gpu::getOrder(mfma);
+  StringAttr rDim = S("register");
+  StringAttr lDim = S("lane");
+  StringAttr wDim = S("warp");
+
+  // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
+  // register and lane layout for mfma instructions.
+
+  SmallVector<unsigned> order = triton::gpu::getOrder(mfma);
   auto tileLayout = LinearLayout::empty();
+
+  // The order of dims in bases is minor to major. So each base is a tuple of
+  // values mapping to matrix C's (N, M[, B]) indices.
+
   if (mfma.getMDim() == 32) {
+    // For mfma with 32x32 output, each of the 64 threads holds 16 elements.
+    //
+    // For the register (i.e., element) dimension, these 16 elements are along
+    // the matrix C's M dimension, with 4 consecutive elements spanning 4 rows
+    // and then the next 4 rows being a gap.
+    //
+    // For the lane (i.e., thread) dimension, these threads are along the
+    // matrix C's N dimension, with 32 consecutive threads covering a whole
+    // row and the next 32 threads start after a gap spanning 4 rows.
     tileLayout = LinearLayout(
-        {{rDim, {{0, 1}, {0, 2}, {0, 8}, {0, 16}}},
-         {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}}},
+        {{rDim, {{0, 1}, {0, 2}, {0, 8}, /*gap*/ {0, 16}}},
+         {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, /*gap*/ {0, 4}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
   } else {
     assert(mfma.getMDim() == 16);
-    tileLayout =
-        LinearLayout({{rDim, {{0, 1}, {0, 2}}},
-                      {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 4}, {0, 8}}}},
-                     {outDimNames[order[0]], outDimNames[order[1]]});
+    // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
+    //
+    // For the register (i.e., element) dimension, these 4 elements are along
+    // the matrix C's M dimension, with 4 consecutive elements spanning 4 rows.
+    //
+    // For the lane (i.e., thread) dimension, these threads are along the
+    // matrix C's N dimension, with 16 consecutive threads covering a whole
+    // row and the next 16 threads start after a gap spanning 4 rows.
+    tileLayout = LinearLayout(
+        {{rDim, {{0, 1}, {0, 2}}},
+         {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
+        {outDimNames[order[0]], outDimNames[order[1]]});
   }
-  if (rank == 3) {
+  if (hasBatchDim) {
     assert(order[2] == 0);
+    // We need to extend one output dimension for register and warp to
+    // accomodate for the batch, which appears at the last.
     tileLayout *= LinearLayout::identity1D(1, rDim, outDimNames[order[2]]);
     tileLayout *= LinearLayout::identity1D(1, lDim, outDimNames[order[2]]);
   }
@@ -453,6 +485,8 @@ LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
   LinearLayout warpLayout =
       identityND(wDim, mfma.getWarpsPerCTA(), order, outDimNames);
 
+  // And each warp takes the same register and lane sub-layout. So mulitply with
+  // an identity layout for the warp.
   LinearLayout ctaLayout = tileLayout * warpLayout;
 
   return combineCtaCgaWithShape(ctaLayout, mfma.getCTALayout(), shape);
