@@ -75,13 +75,13 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     return acc, l_i, m_i
 
 
-# We don't run auto-tuning every time to keep the tutorial fast. Uncommenting
+# We don't run auto-tuning every time to keep the tutorial fast. Keeping
 # the code below and commenting out the equivalent parameters is convenient for
 # re-tuning.
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w) \
     for BM in [64, 128]\
-    for BN in [64, 128]\
+    for BN in [32, 64]\
     for s in ([1] if is_hip() else [3, 4, 7])\
     for w in [4, 8]\
 ]
@@ -551,7 +551,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
     rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of MI200 GPU.
-    # For detailss see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
     if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
         rtol = 1e-2
     assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
@@ -603,9 +603,9 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     rep = 100
     dtype = torch.float16
     if "triton" in provider:
-        q = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda", requires_grad=True)
-        k = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda", requires_grad=True)
-        v = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device="cuda", requires_grad=True)
+        q = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
+        k = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
+        v = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
         if mode == "fwd" and "fp8" in provider:
             q = q.to(torch.float8_e5m2)
             k = k.to(torch.float8_e5m2)

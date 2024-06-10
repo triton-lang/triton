@@ -15,10 +15,19 @@ tmpdir = ".tmp"
 
 
 @triton.jit
+def function_0(i):
+    return i + 1
+
+
+@triton.jit
 def function_1(i):
     i = i + 1
-    i = function_2(i)
-    return i
+    cond: tl.constexpr = True
+    if cond:
+        FN: tl.constexpr = function_2
+    else:
+        FN: tl.constexpr = function_0
+    return FN(i)
 
 
 @triton.jit
@@ -53,32 +62,38 @@ def kernel_with_combine_fn(X, BLOCK: tl.constexpr):
     tl.store(X, i)
 
 
-def apply_src_change(target, old, new):
+def apply_src_change(target, old, new, to_modify):
     kernel.hash = None
+    function_0.hash = None
     function_1.hash = None
     function_2.hash = None
-    function_1.src = function_1.src.replace(old, new)
-    target.src = target.src.replace(old, new)
+    to_modify.src = to_modify.src.replace(old, new)
     ret = target.cache_key
-    target.src = target.src.replace(new, old)
+    to_modify.src = to_modify.src.replace(new, old)
     return ret
 
 
 def test_nochange():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, 'i + 1', 'i + 1')
+    updated = apply_src_change(kernel, 'i + 1', 'i + 1', function_1)
     assert baseline == updated
 
 
 def test_toplevel_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, 'i + 1', 'i + 2')
+    updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_1)
     assert baseline != updated
 
 
 def test_nested1_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(function_1, 'i + 1', 'i + 2')
+    updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_2)
+    assert baseline != updated
+
+
+def test_nested2_change():
+    baseline = kernel.cache_key
+    updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_0)
     assert baseline != updated
 
 

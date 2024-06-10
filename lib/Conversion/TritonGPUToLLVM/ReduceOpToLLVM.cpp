@@ -176,8 +176,8 @@ private:
   void warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
                   unsigned numLaneToReduce, unsigned interleave) const {
-    auto success =
-        targetInfo.warpReduce(rewriter, loc, acc, op, numLaneToReduce);
+    auto success = targetInfo.warpReduce(rewriter, loc, acc, op,
+                                         numLaneToReduce, interleave);
     if (success)
       return;
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {

@@ -3,7 +3,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-
+#include "llvm/Support/Signals.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -54,6 +54,15 @@ public:
 
   SliceEncodingAttr slice(Attribute parent, int dim) {
     return SliceEncodingAttr::get(&ctx, dim, parent);
+  }
+
+  SharedEncodingAttr shared(unsigned vec, unsigned perPhase, unsigned maxPhase,
+                            bool hasLeadingOffset, ArrayRef<unsigned> cpg,
+                            ArrayRef<unsigned> cSplit, ArrayRef<unsigned> ord,
+                            ArrayRef<unsigned> cOrd) {
+    return SharedEncodingAttr::get(&ctx, vec, perPhase, maxPhase, ord,
+                                   CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd),
+                                   hasLeadingOffset);
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -717,5 +726,218 @@ TEST_F(LinearLayoutConversionsTest, SliceOfMmaV2) {
                          {S("dim0")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, SharedSimple1D) {
+  EXPECT_EQ(toLinearLayout({1024}, shared(1, 1, 1, false, {1}, {1}, {0}, {0})),
+            LinearLayout::identity1D(1024, S("offset"), S("dim0")) *
+                LinearLayout::identity1D(1, S("block"), S("dim0")));
+}
+
+TEST_F(LinearLayoutConversionsTest, SharedSimple2D) {
+  EXPECT_EQ(toLinearLayout({128, 128}, shared(1, 1, 1, false, {1, 1}, {1, 1},
+                                              {1, 0}, {1, 0})),
+            (LinearLayout::identity1D(128, S("offset"), S("dim1")) *
+             LinearLayout::identity1D(128, S("offset"), S("dim0")) *
+             LinearLayout::identity1D(1, S("block"), S("dim0")))
+                .transposeOuts({S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, SharedSimple2D_Order01) {
+  EXPECT_EQ(toLinearLayout({128, 128}, shared(1, 1, 1, false, {1, 1}, {1, 1},
+                                              {0, 1}, {1, 0})),
+            LinearLayout::identity1D(128, S("offset"), S("dim0")) *
+                LinearLayout::identity1D(128, S("offset"), S("dim1")) *
+                LinearLayout::identity1D(1, S("block"), S("dim0")));
+}
+
+TEST_F(LinearLayoutConversionsTest, SharedSwizzled2D_MaxPhaseOnly) {
+  EXPECT_EQ(toLinearLayout({32, 32}, shared(1, 1, 4, false, {1, 1}, {1, 1},
+                                            {1, 0}, {1, 0})),
+            LinearLayout({{S("offset"),
+                           {{0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {1, 1},
+                            {2, 2},
+                            {4, 0},
+                            {8, 0},
+                            {16, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, SharedSwizzled2D_PerPhaseMaxPhase) {
+  EXPECT_EQ(toLinearLayout({32, 32}, shared(1, 2, 4, false, {1, 1}, {1, 1},
+                                            {1, 0}, {1, 0})),
+            LinearLayout({{S("offset"),
+                           {{0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {1, 0},
+                            {2, 1},
+                            {4, 2},
+                            {8, 0},
+                            {16, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, SharedSwizzled2D_Vec) {
+  EXPECT_EQ(
+      toLinearLayout({4, 8},
+                     shared(2, 1, 4, false, {1, 1}, {1, 1}, {1, 0}, {1, 0})),
+      LinearLayout({{S("offset"), {{0, 1}, {0, 2}, {0, 4}, {1, 2}, {2, 4}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, SharedSwizzled2D_PerPhaseMaxPhaseVec) {
+  EXPECT_EQ(toLinearLayout({32, 32}, shared(2, 2, 4, false, {1, 1}, {1, 1},
+                                            {1, 0}, {1, 0})),
+            LinearLayout({{S("offset"),
+                           {{0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {1, 0},
+                            {2, 2},
+                            {4, 4},
+                            {8, 0},
+                            {16, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, SharedSwizzled4D) {
+  EXPECT_EQ(toLinearLayout({2, 4, 32, 32},
+                           shared(2, 2, 4, false, {1, 1, 1, 1}, {1, 1, 1, 1},
+                                  {3, 2, 1, 0}, {3, 2, 1, 0})),
+            LinearLayout({{S("offset"),
+                           {{0, 0, 0, 1},
+                            {0, 0, 0, 2},
+                            {0, 0, 0, 4},
+                            {0, 0, 0, 8},
+                            {0, 0, 0, 16},
+                            {0, 0, 1, 0},
+                            {0, 0, 2, 2},
+                            {0, 0, 4, 4},
+                            {0, 0, 8, 0},
+                            {0, 0, 16, 0},
+                            {0, 1, 0, 0},
+                            {0, 2, 0, 0},
+                            {1, 0, 0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1"), S("dim2"), S("dim3")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, SharedSwizzled2D_Order01) {
+  EXPECT_EQ(
+      toLinearLayout({4, 8},
+                     shared(1, 1, 4, false, {1, 1}, {1, 1}, {0, 1}, {0, 1})),
+      LinearLayout({{S("offset"), {{1, 0}, {2, 0}, {1, 1}, {2, 2}, {0, 4}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x16_4_2) {
+  EXPECT_EQ(
+      toLinearLayout({8, 16},
+                     shared(8, 4, 2, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                     /*elemBitWidth=*/16),
+      LinearLayout({{S("offset"),
+                     {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 8}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_128x16_4_2) {
+  EXPECT_EQ(
+      toLinearLayout({128, 16},
+                     shared(8, 4, 2, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                     /*elemBitWidth=*/16),
+      LinearLayout({{S("offset"),
+                     {{0, 1},
+                      {0, 2},
+                      {0, 4},
+                      {0, 8},
+                      {1, 0},
+                      {2, 0},
+                      {4, 8},
+                      {8, 0},
+                      {16, 0},
+                      {32, 0},
+                      {64, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x32_2_4) {
+  EXPECT_EQ(
+      toLinearLayout({8, 32},
+                     shared(8, 2, 4, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                     /*elemBitWidth=*/16),
+      LinearLayout(
+          {{S("offset"),
+            {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}, {2, 8}, {4, 16}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8) {
+  EXPECT_EQ(toLinearLayout(
+                {8, 64}, shared(8, 1, 8, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                /*elemBitWidth=*/16),
+            LinearLayout({{S("offset"),
+                           {{0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {0, 32},
+                            {1, 8},
+                            {2, 16},
+                            {4, 32}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, LeadingOffset_8x64_1_8_32b) {
+  EXPECT_EQ(toLinearLayout(
+                {8, 64}, shared(4, 1, 8, true, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                /*elemBitWidth=*/32),
+            LinearLayout({{S("offset"),
+                           {{0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {1, 4},
+                            {2, 8},
+                            {4, 16},
+                            {0, 32}}},
+                          {S("block"), {}}},
+                         {{S("dim0"), 8}, {S("dim1"), 64}},
+                         /*requireSurjective=*/false));
+}
+
+TEST_F(LinearLayoutConversionsTest, Shared1DSwizzle) {
+  EXPECT_EQ(toLinearLayout(
+                {64, 1}, shared(2, 2, 4, false, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+                /*elemBitWidth=*/16),
+            LinearLayout::identity1D(64, S("offset"), S("dim0")) *
+                LinearLayout::identity1D(1, S("offset"), S("dim1")) *
+                LinearLayout::identity1D(1, S("block"), S("dim0")));
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu
+
+int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

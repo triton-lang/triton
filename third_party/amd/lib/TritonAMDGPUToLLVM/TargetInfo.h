@@ -41,7 +41,7 @@ public:
 
   bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
-                  unsigned numLaneToReduce) const override;
+                  unsigned numLaneToReduce, unsigned interleave) const override;
 
   bool processReplicaUsingStMatrix(
       ConversionPatternRewriter &rewriter, Location loc, Value smemBase,

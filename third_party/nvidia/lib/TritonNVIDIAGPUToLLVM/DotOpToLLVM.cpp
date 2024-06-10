@@ -23,15 +23,10 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter);
 
-LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
+                           triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread);
-
-LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
-                                triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-                                const LLVMTypeConverter *typeConverter,
-                                ConversionPatternRewriter &rewriter,
-                                Value thread);
 namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
@@ -59,9 +54,6 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
         return convertMMA1688(op, adaptor, getTypeConverter(), rewriter);
       if (mmaLayout.isAmpere())
         return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
-      if (mmaLayout.isHopper())
-        return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                            getThreadId(rewriter, loc));
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
@@ -76,13 +68,13 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   }
 };
 
-struct DotAsyncOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::DotAsyncOp> {
+struct WarpGroupDotOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::WarpGroupDotOp> {
   using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::DotAsyncOp>::ConvertOpToLLVMPattern;
+      triton::nvidia_gpu::WarpGroupDotOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::DotAsyncOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::WarpGroupDotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     // D = A * B + C
@@ -100,26 +92,26 @@ struct DotAsyncOpConversion
     if (!isOuter && mmaLayout &&
         supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
       if (mmaLayout.isHopper()) {
-        return convertAsyncWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                                 getThreadId(rewriter, loc));
+        return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
+                            getThreadId(rewriter, loc));
       }
 
       llvm::report_fatal_error(
-          "Unsupported MMA kind found when converting DotAsyncOp to LLVM.");
+          "Unsupported MMA kind found when converting WarpGroupDotOp to LLVM.");
     }
 
     llvm::report_fatal_error(
-        "Unsupported DotAsyncOp found when converting TritonGPU to LLVM.");
+        "Unsupported WarpGroupDotOp found when converting TritonGPU to LLVM.");
   }
 };
 
-struct DotWaitOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::DotWaitOp> {
+struct WarpGroupDotWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::WarpGroupDotWaitOp> {
   using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::DotWaitOp>::ConvertOpToLLVMPattern;
+      triton::nvidia_gpu::WarpGroupDotWaitOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::DotWaitOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::WarpGroupDotWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto pendings = op.getPendings();
     Location loc = op.getLoc();
@@ -180,6 +172,6 @@ void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, benefit);
-  patterns.add<DotAsyncOpConversion>(typeConverter, benefit);
-  patterns.add<DotWaitOpConversion>(typeConverter, benefit);
+  patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);
+  patterns.add<WarpGroupDotWaitOpConversion>(typeConverter, benefit);
 }

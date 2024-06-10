@@ -285,8 +285,7 @@ private:
                           int dim) override {
     // lhs = k * d_lhs = k * k' * gcd(d_lhs, d_rhs)
     // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
-    // lhs + rhs = k * d_lhs + p * d_rhs = (k * d_lhs + p * d_rhs) *
-    // gcd(d_lhs, d_rhs)
+    // lhs + rhs = k * d_lhs + p * d_rhs = (k * k' + p * p') * gcd(d_lhs, d_rhs)
     auto rhsDivisibility = rhs.getDivisibility(dim);
     if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
       //  %ptr = addptr %lhs, %rhs

@@ -372,7 +372,7 @@ public:
     // in mfma 4x4 case argument matrix groups in 16 groups
     if (mDim == 4 && nDim == 4)
       kWidth = kDim / 16;
-    if (mDim == 4 && nDim == 64 || mDim == 64 && nDim == 4)
+    if ((mDim == 4 && nDim == 64) || (mDim == 64 && nDim == 4))
       kWidth = kDim;
 
     // We want to extend kWidth by kPack (kPack=1 means no extension)

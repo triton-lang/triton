@@ -27,4 +27,4 @@ def test_exec(mode):
         data = json.load(f, )
         kernels = data[0]["children"]
         assert len(kernels) == 2
-        assert kernels[1]["frame"]["name"] == "test"
+        assert kernels[0]["frame"]["name"] == "test" or kernels[1]["frame"]["name"] == "test"

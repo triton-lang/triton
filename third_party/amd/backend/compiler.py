@@ -101,7 +101,7 @@ class HIPBackend(BaseBackend):
         lld = Path("/usr/bin/ld.lld")
         if lld.is_file():
             return lld
-        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found")
+        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its path.")
 
     @staticmethod
     def make_ttir(mod, metadata, options):
@@ -158,7 +158,15 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
-        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch)
+        ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
+        ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
+        ##    of the value of kernel arg `allow_flush_denorm`.
+        ## 2. If __HIP_FTZ = 0, whether exp2 flushes denorms in input and output
+        ##    depends on the value of kernel arg `allow_flush_denorm`.
+        ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
+        ##    For now it is used as a controller for developers only.
+        __HIP_FTZ = True
+        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 

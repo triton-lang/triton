@@ -110,18 +110,18 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
       %112 = tt.load %111 : tensor<64x128x!tt.ptr<f16>, #blocked>
       %113 = triton_gpu.local_alloc %38 : (tensor<128x128xf16, #blocked>) -> !tt.memdesc<128x128xf16, #shared>
       %114 = triton_gpu.local_alloc %90 : (tensor<128x64xf16, #blocked2>) -> !tt.memdesc<128x64xf16, #shared1>
-      %115 = tt.dot %113, %114, %cst :!tt.memdesc<128x128xf16, #shared> * !tt.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
+      %115 = triton_nvidia_gpu.warp_group_dot %113, %114, %cst :!tt.memdesc<128x128xf16, #shared> * !tt.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
       %116 = arith.truncf %115 : tensor<128x64xf32, #mma> to tensor<128x64xf16, #mma>
       %117 = triton_gpu.local_alloc %112 : (tensor<64x128xf16, #blocked>) -> !tt.memdesc<64x128xf16, #shared>
       %118 = triton_gpu.convert_layout %116 : tensor<128x64xf16, #mma> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
       // The first dot gets converted to dot-async + wait.  The second one
       // doesn't have a wait because the first wait is sufficient.
-      // CHECK: triton_nvidia_gpu.dot_async
-      // CHECK: triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
-      // CHECK: triton_nvidia_gpu.dot_async
-      // CHECK-NOT: triton_nvidia_gpu.dot_wait
+      // CHECK: triton_nvidia_gpu.warp_group_dot
+      // CHECK: triton_nvidia_gpu.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+      // CHECK: triton_nvidia_gpu.warp_group_dot
+      // CHECK-NOT: triton_nvidia_gpu.warp_group_dot_wait
       // CHECK: scf.yield
-      %119 = tt.dot %118, %117, %arg23 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * !tt.memdesc<64x128xf16, #shared> -> tensor<128x128xf32, #mma1>
+      %119 = triton_nvidia_gpu.warp_group_dot %118, %117, %arg23 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * !tt.memdesc<64x128xf16, #shared> -> tensor<128x128xf32, #mma1>
       %120 = arith.mulf %arg24, %arg25 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
       %121 = arith.addf %120, %arg25 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
       %122 = arith.extsi %c0_i32 : i32 to i64

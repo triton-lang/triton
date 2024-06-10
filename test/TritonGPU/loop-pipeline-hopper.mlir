@@ -303,8 +303,8 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //// C-HECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]], {{.*}}, {{.*}}, {{.*}}, %[[PIPELINE_IDX:.*]] = %[[CONSTANT_2]], %[[LOOP_IDX:.*]] = %[[CONSTANT_0]]
 //  // C-HECK: %[[MBARRIER_AB_ITER:.*]] = triton_nvidia_gpu.extract_mbarrier %[[MBARRIER_AB]][{{.*}}]
 //  // C-HECK: triton_nvidia_gpu.mbarrier_wait %[[MBARRIER_AB_ITER]], {{.*}}
-//  // C-HECK: triton_nvidia_gpu.dot_async %[[arg_a0]], %[[arg_b0]], {{.*}}
-//  // C-HECK: triton_nvidia_gpu.dot_wait {{.*}}
+//  // C-HECK: triton_nvidia_gpu.warp_group_dot %[[arg_a0]], %[[arg_b0]], {{.*}}
+//  // C-HECK: triton_nvidia_gpu.warp_group_dot_wait {{.*}}
 //  // C-HECK: %[[EMPTY_BARRIER_B_ITER_ARRIVE:.*]] = triton_nvidia_gpu.extract_mbarrier %[[EMPTY_BARRIER_B]][{{.*}}]
 //  // C-HECK: triton_nvidia_gpu.mbarrier_arrive %[[EMPTY_BARRIER_B_ITER_ARRIVE]]
 //  // C-HECK: %[[MBARRIER_AB_NEXT_ITER:.*]] = triton_nvidia_gpu.extract_mbarrier %[[MBARRIER_AB]][{{.*}}]
@@ -334,7 +334,7 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //
 //      %sa = triton_gpu.local_alloc %a : (tensor<128x32xf16, #BA>) -> !tt.memdesc<128x32xf16, #SA, #triton_gpu.shared_memory>
 //      %sb = triton_gpu.local_alloc %b : (tensor<32x128xf16, #BB>) -> !tt.memdesc<32x128xf16, #SB, #triton_gpu.shared_memory>
-//      %c = triton_gpu_nvidia.dot_async %sa, %sb, %prev_c : tensor<128x32xf16, #SA> * tensor<32x128xf16, #SB> -> tensor<128x128xf32, #C>
+//      %c = triton_nvidia_gpu.warp_group_dot %sa, %sb, %prev_c : tensor<128x32xf16, #SA> * tensor<32x128xf16, #SB> -> tensor<128x128xf32, #C>
 //
 //      %a_tileptr_next = tt.advance %a_tileptr, [%c0, %c32_i32] : !tt.ptr<tensor<128x32xf16>, 1>
 //      %b_tileptr_next = tt.advance %b_tileptr, [%c32_i32, %c0] : !tt.ptr<tensor<32x128xf16>, 1>
@@ -384,9 +384,9 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: scf.for
     // CHECK:   triton_gpu.async_wait {{.*}} {num = 1 : i32}
-    // CHECK:   triton_nvidia_gpu.dot_async
-    // CHECK-NEXT: triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
-    // CHECK:   triton_nvidia_gpu.dot_async
+    // CHECK:   triton_nvidia_gpu.warp_group_dot
+    // CHECK-NEXT: triton_nvidia_gpu.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+    // CHECK:   triton_nvidia_gpu.warp_group_dot
     // CHECK:   triton_gpu.async_copy_global_to_local
     // CHECK:   triton_gpu.async_commit_group
     // CHECK:   scf.yield
@@ -394,11 +394,11 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
       %18 = tt.load %arg5 : tensor<64x16x!tt.ptr<f16>, #blocked>
       %19 = triton_gpu.local_alloc %9 : (tensor<128x64xf16, #blocked1>) -> !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory>
       %20 = triton_gpu.local_alloc %18 : (tensor<64x16xf16, #blocked>) -> !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory>
-      %21 = tt.dot %19, %20, %cst_2 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
+      %21 = triton_nvidia_gpu.warp_group_dot %19, %20, %cst_2 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
       %22 = arith.truncf %21 : tensor<128x16xf32, #mma1> to tensor<128x16xf16, #mma1>
       %23 = tt.trans %20 {order=array<i32: 1,0>} : !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> !tt.memdesc<16x64xf16, #shared, #triton_gpu.shared_memory>
       %24 = triton_gpu.convert_layout %22 : tensor<128x16xf16, #mma1> -> tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma1}>>
-      %25 = tt.dot %24, %23, %arg4 : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma1}>> * !tt.memdesc<16x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf32, #mma>
+      %25 = triton_nvidia_gpu.warp_group_dot %24, %23, %arg4 : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma1}>> * !tt.memdesc<16x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf32, #mma>
       %26 = tt.addptr %arg5, %cst : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
       scf.yield %25, %26 : tensor<128x64xf32, #mma>, tensor<64x16x!tt.ptr<f16>, #blocked>
     }
@@ -431,22 +431,22 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: scf.for
     // CHECK:   triton_gpu.async_wait {{.*}} {num = 2 : i32}
-    // CHECK:   triton_nvidia_gpu.dot_async
-    // CHECK-NEXT: triton_nvidia_gpu.dot_wait {{.*}} {pendings = 1 : i32}
+    // CHECK:   triton_nvidia_gpu.warp_group_dot
+    // CHECK-NEXT: triton_nvidia_gpu.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
     // CHECK:   triton_gpu.async_copy_global_to_local
     // CHECK:   triton_gpu.async_commit_group
     // CHECK:   scf.if
-    // CHECK:     triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
+    // CHECK:     triton_nvidia_gpu.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
     // CHECK:     arith.mulf
     // CHECK:     scf.yield
     // CHECK:   scf.yield
-    // CHECK:   triton_nvidia_gpu.dot_wait {{.*}} {pendings = 0 : i32}
+    // CHECK:   triton_nvidia_gpu.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
     %17:3 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg4 = %cst_2, %arg5 = %16, %arg6 = %8) -> (tensor<128x16xf32, #mma1>, tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<128x64x!tt.ptr<f16>, #blocked1>)  : i32 {
       %9 = tt.load %arg6 : tensor<128x64x!tt.ptr<f16>, #blocked1>
       %18 = tt.load %arg5 : tensor<64x16x!tt.ptr<f16>, #blocked>
       %19 = triton_gpu.local_alloc %9 : (tensor<128x64xf16, #blocked1>) -> !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory>
       %20 = triton_gpu.local_alloc %18 : (tensor<64x16xf16, #blocked>) -> !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory>
-      %acc = tt.dot %19, %20, %arg4 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
+      %acc = triton_nvidia_gpu.warp_group_dot %19, %20, %arg4 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
       %cnd = arith.cmpi slt, %arg3, %ext : i32
       %acc_ = scf.if %cnd -> (tensor<128x16xf32, #mma1>) {
         %acc_zero = arith.mulf %acc, %cst_2 : tensor<128x16xf32, #mma1>
@@ -506,19 +506,19 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     // CHECK: %[[ALLOC1:.+]] = triton_gpu.local_alloc
     // CHECK: %[[ALLOC2:.+]] = triton_gpu.local_alloc
     // CHECK: %[[R:.+]]:{{.+}} = scf.for
-    // CHECK:   %[[DOT1:.+]] = triton_nvidia_gpu.dot_async{{.*}}
+    // CHECK:   %[[DOT1:.+]] = triton_nvidia_gpu.warp_group_dot{{.*}}
     // CHECK:   triton_gpu.async_wait {{.*}} {num = 1 : i32}
     // CHECK:   %[[TRANS:.+]] = tt.trans{{.*}} : !tt.memdesc
-    // CHECK:   %[[DOT2:.+]] = triton_nvidia_gpu.dot_async{{.*}} %[[TRANS]]
-    // CHECK:   triton_nvidia_gpu.dot_wait %[[DOT1]], %[[DOT2]], %[[ALLOC1]], %[[ALLOC2]], %[[TRANS]] {pendings = 2 : i32}
+    // CHECK:   %[[DOT2:.+]] = triton_nvidia_gpu.warp_group_dot{{.*}} %[[TRANS]]
+    // CHECK:   triton_nvidia_gpu.warp_group_dot_wait %[[DOT1]], %[[DOT2]], %[[ALLOC1]], %[[ALLOC2]], %[[TRANS]] {pendings = 2 : i32}
     // CHECK:   scf.yield
-    // CHECK: %{{.*}}:2 = triton_nvidia_gpu.dot_wait %[[R]]#{{.+}}, %[[R]]#{{.+}} {pendings = 0 : i32} : tensor<128x16xf32, #{{.*}}>, tensor<128x64xf32, #{{.*}}>
+    // CHECK: %{{.*}}:2 = triton_nvidia_gpu.warp_group_dot_wait %[[R]]#{{.+}}, %[[R]]#{{.+}} {pendings = 0 : i32} : tensor<128x16xf32, #{{.*}}>, tensor<128x64xf32, #{{.*}}>
     %17:3 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg4 = %cst_3, %arg5 = %16, %arg6 = %cst_2) -> (tensor<128x64xf32, #mma>, tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<128x16xf32, #mma1>)  : i32 {
-      %21 = tt.dot %19, %20, %arg6 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
+      %21 = triton_nvidia_gpu.warp_group_dot %19, %20, %arg6 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
       %l = tt.load %arg5 : tensor<64x16x!tt.ptr<f16>, #blocked>
       %c = triton_gpu.local_alloc %l : (tensor<64x16xf16, #blocked>) -> !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory>
       %23 = tt.trans %c {order=array<i32: 1,0>} : !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> !tt.memdesc<16x64xf16, #shared, #triton_gpu.shared_memory>
-      %25 = tt.dot %cst_4, %23, %arg4 : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma1}>> * !tt.memdesc<16x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf32, #mma>
+      %25 = triton_nvidia_gpu.warp_group_dot %cst_4, %23, %arg4 : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma1}>> * !tt.memdesc<16x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf32, #mma>
       %26 = tt.addptr %arg5, %cst : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
       scf.yield %25, %26, %21 : tensor<128x64xf32, #mma>, tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<128x16xf32, #mma1>
     }
@@ -580,9 +580,9 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
       %38 = triton_gpu.local_alloc %36 : (tensor<64x256xf8E5M2, #blocked1>) -> !tt.memdesc<64x256xf8E5M2, #shared1, #triton_gpu.shared_memory>
       // CHECK: triton_gpu.local_alloc
       // CHECK: scf.for
-      // CHECK:   triton_nvidia_gpu.dot_async
-      // CHECK-NEXT: triton_nvidia_gpu.dot_wait
-      %39 = tt.dot %37, %38, %arg4 {maxNumImpreciseAcc = 1073741824 : i32} : !tt.memdesc<128x64xf8E5M2, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x256xf8E5M2, #shared1, #triton_gpu.shared_memory> -> tensor<128x256xf32, #mma>
+      // CHECK:   triton_nvidia_gpu.warp_group_dot
+      // CHECK-NEXT: triton_nvidia_gpu.warp_group_dot_wait
+      %39 = triton_nvidia_gpu.warp_group_dot %37, %38, %arg4 {maxNumImpreciseAcc = 1073741824 : i32} : !tt.memdesc<128x64xf8E5M2, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x256xf8E5M2, #shared1, #triton_gpu.shared_memory> -> tensor<128x256xf32, #mma>
       %40 = tt.addptr %arg5, %cst_6 : tensor<128x64x!tt.ptr<f8E5M2>, #blocked>, tensor<128x64xi32, #blocked>
       %41 = tt.addptr %arg6, %cst_5 : tensor<64x256x!tt.ptr<f8E5M2>, #blocked1>, tensor<64x256xi32, #blocked1>
       scf.yield %39, %40, %41 : tensor<128x256xf32, #mma>, tensor<128x64x!tt.ptr<f8E5M2>, #blocked>, tensor<64x256x!tt.ptr<f8E5M2>, #blocked1>
@@ -659,24 +659,24 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     %19 = triton_gpu.local_alloc %9 : (tensor<128x64xf16, #blocked1>) -> !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory>
     %20 = triton_gpu.local_alloc %18 : (tensor<64x16xf16, #blocked>) -> !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory>
     // CHECK:          %[[LOOP:[^ :]+]]{{.*}} scf.for {{.*}} iter_args(%[[PREV_DOT2:[^ ]+]]
-    // CHECK-NOT:        triton_nvidia_gpu.dot_wait
-    // CHECK:            %[[DOT0:.+]] = triton_nvidia_gpu.dot_async
-    // CHECK-NOT:        triton_nvidia_gpu.dot_wait
-    // CHECK:            %[[DOT1:.+]] = triton_nvidia_gpu.dot_async
-    // CHECK-NEXT:       triton_nvidia_gpu.dot_wait
+    // CHECK-NOT:        triton_nvidia_gpu.warp_group_dot_wait
+    // CHECK:            %[[DOT0:.+]] = triton_nvidia_gpu.warp_group_dot
+    // CHECK-NOT:        triton_nvidia_gpu.warp_group_dot_wait
+    // CHECK:            %[[DOT1:.+]] = triton_nvidia_gpu.warp_group_dot
+    // CHECK-NEXT:       triton_nvidia_gpu.warp_group_dot_wait
     // CHECK-DAG-SAME:     %[[DOT0]]
     // CHECK-DAG-SAME:     %[[DOT1]]
     // CHECK-DAG-SAME:     %[[PREV_DOT2]]
     // CHECK-SAME:         {pendings = 0 : i32}
-    // CHECK:            %[[DOT2:.+]] = triton_nvidia_gpu.dot_async
-    // CHECK-NOT:        triton_nvidia_gpu.dot_wait
+    // CHECK:            %[[DOT2:.+]] = triton_nvidia_gpu.warp_group_dot
+    // CHECK-NOT:        triton_nvidia_gpu.warp_group_dot_wait
     // CHECK:          scf.yield %[[DOT2]]
-    // CHECK:          triton_nvidia_gpu.dot_wait %[[LOOP]]#3, %[[LOOP]]#0 {pendings = 0 : i32}
+    // CHECK:          triton_nvidia_gpu.warp_group_dot_wait %[[LOOP]]#3, %[[LOOP]]#0 {pendings = 0 : i32}
     %17:4 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%prev_dot2 = %cst_3, %arg5 = %16, %prev_dot1 = %cst_2, %prev_dot0 = %cst_2) -> (tensor<128x64xf32, #mma>, tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<128x16xf32, #mma1>, tensor<128x16xf32, #mma1>)  : i32 {
       // This one can be async.
-      %dot0 = tt.dot %19, %20, %prev_dot1 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
+      %dot0 = triton_nvidia_gpu.warp_group_dot %19, %20, %prev_dot1 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
       // This can't be async because its result is modified before it's yielded.
-      %dot1 = tt.dot %19, %20, %prev_dot1 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
+      %dot1 = triton_nvidia_gpu.warp_group_dot %19, %20, %prev_dot1 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x16xf32, #mma1>
       %dot1.1 = arith.addf %dot1, %dot1 : tensor<128x16xf32, #mma1>
       %l = tt.load %arg5 : tensor<64x16x!tt.ptr<f16>, #blocked>
       %c = triton_gpu.local_alloc %l : (tensor<64x16xf16, #blocked>) -> !tt.memdesc<64x16xf16, #shared1, #triton_gpu.shared_memory>
@@ -684,7 +684,7 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
       // This dot can be async even though %prev_dot2 is not used directly by an
       // async dot, because that use follows the synchronous dot above.
       %prev_dot2.1 = arith.addf %prev_dot2, %prev_dot2 : tensor<128x64xf32, #mma>
-      %dot2 = tt.dot %cst_4, %23, %prev_dot2.1 : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma1}>> * !tt.memdesc<16x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf32, #mma>
+      %dot2 = triton_nvidia_gpu.warp_group_dot %cst_4, %23, %prev_dot2.1 : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma1}>> * !tt.memdesc<16x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf32, #mma>
       %26 = tt.addptr %arg5, %cst : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
       scf.yield %dot2, %26, %dot1.1, %dot0 : tensor<128x64xf32, #mma>, tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<128x16xf32, #mma1>, tensor<128x16xf32, #mma1>
     }
