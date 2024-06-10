@@ -1729,12 +1729,13 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
         docstr += """
     :param val: The values with which to perform the atomic operation
     :type val: Block of dtype=pointer.dtype.element_ty
-    :param sem: Memory semantics to use ("ACQUIRE_RELEASE" (default),
-        "ACQUIRE", "RELEASE", or "RELAXED")
-    :type sem: str
-    :param scope: Scope of threads that observe synchronizing effect of the
-        atomic operation ("GPU" (default), "CTA", or "SYSTEM")
-    :type scope: str
+    :param sem: Specifies the memory semantics for the operation. Acceptable values are "acquire",
+        "release", "acq_rel" (stands for "ACQUIRE_RELEASE"), and "relaxed". If not provided,
+        the function defaults to using "acq_rel" semantics.
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing effect of the atomic operation.
+        Acceptable values are "gpu" (default), "cta" (cooperative thread array, thread block), or "sys" (stands for "SYSTEM"). The default value is "gpu".
+    :type scope: str, optional
     """
         func.__doc__ = docstr
         return func
