@@ -251,11 +251,11 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     src = launch_exhaustive_populate(src_dtype, 0, 65536, False, numbits_src, max_repr, device=device)
 
     dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device)
-    dst = launch_type_convert_triton(dst, dst_dtype, tl.float32, device=device)
+    dst_to_float32 = launch_type_convert_triton(dst, dst_dtype, tl.float32, device=device)
 
-    dst2 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, device=device)
+    src_emulated_to_float32 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
-    assert(torch.equal(dst, dst2))
+    assert(torch.equal(src_emulated_to_float32, dst_to_float32))
 
 
 @pytest.mark.parametrize("src_dtype, dst_dtype", [
