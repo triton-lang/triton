@@ -293,11 +293,13 @@ def matmul_tma_persistent(a, b):
 
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
+    assert a.dtype == b.dtype, "Incompatible dtypes"
 
     M, K = a.shape
     N, K = b.shape
+    dtype = a.dtype
 
-    c = torch.zeros((M, N), device=a.device, dtype=torch.float8_e4m3fn)
+    c = torch.zeros((M, N), device=a.device, dtype=dtype)
 
     TMA_SIZE = 128
 
@@ -346,18 +348,21 @@ def cublas_matmul(a, b):
     return c
 
 
-def bench(K, reps=10):
+def bench(K, dtype, reps=10):
     M = 8192
     N = 8192
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
 
     b = b.T.contiguous()
 
     proton.activate(0)
 
     for _ in range(reps):
-        cublas_matmul(a, b)
+        if dtype == torch.float8_e4m3fn:
+            cublas_matmul(a, b)
+        else:
+            torch.matmul(a, b.T)
         time.sleep(0.01)
     for _ in range(reps):
         matmul(a, b.T)
@@ -372,11 +377,14 @@ def bench(K, reps=10):
     proton.deactivate(0)
 
 
-def validate(M, N, K):
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
+def validate(M, N, K, dtype):
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
-    cublas_result = cublas_matmul(a, b)
+    if dtype == torch.float8_e4m3fn:
+        cublas_result = cublas_matmul(a, b)
+    else:
+        cublas_result = torch.matmul(a, b.T)
     naive_result = matmul(a, b.T)
     persistent_result = matmul_persistent(a, b.T)
     tma_persistent_result = matmul_tma_persistent(a, b)
@@ -392,15 +400,18 @@ def validate(M, N, K):
     )
 
 
-if not hasattr(torch, "float8_e4m3fn") or not is_cuda():
-    print("This example requires CUDA with fp8 support.")
-    exit(1)
-
 parser = argparse.ArgumentParser()
 parser.add_argument("-K", type=int, required=False)
 parser.add_argument("--K_range", type=int, nargs=2)
 parser.add_argument("--K_step", type=int, default=512)
+parser.add_argument("--prec", type=str, choices=['fp8', 'fp16'], default='fp8')
 args = parser.parse_args()
+
+if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
+    print("This example requires CUDA with fp8 support.")
+    exit(1)
+
+dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 
 if args.K:
     args.K_range = [args.K, args.K]
@@ -408,10 +419,10 @@ if args.K:
 
 torch.manual_seed(0)
 
-validate(32, 32, 32)
-validate(8192, 8192, 512)
+validate(32, 32, 32, dtype)
+validate(8192, 8192, 512, dtype)
 
 proton.start("matmul", hook="triton")
 for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-    bench(K)
+    bench(K, dtype)
 proton.finalize()
