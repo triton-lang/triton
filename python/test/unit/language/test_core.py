@@ -2095,6 +2095,7 @@ def deserialize_fp8(np_data, in_dtype):
 # ---------------
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 def test_max_returns_zero(device):
     # Simple test with a tl.max call that returns 0.  The interpreter had a bug
@@ -2121,6 +2122,7 @@ def get_reduced_dtype(dtype_str, op):
     return dtype_str
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op, dtype_str, shape", [(op, dtype, shape) for op in [
     'min',
@@ -2239,9 +2241,6 @@ reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
-
-    if is_cpu() and op in ('argmin', 'argmax'):
-        pytest.skip(f"Not yet implemented on CPU: {op}")
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
@@ -2377,16 +2376,23 @@ def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
     return a1 + a2, tl.where(a2 == 1, b1_cur, 0) + b2_last, b2_cur
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps", scan_configs + negative_config)
 def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
     if dtype_str == 'bfloat16':
-        if op == 'cummax':
+        if is_cuda() and op == 'cummax':
             pytest.skip("bfloat16 compare not suppoted before sm90")
         if op == 'linear_recurrence':
             pytest.skip("Skipping linear_recurrence scan on bfloat16 due to accuracy issues")
     numpy_dtype_str = 'float32' if dtype_str == 'bfloat16' else dtype_str
+
+    # bf16 vector cast is broken in LLVM for large vectors:
+    #   https://github.com/llvm/llvm-project/issues/92471
+    # TODO: Remove the change after the bug is fixed.
+    if is_cpu() and dtype_str == 'bfloat16':
+        shape = (min(shape[0], 128), min(shape[1], 128))
 
     # triton kernel
     @triton.jit
@@ -3026,6 +3032,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis, tmp_path: pathli
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 def test_generic_reduction(device):
 

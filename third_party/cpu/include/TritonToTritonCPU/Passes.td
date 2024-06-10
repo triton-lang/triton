@@ -100,4 +100,18 @@ def ConvertReductionOp : Pass<"triton-cpu-convert-reduction", "mlir::ModuleOp"> 
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def ConvertScanOp : Pass<"triton-cpu-convert-scan", "mlir::ModuleOp"> {
+    let summary = "Convert Triton ScanOp.";
+    let description = [{
+
+    }];
+    let constructor = "mlir::triton::cpu::createConvertScanOp()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::vector::VectorDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 #endif
