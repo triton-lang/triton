@@ -110,7 +110,6 @@ class CPUUtils(object):
         return cls.instance
 
     def __init__(self):
-        pass
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.cpp")).read_text(), "cpu_utils")
         self.load_binary = mod.load_binary
@@ -182,14 +181,39 @@ def make_launcher(constants, signature, ids):
 
     # generate glue code
     src = f"""
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
-#include <string>
-#include <iostream>
+#include <cstdlib>
 #include <iomanip>
+#include <iostream>
+#include <omp.h>
+#include <optional>
+#include <stdio.h>
+#include <string>
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
-#include <stdio.h>
+
+inline bool getBoolEnv(const std::string &env) {{
+  const char *s = std::getenv(env.c_str());
+  std::string str(s ? s : "");
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) {{ return std::tolower(c); }});
+  return str == "on" || str == "true" || str == "1";
+}}
+
+inline std::optional<int64_t> getIntEnv(const std::string &env) {{
+  const char *cstr = std::getenv(env.c_str());
+  if (!cstr)
+    return std::nullopt;
+
+  char *endptr;
+  long int result = std::strtol(cstr, &endptr, 10);
+  if (endptr == cstr)
+    assert(false && "invalid integer");
+  return result;
+}}
 
 using kernel_ptr_t = void(*)({kernel_fn_arg_types});
 
@@ -233,20 +257,55 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   return ptr_info;
 }}
 
-static void run_omp_kernels(uint32_t gridX, uint32_t gridY, uint32_t gridZ, kernel_ptr_t kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  // TODO: add OMP pragmas to run in parallel
+static std::unique_ptr<uint32_t[][3]> get_all_grids(uint32_t gridX, uint32_t gridY, uint32_t gridZ) {{
+  std::unique_ptr<uint32_t[][3]> grids(new uint32_t[gridX * gridY * gridZ][3]);
+  // TODO: which order would be more effective for cache locality?
   for (uint32_t z = 0; z < gridZ; ++z) {{
     for (uint32_t y = 0; y < gridY; ++y) {{
       for (uint32_t x = 0; x < gridX; ++x) {{
-        (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} x, y, z);
+        grids[z * gridY * gridX + y * gridX + x][0] = x;
+        grids[z * gridY * gridX + y * gridX + x][1] = y;
+        grids[z * gridY * gridX + y * gridX + x][2] = z;
       }}
     }}
+  }}
+  return grids;
+}}
+
+static void run_omp_kernels(uint32_t gridX, uint32_t gridY, uint32_t gridZ, kernel_ptr_t kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+  // TODO: Consider using omp collapse(3) clause for simplicity?
+  auto all_grids = get_all_grids(gridX, gridY, gridZ);
+  size_t N = gridX * gridY * gridZ;
+
+  if (getBoolEnv("TRITON_CPU_SINGLE_CORE")) {{
+    if (getBoolEnv("TRITON_CPU_OMP_DEBUG"))
+      printf("Single core launcher\\n");
+
+    for (size_t i = 0; i < N; ++i) {{
+      const auto [x, y, z] = all_grids[i];
+      (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} x, y, z);
+    }}
+    return;
+  }}
+
+  std::optional<int> max_threads = getIntEnv("TRITON_CPU_MAX_THREADS");
+  if (max_threads.has_value())
+    max_threads = std::max(1, std::min(max_threads.value(), omp_get_max_threads()));
+  else
+    max_threads = omp_get_max_threads();
+
+  if (getBoolEnv("TRITON_CPU_OMP_DEBUG"))
+    printf("N: %zu, max_threads: %d\\n", N, max_threads.value());
+
+  // For now, use the default chunk size, total iterations / max_threads.
+#pragma omp parallel for schedule(static) num_threads(max_threads.value())
+  for (size_t i = 0; i < N; ++i) {{
+    const auto [x, y, z] = all_grids[i];
+    (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} x, y, z);
   }}
 }}
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
-
-
   int gridX, gridY, gridZ;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
