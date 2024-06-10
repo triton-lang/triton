@@ -1018,7 +1018,8 @@ emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
 }
 
 inline SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type);
+emitOffsetForLayout(Attribute layout, RankedTensorType type,
+                    bool allowLLs = true);
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
@@ -1170,8 +1171,19 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
+std::optional<SmallVector<SmallVector<unsigned>>>
+emitOffsetForLayoutUsingLinearLayouts(Attribute layout, RankedTensorType type);
+
 inline SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type) {
+emitOffsetForLayout(Attribute layout, RankedTensorType type,
+                    bool allowLLs /*= true*/) {
+  if (allowLLs) {
+    std::optional<SmallVector<SmallVector<unsigned>>> llOffsets =
+        emitOffsetForLayoutUsingLinearLayouts(layout, type);
+    if (llOffsets.has_value())
+      return *llOffsets;
+  }
+
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
     return emitOffsetForBlockedLayout(blockedLayout, type);
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
