@@ -11,8 +11,6 @@ Complete the following tasks before sending your PR, and replace `[ ]` with
 - [ ] I have written a PR description following these
   [rules](https://cbea.ms/git-commit/#why-not-how).
 
-- [ ] I have used an LLM to copyedit my PR description and and code comments.
-
 - [ ] I have run `pre-commit run --from-ref origin/main --to-ref HEAD`.
 
 - Select one of the following.
@@ -24,6 +22,6 @@ Complete the following tasks before sending your PR, and replace `[ ]` with
 
 - Select one of the following.
   - [ ] I have not added any `lit` tests.
-  - [ ] The `lit` tests I have added are "minimal" -- they contain only the
-    instructions necessary to exercise the bug.  (Usually running Python code
+  - [ ] The `lit` tests I have added follow the [best practice](https://mlir.llvm.org/getting_started/TestingGuide/#filecheck-best-practices)
+    including "Tests should be minimal part". (Usually running Python code
     and using the instructions it generates is not minimal.)
