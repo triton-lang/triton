@@ -71,7 +71,7 @@ public:
       return op->emitOpError("expected 3 operands");
     auto aTy = cast<TensorOrMemDesc>(op->getOperand(0).getType());
     auto bTy = cast<TensorOrMemDesc>(op->getOperand(1).getType());
-    auto cTy = cast<TensorType>(op->getOperand(2).getType());
+    auto cTy = cast<TensorOrMemDesc>(op->getOperand(2).getType());
     auto aShape = aTy.getShape();
     auto bShape = bTy.getShape();
     auto cShape = cTy.getShape();
