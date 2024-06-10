@@ -1,8 +1,8 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul='arch-generation-name=gfx1100 matrix-instruction-size=0' | FileCheck %s
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #triton_gpu.blocked<{{.*}}>
-// CHECK: #[[WMMA_0:.+]] = #triton_gpu.amd_wmma<{warpsPerCTA = [1, 4]}>
-// CHECK: #[[WMMA_1:.+]] = #triton_gpu.amd_wmma<{warpsPerCTA = [2, 2]}>
+// CHECK: #[[WMMA_0:.+]] = #triton_gpu.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
+// CHECK: #[[WMMA_1:.+]] = #triton_gpu.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_cf32(

@@ -929,7 +929,7 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
   SmallVector<Value> warpsPerCTA;
   for (unsigned i = 0; i < rank; ++i)
     warpsPerCTA.push_back(i32_val(_warpsPerCTA[i]));
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
 
   Value threadId = getThreadId(rewriter, loc);
   Value warpSize = i32_val(triton::gpu::getWarpSize(wmmaLayout));
@@ -983,7 +983,7 @@ emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
   assert(rank == 2 || rank == 3);
 
   SmallVector<unsigned> numWarpsPerDim(rank, 1);
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
   SmallVector<unsigned> shapePerWarp(rank, 1);
   shapePerWarp[rank - 2] = mnkDim[0];
   shapePerWarp[rank - 1] = mnkDim[1];
@@ -1109,6 +1109,8 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
+    // TODO: support 2nd gen of WMMA
+    assert(wmmaLayout.getVersion() == 1);
     result = emitBaseIndexForWmmaLayout(loc, rewriter, wmmaLayout, type);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
