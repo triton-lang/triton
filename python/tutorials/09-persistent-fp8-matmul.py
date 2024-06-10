@@ -1,3 +1,12 @@
+"""
+Persistent FP8 Matmul
+=====================
+This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
+It includes various matmul methods, such as naive, persistent, and TMA (Tile Matrix Accumulation) based approaches, and only supports GPUs with compute capability >= 9.0.
+Triton and CuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
+Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.
+"""
+
 import argparse
 import sys
 import time
@@ -19,7 +28,7 @@ cublas = nvidia.cublas.CublasLt(cublas_workspace)
 
 
 def _matmul_launch_metadata(grid, kernel, args):
-    ret = dict()
+    ret = {}
     M, N, K = args["M"], args["N"], args["K"]
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
     ret["flops8"] = 2. * M * N * K
@@ -149,7 +158,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for i in range(0, k_tiles * tiles_per_SM):
+    for _ in range(0, k_tiles * tiles_per_SM):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
             tile_id += NUM_SMS
