@@ -18,6 +18,10 @@ cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint
 cublas = nvidia.cublas.CublasLt(cublas_workspace)
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
 def _matmul_launch_metadata(grid, kernel, args):
     ret = dict()
     M, N, K = args["M"], args["N"], args["K"]
@@ -387,6 +391,10 @@ def validate(M, N, K):
         f"M={M}, N={N}, K={K} verification naive vs: cublas {naive_vs_cublas}, persistent {naive_vs_persistent}, TMA persistent {naive_vs_tma_persistent}"
     )
 
+
+if not hasattr(torch, "float8_e4m3fn") or not is_cuda():
+    print("This example requires CUDA with fp8 support.")
+    exit(1)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-K", type=int, required=False)
