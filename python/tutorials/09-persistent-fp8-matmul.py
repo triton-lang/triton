@@ -41,6 +41,7 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
                   BLOCK_SIZE_N: tl.constexpr,  #
                   BLOCK_SIZE_K: tl.constexpr,  #
                   GROUP_SIZE_M: tl.constexpr,  #
+                  FP8_OUTPUT: tl.constexpr,  #
                   ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -76,7 +77,10 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
-    c = accumulator.to(tl.float8e4nv)
+    if FP8_OUTPUT:
+        c = accumulator.to(tl.float8e4nv)
+    else:
+        c = accumulator.to(tl.float16)
 
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -88,17 +92,19 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
 def matmul(a, b):
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_N = 256
-    BLOCK_SIZE_K = 128
+    BLOCK_SIZE_K = 64
     GROUP_SIZE = 8
     num_stages = 3
     num_warps = 8
 
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+    assert a.dtype == b.dtype, "Incompatible dtypes"
     M, K = a.shape
     K, N = b.shape
+    dtype = a.dtype
 
-    c = torch.empty((M, N), device=a.device, dtype=torch.float8_e4m3fn)
+    c = torch.empty((M, N), device=a.device, dtype=dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
     matmul_kernel[grid](
@@ -111,6 +117,7 @@ def matmul(a, b):
         BLOCK_SIZE_N=BLOCK_SIZE_N,  #
         BLOCK_SIZE_K=BLOCK_SIZE_K,  #
         GROUP_SIZE_M=GROUP_SIZE,  #
+        FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         num_stages=num_stages,  #
         num_warps=num_warps,  #
     )
@@ -127,6 +134,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
                              BLOCK_SIZE_N: tl.constexpr,  #
                              BLOCK_SIZE_K: tl.constexpr,  #
                              GROUP_SIZE_M: tl.constexpr,  #
+                             FP8_OUTPUT: tl.constexpr,  #
                              NUM_SMS: tl.constexpr,  #
                              ):
     start_pid = tl.program_id(axis=0)
@@ -184,7 +192,10 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
             offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
             c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
             c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-            c = accumulator.to(tl.float8e4nv)
+            if FP8_OUTPUT:
+                c = accumulator.to(tl.float8e4nv)
+            else:
+                c = accumulator.to(tl.float16)
             tl.store(c_ptrs, c, mask=c_mask)
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
@@ -192,19 +203,20 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
 def matmul_persistent(a, b):
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_N = 256
-    BLOCK_SIZE_K = 128
+    BLOCK_SIZE_K = 64
     GROUP_SIZE = 8
     num_stages = 3
     num_warps = 8
 
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-
+    assert a.dtype == b.dtype, "Incompatible dtypes"
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
     M, K = a.shape
     K, N = b.shape
+    dtype = a.dtype
     # Allocates output.
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    c = torch.empty((M, N), device=a.device, dtype=dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
     matmul_kernel_persistent[grid](
@@ -218,6 +230,7 @@ def matmul_persistent(a, b):
         BLOCK_SIZE_K=BLOCK_SIZE_K,  #
         GROUP_SIZE_M=GROUP_SIZE,  #
         NUM_SMS=NUM_SMS,  #
+        FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         num_stages=num_stages,  #
         num_warps=num_warps,  #
     )
@@ -231,7 +244,9 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                                  BLOCK_SIZE_N: tl.constexpr,  #
                                  BLOCK_SIZE_K: tl.constexpr,  #
                                  GROUP_SIZE_M: tl.constexpr,  #
+                                 FP8_OUTPUT: tl.constexpr,  #
                                  NUM_SMS: tl.constexpr):  #
+    dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -272,12 +287,15 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
         offs_k = ki * BLOCK_SIZE_K
 
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], tl.float8e4nv)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], tl.float8e4nv)
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
         accumulator = tl.dot(a, b.T, accumulator)
 
         if ki == k_tiles - 1:
-            c = accumulator.to(tl.float8e4nv)
+            if FP8_OUTPUT:
+                c = accumulator.to(tl.float8e4nv)
+            else:
+                c = accumulator.to(tl.float16)
 
             tl._experimental_descriptor_store(c_desc_ptr, c, [offs_am, offs_bn])
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
@@ -286,7 +304,7 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 def matmul_tma_persistent(a, b):
     BLOCK_SIZE_M = 128
     BLOCK_SIZE_N = 256
-    BLOCK_SIZE_K = 128
+    BLOCK_SIZE_K = 64
     GROUP_SIZE = 8
     num_stages = 3
     num_warps = 8
@@ -327,6 +345,7 @@ def matmul_tma_persistent(a, b):
         BLOCK_SIZE_N=BLOCK_SIZE_N,  #
         BLOCK_SIZE_K=BLOCK_SIZE_K,  #
         GROUP_SIZE_M=GROUP_SIZE,  #
+        FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         NUM_SMS=NUM_SMS,  #
         num_stages=num_stages,  #
         num_warps=num_warps,  #
@@ -340,11 +359,15 @@ def cublas_matmul(a, b):
 
     M, K = a.shape
     N, K = b.shape
+    dtype = a.dtype
 
-    c = torch.empty((M, N), device=a.device, dtype=torch.float8_e4m3fn)
+    c = torch.empty((M, N), device=a.device, dtype=dtype)
 
     with proton.scope(f"cublas M={M}, N={N}, K={K}", {"bytes": M * K + N * K, "flops8": 2. * M * N * K}):
-        cublas.fp8_matmul(a, b, c)
+        if dtype == torch.float8_e4m3fn:
+            cublas.fp8_matmul(a, b, c)
+        else:
+            c = torch.matmul(a, b.T)
     return c
 
 
@@ -359,10 +382,7 @@ def bench(K, dtype, reps=10):
     proton.activate(0)
 
     for _ in range(reps):
-        if dtype == torch.float8_e4m3fn:
-            cublas_matmul(a, b)
-        else:
-            torch.matmul(a, b.T)
+        cublas_matmul(a, b)
         time.sleep(0.01)
     for _ in range(reps):
         matmul(a, b.T)
@@ -385,9 +405,13 @@ def validate(M, N, K, dtype):
         cublas_result = cublas_matmul(a, b)
     else:
         cublas_result = torch.matmul(a, b.T)
+    # print(f"{cublas_result=}")
     naive_result = matmul(a, b.T)
+    # print(f"{naive_result=}")
     persistent_result = matmul_persistent(a, b.T)
+    # print(f"{persistent_result=}")
     tma_persistent_result = matmul_tma_persistent(a, b)
+    # print(f"{tma_persistent_result=}")
 
     naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
                                             atol=1.0) else "❌"
