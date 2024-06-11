@@ -54,4 +54,15 @@ def LowerMultiReduction : Pass<"triton-cpu-lower-multi-reduction", "mlir::triton
                              "mlir::triton::TritonDialect"];
 }
 
+def AtomicOpsToLLVM : Pass<"triton-cpu-atomic-ops-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Convert Triton atomic operations to LLVM.";
+    let description = [{
+    }];
+    let constructor = "mlir::triton::cpu::createAtomicOpsToLLVMPass()";
+
+    let dependentDialects = ["mlir::vector::VectorDialect",
+                             "mlir::triton::cpu::TritonCPUDialect",
+                             "mlir::triton::TritonDialect"];
+}
+
 #endif

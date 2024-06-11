@@ -11,6 +11,7 @@ void tritonCPUToLLVMPipelineBuilder(OpPassManager &pm) {
   pm.addPass(mlir::triton::cpu::createFuncOpToLLVMPass());
   pm.addPass(mlir::triton::cpu::createGetProgramIdOpToLLVMPass());
   pm.addPass(mlir::triton::cpu::createMemoryOpToLLVMPass());
+  pm.addPass(mlir::triton::cpu::createAtomicOpsToLLVMPass());
   // pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
 
