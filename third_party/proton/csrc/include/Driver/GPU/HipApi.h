@@ -16,8 +16,8 @@ hipError_t deviceGetAttribute(int *value, hipDeviceAttribute_t attribute,
 
 template <bool CheckSuccess> hipError_t getDeviceCount(int *count);
 
-template <bool CheckSuccess> hipError_t getDeviceProperties(hipDeviceProp_t *prop, 
-			     int deviceId);
+template <bool CheckSuccess>
+hipError_t getDeviceProperties(hipDeviceProp_t *prop, int deviceId);
 
 Device getDevice(uint64_t index);
 

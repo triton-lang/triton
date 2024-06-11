@@ -23,7 +23,8 @@ DEFINE_DISPATCH(ExternLibHip, deviceGetAttribute, hipDeviceGetAttribute, int *,
 
 DEFINE_DISPATCH(ExternLibHip, getDeviceCount, hipGetDeviceCount, int *);
 
-DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties, hipDeviceProp_t *, int);
+DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
+                hipDeviceProp_t *, int);
 
 Device getDevice(uint64_t index) {
   int clockRate;
@@ -49,7 +50,7 @@ Device getDevice(uint64_t index) {
                 smCount, arch, archName);
 }
 
-const std::string getHipArchName(uint64_t index){
+const std::string getHipArchName(uint64_t index) {
   hipDeviceProp_t devProp;
   (void)hip::getDeviceProperties<true>(&devProp, index);
   std::string gcnArchName(devProp.gcnArchName);

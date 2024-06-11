@@ -56,13 +56,16 @@ Device getDevice(uint64_t index) {
                 numSms, arch, archName);
 }
 
-const std::string getCudaArchName(int arch){
-  if(arch == 80) return "Ampere";
-  else if(arch == 89) return "Ada";
-  else if(arch == 90) return "Hopper";
-  else return "Unknown";
+const std::string getCudaArchName(int arch) {
+  if (arch == 80)
+    return "Ampere";
+  else if (arch == 89)
+    return "Ada";
+  else if (arch == 90)
+    return "Hopper";
+  else
+    return "Unknown";
 }
-
 
 } // namespace cuda
 

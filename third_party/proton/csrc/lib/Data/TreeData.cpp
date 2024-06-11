@@ -158,7 +158,7 @@ void TreeData::dumpHatchet(std::ostream &os) const {
           {"memory_clock_rate", device.memoryClockRate},
           {"bus_width", device.busWidth},
           {"arch", device.arch},
-	  {"arch_name", device.archName},
+          {"arch_name", device.archName},
           {"num_sms", device.numSms}};
     }
   }
