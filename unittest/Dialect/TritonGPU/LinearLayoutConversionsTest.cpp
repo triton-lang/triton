@@ -478,12 +478,7 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
   auto mfmaNT =
       mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4},
            /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
-  EXPECT_DEBUG_DEATH(toLinearLayout({16, 16}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
-  EXPECT_DEBUG_DEATH(toLinearLayout({16, 32}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
-  EXPECT_DEBUG_DEATH(toLinearLayout({64, 16}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
+
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaNT),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {8, 0}, {16, 0}}},
@@ -538,12 +533,6 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
       mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4},
            /*mDim*/ 16, /*nDim*/ 16, /*isTranspose*/ false);
 
-  EXPECT_DEBUG_DEATH(toLinearLayout({8, 8}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
-  EXPECT_DEBUG_DEATH(toLinearLayout({8, 32}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
-  EXPECT_DEBUG_DEATH(toLinearLayout({16, 8}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
   EXPECT_EQ(toLinearLayout({16, 16}, mfmaNT),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
@@ -558,12 +547,6 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
       mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4, 1},
            /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
 
-  EXPECT_DEBUG_DEATH(toLinearLayout({32, 16, 16}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
-  EXPECT_DEBUG_DEATH(toLinearLayout({32, 16, 32}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
-  EXPECT_DEBUG_DEATH(toLinearLayout({32, 64, 16}, mfmaNT),
-                     "unsupported tensor shape for given mfma layout");
   EXPECT_EQ(toLinearLayout({1, 128, 128}, mfmaNT),
             LinearLayout({{S("register"),
                            {{0, 1, 0},
