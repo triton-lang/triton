@@ -44,9 +44,8 @@ public:
                            bool isTransposed) {
     SmallVector<unsigned> cpg(wbp.size(), 1u);
     SmallVector<unsigned> cSplit(wbp.size(), 1u);
-    SmallVector<unsigned> cOrd;
-    for (int i = 0; i < wbp.size(); ++i)
-      cOrd.push_back(i);
+    SmallVector<unsigned> cOrd(wbp.size());
+    std::iota(cOrd.begin(), cOrd.end(), 0);
     return AMDMfmaEncodingAttr::get(
         &ctx, versionMaj, versionMin, wbp, mDim, nDim, isTransposed,
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
@@ -476,21 +475,15 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_4x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
-  auto mfmaNT = mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4},
-                     /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
+  auto mfmaNT =
+      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4},
+           /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
   EXPECT_DEBUG_DEATH(toLinearLayout({16, 16}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_DEBUG_DEATH(toLinearLayout({16, 32}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_DEBUG_DEATH(toLinearLayout({64, 16}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
-  EXPECT_EQ(toLinearLayout({128, 128}, mfmaNT),
-            LinearLayout(
-                {{S("register"), {{1, 0}, {2, 0}, {8, 0}, {16, 0}, {64, 0}}},
-                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {4, 0}}},
-                 {S("warp"), {{0, 32}, {0, 64}, {32, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaNT),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {8, 0}, {16, 0}}},
@@ -505,17 +498,18 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
                  {S("warp"), {{0, 0}, {0, 0}, {32, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
-
-  auto mfmaT = mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4},
-                    /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ true);
-
-  EXPECT_EQ(toLinearLayout({128, 128}, mfmaT),
+  EXPECT_EQ(toLinearLayout({128, 128}, mfmaNT),
             LinearLayout(
-                {{S("register"), {{0, 1}, {0, 2}, {0, 8}, {0, 16}, {64, 0}}},
-                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}},
-                 {S("warp"), {{32, 0}, {0, 32}, {0, 64}}},
+                {{S("register"), {{1, 0}, {2, 0}, {8, 0}, {16, 0}, {64, 0}}},
+                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {4, 0}}},
+                 {S("warp"), {{0, 32}, {0, 64}, {32, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
+
+  auto mfmaT =
+      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4},
+           /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ true);
+
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaT),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {0, 8}, {0, 16}}},
@@ -530,18 +524,26 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
                  {S("warp"), {{32, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({128, 128}, mfmaT),
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {0, 8}, {0, 16}, {64, 0}}},
+                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}},
+                 {S("warp"), {{32, 0}, {0, 32}, {0, 64}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
-  auto mfmaNT = mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4},
-                     /*mDim*/ 16, /*nDim*/ 16, /*isTranspose*/ false);
+  auto mfmaNT =
+      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4},
+           /*mDim*/ 16, /*nDim*/ 16, /*isTranspose*/ false);
 
   EXPECT_DEBUG_DEATH(toLinearLayout({8, 8}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_DEBUG_DEATH(toLinearLayout({8, 32}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_DEBUG_DEATH(toLinearLayout({16, 8}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_EQ(toLinearLayout({16, 16}, mfmaNT),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
@@ -553,15 +555,15 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
   auto mfmaNT =
-      mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4, 1},
+      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4, 1},
            /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
 
   EXPECT_DEBUG_DEATH(toLinearLayout({32, 16, 16}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_DEBUG_DEATH(toLinearLayout({32, 16, 32}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_DEBUG_DEATH(toLinearLayout({32, 64, 16}, mfmaNT),
-                     "Unsupported tensor shape for given mfma layout");
+                     "unsupported tensor shape for given mfma layout");
   EXPECT_EQ(toLinearLayout({1, 128, 128}, mfmaNT),
             LinearLayout({{S("register"),
                            {{0, 1, 0},
@@ -608,7 +610,7 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
                 {S("dim0"), S("dim1"), S("dim2")}));
 
   auto mfmaT =
-      mfma(/*Version Major*/ 2, /*Version Minor*/ 0, /*Warps*/ {2, 4, 1},
+      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4, 1},
            /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ true);
 
   EXPECT_EQ(toLinearLayout({1, 128, 128}, mfmaT),

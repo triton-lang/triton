@@ -531,14 +531,16 @@ public:
 
   triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
                                               ArrayRef<unsigned> warpsPerCTA) {
-    return triton::gpu::AMDMfmaEncodingAttr::get(&ctx, 2, 0, warpsPerCTA, mDim,
-                                                 nDim, false, ctaLayout);
+    return triton::gpu::AMDMfmaEncodingAttr::get(
+        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/false, ctaLayout);
   }
 
   triton::gpu::AMDMfmaEncodingAttr
   createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
-    return triton::gpu::AMDMfmaEncodingAttr::get(&ctx, 2, 0, warpsPerCTA, mDim,
-                                                 nDim, true, ctaLayout);
+    return triton::gpu::AMDMfmaEncodingAttr::get(
+        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/true, ctaLayout);
   }
 
 protected:
@@ -573,7 +575,7 @@ TEST_F(AMDMfmaLayoutTest, mfma16) {
   ASSERT_THAT(mfma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
   ASSERT_THAT(mfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
 
-  auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
+  auto tmfma2d = createTransposedMFMA(16, 16, {2, 4});
   ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
   ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(0u, 1u));
 
@@ -581,7 +583,7 @@ TEST_F(AMDMfmaLayoutTest, mfma16) {
   ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
   ASSERT_THAT(mfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
 
-  auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
+  auto tmfma3d = createTransposedMFMA(16, 16, {2, 4, 1});
   ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
   ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(1u, 2u, 0u));
 }

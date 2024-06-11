@@ -439,11 +439,10 @@ LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
   // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
   // register and lane layout for mfma instructions.
 
+  // We use the order from fastest varying to slowest varying. So each base is a
+  // tuple of values mapping to matrix C's (N, M[, B]) indices.
   SmallVector<unsigned> order = triton::gpu::getOrder(mfma);
   auto tileLayout = LinearLayout::empty();
-
-  // The order of dims in bases is minor to major. So each base is a tuple of
-  // values mapping to matrix C's (N, M[, B]) indices.
 
   if (mfma.getMDim() == 32) {
     // For mfma with 32x32 output, each of the 64 threads holds 16 elements.
