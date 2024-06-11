@@ -268,6 +268,7 @@ private:
       inNumCTAs[d] = ceil<unsigned>(shapePerCTA[d], inPerCTA);
       outNumCTAs[d] = ceil<unsigned>(shapePerCTA[d], outPerCTA);
     }
+
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);

@@ -1,3 +1,12 @@
+"""
+Persistent FP8 Matmul
+=====================
+This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
+It includes various matmul methods, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches, and only supports GPUs with compute capability >= 9.0.
+Triton and CuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
+Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.
+"""
+
 import argparse
 import time
 
@@ -20,7 +29,7 @@ def is_cuda():
 
 
 def _matmul_launch_metadata(grid, kernel, args):
-    ret = dict()
+    ret = {}
     M, N, K = args["M"], args["N"], args["K"]
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
     ret["flops8"] = 2. * M * N * K
@@ -161,7 +170,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for i in range(0, k_tiles * tiles_per_SM):
+    for _ in range(0, k_tiles * tiles_per_SM):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
             tile_id += NUM_SMS
@@ -431,7 +440,6 @@ def validate(M, N, K, dtype):
     if torch_result is not None:
         naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
                                                atol=1.0) else "❌"
-        print("maxdiff torch: ", torch.max(torch.abs(naive_result.to(torch.float16) - torch_result.to(torch.float16))))
     if cublas_result is not None:
         naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
                                                 atol=1.0) else "❌"
@@ -448,29 +456,30 @@ def validate(M, N, K, dtype):
     print(f"TMA persistent: {naive_vs_tma_persistent}")
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-K", type=int, required=False)
-parser.add_argument("--K_range", type=int, nargs=2)
-parser.add_argument("--K_step", type=int, default=512)
-parser.add_argument("--prec", type=str, choices=['fp8', 'fp16'], default='fp8')
-args = parser.parse_args()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-K", type=int, required=False)
+    parser.add_argument("--K_range", type=int, nargs=2)
+    parser.add_argument("--K_step", type=int, default=512)
+    parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp8")
+    args = parser.parse_args()
 
-if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
-    print("This example requires CUDA with fp8 support.")
-    exit(1)
+    if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
+        print("This example requires CUDA with fp8 support.")
+        exit(1)
 
-dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
+    dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 
-if args.K:
-    args.K_range = [args.K, args.K]
-    args.K_step = 1  # doesn't matter as long as it's not 0
+    if args.K:
+        args.K_range = [args.K, args.K]
+        args.K_step = 1  # doesn't matter as long as it's not 0
 
-torch.manual_seed(0)
+    torch.manual_seed(0)
 
-validate(32, 32, 32, dtype)
-validate(8192, 8192, 512, dtype)
+    validate(32, 32, 32, dtype)
+    validate(8192, 8192, 512, dtype)
 
-proton.start("matmul", hook="triton")
-for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-    bench(K, dtype)
-proton.finalize()
+    proton.start("matmul", hook="triton")
+    for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+        bench(K, dtype)
+    proton.finalize()
