@@ -33,7 +33,10 @@ def _matmul_launch_metadata(grid, kernel, args):
     M, N, K = args["M"], args["N"], args["K"]
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
     ret["flops8"] = 2. * M * N * K
-    bytes_per_elem = 1 if args["FP8_OUTPUT"] else 2
+    if "c_ptr" in args:
+        bytes_per_elem = args["c_ptr"].element_size()
+    else:
+        bytes_per_elem = 1 if args["FP8_OUTPUT"] else 2
     ret["bytes"] = bytes_per_elem * (M * K + N * K)
     return ret
 
@@ -48,7 +51,6 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
                   BLOCK_SIZE_N: tl.constexpr,  #
                   BLOCK_SIZE_K: tl.constexpr,  #
                   GROUP_SIZE_M: tl.constexpr,  #
-                  FP8_OUTPUT: tl.constexpr,  #
                   ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -84,7 +86,7 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
-    if FP8_OUTPUT:
+    if (c_ptr.dtype == tl.float8e4nv):
         c = accumulator.to(tl.float8e4nv)
     else:
         c = accumulator.to(tl.float16)
@@ -126,7 +128,6 @@ def matmul(a, b):
         BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
         BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
         GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
-        FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         num_stages=configs[dtype]["num_stages"],  #
         num_warps=configs[dtype]["num_warps"],  #
     )
@@ -143,7 +144,6 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
                              BLOCK_SIZE_N: tl.constexpr,  #
                              BLOCK_SIZE_K: tl.constexpr,  #
                              GROUP_SIZE_M: tl.constexpr,  #
-                             FP8_OUTPUT: tl.constexpr,  #
                              NUM_SMS: tl.constexpr,  #
                              ):
     start_pid = tl.program_id(axis=0)
@@ -201,7 +201,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
             offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
             c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
             c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-            if FP8_OUTPUT:
+            if (c_ptr.dtype == tl.float8e4nv):
                 c = accumulator.to(tl.float8e4nv)
             else:
                 c = accumulator.to(tl.float16)
@@ -240,7 +240,6 @@ def matmul_persistent(a, b):
         BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
         BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
         GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
-        FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         NUM_SMS=NUM_SMS,  #
         num_stages=configs[dtype]["num_stages"],  #
         num_warps=configs[dtype]["num_warps"],  #
@@ -303,10 +302,7 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
         accumulator = tl.dot(a, b.T, accumulator)
 
         if ki == k_tiles - 1:
-            if FP8_OUTPUT:
-                c = accumulator.to(tl.float8e4nv)
-            else:
-                c = accumulator.to(tl.float16)
+            c = accumulator.to(dtype)
 
             tl._experimental_descriptor_store(c_desc_ptr, c, [offs_am, offs_bn])
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
