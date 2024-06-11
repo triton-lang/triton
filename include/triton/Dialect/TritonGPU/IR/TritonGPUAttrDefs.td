@@ -926,6 +926,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
 
   }];
 
+  let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 }
 
