@@ -1,5 +1,4 @@
 import argparse
-import sys
 import time
 
 import numpy as np
@@ -8,14 +7,12 @@ import triton
 import triton.language as tl
 import triton.profiler as proton
 
-from triton._C.libtriton import nvidia
-
-if not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 9):
-    print("This tutorial fp8_matmul is only supported on CUDA with cc >= 90")
-    sys.exit(0)
-
-cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-cublas = nvidia.cublas.CublasLt(cublas_workspace)
+if torch.cuda.is_available():
+    from triton._C.libtriton import nvidia
+    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+    cublas = nvidia.cublas.CublasLt(cublas_workspace)
+else:
+    cublas = None
 
 
 def is_cuda():
@@ -27,7 +24,8 @@ def _matmul_launch_metadata(grid, kernel, args):
     M, N, K = args["M"], args["N"], args["K"]
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
     ret["flops8"] = 2. * M * N * K
-    ret["bytes"] = M * K + N * K
+    bytes_per_elem = 1 if args["FP8_OUTPUT"] else 2
+    ret["bytes"] = bytes_per_elem * (M * K + N * K)
     return ret
 
 
@@ -90,13 +88,15 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 def matmul(a, b):
-    BLOCK_SIZE_M = 128
-    BLOCK_SIZE_N = 256
-    BLOCK_SIZE_K = 64
-    GROUP_SIZE = 8
-    num_stages = 3
-    num_warps = 8
-
+    configs = {
+        torch.float8_e4m3fn: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
+            "num_warps": 8
+        }, torch.float16: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
+            "num_warps": 8
+        }
+    }
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -113,13 +113,13 @@ def matmul(a, b):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        BLOCK_SIZE_M=BLOCK_SIZE_M,  #
-        BLOCK_SIZE_N=BLOCK_SIZE_N,  #
-        BLOCK_SIZE_K=BLOCK_SIZE_K,  #
-        GROUP_SIZE_M=GROUP_SIZE,  #
+        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
+        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
+        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
+        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
-        num_stages=num_stages,  #
-        num_warps=num_warps,  #
+        num_stages=configs[dtype]["num_stages"],  #
+        num_warps=configs[dtype]["num_warps"],  #
     )
     return c
 
@@ -201,13 +201,15 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
 
 
 def matmul_persistent(a, b):
-    BLOCK_SIZE_M = 128
-    BLOCK_SIZE_N = 256
-    BLOCK_SIZE_K = 64
-    GROUP_SIZE = 8
-    num_stages = 3
-    num_warps = 8
-
+    configs = {
+        torch.float8_e4m3fn: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
+            "num_warps": 8
+        }, torch.float16: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
+            "num_warps": 8
+        }
+    }
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -225,14 +227,14 @@ def matmul_persistent(a, b):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        BLOCK_SIZE_M=BLOCK_SIZE_M,  #
-        BLOCK_SIZE_N=BLOCK_SIZE_N,  #
-        BLOCK_SIZE_K=BLOCK_SIZE_K,  #
-        GROUP_SIZE_M=GROUP_SIZE,  #
-        NUM_SMS=NUM_SMS,  #
+        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
+        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
+        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
+        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
-        num_stages=num_stages,  #
-        num_warps=num_warps,  #
+        NUM_SMS=NUM_SMS,  #
+        num_stages=configs[dtype]["num_stages"],  #
+        num_warps=configs[dtype]["num_warps"],  #
     )
     return c
 
@@ -302,12 +304,16 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
 
 def matmul_tma_persistent(a, b):
-    BLOCK_SIZE_M = 128
-    BLOCK_SIZE_N = 256
-    BLOCK_SIZE_K = 64
-    GROUP_SIZE = 8
-    num_stages = 3
-    num_warps = 8
+    # Autotuner does not work with TMA. Use manual config.
+    configs = {
+        torch.float8_e4m3fn: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
+            "num_warps": 8
+        }, torch.float16: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
+            "num_warps": 8
+        }
+    }
 
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
@@ -324,12 +330,12 @@ def matmul_tma_persistent(a, b):
     desc_a = np.empty(TMA_SIZE, dtype=np.int8)
     desc_b = np.empty(TMA_SIZE, dtype=np.int8)
     desc_c = np.empty(TMA_SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), M, K, BLOCK_SIZE_M, BLOCK_SIZE_K,
-                                                              a.element_size(), desc_a)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), N, K, BLOCK_SIZE_N, BLOCK_SIZE_K,
-                                                              b.element_size(), desc_b)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(c.data_ptr(), M, N, BLOCK_SIZE_M, BLOCK_SIZE_N,
-                                                              c.element_size(), desc_c)
+    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), M, K, configs[dtype]["BLOCK_SIZE_M"],
+                                                              configs[dtype]["BLOCK_SIZE_K"], a.element_size(), desc_a)
+    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), N, K, configs[dtype]["BLOCK_SIZE_N"],
+                                                              configs[dtype]["BLOCK_SIZE_K"], b.element_size(), desc_b)
+    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(c.data_ptr(), M, N, configs[dtype]["BLOCK_SIZE_M"],
+                                                              configs[dtype]["BLOCK_SIZE_N"], c.element_size(), desc_c)
 
     desc_a = torch.tensor(desc_a, device="cuda")
     desc_b = torch.tensor(desc_b, device="cuda")
@@ -341,14 +347,14 @@ def matmul_tma_persistent(a, b):
     matmul_kernel_tma_persistent[grid](
         desc_a, desc_b, desc_c,  #
         M, N, K,  #
-        BLOCK_SIZE_M=BLOCK_SIZE_M,  #
-        BLOCK_SIZE_N=BLOCK_SIZE_N,  #
-        BLOCK_SIZE_K=BLOCK_SIZE_K,  #
-        GROUP_SIZE_M=GROUP_SIZE,  #
+        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
+        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
+        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
+        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         NUM_SMS=NUM_SMS,  #
-        num_stages=num_stages,  #
-        num_warps=num_warps,  #
+        num_stages=configs[dtype]["num_stages"],  #
+        num_warps=configs[dtype]["num_warps"],  #
     )
     return c
 
@@ -356,18 +362,27 @@ def matmul_tma_persistent(a, b):
 def cublas_matmul(a, b):
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
-
     M, K = a.shape
     N, K = b.shape
     dtype = a.dtype
-
     c = torch.empty((M, N), device=a.device, dtype=dtype)
+    bytes_per_elem = a.element_size()
+    flops_str = "flops8" if dtype == torch.float8_e4m3fn else "flops"
+    with proton.scope(f"cublas M={M}, N={N}, K={K}",
+                      {"bytes": bytes_per_elem * (M * K + N * K), flops_str: 2. * M * N * K}):
+        cublas.matmul(a, b, c)
+    return c
 
-    with proton.scope(f"cublas M={M}, N={N}, K={K}", {"bytes": M * K + N * K, "flops8": 2. * M * N * K}):
-        # if dtype == torch.float8_e4m3fn:
-        cublas.fp8_matmul(a, b, c)
-        # else:
-        #     c = torch.matmul(a, b.T)
+
+def torch_matmul(a, b):
+    M, K = a.shape
+    N, K = b.shape
+    dtype = a.dtype
+    bytes_per_elem = a.element_size()
+    flops_str = "flops8" if dtype == torch.float8_e4m3fn else "flops"
+    with proton.scope(f"torch M={M}, N={N}, K={K}",
+                      {"bytes": bytes_per_elem * (M * K + N * K), flops_str: 2. * M * N * K}):
+        c = torch.matmul(a, b.T)
     return c
 
 
@@ -381,9 +396,14 @@ def bench(K, dtype, reps=10):
 
     proton.activate(0)
 
-    for _ in range(reps):
-        cublas_matmul(a, b)
+    if cublas is not None:
+        for _ in range(reps):
+            cublas_matmul(a, b)
         time.sleep(0.01)
+    if dtype == torch.float16:
+        for _ in range(reps):
+            torch_matmul(a, b)
+            time.sleep(0.01)
     for _ in range(reps):
         matmul(a, b.T)
         time.sleep(0.01)
@@ -401,27 +421,31 @@ def validate(M, N, K, dtype):
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
-    # if dtype == torch.float8_e4m3fn:
-    cublas_result = cublas_matmul(a, b)
-    # else:
-    #     cublas_result = torch.matmul(a, b.T)
-    # print(f"{cublas_result=}")
-    naive_result = matmul(a, b.T)
-    # print(f"{naive_result=}")
-    persistent_result = matmul_persistent(a, b.T)
-    # print(f"{persistent_result=}")
-    tma_persistent_result = matmul_tma_persistent(a, b)
-    # print(f"{tma_persistent_result=}")
 
-    naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
-                                            atol=1.0) else "❌"
+    torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
+    cublas_result = cublas_matmul(a, b) if cublas is not None else None
+    naive_result = matmul(a, b.T)
+    persistent_result = matmul_persistent(a, b.T)
+    tma_persistent_result = matmul_tma_persistent(a, b)
+
+    if torch_result is not None:
+        naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
+                                               atol=1.0) else "❌"
+        print("maxdiff torch: ", torch.max(torch.abs(naive_result.to(torch.float16) - torch_result.to(torch.float16))))
+    if cublas_result is not None:
+        naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
+                                                atol=1.0) else "❌"
     naive_vs_persistent = "✅" if torch.allclose(naive_result.to(torch.float16), persistent_result.to(torch.float16),
                                                 atol=1.0) else "❌"
     naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
                                                     tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
-    print(
-        f"M={M}, N={N}, K={K} verification naive vs: cublas {naive_vs_cublas}, persistent {naive_vs_persistent}, TMA persistent {naive_vs_tma_persistent}"
-    )
+    print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
+    if torch_result is not None:
+        print(f"torch: {naive_vs_torch} ", end="")
+    if cublas_result is not None:
+        print(f"cublas: {naive_vs_cublas} ", end="")
+    print(f"persistent: {naive_vs_persistent} ", end="")
+    print(f"TMA persistent: {naive_vs_tma_persistent}")
 
 
 parser = argparse.ArgumentParser()
