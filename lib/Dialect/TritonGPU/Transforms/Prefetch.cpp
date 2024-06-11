@@ -335,6 +335,14 @@ scf::ForOp Prefetcher::createNewForOp() {
       int64_t kOff = prefetchWidth;
       int64_t kRem = dot.getA().getType().getShape()[1] - prefetchWidth;
       Operation *prevDot = firstDot;
+      if (kRem == 0) {
+        // There is only one dot while prefetchWidth == kSize so delay issuing
+        // it. Meanwhile, newOp should be set to firstDot to make sure the dot
+        // result is updated to yield.
+        builder.setInsertionPoint(prevDot);
+        newOp = firstDot;
+      }
+
       while (kRem != 0) {
         // int64_t kShape = largestPow2(kRem);
         int64_t kShape = prefetchWidth;

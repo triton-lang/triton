@@ -8,7 +8,7 @@ permissions: read-all
 
 jobs:
   Build-Documentation:
-    runs-on: [self-hosted, A100]
+    runs-on: [a100-runner-set]
     timeout-minutes: 30
 
     steps:

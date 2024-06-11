@@ -148,7 +148,7 @@ def check_cuda_or_hip(device):
     # CUDA and HIP both use pytorch device 'cuda'.  Other backends like Intel
     # GPU do not.
     if device not in ['cuda']:
-        pytest.skip("Only for cuda")
+        pytest.skip("Only for cuda or HIP")
 
 
 def check_type_supported(dtype, device):
@@ -1440,11 +1440,13 @@ def test_atomic_rmw_predicate(num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("shape, axis, num_ctas", [(shape, axis, num_ctas)
-                                                   for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
-                                                   for axis in [0, 1]
-                                                   for num_ctas in num_ctas_list])
-def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
+@pytest.mark.parametrize("shape, axis, num_ctas, dtype_x_str",
+                         [(shape, axis, num_ctas, dtype_x_str)
+                          for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
+                          for axis in [0, 1]
+                          for num_ctas in num_ctas_list
+                          for dtype_x_str in ['float32', 'uint64', 'int64', 'float64']])
+def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
     shape0, shape1 = shape
     # triton kernel
 
@@ -1460,13 +1462,13 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
             tl.atomic_add(Z + off1, z)
 
     rs = RandomState(17)
-    x = numpy_random((shape0, shape1), dtype_str="float32", rs=rs)
+    x = numpy_random((shape0, shape1), dtype_str=dtype_x_str, rs=rs)
     # reference result
     z_ref = np.sum(x, axis=axis, keepdims=False)
     # triton result
     x_tri = to_triton(x, device=device)
     z_shape = (shape0, ) if axis == 1 else (shape1, )
-    z_tri = to_triton(np.zeros(z_shape, dtype="float32"), device=device)
+    z_tri = to_triton(np.zeros(z_shape, dtype=getattr(np, dtype_x_str)), device=device)
     kernel[(1, )](z_tri, x_tri, axis, shape0, shape1, num_ctas=num_ctas)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
@@ -2559,9 +2561,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         pytest.skip("Skipping test because it runs out of shared memory")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
-    if epilogue_kind == 'expand_reduce2d' and isinstance(src_layout, MmaLayout):
-        pytest.skip(
-            "Currently MmaLayout combined with slice encoding and reduce op trigger device illegal memory access")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout[2] = 16 if dtype_str == "float16" else 8
@@ -2579,7 +2578,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     num_warps = src_layout.warps_per_cta[0] * src_layout.warps_per_cta[1]
     if num_warps == 8:
         blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 2], [0, 1], [1, 1], [1, 1], [0, 1])
-    one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [4], [0], [1], [1], [0])
+    one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
 
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
     other_axis = 1 - axis
@@ -3273,6 +3272,13 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     else:
         input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
 
+    if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
+        if triton.runtime.driver.active.utils.get_device_properties(
+                torch.cuda.current_device())["max_shared_mem"] < 131072:
+            pytest.skip(
+                "Skipping tests with B = 8, M = 64, in_type = float32, out_type = float32 due to insufficient shared memory (less than 128 KB per SM) on this GPU."
+            )
+
     @triton.jit
     def kernel(
         q_ptr,
@@ -3762,7 +3768,7 @@ def test_load_cache_modifier(cache, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_vectorization(N, num_ctas, device):
     block_size = 1024 * num_ctas
-    src = torch.empty(block_size, device=device)
+    src = torch.randn(block_size, device=device)
     dst = torch.empty(block_size, device=device)
 
     @triton.jit
@@ -3781,7 +3787,7 @@ def test_vectorization(N, num_ctas, device):
         assert "ld.global.v4.b32" in ptx
     else:
         assert "ld.global.b32" in ptx
-    # np.testing.assert_allclose(dst, src[:N])
+    torch.testing.assert_close(dst[:N], src[:N], atol=1e-6, rtol=0)
 
 
 @pytest.mark.interpreter
@@ -3857,6 +3863,33 @@ def test_store_cache_modifier(cache, device):
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' not in ptx
         assert 'st.global.wt' in ptx
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("eviction_policy", ["", "evict_last", "evict_first"])
+def test_store_eviction_policy(eviction_policy, device):
+    src = torch.empty(128, device=device)
+    dst = torch.empty(128, device=device)
+
+    @triton.jit
+    def _kernel(dst, src, POLICY: tl.constexpr):
+        offsets = tl.arange(0, 128)
+        x = tl.load(src + offsets)
+        tl.store(dst + offsets, x, eviction_policy=POLICY)
+
+    if not is_cuda():
+        return
+    pgm = _kernel[(1, )](dst, src, POLICY=eviction_policy)
+    ptx = pgm.asm['ptx']
+    if eviction_policy == '':
+        assert 'evict_last' not in ptx
+        assert 'evict_first' not in ptx
+    if eviction_policy == 'evict_last':
+        assert 'evict_last' in ptx
+        assert 'evict_first' not in ptx
+    if eviction_policy == 'evict_first':
+        assert 'evict_last' not in ptx
+        assert 'evict_first' in ptx
 
 
 # ---------------
@@ -4822,11 +4855,6 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if (M == 1 or N == 1) and interm_layout:
-        # TODO(jlebar): These OOB accesses don't even hit an assert in the
-        # compiler, and some of them return the wrong result instead of
-        # crashing!
-        pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if is_hip():
@@ -5399,3 +5427,22 @@ def test_temp_var_in_loop(device):
         temp = torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
         acc += temp
     assert (acc == out).all()
+
+
+@pytest.mark.interpreter
+def test_num_programs(device):
+    # Assuming that the kernel is launched with a grid of (11, 21, 31)
+    grid = (11, 21, 31)
+    input = torch.empty((3, ), dtype=torch.int32, device=device)
+
+    @triton.jit
+    def kernel(input):
+        num_programs_0 = tl.num_programs(0)
+        num_programs_1 = tl.num_programs(1)
+        num_programs_2 = tl.num_programs(2)
+        tl.store(input, num_programs_0)
+        tl.store(input + 1, num_programs_1)
+        tl.store(input + 2, num_programs_2)
+
+    kernel[grid](input)
+    assert torch.all(input == torch.tensor(grid, device=device))

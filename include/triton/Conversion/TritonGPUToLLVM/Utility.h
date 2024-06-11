@@ -1018,7 +1018,8 @@ emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
 }
 
 inline SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type);
+emitOffsetForLayout(Attribute layout, RankedTensorType type,
+                    bool allowLLs = true);
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
@@ -1170,8 +1171,19 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
+std::optional<SmallVector<SmallVector<unsigned>>>
+emitOffsetForLayoutUsingLinearLayouts(Attribute layout, RankedTensorType type);
+
 inline SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type) {
+emitOffsetForLayout(Attribute layout, RankedTensorType type,
+                    bool allowLLs /*= true*/) {
+  if (allowLLs) {
+    std::optional<SmallVector<SmallVector<unsigned>>> llOffsets =
+        emitOffsetForLayoutUsingLinearLayouts(layout, type);
+    if (llOffsets.has_value())
+      return *llOffsets;
+  }
+
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
     return emitOffsetForBlockedLayout(blockedLayout, type);
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
@@ -1235,13 +1247,30 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return multiDimIdx;
 }
 
-/* ---------------- */
-/* ---------------- */
+// Emits IR to load data from shared memory into registers, or to store data
+// from registers into shared memory.
+//
+// You supply perVectorCallback, which is called once per group of register
+// elements to transfer.  You can use this callback to emit IR to load or store
+// data from or to shared memory.
+//
+// elemLlvmTy should be dstTy's element type converted to an LLVM-dialect type.
+//
+// If maxVecElems is provided, we won't vectorize more than this many elements.
+//
+// Returns true on success.
+[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
+    RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
+    std::optional<int32_t> maxVecElems, Value shmemBase,
+    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target,
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
+
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     Location loc, const TargetInfoBase &target, unsigned inVec,
     RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
     Type resElemTy, SharedMemoryObject smemObj, RewriterBase &rewriter,
-    SmallVectorImpl<Value> &offsetVals, SmallVectorImpl<Value> &srcStrides) {
+    ArrayRef<Value> offsetVals, ArrayRef<Value> srcStrides) {
   // This utility computes the pointers for accessing the provided swizzled
   // shared memory layout `resSharedLayout`. More specifically, it computes,
   // for all indices (row, col) of `srcEncoding` such that idx % inVec = 0,
@@ -1381,6 +1410,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     colOffOrdered = udiv(colOffOrdered, i32_val(minVec));
     colOffOrdered = mul(colOffOrdered, i32_val(minVec));
     Value colOff = add(colOffSwizzled, colOffOrdered);
+
     // compute non-immediate offset
     if (outOrder.size() == 3)
       offset = add(offset, mul(idx[outOrder[2]], srcStrides[outOrder[2]]));
@@ -1400,13 +1430,27 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   return ret;
 }
 
-inline SmallVector<Value> loadSharedToDistributed(
-    Value dst, Value src, SharedMemoryObject smemObj, Type elemTy, Location loc,
-    ConversionPatternRewriter &rewriter, const TargetInfoBase &target) {
-  auto dstTy = cast<RankedTensorType>(dst.getType());
+std::optional<SmallVector<Value>> loadSharedToRegistersUsingLinearLayouts(
+    RankedTensorType dstTy, MemDescType srcTy, Type elemLlvmTy,
+    SharedMemoryObject smemObj, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target);
+
+inline SmallVector<Value>
+loadSharedToDistributed(RankedTensorType dstTy, MemDescType srcTy,
+                        Type elemLlvmTy, SharedMemoryObject smemObj,
+                        Location loc, RewriterBase &rewriter,
+                        const TargetInfoBase &target, bool allowLLs = true) {
+  if (allowLLs) {
+    std::optional<SmallVector<Value>> llVals =
+        loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemLlvmTy,
+                                                smemObj, loc, rewriter, target);
+    if (llVals.has_value()) {
+      return *std::move(llVals);
+    }
+  }
+
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
-  auto srcTy = cast<MemDescType>(src.getType());
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
@@ -1416,8 +1460,8 @@ inline SmallVector<Value> loadSharedToDistributed(
       cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
   auto srcElemTy = srcTy.getElementType();
   auto dstElemTy = dstTy.getElementType();
-  LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy
-                                         << " dstElemTy " << dstElemTy);
+  LDBG("loadSharedToDistributed srcElemTy " << srcElemTy << " dstElemTy "
+                                            << dstElemTy);
   auto inOrd = triton::gpu::getOrder(srcSharedLayout);
   auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
   unsigned outVec = inOrd == outOrd
@@ -1435,36 +1479,46 @@ inline SmallVector<Value> loadSharedToDistributed(
   unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
   SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
 
-  DenseMap<unsigned, Value> sharedPtrs =
-      getSwizzledSharedPtrs(loc, target, outVec, dstTy, srcSharedLayout, elemTy,
-                            smemObj, rewriter, offsetVals, smemObj.strides);
+  DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
+      loc, target, outVec, dstTy, srcSharedLayout, elemLlvmTy, smemObj,
+      rewriter, offsetVals, smemObj.strides);
   assert(outElems % minVec == 0 && "Unexpected number of elements");
   unsigned numVecs = outElems / minVec;
-  auto wordTy = vec_ty(elemTy, minVec);
+  auto wordTy = vec_ty(elemLlvmTy, minVec);
   SmallVector<Value> outVals(outElems);
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
     auto valVec = load(wordTy, smemAddr);
-    valVec.setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
+    valVec.setAlignment(minVec * elemLlvmTy.getIntOrFloatBitWidth() / 8);
     for (unsigned v = 0; v < minVec; ++v) {
-      Value currVal = extract_element(elemTy, valVec, i32_val(v));
+      Value currVal = extract_element(elemLlvmTy, valVec, i32_val(v));
       outVals[i * minVec + v] = currVal;
     }
   }
   return outVals;
 }
 
-inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
-                                     ArrayRef<Value> dstStrides, Value dst,
-                                     Value smemBase, Type elemTy, Location loc,
-                                     ConversionPatternRewriter &rewriter,
-                                     const TargetInfoBase &target) {
-  auto srcTy = cast<RankedTensorType>(src.getType());
+[[nodiscard]] bool storeDistributedToSharedUsingLinearLayouts(
+    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
+    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target);
+
+inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
+                                     Type elemLlvmTy, ArrayRef<Value> srcVals,
+                                     Value smemBase, ArrayRef<Value> dstStrides,
+                                     Location loc, RewriterBase &rewriter,
+                                     const TargetInfoBase &target,
+                                     bool allowLLs = true) {
+  if (allowLLs && storeDistributedToSharedUsingLinearLayouts(
+                      dstTy, srcTy, elemLlvmTy, srcVals, smemBase, dstStrides,
+                      loc, rewriter, target)) {
+    return;
+  }
+
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();
   assert(rank <= 3 && "Unexpected rank of storeDistributedToShared");
-  auto dstTy = cast<MemDescType>(dst.getType());
   auto srcDistributedLayout = srcTy.getEncoding();
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
@@ -1487,27 +1541,27 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                         : dstSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-  auto wordTy = vec_ty(elemTy, minVec);
+  auto wordTy = vec_ty(elemLlvmTy, minVec);
   Value word;
 
   SmallVector<Value, 3> srcStrides(dstStrides);
   SmallVector<Value, 3> offsetVals(rank, i32_val(0));
-  SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
+  SharedMemoryObject smemObj(smemBase, elemLlvmTy, srcStrides, offsetVals);
 
-  DenseMap<unsigned, Value> sharedPtrs =
-      getSwizzledSharedPtrs(loc, target, inVec, srcTy, dstSharedLayout, elemTy,
-                            smemObj, rewriter, offsetVals, srcStrides);
+  DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
+      loc, target, inVec, srcTy, dstSharedLayout, elemLlvmTy, smemObj, rewriter,
+      offsetVals, srcStrides);
   LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
                                                << minVec << " " << wordTy);
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % minVec == 0)
       word = undef(wordTy);
-    word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
+    word = insert_element(wordTy, word, srcVals[i], i32_val(i % minVec));
     if (i % minVec == minVec - 1) {
       Value smemAddr = sharedPtrs[i / minVec * minVec];
       smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
       store(word, smemAddr)
-          .setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
+          .setAlignment(minVec * elemLlvmTy.getIntOrFloatBitWidth() / 8);
     }
   }
 }

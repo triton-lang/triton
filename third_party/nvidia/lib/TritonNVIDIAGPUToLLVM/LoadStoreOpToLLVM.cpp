@@ -6,6 +6,8 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
 #include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -807,70 +809,73 @@ struct AsyncCopyGlobalToLocalOpConversion
     // %other
     SmallVector<Value> otherElems;
     if (llOther) {
-      // FIXME(Keren): always assume other is 0 for now
+      // FIXME(Keren): assume other is 0 for now.
+      //
       // It's not necessary for now because the pipeline pass will skip
       // generating insert_slice_async if the load op has any "other" tensor.
-      // assert(false && "insert_slice_async: Other value not supported yet");
       otherElems = unpackLLElements(loc, llOther, rewriter);
       assert(srcElems.size() == otherElems.size());
     }
 
-    // We don't use getVec() here because we are copying from memory to memory.
-    // If contiguity > vector size, we can have one pointer maintaining the
-    // start of the vector and the other pointer moving to the next vector.
-    unsigned inVec = getContiguity(op.getSrc());
-    unsigned outVec = resSharedLayout.getVec();
-    unsigned minVec = inVec;
-    if (outVec > 1)
-      minVec = std::min(outVec, inVec);
-    unsigned numElems = getTotalElemsPerThread(srcTy);
-    unsigned perPhase = resSharedLayout.getPerPhase();
-    unsigned maxPhase = resSharedLayout.getMaxPhase();
-    SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
-    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
-        loc, targetInfo, inVec, srcTy, resSharedLayout, resElemTy, smemObj,
-        rewriter, offsetVals, smemObj.strides);
+    // We can load N elements at a time if:
+    //  1. Every group of N source pointers are contiguous.  For example, if
+    //     N=2, then the pointers should be [x, x+1, y, y+1, ...].
+    //  2. The mask (if present) has "alignment" N, meaning that each group of N
+    //     mask bits are the same.  For example if N=2, the mask must be
+    //     [x, x, y, y, ...].
+    unsigned maxVec = getContiguity(op.getSrc());
+    if (mask) {
+      maxVec = std::min(maxVec, getMaskAlignment(mask));
+    }
 
-    // A sharedLayout encoding has a "vec" parameter.
-    // On the column dimension, if inVec > outVec, it means we have to divide
-    // single vector read into multiple ones
-    auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
+    // Addresses to store into, one per `vecTy`.
+    VectorType vecTy;
+    SmallVector<Value> shmemAddrs;
+    bool ok = emitTransferBetweenRegistersAndShared(
+        srcTy, dstTy, resElemTy, maxVec, smemObj.base, smemObj.strides, loc,
+        rewriter, targetInfo, [&](VectorType vecTy_, Value shmemAddr) {
+          vecTy = vecTy_;
+          shmemAddrs.push_back(shmemAddr);
+        });
+    assert(ok);
 
-    for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
-      // 16 * 8 = 128bits
-      auto maxBitWidth =
-          std::max<unsigned>(128, resElemTy.getIntOrFloatBitWidth());
-      auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
-      auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
-      auto numWords = vecBitWidth / bitWidth;
-      auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
+    int vecBytes = vecTy.getNumElements() * vecTy.getElementTypeBitWidth() / 8;
+    assert(llvm::isPowerOf2_32(vecBytes));
+    if (vecBytes < 4) {
+      return emitError(loc, "cp.async does not support transfers smaller than "
+                            "4 bytes; calculated this as ")
+             << vecBytes << " bytes";
+    }
 
-      // Tune CG and CA here.
-      auto byteWidth = bitWidth / 8;
-      CacheModifier srcCacheModifier =
-          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
-      assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
-      auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
+    for (int i = 0; i < shmemAddrs.size(); i++) {
+      // It's possible that vecTy is larger than 128 bits, in which case we have
+      // to use multiple cp.async instructions.
+      int wordBytes = std::min(vecBytes, 16);
+      int wordElems = wordBytes * 8 / vecTy.getElementTypeBitWidth();
+      int numWordsInVec = std::max(1, vecBytes / wordBytes);
+      for (int j = 0; j < numWordsInVec; j++) {
+        int elemIdx = i * vecTy.getNumElements() + j * wordElems;
 
-      Value basePtr = sharedPtrs[elemIdx];
-      for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
+        // Tune CG and CA.
+        CacheModifier srcCacheModifier =
+            wordBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
+        assert(wordBytes == 16 || wordBytes == 8 || wordBytes == 4);
+
         PTXBuilder ptxBuilder;
-        auto wordElemIdx = wordIdx * numWordElems;
         auto &copyAsyncOp =
             *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-        auto *dstOperand =
-            ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
-        auto *srcOperand =
-            ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
-        auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
+        auto *dstOperand = ptxBuilder.newAddrOperand(shmemAddrs[i], "r",
+                                                     /*offset=*/j * wordBytes);
+        auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[elemIdx], "l");
+        auto *copySize = ptxBuilder.newConstantOperand(wordBytes);
         auto *srcSize = copySize;
         if (op.getMask()) {
           // We don't use predicate in this case, setting src-size to 0
           // if there's any mask. cp.async will automatically fill the
           // remaining slots with 0 if cp-size > src-size.
           // XXX(Keren): Always assume other = 0 for now.
-          auto selectOp = select(maskElems[elemIdx + wordElemIdx],
-                                 i32_val(byteWidth), i32_val(0));
+          auto selectOp =
+              select(maskElems[elemIdx], i32_val(wordBytes), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
 
