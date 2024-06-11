@@ -8,7 +8,6 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 """
 
 import argparse
-import sys
 import time
 
 import numpy as np
@@ -19,12 +18,9 @@ import triton.profiler as proton
 
 from triton._C.libtriton import nvidia
 
-if not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 9):
-    print("This tutorial fp8_matmul is only supported on CUDA with cc >= 90")
-    sys.exit(0)
-
-cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-cublas = nvidia.cublas.CublasLt(cublas_workspace)
+if torch.cuda.is_available():
+    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
+    cublas = nvidia.cublas.CublasLt(cublas_workspace)
 
 
 def _matmul_launch_metadata(grid, kernel, args):
@@ -397,22 +393,26 @@ def validate(M, N, K):
     )
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-K", type=int, required=False)
-parser.add_argument("--K_range", type=int, nargs=2)
-parser.add_argument("--K_step", type=int, default=512)
-args = parser.parse_args()
+if __name__ == "__main__":
+    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 9:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-K", type=int, required=False)
+        parser.add_argument("--K_range", type=int, nargs=2)
+        parser.add_argument("--K_step", type=int, default=512)
+        args = parser.parse_args()
 
-if args.K:
-    args.K_range = [args.K, args.K]
-    args.K_step = 1  # doesn't matter as long as it's not 0
+        if args.K:
+            args.K_range = [args.K, args.K]
+            args.K_step = 1  # doesn't matter as long as it's not 0
 
-torch.manual_seed(0)
+        torch.manual_seed(0)
 
-validate(32, 32, 32)
-validate(8192, 8192, 512)
+        validate(32, 32, 32)
+        validate(8192, 8192, 512)
 
-proton.start("matmul", hook="triton")
-for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-    bench(K)
-proton.finalize()
+        proton.start("matmul", hook="triton")
+        for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+            bench(K)
+        proton.finalize()
+    else:
+        print("This tutorial fp8_matmul is only supported on CUDA with cc >= 90")
