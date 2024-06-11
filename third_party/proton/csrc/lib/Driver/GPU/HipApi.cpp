@@ -23,6 +23,8 @@ DEFINE_DISPATCH(ExternLibHip, deviceGetAttribute, hipDeviceGetAttribute, int *,
 
 DEFINE_DISPATCH(ExternLibHip, getDeviceCount, hipGetDeviceCount, int *);
 
+DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties, hipDeviceProp_t *, int);
+
 Device getDevice(uint64_t index) {
   int clockRate;
   (void)hip::deviceGetAttribute<true>(&clockRate, hipDeviceAttributeClockRate,
@@ -40,8 +42,19 @@ Device getDevice(uint64_t index) {
   // TODO: Compute capability is a NVIDIA concept. It doesn't map naturally to
   // AMD GPUs. Figure out a better way to support this.
   uint64_t arch = 0;
+
+  std::string archName = getHipArchName(index);
+
   return Device(DeviceType::HIP, index, clockRate, memoryClockRate, busWidth,
-                smCount, arch);
+                smCount, arch, archName);
+}
+
+const std::string getHipArchName(uint64_t index){
+  hipDeviceProp_t devProp;
+  (void)hip::getDeviceProperties<true>(&devProp, index);
+  std::string gcnArchName(devProp.gcnArchName);
+  std::string hipArch = gcnArchName.substr(0, 6);
+  return hipArch;
 }
 
 const char *getKernelNameRef(const hipFunction_t f) {

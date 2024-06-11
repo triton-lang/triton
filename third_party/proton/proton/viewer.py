@@ -51,6 +51,11 @@ def get_min_time_flops(df, device_info):
                     elif arch == 90:
                         # 114 sms and 1755mhz is the base number of sms and clock rate of H100 pcie
                         max_flops = ((num_sms / 114 * clock_rate / (1755 * 1e3) * 1513) * 1e12) / (width / 8)
+                elif device_type == "HIP":
+                    if arch == "gfx90a":
+                        max_flops = 383e12 / (width / 8)
+                    elif arch == "gfx941" or arch == "gfx942":
+                        max_flops = 2614.9e12 / (width / 8)
                 else:
                     raise ValueError(f"Unsupported device type: {device_type}")
                 min_time_flops.loc[idx, "min_time"] += device_frames[f"flops{width}"].fillna(0) / max_flops

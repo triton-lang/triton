@@ -28,15 +28,16 @@ struct Device {
   uint64_t busWidth;
   uint64_t numSms;
   uint64_t arch;
+  std::string archName;
 
   Device() = default;
 
   Device(DeviceType type, uint64_t id, uint64_t clockRate,
          uint64_t memoryClockRate, uint64_t busWidth, uint64_t numSms,
-         uint64_t arch)
+         uint64_t arch, std::string archName)
       : type(type), id(id), clockRate(clockRate),
         memoryClockRate(memoryClockRate), busWidth(busWidth), numSms(numSms),
-        arch(arch) {}
+        arch(arch), archName(archName) {}
 };
 
 Device getDevice(DeviceType type, uint64_t index);
