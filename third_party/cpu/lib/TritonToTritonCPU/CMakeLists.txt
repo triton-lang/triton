@@ -1,4 +1,5 @@
 add_triton_library(TritonToTritonCPU
+    ConvertAtomicOps.cpp
     ConvertControlFlowOps.cpp
     ConvertDotOp.cpp
     ConvertElementwiseOps.cpp
