@@ -94,8 +94,8 @@ void init_triton_nvidia(py::module &&m) {
                         workspace.attr("element_size")().cast<size_t>();
         return new CublasLtInstance(wrk_ptr, wrk_size);
       }))
-      .def("fp8_matmul", [](CublasLtInstance &self, py::object &A,
-                            py::object &B, py::object &C) {
+      .def("matmul", [](CublasLtInstance &self, py::object &A, py::object &B,
+                        py::object &C) {
         auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
         auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
         auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
@@ -103,6 +103,21 @@ void init_triton_nvidia(py::module &&m) {
         auto A_shape = A.attr("shape").cast<std::vector<int>>();
         auto B_shape = B.attr("shape").cast<std::vector<int>>();
         auto C_shape = C.attr("shape").cast<std::vector<int>>();
+
+        auto A_dtype = A.attr("dtype").attr("__str__")().cast<std::string>();
+        auto B_dtype = B.attr("dtype").attr("__str__")().cast<std::string>();
+        auto C_dtype = C.attr("dtype").attr("__str__")().cast<std::string>();
+
+        assert(A_dtype == B_dtype && A_dtype == C_dtype);
+        assert(A_dtype == "torch.float8_e4m3fn" || A_dtype == "torch.float16");
+
+        std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
+        cudaDataType_t dtype;
+        if (dtype_str == "float8_e4m3fn") {
+          dtype = CUDA_R_8F_E4M3;
+        } else if (dtype_str == "float16") {
+          dtype = CUDA_R_16F;
+        }
 
         if (A_shape.size() != 2 || B_shape.size() != 2 || C_shape.size() != 2) {
           throw std::runtime_error("Only 2D matrices are supported.");
@@ -140,6 +155,7 @@ void init_triton_nvidia(py::module &&m) {
                                    "that B needs to be transposed.");
         }
 
-        self.fp8Matmul(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr);
+        self.matmul(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr,
+                    dtype);
       });
 }

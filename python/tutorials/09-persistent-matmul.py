@@ -364,10 +364,10 @@ def cublas_matmul(a, b):
     c = torch.empty((M, N), device=a.device, dtype=dtype)
 
     with proton.scope(f"cublas M={M}, N={N}, K={K}", {"bytes": M * K + N * K, "flops8": 2. * M * N * K}):
-        if dtype == torch.float8_e4m3fn:
-            cublas.fp8_matmul(a, b, c)
-        else:
-            c = torch.matmul(a, b.T)
+        # if dtype == torch.float8_e4m3fn:
+        cublas.fp8_matmul(a, b, c)
+        # else:
+        #     c = torch.matmul(a, b.T)
     return c
 
 
@@ -401,10 +401,10 @@ def validate(M, N, K, dtype):
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
-    if dtype == torch.float8_e4m3fn:
-        cublas_result = cublas_matmul(a, b)
-    else:
-        cublas_result = torch.matmul(a, b.T)
+    # if dtype == torch.float8_e4m3fn:
+    cublas_result = cublas_matmul(a, b)
+    # else:
+    #     cublas_result = torch.matmul(a, b.T)
     # print(f"{cublas_result=}")
     naive_result = matmul(a, b.T)
     # print(f"{naive_result=}")
