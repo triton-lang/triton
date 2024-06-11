@@ -45,3 +45,18 @@
 // expected-error@+2 {{triton_gpu.dot_op kWidth parameter supports only 16 for WMMA parent}}
 #wmma = #triton_gpu.amd_wmma<{warpsPerCTA = [1, 4]}>
 #dot_op = #triton_gpu.dot_op<{opIdx = 1, parent = #wmma, kWidth = 8}>
+
+// -----
+
+// expected-error@+1 {{major version must be in the [0, 3] range}}
+#mfma = #triton_gpu.amd_mfma<{versionMajor = 10, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+
+// -----
+
+// expected-error@+1 {{minor version must be 0}}
+#mfma = #triton_gpu.amd_mfma<{versionMajor = 2, versionMinor = 5, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+
+// -----
+
+// expected-error@+1 {{(M, N) cases other than (32, 32) or (16, 16) unimplemented}}
+#mfma = #triton_gpu.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [16, 8], isTransposed = false}>
