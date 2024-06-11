@@ -40,14 +40,10 @@ Device getDevice(uint64_t index) {
   (void)hip::deviceGetAttribute<true>(
       &smCount, hipDeviceAttributeMultiprocessorCount, index);
 
-  // TODO: Compute capability is a NVIDIA concept. It doesn't map naturally to
-  // AMD GPUs. Figure out a better way to support this.
-  uint64_t arch = 0;
-
-  std::string archName = getHipArchName(index);
+  std::string arch = getHipArchName(index);
 
   return Device(DeviceType::HIP, index, clockRate, memoryClockRate, busWidth,
-                smCount, arch, archName);
+                smCount, arch);
 }
 
 const std::string getHipArchName(uint64_t index) {

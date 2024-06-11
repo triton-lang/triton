@@ -46,16 +46,14 @@
   {
     "HIP": {
       "0": {
-        "arch": 0,
-        "arch_name": "gfx90a",
+        "arch": "gfx90a",
         "bus_width": 4096,
         "clock_rate": 1700000,
         "memory_clock_rate": 1600000,
         "num_sms": 104
       },
       "1": {
-        "arch": 0,
-        "arch_name": "gfx941",
+        "arch": "gfx941",
         "bus_width": 8192,
         "clock_rate": 5200000,
         "memory_clock_rate": 2525000,

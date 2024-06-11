@@ -21,8 +21,6 @@ template <bool CheckSuccess> CUresult deviceGet(CUdevice *device, int ordinal);
 
 Device getDevice(uint64_t index);
 
-const std::string getCudaArchName(int arch);
-
 } // namespace cuda
 
 } // namespace proton

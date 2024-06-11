@@ -46,16 +46,14 @@
   {
     "CUDA": {
       "0": {
-        "arch": 89,
-        "arch_name": "Ada",
+        "arch": "89",
         "bus_width": 384,
         "clock_rate": 2625000,
         "memory_clock_rate": 10501000,
         "num_sms": 128
       },
       "1": {
-        "arch": 90,
-        "arch_name": "Hopper",
+        "arch": "90",
         "bus_width": 6144,
         "clock_rate": 1980000,
         "memory_clock_rate": 2619000,
