@@ -798,16 +798,18 @@ def AMDMfmaEncodingAttr : DistributedEncoding<"AMDMfmaEncoding", "amd_mfma_encod
   let mnemonic = "amd_mfma";
 
   let description = [{
-An encoding for tensors that have been produced by tensor cores of AMD MI GPUs.
+An encoding for tensors that have been produced by MFMA matrix core instructions,
+available on AMD Instinct GPUs of CDNA architectures.
+
 It is characterized by the following parameters:
-- `versionMajor` and `versionMinor` indicates the GPU arch
+- `versionMajor` and `versionMinor` indicates the GPU architecture:
   - 1.0: gfx908, i.e. MI100
   - 2.0: gfx90a: i.e. MI200, MI210, MI250
   - 3.0: gfx940, gfx941, gfx942: MI300
 - `warpsPerCTA` indicates the warp layout in the block.
 - `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
 - `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
-without going to LDS. This is used in the case of chained dot (E.g. Flash-Attention kernel).
+without going to shared memory. This is used in the case of chained dot (E.g. Flash-Attention kernel).
 
 Example 1:
 Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and MDim=NDim=32.
@@ -924,6 +926,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
 
   }];
 
+  let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 }
 
@@ -931,8 +934,9 @@ def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encod
   let mnemonic = "amd_wmma";
 
   let description = [{
-An encoding for tensors that have been produced by WMMA instructions,
-available on RDNA 3.
+An encoding for tensors that have been produced by WMMA matrix core instructions,
+available on AMD Radeon GPUs of RDNA architectures.
+
 A `warpsPerCTA` parameter characterizes data distribution between warps.
 An important limitation of WMMA for layout is a shape for tiles proccessed
 by a single warp. It is [16, 16].
