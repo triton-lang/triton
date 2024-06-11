@@ -335,17 +335,8 @@ bool emitTransferBetweenRegistersAndShared(
                       [&](auto offset) { return offset == 0; })) {
       return false;
     }
-
-    // We now have
-    //   regToSharedLayout(0, ..., block=inBlock) => (0, ..., block=outBlock).
-    // To confirm that there's no cross-block communication, we must also have
-    // outBlock == inBlock or outBlock == 0.
-    //
-    // The fact that outBlock == 0 works is nonobvious.  It occurs when the
-    // shared layout is broadcasted in its block dim, i.e. multiple blocks
-    // contain the same data.
     int32_t outBlock = idx.back();
-    if (outBlock != inBlock && outBlock != 0) {
+    if (outBlock != inBlock) {
       return false;
     }
   }
