@@ -39,16 +39,15 @@ public:
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd), instrShape);
   }
 
-  AMDMfmaEncodingAttr mfma(unsigned versionMaj, unsigned versionMin,
-                           ArrayRef<unsigned> wbp, unsigned mDim, unsigned nDim,
-                           bool isTransposed) {
-    SmallVector<unsigned> cpg(wbp.size(), 1u);
-    SmallVector<unsigned> cSplit(wbp.size(), 1u);
-    SmallVector<unsigned> cOrd(wbp.size());
+  AMDMfmaEncodingAttr mfma(ArrayRef<unsigned> warps, unsigned mDim,
+                           unsigned nDim, bool isTransposed) {
+    SmallVector<unsigned> cpg(warps.size(), 1u);
+    SmallVector<unsigned> cSplit(warps.size(), 1u);
+    SmallVector<unsigned> cOrd(warps.size());
     std::iota(cOrd.begin(), cOrd.end(), 0);
     return AMDMfmaEncodingAttr::get(
-        &ctx, versionMaj, versionMin, wbp, mDim, nDim, isTransposed,
-        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warps, mDim, nDim,
+        isTransposed, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   SliceEncodingAttr slice(Attribute parent, int dim) {
@@ -475,9 +474,8 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_4x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
-  auto mfmaNT =
-      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4},
-           /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
+  auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                     /*isTransposed=*/false);
 
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaNT),
             LinearLayout(
@@ -501,9 +499,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  auto mfmaT =
-      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4},
-           /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ true);
+  auto mfmaT = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                    /*isTransposed=*/true);
 
   EXPECT_EQ(toLinearLayout({32, 32}, mfmaT),
             LinearLayout(
@@ -529,10 +526,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
-  auto mfmaNT =
-      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4},
-           /*mDim*/ 16, /*nDim*/ 16, /*isTranspose*/ false);
-
+  auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
+                     /*isTransposed=*/false);
   EXPECT_EQ(toLinearLayout({16, 16}, mfmaNT),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
@@ -543,9 +538,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
-  auto mfmaNT =
-      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4, 1},
-           /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ false);
+  auto mfmaNT = mfma(/*warps=*/{2, 4, 1}, /*mDim=*/32, /*nDim=*/32,
+                     /*isTransposed=*/false);
 
   EXPECT_EQ(toLinearLayout({1, 128, 128}, mfmaNT),
             LinearLayout({{S("register"),
@@ -592,9 +586,8 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1"), S("dim2")}));
 
-  auto mfmaT =
-      mfma(/*versionMajor*/ 2, /*versionMinor*/ 0, /*warpsPerCTA*/ {2, 4, 1},
-           /*mDim*/ 32, /*nDim*/ 32, /*isTranspose*/ true);
+  auto mfmaT = mfma(/*warps=*/{2, 4, 1}, /*mDim=*/32, /*nDim=*/32,
+                    /*isTransposed=*/true);
 
   EXPECT_EQ(toLinearLayout({1, 128, 128}, mfmaT),
             LinearLayout({{S("register"),
