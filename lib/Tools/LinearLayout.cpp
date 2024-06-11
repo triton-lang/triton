@@ -88,6 +88,30 @@ std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
   return m;
 }
 
+// Get a matrix for `layout` with its codomain expanded so it's injective, i.e.
+// each input element maps to a unique output element.  We do this by finding
+// columns that are equal to 0 and adding a new row with a 1 in that column.
+std::tuple<std::unique_ptr<uint64_t[]>, int /*numRows*/, int /*numCols*/>
+getInjectiveMat(const LinearLayout &layout) {
+  int numRows = layout.getTotalOutDimSizeLog2();
+  int numCols = layout.getTotalInDimSizeLog2();
+  std::unique_ptr<uint64_t[]> mat = getMatrix(layout);
+
+  // Bits of mat or-reduced along the columns (so there's just one row).
+  uint64_t colBits = 0;
+  for (int r = 0; r < numRows; r++) {
+    colBits |= mat[r];
+  }
+  auto expanded = std::unique_ptr<uint64_t[]>(new uint64_t[numRows + numCols]);
+  std::memcpy(expanded.get(), mat.get(), numRows * sizeof(uint64_t));
+  for (int c = 0; c < numCols; c++) {
+    if ((colBits & (1 << c)) == 0) {
+      expanded[numRows++] = (1 << c);
+    }
+  }
+  return std::make_tuple(std::move(expanded), numRows, numCols);
+}
+
 // Compute the rank of the matrix formed by taking the bases for the given
 // outDim as columns.  In other words, finds the number of linearly-independent
 // bases for this output dimension.
@@ -576,37 +600,43 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   }
   assert(outer.isSurjective());
 
-  int numRowsThis = this->getTotalOutDimSizeLog2();
-  int numRowsOuter = outer.getTotalOutDimSizeLog2();
-  int numColsThis = this->getTotalInDimSizeLog2();
-  int numColsOuter = outer.getTotalInDimSizeLog2();
-
-  std::unique_ptr<uint64_t[]> matThis = getMatrix(*this);
-
-  // Increase the number of rows in matOuter's storage, because we may add some
-  // rows to it.
-  std::unique_ptr<uint64_t[]> matOuter = [&] {
-    std::unique_ptr<uint64_t[]> mat =
-        getMatrix(outer.transposeOuts(llvm::to_vector(this->getOutDimNames())));
-    std::unique_ptr<uint64_t[]> expanded = std::unique_ptr<uint64_t[]>(
-        new uint64_t[numRowsOuter + numColsOuter]());
-    std::memcpy(expanded.get(), mat.get(), numRowsOuter * sizeof(uint64_t));
-    return expanded;
-  }();
-
-  // Check if `o` is injective.  Because it's surjective, it's sufficient to
-  // check whether any columns of `o` are 0.  If it's not injective, we'll add
-  // rows to `o` until it is.
-  uint64_t colBits = 0;
-  for (int c = 0; c < numRowsOuter; c++) {
-    colBits |= matOuter[c];
-  }
-  bool outerWasInjective = colBits == (1 << numColsOuter) - 1;
-  for (int c = 0; c < numColsOuter; c++) {
-    if ((colBits & (1 << c)) == 0) {
-      matOuter[numRowsOuter++] = (1 << c);
-    }
-  }
+  // Make both `this` and `outer` injective.  We need to do this on the `outer`
+  // layout because we can't invert a non-injective function.  We choose to do
+  // so on the `this` layout as well.  The rest of the comment explains why we
+  // make that choice.
+  //
+  // Recall from the header that C = A.invertAndCompose(B) just means that
+  //  A(x) = B(C(x)).
+  //
+  // Sometimes we may have a choice of multiple values for a particular C(x).
+  // For example, if A(1) = B(0) = B(1) = 0, then C(1) can be either 0 or 1.
+  //
+  // We want to choose C such that C(x) != 0 where possible.  For example,
+  // suppose we are transfering from registers to registers and we have the
+  // following layouts.
+  //
+  //   A(thread=1, block=0) = 1
+  //   A(thread=2, block=0) = 2
+  //   A(thread=0, block=1) = 0
+  //
+  //   B(thread=1, block=0) = 2
+  //   B(thread=2, block=0) = 1
+  //   B(thread=0, block=1) = 0
+  //
+  // Notice that A and B both have the same data in each of their two blocks.
+  // So if we want to transfer from A to B, we don't need to cross blocks, which
+  // is expensive.  We want A.invertAndCompose(B) to reflect that choice.
+  //
+  // Let A' be A with the last line changed to "=4", and similarly for B'.  When
+  // transfering from A' to B', we can't cross blocks even if we wanted to,
+  // because the two blocks now have different data.  But also, any mapping of
+  // thread+block from A' to B' is also valid for mapping from A to B.
+  //
+  // Thus making A and B injective encodes our desire not to cross blocks, or
+  // more generally our desire that C(x) != 0 where possible.
+  auto [matThis, numRowsThis, numColsThis] = getInjectiveMat(*this);
+  auto [matOuter, numRowsOuter, numColsOuter] = getInjectiveMat(
+      outer.transposeOuts(llvm::to_vector(this->getOutDimNames())));
 
   // Concatenate `matOuter` and `matThis` horizontally (i.e. `matThis`
   // is to the right of `matOuter`).
