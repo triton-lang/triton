@@ -432,15 +432,14 @@ LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
   MLIRContext *ctx = mfma.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
-  StringAttr rDim = S("register");
-  StringAttr lDim = S("lane");
-  StringAttr wDim = S("warp");
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
 
   // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
   // register and lane layout for mfma instructions.
 
-  // We use the order from fastest varying to slowest varying. So each base is a
-  // tuple of values mapping to matrix C's (N, M[, B]) indices.
+  // We use the order from fastest varying to slowest varying. So each base
+  // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
   SmallVector<unsigned> order = triton::gpu::getOrder(mfma);
   auto tileLayout = LinearLayout::empty();
 
@@ -455,8 +454,8 @@ LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
     // matrix C's N dimension, with 32 consecutive threads covering a whole
     // row and the next 32 threads start after a gap spanning 4 rows.
     tileLayout = LinearLayout(
-        {{rDim, {{0, 1}, {0, 2}, {0, 8}, /*gap*/ {0, 16}}},
-         {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, /*gap*/ {0, 4}}}},
+        {{kRegister, {{0, 1}, {0, 2}, {0, 8}, /*gap*/ {0, 16}}},
+         {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, /*gap*/ {0, 4}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
   } else {
     assert(mfma.getMDim() == 16);
@@ -469,23 +468,22 @@ LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
     // matrix C's N dimension, with 16 consecutive threads covering a whole
     // row and the next 16 threads start after a gap spanning 4 rows.
     tileLayout = LinearLayout(
-        {{rDim, {{0, 1}, {0, 2}}},
-         {lDim, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
+        {{kRegister, {{0, 1}, {0, 2}}},
+         {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
   }
   if (hasBatchDim) {
     assert(order[2] == 0);
-    // We need to extend one output dimension for register and warp to
-    // accomodate for the batch, which appears at the last.
-    tileLayout *= LinearLayout::identity1D(1, rDim, outDimNames[order[2]]);
-    tileLayout *= LinearLayout::identity1D(1, lDim, outDimNames[order[2]]);
+    // Extend the base vector with one value to accomodate for the batch
+    // dimension, which appears at the last.
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
   }
-
-  LinearLayout warpLayout =
-      identityND(wDim, mfma.getWarpsPerCTA(), order, outDimNames);
 
   // And each warp takes the same register and lane sub-layout. So mulitply with
   // an identity layout for the warp.
+  LinearLayout warpLayout =
+      identityND(S("warp"), mfma.getWarpsPerCTA(), order, outDimNames);
   LinearLayout ctaLayout = tileLayout * warpLayout;
 
   return combineCtaCgaWithShape(ctaLayout, mfma.getCTALayout(), shape);
