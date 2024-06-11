@@ -505,6 +505,26 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Multidim) {
             l2.transposeOuts(llvm::to_vector(l1.getOutDimNames())));
 }
 
+TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims) {
+  LinearLayout l1({{S("in1"), {{1}, {2}, {4}}}, {S("in2"), {{0}}}}, {S("out")});
+  LinearLayout l2({{S("in3"), {{1}, {2}, {4}}}, {S("in4"), {{0}}}}, {S("out")});
+  LinearLayout c = l1.invertAndCompose(l2);
+  EXPECT_EQ(c, LinearLayout::identity1D(8, S("in1"), S("in3")) *
+                   LinearLayout::identity1D(2, S("in2"), S("in4")));
+  EXPECT_EQ(c.compose(l2),
+            l1.transposeOuts(llvm::to_vector(l2.getOutDimNames())));
+}
+
+TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims2) {
+  LinearLayout a({{S("in1"), {{1}, {2}}}, {S("in2"), {{0}}}}, {S("out")});
+  LinearLayout b({{S("in3"), {{2}, {1}}}, {S("in4"), {{0}}}}, {S("out")});
+  LinearLayout c = a.invertAndCompose(b);
+  EXPECT_EQ(c,
+            LinearLayout({{S("in1"), {{2, 0}, {1, 0}}}, {S("in2"), {{0, 1}}}},
+                         {S("in3"), S("in4")}));
+  EXPECT_EQ(c.compose(b), a.transposeOuts(llvm::to_vector(b.getOutDimNames())));
+}
+
 TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
   EXPECT_EQ(
       1,
