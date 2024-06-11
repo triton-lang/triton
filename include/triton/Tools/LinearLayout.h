@@ -607,6 +607,10 @@ public:
 
   // Inverts or pseudo-inverts `outer` and composes it with `this`.
   //
+  // Formally, if C = A.invertAndCompose(B), then for all x, C(x) = y implies
+  // A(x) = B(y), or in other words A(x) = B(C(x)).  If B is invertible, then
+  // C(x) = B^-1(A(x)), which is how this function gets its name.
+  //
   // For example, suppose you have the following two LLs.
   //
   //   - R is an LL representing registers, mapping (lane, warp) to a 2D index.
