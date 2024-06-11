@@ -248,6 +248,36 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
   return ret;
 }
 
+std::optional<SmallVector<SmallVector<unsigned>>>
+emitOffsetForLayoutUsingLinearLayouts(Attribute layout, RankedTensorType type) {
+  MLIRContext *ctx = layout.getContext();
+  auto shape = type.getShape();
+  unsigned rank = shape.size();
+
+  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
+  if (!ll.has_value()) {
+    return std::nullopt;
+  }
+
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  SmallVector<SmallVector<unsigned>> offsets;
+  for (int i = 0; i < ll->getInDimSize(str_attr("register")); i++) {
+    auto idxs =
+        ll->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    assert(idxs.size() == rank);
+    for (unsigned k = 0; k < rank; ++k) {
+      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
+    }
+    offsets.push_back(
+        llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
+  }
+  return offsets;
+}
+
 bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
     std::optional<int32_t> maxVecElems, Value shmemBase,
@@ -305,17 +335,8 @@ bool emitTransferBetweenRegistersAndShared(
                       [&](auto offset) { return offset == 0; })) {
       return false;
     }
-
-    // We now have
-    //   regToSharedLayout(0, ..., block=inBlock) => (0, ..., block=outBlock).
-    // To confirm that there's no cross-block communication, we must also have
-    // outBlock == inBlock or outBlock == 0.
-    //
-    // The fact that outBlock == 0 works is nonobvious.  It occurs when the
-    // shared layout is broadcasted in its block dim, i.e. multiple blocks
-    // contain the same data.
     int32_t outBlock = idx.back();
-    if (outBlock != inBlock && outBlock != 0) {
+    if (outBlock != inBlock) {
       return false;
     }
   }

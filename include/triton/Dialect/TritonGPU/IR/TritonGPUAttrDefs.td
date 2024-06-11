@@ -934,7 +934,7 @@ def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encod
   let mnemonic = "amd_wmma";
 
   let description = [{
-An encoding for tensors that have been produced by WMMA instructions,
+An encoding for tensors that have been produced by WMMA matrix core instructions,
 available on AMD Radeon GPUs of RDNA architectures.
 
 A `warpsPerCTA` parameter characterizes data distribution between warps.
