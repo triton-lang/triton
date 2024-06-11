@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Persistent FP8 Matmul &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="triton" href="../../python-api/triton.html" />
+    <link rel="prev" title="Group GEMM" href="08-grouped-gemm.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="01-vector-add.html">Vector Addition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="02-fused-softmax.html">Fused Softmax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="03-matrix-multiplication.html">Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Persistent FP8 Matmul</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Persistent FP8 Matmul</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/getting-started/tutorials/09-persistent-fp8-matmul.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <div class="sphx-glr-download-link-note admonition note">
+<p class="admonition-title">Note</p>
+<p><a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-09-persistent-fp8-matmul-py"><span class="std std-ref">Go to the end</span></a>
+to download the full example code.</p>
+</div>
+<section class="sphx-glr-example-title" id="persistent-fp8-matmul">
+<span id="sphx-glr-getting-started-tutorials-09-persistent-fp8-matmul-py"></span><h1>Persistent FP8 Matmul<a class="headerlink" href="#persistent-fp8-matmul" title="Link to this heading">¶</a></h1>
+<p>This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
+It includes various matmul methods, such as naive, persistent, and TMA (Tile Matrix Accumulation) based approaches, and only supports GPUs with compute capability &gt;= 9.0.
+Triton and CuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
+Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.</p>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>This tutorial fp8_matmul is only supported on CUDA with cc &gt;= 90
+</pre></div>
+</div>
+<div class="line-block">
+<div class="line"><br /></div>
+</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">import</span> <span class="nn">time</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">triton</span>
+<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
+<span class="kn">import</span> <span class="nn">triton.profiler</span> <span class="k">as</span> <span class="nn">proton</span>
+
+<span class="kn">from</span> <span class="nn">triton._C.libtriton</span> <span class="kn">import</span> <span class="n">nvidia</span>
+
+<span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">():</span>
+    <span class="n">cublas_workspace</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">32</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+    <span class="n">cublas</span> <span class="o">=</span> <span class="n">nvidia</span><span class="o">.</span><span class="n">cublas</span><span class="o">.</span><span class="n">CublasLt</span><span class="p">(</span><span class="n">cublas_workspace</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_matmul_launch_metadata</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="n">kernel</span><span class="p">,</span> <span class="n">args</span><span class="p">):</span>
+    <span class="n">ret</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">],</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;N&quot;</span><span class="p">],</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;K&quot;</span><span class="p">]</span>
+    <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">kernel</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> [M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">]&quot;</span>
+    <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;flops8&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span>
+    <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;bytes&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span>
+    <span class="k">return</span> <span class="n">ret</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">launch_metadata</span><span class="o">=</span><span class="n">_matmul_launch_metadata</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">matmul_kernel</span><span class="p">(</span><span class="n">a_ptr</span><span class="p">,</span> <span class="n">b_ptr</span><span class="p">,</span> <span class="n">c_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">stride_am</span><span class="p">,</span> <span class="n">stride_ak</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">stride_bk</span><span class="p">,</span> <span class="n">stride_bn</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">stride_cm</span><span class="p">,</span> <span class="n">stride_cn</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">BLOCK_SIZE_K</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                  <span class="p">):</span>
+    <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+    <span class="n">group_id</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
+    <span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+    <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+    <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+    <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
+
+    <span class="n">start_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
+    <span class="n">start_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
+
+    <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+
+    <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">offs_am</span> <span class="o">&lt;</span> <span class="n">M</span> <span class="o">-</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">offs_am</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">offs_bn</span> <span class="o">&lt;</span> <span class="n">N</span> <span class="o">-</span> <span class="n">start_n</span><span class="p">,</span> <span class="n">offs_bn</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+
+    <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">max_contiguous</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">),</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">max_contiguous</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+    <span class="n">a_ptrs</span> <span class="o">=</span> <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_am</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_am</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_ak</span><span class="p">)</span>
+    <span class="n">b_ptrs</span> <span class="o">=</span> <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_bk</span> <span class="o">+</span> <span class="n">offs_bn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_bn</span><span class="p">)</span>
+
+    <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)):</span>
+        <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">K</span> <span class="o">-</span> <span class="n">k</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">b_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">offs_k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">K</span> <span class="o">-</span> <span class="n">k</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
+        <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">)</span>
+        <span class="n">a_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_ak</span>
+        <span class="n">b_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_bk</span>
+
+    <span class="n">c</span> <span class="o">=</span> <span class="n">accumulator</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float8e4nv</span><span class="p">)</span>
+
+    <span class="n">offs_cm</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">offs_cn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">c_ptrs</span> <span class="o">=</span> <span class="n">c_ptr</span> <span class="o">+</span> <span class="n">stride_cm</span> <span class="o">*</span> <span class="n">offs_cm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">+</span> <span class="n">stride_cn</span> <span class="o">*</span> <span class="n">offs_cn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+    <span class="n">c_mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">offs_cm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">offs_cn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_ptrs</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">c_mask</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+    <span class="n">BLOCK_SIZE_M</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">BLOCK_SIZE_N</span> <span class="o">=</span> <span class="mi">256</span>
+    <span class="n">BLOCK_SIZE_K</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">GROUP_SIZE</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">num_stages</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
+
+    <span class="c1"># Check constraints.</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">&quot;Incompatible dimensions&quot;</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">K</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">)</span>
+    <span class="c1"># 1D launch kernel where each block gets its own program.</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">]),</span> <span class="p">)</span>
+    <span class="n">matmul_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_K</span><span class="o">=</span><span class="n">BLOCK_SIZE_K</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">GROUP_SIZE_M</span><span class="o">=</span><span class="n">GROUP_SIZE</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">num_stages</span><span class="o">=</span><span class="n">num_stages</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">c</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">launch_metadata</span><span class="o">=</span><span class="n">_matmul_launch_metadata</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">matmul_kernel_persistent</span><span class="p">(</span><span class="n">a_ptr</span><span class="p">,</span> <span class="n">b_ptr</span><span class="p">,</span> <span class="n">c_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">stride_am</span><span class="p">,</span> <span class="n">stride_ak</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">stride_bk</span><span class="p">,</span> <span class="n">stride_bn</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">stride_cm</span><span class="p">,</span> <span class="n">stride_cn</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">BLOCK_SIZE_K</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="n">NUM_SMS</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                             <span class="p">):</span>
+    <span class="n">start_pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">k_tiles</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+    <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">num_pid_m</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+
+    <span class="n">tiles_per_SM</span> <span class="o">=</span> <span class="n">num_tiles</span> <span class="o">//</span> <span class="n">NUM_SMS</span>
+    <span class="k">if</span> <span class="n">start_pid</span> <span class="o">&lt;</span> <span class="n">num_tiles</span> <span class="o">%</span> <span class="n">NUM_SMS</span><span class="p">:</span>
+        <span class="n">tiles_per_SM</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="n">tile_id</span> <span class="o">=</span> <span class="n">start_pid</span> <span class="o">-</span> <span class="n">NUM_SMS</span>
+    <span class="n">ki</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+
+    <span class="n">offs_k_for_mask</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+
+    <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+
+    <span class="n">pid_m</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">pid_n</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+
+    <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">k_tiles</span> <span class="o">*</span> <span class="n">tiles_per_SM</span><span class="p">):</span>
+        <span class="n">ki</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">ki</span> <span class="o">==</span> <span class="n">k_tiles</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">ki</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">ki</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">tile_id</span> <span class="o">+=</span> <span class="n">NUM_SMS</span>
+            <span class="n">group_id</span> <span class="o">=</span> <span class="n">tile_id</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
+            <span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+            <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+            <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+            <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
+
+            <span class="n">start_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
+            <span class="n">start_n</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
+            <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+            <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+            <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">offs_am</span> <span class="o">&lt;</span> <span class="n">M</span> <span class="o">-</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">offs_am</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">offs_bn</span> <span class="o">&lt;</span> <span class="n">N</span> <span class="o">-</span> <span class="n">start_n</span><span class="p">,</span> <span class="n">offs_bn</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">max_contiguous</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">),</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+            <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">max_contiguous</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+        <span class="n">offs_k</span> <span class="o">=</span> <span class="n">ki</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+        <span class="n">a_ptrs</span> <span class="o">=</span> <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_am</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_am</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_ak</span><span class="p">)</span>
+        <span class="n">b_ptrs</span> <span class="o">=</span> <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_bk</span> <span class="o">+</span> <span class="n">offs_bn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_bn</span><span class="p">)</span>
+
+        <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">offs_k_for_mask</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">K</span> <span class="o">-</span> <span class="n">ki</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">b_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">offs_k_for_mask</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">K</span> <span class="o">-</span> <span class="n">ki</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
+        <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">ki</span> <span class="o">==</span> <span class="n">k_tiles</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">offs_cm</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+            <span class="n">offs_cn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+            <span class="n">c_ptrs</span> <span class="o">=</span> <span class="n">c_ptr</span> <span class="o">+</span> <span class="n">stride_cm</span> <span class="o">*</span> <span class="n">offs_cm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">+</span> <span class="n">stride_cn</span> <span class="o">*</span> <span class="n">offs_cn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+            <span class="n">c_mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">offs_cm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">offs_cn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+            <span class="n">c</span> <span class="o">=</span> <span class="n">accumulator</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float8e4nv</span><span class="p">)</span>
+            <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_ptrs</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">c_mask</span><span class="p">)</span>
+            <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">matmul_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+    <span class="n">BLOCK_SIZE_M</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">BLOCK_SIZE_N</span> <span class="o">=</span> <span class="mi">256</span>
+    <span class="n">BLOCK_SIZE_K</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">GROUP_SIZE</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">num_stages</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
+
+    <span class="c1"># Check constraints.</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">&quot;Incompatible dimensions&quot;</span>
+
+    <span class="n">NUM_SMS</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">K</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
+    <span class="c1"># Allocates output.</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="c1"># 1D launch kernel where each block gets its own program.</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">NUM_SMS</span><span class="p">,</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">])),</span> <span class="p">)</span>
+    <span class="n">matmul_kernel_persistent</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_K</span><span class="o">=</span><span class="n">BLOCK_SIZE_K</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">GROUP_SIZE_M</span><span class="o">=</span><span class="n">GROUP_SIZE</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">NUM_SMS</span><span class="o">=</span><span class="n">NUM_SMS</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">num_stages</span><span class="o">=</span><span class="n">num_stages</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">c</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">launch_metadata</span><span class="o">=</span><span class="n">_matmul_launch_metadata</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">matmul_kernel_tma_persistent</span><span class="p">(</span><span class="n">a_desc_ptr</span><span class="p">,</span> <span class="n">b_desc_ptr</span><span class="p">,</span> <span class="n">c_desc_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+                                 <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+                                 <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                                 <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                                 <span class="n">BLOCK_SIZE_K</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                                 <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+                                 <span class="n">NUM_SMS</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>  <span class="c1">#</span>
+    <span class="n">start_pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">k_tiles</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+    <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">num_pid_m</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+
+    <span class="n">tiles_per_SM</span> <span class="o">=</span> <span class="n">num_tiles</span> <span class="o">//</span> <span class="n">NUM_SMS</span>
+    <span class="k">if</span> <span class="n">start_pid</span> <span class="o">&lt;</span> <span class="n">num_tiles</span> <span class="o">%</span> <span class="n">NUM_SMS</span><span class="p">:</span>
+        <span class="n">tiles_per_SM</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="n">tile_id</span> <span class="o">=</span> <span class="n">start_pid</span> <span class="o">-</span> <span class="n">NUM_SMS</span>
+    <span class="n">ki</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+
+    <span class="n">pid_m</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">pid_n</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">offs_am</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">offs_bn</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+
+    <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">k_tiles</span> <span class="o">*</span> <span class="n">tiles_per_SM</span><span class="p">):</span>
+        <span class="n">ki</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">ki</span> <span class="o">==</span> <span class="n">k_tiles</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">ki</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">ki</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">tile_id</span> <span class="o">+=</span> <span class="n">NUM_SMS</span>
+            <span class="n">group_id</span> <span class="o">=</span> <span class="n">tile_id</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
+            <span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+            <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+            <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+            <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">tile_id</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
+
+            <span class="n">offs_am</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
+            <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
+
+            <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+            <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+
+        <span class="n">offs_k</span> <span class="o">=</span> <span class="n">ki</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span>
+
+        <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_load</span><span class="p">(</span><span class="n">a_desc_ptr</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">],</span> <span class="p">[</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span> <span class="n">tl</span><span class="o">.</span><span class="n">float8e4nv</span><span class="p">)</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_load</span><span class="p">(</span><span class="n">b_desc_ptr</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">],</span> <span class="p">[</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span> <span class="n">tl</span><span class="o">.</span><span class="n">float8e4nv</span><span class="p">)</span>
+        <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">ki</span> <span class="o">==</span> <span class="n">k_tiles</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">c</span> <span class="o">=</span> <span class="n">accumulator</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float8e4nv</span><span class="p">)</span>
+
+            <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_store</span><span class="p">(</span><span class="n">c_desc_ptr</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_bn</span><span class="p">])</span>
+            <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+    <span class="n">BLOCK_SIZE_M</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">BLOCK_SIZE_N</span> <span class="o">=</span> <span class="mi">256</span>
+    <span class="n">BLOCK_SIZE_K</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">GROUP_SIZE</span> <span class="o">=</span> <span class="mi">8</span>
+    <span class="n">num_stages</span> <span class="o">=</span> <span class="mi">3</span>
+    <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
+
+    <span class="c1"># Check constraints.</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="s2">&quot;Incompatible dimensions&quot;</span>  <span class="c1"># b is transposed</span>
+
+    <span class="n">M</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">)</span>
+
+    <span class="n">TMA_SIZE</span> <span class="o">=</span> <span class="mi">128</span>
+
+    <span class="n">desc_a</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">TMA_SIZE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span><span class="p">)</span>
+    <span class="n">desc_b</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">TMA_SIZE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span><span class="p">)</span>
+    <span class="n">desc_c</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">TMA_SIZE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span><span class="p">)</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span> <span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span>
+                                                              <span class="n">a</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span> <span class="n">desc_a</span><span class="p">)</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span><span class="n">b</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span>
+                                                              <span class="n">b</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span> <span class="n">desc_b</span><span class="p">)</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">fill_2d_tma_descriptor</span><span class="p">(</span><span class="n">c</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">,</span>
+                                                              <span class="n">c</span><span class="o">.</span><span class="n">element_size</span><span class="p">(),</span> <span class="n">desc_c</span><span class="p">)</span>
+
+    <span class="n">desc_a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">desc_a</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">desc_b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">desc_b</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">desc_c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">desc_c</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+
+    <span class="n">NUM_SMS</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
+
+    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">NUM_SMS</span><span class="p">,</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">])),</span> <span class="p">)</span>
+    <span class="n">matmul_kernel_tma_persistent</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
+        <span class="n">desc_a</span><span class="p">,</span> <span class="n">desc_b</span><span class="p">,</span> <span class="n">desc_c</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">BLOCK_SIZE_K</span><span class="o">=</span><span class="n">BLOCK_SIZE_K</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">GROUP_SIZE_M</span><span class="o">=</span><span class="n">GROUP_SIZE</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">NUM_SMS</span><span class="o">=</span><span class="n">NUM_SMS</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">num_stages</span><span class="o">=</span><span class="n">num_stages</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>  <span class="c1">#</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">c</span>
+
+
+<span class="k">def</span> <span class="nf">cublas_matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+    <span class="c1"># Check constraints.</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="s2">&quot;Incompatible dimensions&quot;</span>  <span class="c1"># b is transposed</span>
+
+    <span class="n">M</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="n">proton</span><span class="o">.</span><span class="n">scope</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cublas M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;bytes&quot;</span><span class="p">:</span> <span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">,</span> <span class="s2">&quot;flops8&quot;</span><span class="p">:</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">}):</span>
+        <span class="n">cublas</span><span class="o">.</span><span class="n">fp8_matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">c</span>
+
+
+<span class="k">def</span> <span class="nf">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">reps</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">M</span> <span class="o">=</span> <span class="mi">8192</span>
+    <span class="n">N</span> <span class="o">=</span> <span class="mi">8192</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">)</span>
+
+    <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+
+    <span class="n">proton</span><span class="o">.</span><span class="n">activate</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">reps</span><span class="p">):</span>
+        <span class="n">cublas_matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">reps</span><span class="p">):</span>
+        <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">reps</span><span class="p">):</span>
+        <span class="n">matmul_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">reps</span><span class="p">):</span>
+        <span class="n">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span>
+
+    <span class="n">proton</span><span class="o">.</span><span class="n">deactivate</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">validate</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">):</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+    <span class="n">cublas_result</span> <span class="o">=</span> <span class="n">cublas_matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+    <span class="n">naive_result</span> <span class="o">=</span> <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+    <span class="n">persistent_result</span> <span class="o">=</span> <span class="n">matmul_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+    <span class="n">tma_persistent_result</span> <span class="o">=</span> <span class="n">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+
+    <span class="n">naive_vs_cublas</span> <span class="o">=</span> <span class="s2">&quot;✅&quot;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">naive_result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span> <span class="n">cublas_result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span>
+                                            <span class="n">atol</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span> <span class="k">else</span> <span class="s2">&quot;❌&quot;</span>
+    <span class="n">naive_vs_persistent</span> <span class="o">=</span> <span class="s2">&quot;✅&quot;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">naive_result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span> <span class="n">persistent_result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span>
+                                                <span class="n">atol</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span> <span class="k">else</span> <span class="s2">&quot;❌&quot;</span>
+    <span class="n">naive_vs_tma_persistent</span> <span class="o">=</span> <span class="s2">&quot;✅&quot;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">cublas_result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span>
+                                                    <span class="n">tma_persistent_result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span> <span class="k">else</span> <span class="s2">&quot;❌&quot;</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2"> verification naive vs: cublas </span><span class="si">{</span><span class="n">naive_vs_cublas</span><span class="si">}</span><span class="s2">, persistent </span><span class="si">{</span><span class="n">naive_vs_persistent</span><span class="si">}</span><span class="s2">, TMA persistent </span><span class="si">{</span><span class="n">naive_vs_tma_persistent</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="p">)</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span><span class="p">:</span>
+        <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-K&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--K_range&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--K_step&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">512</span><span class="p">)</span>
+        <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">K</span><span class="p">:</span>
+            <span class="n">args</span><span class="o">.</span><span class="n">K_range</span> <span class="o">=</span> <span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">K</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K</span><span class="p">]</span>
+            <span class="n">args</span><span class="o">.</span><span class="n">K_step</span> <span class="o">=</span> <span class="mi">1</span>  <span class="c1"># doesn&#39;t matter as long as it&#39;s not 0</span>
+
+        <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+        <span class="n">validate</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span>
+        <span class="n">validate</span><span class="p">(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">512</span><span class="p">)</span>
+
+        <span class="n">proton</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">,</span> <span class="n">hook</span><span class="o">=</span><span class="s2">&quot;triton&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_step</span><span class="p">):</span>
+            <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">)</span>
+        <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;This tutorial fp8_matmul is only supported on CUDA with cc &gt;= 90&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.028 seconds)</p>
+<div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-fp8-matmul-py">
+<div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
+<p><a class="reference download internal" download="" href="../../_downloads/c640f91b8ed671656d9d9ec8f7d29d34/09-persistent-fp8-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-fp8-matmul.ipynb</span></code></a></p>
+</div>
+<div class="sphx-glr-download sphx-glr-download-python docutils container">
+<p><a class="reference download internal" download="" href="../../_downloads/b9ce5a39c8d43007681c288566b27368/09-persistent-fp8-matmul.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">09-persistent-fp8-matmul.py</span></code></a></p>
+</div>
+</div>
+<p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="08-grouped-gemm.html" class="btn btn-neutral float-left" title="Group GEMM" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../python-api/triton.html" class="btn btn-neutral float-right" title="triton" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Related Work &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+        <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Debugging Triton" href="../chapter-3/debugging.html" />
+    <link rel="prev" title="Introduction" href="../chapter-1/introduction.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Related Work</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#polyhedral-compilation">Polyhedral Compilation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#program-representation">Program Representation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#advantages">Advantages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#limitations">Limitations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#scheduling-languages">Scheduling Languages</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id16">Advantages</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id17">Limitations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#references">References</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Related Work</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/programming-guide/chapter-2/related-work.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="related-work">
+<h1>Related Work<a class="headerlink" href="#related-work" title="Link to this heading">¶</a></h1>
+<p>At first sight, Triton may seem like just yet another DSL for DNNs. The purpose of this section is to contextualize Triton and highlight its differences with the two leading approaches in this domain: polyhedral compilation and scheduling languages.</p>
+<section id="polyhedral-compilation">
+<h2>Polyhedral Compilation<a class="headerlink" href="#polyhedral-compilation" title="Link to this heading">¶</a></h2>
+<p>Traditional compilers typically rely on intermediate representations, such as LLVM-IR <a class="reference internal" href="#lattner2004" id="id1"><span>[LATTNER2004]</span></a>, that encode control flow information using (un)conditional branches. This relatively low-level format makes it difficult to statically analyze the runtime behavior (e.g., cache misses) of input programs, and to  automatically optimize loops accordingly through the use of tiling <a class="reference internal" href="#wolfe1989" id="id2"><span>[WOLFE1989]</span></a>, fusion <a class="reference internal" href="#darte1999" id="id3"><span>[DARTE1999]</span></a> and interchange <a class="reference internal" href="#allen1984" id="id4"><span>[ALLEN1984]</span></a>. To solve this issue, polyhedral compilers <a class="reference internal" href="#ancourt1991" id="id5"><span>[ANCOURT1991]</span></a> rely on program representations that have statically predictable control flow, thereby enabling aggressive compile-time program transformations for data locality and parallelism. Though this strategy has been adopted by many languages and compilers for DNNs such as Tiramisu <a class="reference internal" href="#baghdadi2021" id="id6"><span>[BAGHDADI2021]</span></a>, Tensor Comprehensions <a class="reference internal" href="#vasilache2018" id="id7"><span>[VASILACHE2018]</span></a>, Diesel <a class="reference internal" href="#elango2018" id="id8"><span>[ELANGO2018]</span></a> and the Affine dialect in MLIR <a class="reference internal" href="#lattner2019" id="id9"><span>[LATTNER2019]</span></a>, it also comes with a number of limitations that will be described later in this section.</p>
+<section id="program-representation">
+<h3>Program Representation<a class="headerlink" href="#program-representation" title="Link to this heading">¶</a></h3>
+<p>Polyhedral compilation is a vast area of research. In this section we only outline the most basic aspects of this topic, but readers interested in the solid mathematical foundations underneath may refer to the ample literature on linear and integer programming.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 50.0%" />
+<col style="width: 50.0%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><div class="highlight-C notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span>
+<span class="w">  </span><span class="n">A</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+</pre></div>
+</div>
+</td>
+<td><p><a class="reference internal" href="../../_images/polyhedral-iteration.png"><img alt="pic1" src="../../_images/polyhedral-iteration.png" style="width: 300px;" /></a></p></td>
+</tr>
+</tbody>
+</table>
+<p>Polyhedral compilers focus on a class of programs commonly known as <strong>Static Control Parts</strong> (SCoP), <em>i.e.</em>, maximal sets of consecutive statements in which conditionals and loop bounds are affine functions of surrounding loop indices and global invariant parameters. As shown above, programs in this format always lead to iteration domains that are bounded by affine inequalities, i.e., polyhedral. These polyhedra can also be defined algebraically; for the above example:</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}\mathcal{P} = \{ i, j \in \mathbb{Z}^2
+~|~
+\begin{pmatrix}
+1 &amp; 0 \\
+-1 &amp; 0 \\
+-1 &amp; 1 \\
+0 &amp; -1 \\
+\end{pmatrix}
+\begin{pmatrix}
+i \\
+j
+\end{pmatrix}
++
+\begin{pmatrix}
+0 \\
+2 \\
+0 \\
+4
+\end{pmatrix}
+\geq
+0
+\}\end{split}\]</div>
+<p>Each point <span class="math notranslate nohighlight">\((i, j)\)</span> in <span class="math notranslate nohighlight">\(\mathcal{P}\)</span> represents a <em>polyhedral statement</em>, that is a program statement which (1) does not induce control-flow side effects (e.g., <code class="code docutils literal notranslate"><span class="pre">for</span></code>, <code class="code docutils literal notranslate"><span class="pre">if</span></code>, <code class="code docutils literal notranslate"><span class="pre">break</span></code>) and (2) contains only affine functions of loop indices and global parameters in array accesses. To facilitate alias analysis, array accesses are also mathematically abstracted, using so-called <em>access function</em>. In other words, <code class="code docutils literal notranslate"><span class="pre">A[i][j]</span></code> is simply <code class="code docutils literal notranslate"><span class="pre">A[f(i,j)]</span></code> where the access function <span class="math notranslate nohighlight">\(f\)</span> is defined by:</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}f(i, j) = \begin{pmatrix}
+1 &amp; 0\\
+0 &amp; 1\\
+\end{pmatrix}
+\begin{pmatrix}
+i\\
+j
+\end{pmatrix}
+=
+(i, j)\end{split}\]</div>
+<p>Note that the iteration domains of an SCoP does not specify the order in which its statements shall execute. In fact, this iteration domain may be traversed in many different possible legal orders, i.e. <em>schedules</em>. Formally, a schedule is defined as a p-dimensional affine transformation <span class="math notranslate nohighlight">\(\Theta\)</span> of loop indices <span class="math notranslate nohighlight">\(\mathbf{x}\)</span> and global invariant parameters <span class="math notranslate nohighlight">\(\mathbf{g}\)</span>:</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}\Theta_S(\mathbf{x}) = T_S \begin{pmatrix}
+\vec{x}\\
+\vec{g}\\
+1
+\end{pmatrix}
+\qquad
+T_S \in \mathbb{Z} ^{p \times (\text{dim}(\mathbf{x}) + \text{dim}(\mathbf{g}) + 1)}\end{split}\]</div>
+<p>Where <span class="math notranslate nohighlight">\(\Theta_S(\mathbf{x})\)</span> is a p-dimensional vector representing the slowest to fastest growing indices (from left to right) when traversing the loop nest surrounding <span class="math notranslate nohighlight">\(S\)</span>. For the code shown above, the original schedule defined by the loop nest in C can be retrieved by using:</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}\Theta_S(\mathbf{x}) = \begin{pmatrix}
+1 &amp; 0 \\
+0 &amp; 1 \\
+\end{pmatrix}
+\begin{pmatrix}
+i &amp; j
+\end{pmatrix}^T
+=
+\begin{pmatrix}
+i &amp; j
+\end{pmatrix}^T\end{split}\]</div>
+<p>where <span class="math notranslate nohighlight">\(i\)</span> and <span class="math notranslate nohighlight">\(j\)</span> are respectively the slowest and fastest growing loop indices in the nest. If <span class="math notranslate nohighlight">\(T_S\)</span> is a vector (resp. tensor), then <span class="math notranslate nohighlight">\(\Theta_S\)</span> is a said to be one-dimensional (resp. multi-dimensional).</p>
+</section>
+<section id="advantages">
+<h3>Advantages<a class="headerlink" href="#advantages" title="Link to this heading">¶</a></h3>
+<p>Programs amenable to polyhedral compilation can be aggressively transformed and optimized. Most of these transformations actually boil down to the production of  schedules and iteration domains that enable loop transformations promoting parallelism and spatial/temporal data locality (e.g., fusion, interchange, tiling, parallelization).</p>
+<p>Polyhedral compilers can also automatically go through complex verification processes to ensure that the semantics of their input program is preserved throughout this optimization phase. Note that polyhedral optimizers are not incompatible with more standard optimization techniques. In fact, it is not uncommon for these systems to be implemented as a set of LLVM passes that can be run ahead of more traditional compilation techniques <a class="reference internal" href="#grosser2012" id="id10"><span>[GROSSER2012]</span></a>.</p>
+<p>All in all, polyhedral machinery is extremely powerful, when applicable. It has been shown to support most common loop transformations, and has indeed achieved performance comparable to state-of-the-art GPU libraries for dense matrix multiplication <a class="reference internal" href="#elango2018" id="id11"><span>[ELANGO2018]</span></a>. Additionally, it is also fully automatic and doesn’t require any hint from programmers apart from source-code in a C-like format.</p>
+</section>
+<section id="limitations">
+<h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h3>
+<p>Unfortunately, polyhedral compilers suffer from two major limitations that have prevented its adoption as a universal method for code generation in neural networks.</p>
+<p>First, the set of possible program transformations <span class="math notranslate nohighlight">\(\Omega = \{ \Theta_S ~|~ S \in \text{program} \}\)</span> is large, and grows with the number of statements in the program as well as with the size of their iteration domain. Verifying the legality of each transformation can also require the resolution of complex integer linear programs, making polyhedral compilation very computationally expensive. To make matters worse, hardware properties (e.g., cache size, number of SMs) and contextual characteristics (e.g., input tensor shapes) also have to be taken into account by this framework, leading to expensive auto-tuning procedures <a class="reference internal" href="#sato2019" id="id12"><span>[SATO2019]</span></a>.</p>
+<p>Second, the polyhedral framework is not very generally applicable; SCoPs are relatively common <a class="reference internal" href="#girbal2006" id="id13"><span>[GIRBAL2006]</span></a> but require loop bounds and array subscripts to be affine functions of loop indices, which typically only occurs in regular, dense computations. For this reason, this framework still has to be successfully applied to sparse – or even structured-sparse – neural networks, whose importance has been rapidly rising over the past few years.</p>
+<p>On the other hand, blocked program representations advocated by this dissertation are less restricted in scope and can achieve close to peak performance using standard dataflow analysis.</p>
+</section>
+</section>
+<section id="scheduling-languages">
+<h2>Scheduling Languages<a class="headerlink" href="#scheduling-languages" title="Link to this heading">¶</a></h2>
+<p>Separation of concerns <a class="reference internal" href="#dijkstra82" id="id14"><span>[DIJKSTRA82]</span></a> is a well-known design principle in computer science: programs should be decomposed into modular layers of abstraction that separate the semantics of their algorithms from the details of their implementation. Systems like Halide and TVM push this philosophy one step further, and enforce this separation at the grammatical level through the use of a  <strong>scheduling language</strong>. The benefits of this methodology are particularly visible in the case of matrix multiplication, where, as one can see below, the definition of the algorithm (Line 1-7) is completely disjoint from its implementation (Line 8-16), meaning that both can be maintained, optimized and distributed independently.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="o">//</span> <span class="n">algorithm</span>
+<span class="linenos"> 2</span><span class="n">Var</span> <span class="n">x</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">),</span> <span class="n">y</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">);</span>
+<span class="linenos"> 3</span><span class="n">Func</span> <span class="n">matmul</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">);</span>
+<span class="linenos"> 4</span><span class="n">RDom</span> <span class="n">k</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">matrix_size</span><span class="p">);</span>
+<span class="linenos"> 5</span><span class="n">RVar</span> <span class="n">ki</span><span class="p">;</span>
+<span class="linenos"> 6</span><span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">=</span> <span class="mf">0.0</span><span class="n">f</span><span class="p">;</span>
+<span class="linenos"> 7</span><span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">+=</span> <span class="n">A</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span> <span class="o">*</span> <span class="n">B</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">k</span><span class="p">);</span>
+<span class="linenos"> 8</span><span class="o">//</span> <span class="n">schedule</span>
+<span class="linenos"> 9</span><span class="n">Var</span> <span class="n">xi</span><span class="p">(</span><span class="s2">&quot;xi&quot;</span><span class="p">),</span> <span class="n">xo</span><span class="p">(</span><span class="s2">&quot;xo&quot;</span><span class="p">),</span> <span class="n">yo</span><span class="p">(</span><span class="s2">&quot;yo&quot;</span><span class="p">),</span> <span class="n">yi</span><span class="p">(</span><span class="s2">&quot;yo&quot;</span><span class="p">),</span> <span class="n">yii</span><span class="p">(</span><span class="s2">&quot;yii&quot;</span><span class="p">),</span> <span class="n">xii</span><span class="p">(</span><span class="s2">&quot;xii&quot;</span><span class="p">);</span>
+<span class="linenos">10</span><span class="n">matmul</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">8</span><span class="p">);</span>
+<span class="linenos">11</span><span class="n">matmul</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="linenos">12</span>    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">xi</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">xii</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span>
+<span class="linenos">13</span>    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">yi</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">yii</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+<span class="linenos">14</span>    <span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">block_size</span><span class="p">)</span>
+<span class="linenos">15</span>    <span class="o">.</span><span class="n">reorder</span><span class="p">(</span><span class="n">xii</span><span class="p">,</span> <span class="n">yii</span><span class="p">,</span> <span class="n">xi</span><span class="p">,</span> <span class="n">ki</span><span class="p">,</span> <span class="n">yi</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<span class="linenos">16</span>    <span class="o">.</span><span class="n">parallel</span><span class="p">(</span><span class="n">y</span><span class="p">)</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="n">xii</span><span class="p">)</span><span class="o">.</span><span class="n">unroll</span><span class="p">(</span><span class="n">xi</span><span class="p">)</span><span class="o">.</span><span class="n">unroll</span><span class="p">(</span><span class="n">yii</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The resulting code may however not be completely portable, as schedules can sometimes rely on execution models (e.g., SPMD) or hardware intrinsics (e.g., matrix-multiply-accumulate) that are not widely available. This issue can be mitigated by auto-scheduling mechanisms <a class="reference internal" href="#mullapudi2016" id="id15"><span>[MULLAPUDI2016]</span></a>.</p>
+<section id="id16">
+<h3>Advantages<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<p>The main advantage of this approach is that it allows programmers to write an algorithm <em>only once</em>, and focus on performance optimization separately. It makes it possible to manually specify optimizations that a polyhedral compiler wouldn’t be able to figure out automatically using static data-flow analysis.</p>
+<p>Scheduling languages are, without a doubt, one of the most popular approaches for neural network code generation. The most popular system for this purpose is probably TVM, which provides good performance across a wide range of platforms as well as built-in automatic scheduling mechanisms.</p>
+</section>
+<section id="id17">
+<h3>Limitations<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<p>This ease-of-development comes at a cost. First of all, existing systems that follow this paradigm tend to be noticeably slower than Triton on modern hardware when applicable (e.g., V100/A100 tensor cores w/ equal tile sizes). I do believe that this is not a fundamental issue of scheduling languages – in the sense that it could probably be solved with more efforts – but it could mean that these systems are harder to engineer. More importantly, existing scheduling languages generate loops whose bounds and increments cannot depend on surrounding loop indices without at least imposing severe constraints on possible schedules – if not breaking the system entirely. This is problematic for sparse computations, whose iteration spaces may be irregular.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 50.0%" />
+<col style="width: 50.0%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><div class="highlight-C notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span>
+<span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="n">acc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">K</span><span class="p">[</span><span class="n">i</span><span class="p">];</span><span class="w"> </span><span class="n">k</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="n">acc</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">A</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">col</span><span class="p">[</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">k</span><span class="p">]]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">]</span>
+<span class="w">  </span><span class="n">C</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">acc</span><span class="p">;</span>
+</pre></div>
+</div>
+</td>
+<td><p><a class="reference internal" href="../../_images/halide-iteration.png"><img alt="pic2" src="../../_images/halide-iteration.png" style="width: 300px;" /></a></p></td>
+</tr>
+</tbody>
+</table>
+<p>On the other hand, the block-based program representation that we advocate for through this work allows for block-structured iteration spaces and allows programmers to manually handle load-balancing as they wish.</p>
+</section>
+</section>
+<section id="references">
+<h2>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h2>
+<div role="list" class="citation-list">
+<div class="citation" id="lattner2004" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id1">LATTNER2004</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="3">
+<li><p>Lattner et al., “LLVM: a compilation framework for lifelong program analysis transformation”, CGO 2004</p></li>
+</ol>
+</div>
+<div class="citation" id="wolfe1989" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id2">WOLFE1989</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="13">
+<li><p>Wolfe, “More Iteration Space Tiling”, SC 1989</p></li>
+</ol>
+</div>
+<div class="citation" id="darte1999" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id3">DARTE1999</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple">
+<li><p>Darte, “On the Complexity of Loop Fusion”, PACT 1999</p></li>
+</ol>
+</div>
+<div class="citation" id="allen1984" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id4">ALLEN1984</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="10">
+<li><p>Allen et al., “Automatic Loop Interchange”, SIGPLAN Notices 1984</p></li>
+</ol>
+</div>
+<div class="citation" id="ancourt1991" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id5">ANCOURT1991</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="3">
+<li><p>Ancourt et al., “Scanning Polyhedra with DO Loops”, PPoPP 1991</p></li>
+</ol>
+</div>
+<div class="citation" id="baghdadi2021" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id6">BAGHDADI2021</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="18">
+<li><p>Baghdadi et al., “Tiramisu: A Polyhedral Compiler for Expressing Fast and Portable Code”, CGO 2021</p></li>
+</ol>
+</div>
+<div class="citation" id="vasilache2018" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id7">VASILACHE2018</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="14">
+<li><p>Vasilache et al., “Tensor Comprehensions: Framework-Agnostic High-Performance Machine Learning Abstractions”, ArXiV 2018</p></li>
+</ol>
+</div>
+<div class="citation" id="elango2018" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span>ELANGO2018<span class="fn-bracket">]</span></span>
+<span class="backrefs">(<a role="doc-backlink" href="#id8">1</a>,<a role="doc-backlink" href="#id11">2</a>)</span>
+<ol class="upperalpha simple" start="22">
+<li><p>Elango et al. “Diesel: DSL for Linear Algebra and Neural Net Computations on GPUs”, MAPL 2018</p></li>
+</ol>
+</div>
+<div class="citation" id="lattner2019" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id9">LATTNER2019</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="3">
+<li><p>Lattner et al., “MLIR Primer: A Compiler Infrastructure for the End of Moore’s Law”, Arxiv 2019</p></li>
+</ol>
+</div>
+<div class="citation" id="grosser2012" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id10">GROSSER2012</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="20">
+<li><p>Grosser et al., “Polly - Performing Polyhedral Optimizations on a Low-Level Intermediate Representation”, Parallel Processing Letters 2012</p></li>
+</ol>
+</div>
+<div class="citation" id="sato2019" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id12">SATO2019</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="25">
+<li><p>Sato et al., “An Autotuning Framework for Scalable Execution of Tiled Code via Iterative Polyhedral Compilation”, TACO 2019</p></li>
+</ol>
+</div>
+<div class="citation" id="girbal2006" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id13">GIRBAL2006</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="19">
+<li><p>Girbal et al., “Semi-Automatic Composition of Loop Transformations for Deep Parallelism and Memory Hierarchies”, International Journal of Parallel Programming 2006</p></li>
+</ol>
+</div>
+<div class="citation" id="dijkstra82" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id14">DIJKSTRA82</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="5">
+<li><ol class="upperalpha simple" start="23">
+<li><p>Dijkstra et al., “On the role of scientific thought”, Selected writings on computing: a personal perspective 1982</p></li>
+</ol>
+</li>
+</ol>
+</div>
+<div class="citation" id="mullapudi2016" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id15">MULLAPUDI2016</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="18">
+<li><p>Mullapudi et al., “Automatically scheduling halide image processing pipelines”, TOG 2016</p></li>
+</ol>
+</div>
+</div>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../chapter-1/introduction.html" class="btn btn-neutral float-left" title="Introduction" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../chapter-3/debugging.html" class="btn btn-neutral float-right" title="Debugging Triton" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

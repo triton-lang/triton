@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>triton.language.inline_asm_elementwise &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="triton.language.debug_barrier" href="triton.language.debug_barrier.html" />
+    <link rel="prev" title="triton.language.static_range" href="triton.language.static_range.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../triton.html">triton</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../triton.language.html">triton.language</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#programming-model">Programming Model</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#creation-ops">Creation Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#shape-manipulation-ops">Shape Manipulation Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#linear-algebra-ops">Linear Algebra Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#memory-pointer-ops">Memory/Pointer Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#reduction-ops">Reduction Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#scan-sort-ops">Scan/Sort Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#atomic-ops">Atomic Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#random-number-generation">Random Number Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#iterators">Iterators</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../triton.language.html#inline-assembly">Inline Assembly</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.inline_asm_elementwise</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#triton.language.inline_asm_elementwise"><code class="docutils literal notranslate"><span class="pre">inline_asm_elementwise()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#compiler-hint-ops">Compiler Hint Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#debug-ops">Debug Ops</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../triton.testing.html">triton.testing</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../triton.language.html">triton.language</a></li>
+      <li class="breadcrumb-item active">triton.language.inline_asm_elementwise</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/python-api/generated/triton.language.inline_asm_elementwise.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="triton-language-inline-asm-elementwise">
+<h1>triton.language.inline_asm_elementwise<a class="headerlink" href="#triton-language-inline-asm-elementwise" title="Link to this heading">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.language.inline_asm_elementwise">
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">inline_asm_elementwise</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">asm</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">constraints</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Sequence</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dtype</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Sequence</span><span class="p"><span class="pre">[</span></span><span class="pre">dtype</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_pure</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pack</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.inline_asm_elementwise" title="Link to this definition">¶</a></dt>
+<dd><p>Execute inline assembly over a tensor.  Essentially, this is <code class="code docutils literal notranslate"><span class="pre">map</span></code>
+where the function is inline assembly.</p>
+<p>The input tensors <code class="code docutils literal notranslate"><span class="pre">args</span></code> are implicitly broadcasted to the same shape.</p>
+<p><code class="code docutils literal notranslate"><span class="pre">dtype</span></code> can be a tuple of types, in which case the output is a
+tuple of tensors.</p>
+<p>Each invocation of the inline asm processes <code class="code docutils literal notranslate"><span class="pre">pack</span></code> elements at a
+time.  Exactly which set of inputs a block receives is unspecified.
+Input elements of size less than 4 bytes are packed into 4-byte
+registers.</p>
+<p>This op does not support empty <code class="code docutils literal notranslate"><span class="pre">dtype</span></code> – the inline asm must
+return at least one tensor, even if you don’t need it.  You can work
+around this by returning a dummy tensor of arbitrary type; it shouldn’t
+cost you anything if you don’t use it.</p>
+<p>Example using
+[PTX](<a class="reference external" href="https://docs.nvidia.com/cuda/parallel-thread-execution/index.html">https://docs.nvidia.com/cuda/parallel-thread-execution/index.html</a>)
+assembly:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+</pre></div>
+</div>
+<p>&#64;triton.jit
+def kernel(A, B, C, D, BLOCK: tl.constexpr):</p>
+<blockquote>
+<div><p>a = tl.load(A + tl.arange(0, BLOCK)) # uint8 tensor
+b = tl.load(B + tl.arange(0, BLOCK)) # float32 tensor</p>
+<p># For each (a,b) in zip(a,b), perform the following:
+# - Let ai be <cite>a</cite> converted to int32.
+# - Let af be <cite>a</cite> converted to float.
+# - Let m be the max of ai and b.
+# - Return ai and mi.
+# Do the above 4 elements at a time.
+(c, d) = tl.inline_asm_elementwise(</p>
+<blockquote>
+<div><p>asm=”””
+{</p>
+<blockquote>
+<div><p>// Unpack <cite>a</cite> into <cite>ai</cite>.
+.reg .b8 tmp&lt;4&gt;;
+mov.b32 {tmp0, tmp1, tmp2, tmp3}, $8;
+cvt.u32.u8 $0, tmp0;
+cvt.u32.u8 $1, tmp1;
+cvt.u32.u8 $2, tmp2;
+cvt.u32.u8 $3, tmp3;</p>
+</div></blockquote>
+<p>}
+// Convert <cite>ai</cite> to float.
+cvt.rn.f32.s32 $4, $0;
+cvt.rn.f32.s32 $5, $1;
+cvt.rn.f32.s32 $6, $2;
+cvt.rn.f32.s32 $7, $3;
+// Take max of <cite>ai</cite> and <cite>b</cite>.
+max.f32 $4, $4, $9;
+max.f32 $5, $5, $10;
+max.f32 $6, $6, $11;
+max.f32 $7, $7, $12;
+“””,
+constraints=(</p>
+<blockquote>
+<div><p># 8 output registers, namely
+#   $0=ai0, $1=ai1, $2=ai2, $3=ai3,
+#   $4=m0,  $5=m1,  $6=m2,  $7=m3.
+“=r,=r,=r,=r,=r,=r,=r,=r,”
+# 5 input registers, namely
+#   $8=ai,
+#   $9=b0, $10=b1, $11=b2, $12=b3.
+# The four elements from <cite>a</cite> are all packed into one register.
+“r,r,r,r,r”),</p>
+</div></blockquote>
+<p>args=[a, b],
+dtype=(tl.int32, tl.float32),
+is_pure=True,
+pack=4,</p>
+</div></blockquote>
+<p>)
+tl.store(C + tl.arange(0, BLOCK), c)
+tl.store(D + tl.arange(0, BLOCK), d)</p>
+</div></blockquote>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>asm</strong> – assembly to run.  Must match target’s assembly format.</p></li>
+<li><p><strong>constraints</strong> – asm constraints in
+[LLVM format](<a class="reference external" href="https://llvm.org/docs/LangRef.html#inline-asm-constraint-string">https://llvm.org/docs/LangRef.html#inline-asm-constraint-string</a>)</p></li>
+<li><p><strong>args</strong> – the input tensors, whose values are passed to the asm block</p></li>
+<li><p><strong>dtype</strong> – the element type(s) of the returned tensor(s)</p></li>
+<li><p><strong>is_pure</strong> – if true, the compiler assumes the asm block has no side-effects</p></li>
+<li><p><strong>pack</strong> – the number of elements to be processed by one instance of inline assembly</p></li>
+<li><p><strong>_builder</strong> – the builder</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>one tensor or a tuple of tensors of the given dtypes</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="triton.language.static_range.html" class="btn btn-neutral float-left" title="triton.language.static_range" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.language.debug_barrier.html" class="btn btn-neutral float-right" title="triton.language.debug_barrier" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

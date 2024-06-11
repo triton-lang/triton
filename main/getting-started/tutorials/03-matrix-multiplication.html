@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Matrix Multiplication &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Low-Memory Dropout" href="04-low-memory-dropout.html" />
+    <link rel="prev" title="Fused Softmax" href="02-fused-softmax.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="01-vector-add.html">Vector Addition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="02-fused-softmax.html">Fused Softmax</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Matrix Multiplication</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#motivations">Motivations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#compute-kernel">Compute Kernel</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#pointer-arithmetic">Pointer Arithmetic</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#l2-cache-optimizations">L2 Cache Optimizations</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#final-result">Final Result</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#unit-test">Unit Test</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#benchmark">Benchmark</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#square-matrix-performance">Square Matrix Performance</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="09-persistent-fp8-matmul.html">Persistent FP8 Matmul</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Matrix Multiplication</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/getting-started/tutorials/03-matrix-multiplication.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <div class="sphx-glr-download-link-note admonition note">
+<p class="admonition-title">Note</p>
+<p><a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py"><span class="std std-ref">Go to the end</span></a>
+to download the full example code.</p>
+</div>
+<section class="sphx-glr-example-title" id="matrix-multiplication">
+<span id="sphx-glr-getting-started-tutorials-03-matrix-multiplication-py"></span><h1>Matrix Multiplication<a class="headerlink" href="#matrix-multiplication" title="Link to this heading">¶</a></h1>
+<p>In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
+performance on par with cuBLAS or rocBLAS.</p>
+<p>You will specifically learn about:</p>
+<ul class="simple">
+<li><p>Block-level matrix multiplications.</p></li>
+<li><p>Multi-dimensional pointer arithmetic.</p></li>
+<li><p>Program re-ordering for improved L2 cache hit rate.</p></li>
+<li><p>Automatic performance tuning.</p></li>
+</ul>
+<section id="motivations">
+<h2>Motivations<a class="headerlink" href="#motivations" title="Link to this heading">¶</a></h2>
+<p>Matrix multiplications are a key building block of most modern high-performance computing systems.
+They are notoriously hard to optimize, hence their implementation is generally done by
+hardware vendors themselves as part of so-called “kernel libraries” (e.g., cuBLAS).
+Unfortunately, these libraries are often proprietary and cannot be easily customized
+to accommodate the needs of modern deep learning workloads (e.g., fused activation functions).
+In this tutorial, you will learn how to implement efficient matrix multiplications by
+yourself with Triton, in a way that is easy to customize and extend.</p>
+<p>Roughly speaking, the kernel that we will write will implement the following blocked
+algorithm to multiply a (M, K) by a (K, N) matrix:</p>
+<blockquote>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Do in parallel</span>
+<span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">):</span>
+  <span class="c1"># Do in parallel</span>
+  <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">):</span>
+    <span class="n">acc</span> <span class="o">=</span> <span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">float32</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">):</span>
+      <span class="n">a</span> <span class="o">=</span> <span class="n">A</span><span class="p">[</span><span class="n">m</span> <span class="p">:</span> <span class="n">m</span><span class="o">+</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">]</span>
+      <span class="n">b</span> <span class="o">=</span> <span class="n">B</span><span class="p">[</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">n</span> <span class="p">:</span> <span class="n">n</span><span class="o">+</span><span class="n">BLOCK_SIZE_N</span><span class="p">]</span>
+      <span class="n">acc</span> <span class="o">+=</span> <span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+    <span class="n">C</span><span class="p">[</span><span class="n">m</span> <span class="p">:</span> <span class="n">m</span><span class="o">+</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">n</span> <span class="p">:</span> <span class="n">n</span><span class="o">+</span><span class="n">BLOCK_SIZE_N</span><span class="p">]</span> <span class="o">=</span> <span class="n">acc</span>
+</pre></div>
+</div>
+</div></blockquote>
+<p>where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.</p>
+</section>
+<section id="compute-kernel">
+<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Link to this heading">¶</a></h2>
+<p>The above algorithm is, actually, fairly straightforward to implement in Triton.
+The main difficulty comes from the computation of the memory locations at which blocks
+of <code class="code docutils literal notranslate"><span class="pre">A</span></code> and <code class="code docutils literal notranslate"><span class="pre">B</span></code> must be read in the inner loop. For that, we need
+multi-dimensional pointer arithmetic.</p>
+<section id="pointer-arithmetic">
+<h3>Pointer Arithmetic<a class="headerlink" href="#pointer-arithmetic" title="Link to this heading">¶</a></h3>
+<p>For a row-major 2D tensor <code class="code docutils literal notranslate"><span class="pre">X</span></code>, the memory location of <code class="code docutils literal notranslate"><span class="pre">X[i,</span> <span class="pre">j]</span></code> is given
+by <code class="code docutils literal notranslate"><span class="pre">&amp;X[i,</span> <span class="pre">j]</span> <span class="pre">=</span> <span class="pre">X</span> <span class="pre">+</span> <span class="pre">i*stride_xi</span> <span class="pre">+</span> <span class="pre">j*stride_xj</span></code>.
+Therefore, blocks of pointers for <code class="code docutils literal notranslate"><span class="pre">A[m</span> <span class="pre">:</span> <span class="pre">m+BLOCK_SIZE_M,</span> <span class="pre">k:k+BLOCK_SIZE_K]</span></code> and
+<code class="code docutils literal notranslate"><span class="pre">B[k</span> <span class="pre">:</span> <span class="pre">k+BLOCK_SIZE_K,</span> <span class="pre">n</span> <span class="pre">:</span> <span class="pre">n+BLOCK_SIZE_N]</span></code> can be defined in pseudo-code as:</p>
+<blockquote>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="o">&amp;</span><span class="n">A</span><span class="p">[</span><span class="n">m</span> <span class="p">:</span> <span class="n">m</span><span class="o">+</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">k</span><span class="p">:</span><span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">]</span> <span class="o">=</span>  <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">m</span> <span class="p">:</span> <span class="n">m</span><span class="o">+</span><span class="n">BLOCK_SIZE_M</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="o">&amp;</span><span class="n">B</span><span class="p">[</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span><span class="n">n</span><span class="o">+</span><span class="n">BLOCK_SIZE_N</span><span class="p">]</span> <span class="o">=</span>  <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">k</span> <span class="p">:</span> <span class="n">k</span><span class="o">+</span><span class="n">BLOCK_SIZE_K</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">n</span> <span class="p">:</span> <span class="n">n</span><span class="o">+</span><span class="n">BLOCK_SIZE_N</span><span class="p">)[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+</pre></div>
+</div>
+</div></blockquote>
+<p>Which means that pointers for blocks of A and B can be initialized (i.e., <code class="code docutils literal notranslate"><span class="pre">k=0</span></code>) in Triton as the following
+code. Also note that we need an extra modulo to handle the case where <code class="code docutils literal notranslate"><span class="pre">M</span></code> is not a multiple of
+<code class="code docutils literal notranslate"><span class="pre">BLOCK_SIZE_M</span></code> or <code class="code docutils literal notranslate"><span class="pre">N</span></code> is not a multiple of <code class="code docutils literal notranslate"><span class="pre">BLOCK_SIZE_N</span></code>, in which case we can pad the data with
+some useless values, which will not contribute to the results. For the <code class="code docutils literal notranslate"><span class="pre">K</span></code> dimension, we will handle that later
+using masking load semantics.</p>
+<blockquote>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">offs_am</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">))</span> <span class="o">%</span> <span class="n">M</span>
+<span class="n">offs_bn</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">))</span> <span class="o">%</span> <span class="n">N</span>
+<span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+<span class="n">a_ptrs</span> <span class="o">=</span> <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_am</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">stride_am</span> <span class="o">+</span> <span class="n">offs_k</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">stride_ak</span><span class="p">)</span>
+<span class="n">b_ptrs</span> <span class="o">=</span> <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_k</span> <span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">*</span><span class="n">stride_bk</span> <span class="o">+</span> <span class="n">offs_bn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span><span class="o">*</span><span class="n">stride_bn</span><span class="p">)</span>
+</pre></div>
+</div>
+</div></blockquote>
+<p>And then updated in the inner loop as follows:</p>
+<blockquote>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">a_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_ak</span><span class="p">;</span>
+<span class="n">b_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_bk</span><span class="p">;</span>
+</pre></div>
+</div>
+</div></blockquote>
+</section>
+<section id="l2-cache-optimizations">
+<h3>L2 Cache Optimizations<a class="headerlink" href="#l2-cache-optimizations" title="Link to this heading">¶</a></h3>
+<p>As mentioned above, each program instance computes a <code class="code docutils literal notranslate"><span class="pre">[BLOCK_SIZE_M,</span> <span class="pre">BLOCK_SIZE_N]</span></code>
+block of <code class="code docutils literal notranslate"><span class="pre">C</span></code>.
+It is important to remember that the order in which these blocks are computed does
+matter, since it affects the L2 cache hit rate of our program, and unfortunately, a
+simple row-major ordering</p>
+<blockquote>
+<div><div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">grid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+<span class="n">pid_m</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">grid_n</span>
+<span class="n">pid_n</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">%</span> <span class="n">grid_n</span>
+</pre></div>
+</div>
+</div></blockquote>
+<p>is just not going to cut it.</p>
+<p>One possible solution is to launch blocks in an order that promotes data reuse.
+This can be done by ‘super-grouping’ blocks in groups of <code class="code docutils literal notranslate"><span class="pre">GROUP_M</span></code> rows before
+switching to the next column:</p>
+<blockquote>
+<div><div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Program ID</span>
+<span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="c1"># Number of program ids along the M axis</span>
+<span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+<span class="c1"># Number of programs ids along the N axis</span>
+<span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+<span class="c1"># Number of programs in group</span>
+<span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+<span class="c1"># Id of the group this program is in</span>
+<span class="n">group_id</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
+<span class="c1"># Row-id of the first program in the group</span>
+<span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+<span class="c1"># If `num_pid_m` isn&#39;t divisible by `GROUP_SIZE_M`, the last group is smaller</span>
+<span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+<span class="c1"># *Within groups*, programs are ordered in a column-major order</span>
+<span class="c1"># Row-id of the program in the *launch grid*</span>
+<span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">((</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+<span class="c1"># Col-id of the program in the *launch grid*</span>
+<span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
+</pre></div>
+</div>
+</div></blockquote>
+<p>For example, in the following matmul where each matrix is 9 blocks by 9 blocks,
+we can see that if we compute the output in row-major ordering, we need to load 90
+blocks into SRAM to compute the first 9 output blocks, but if we do it in grouped
+ordering, we only need to load 54 blocks.</p>
+<blockquote>
+<div><img alt="../../_images/grouped_vs_row_major_ordering.png" src="../../_images/grouped_vs_row_major_ordering.png" />
+</div></blockquote>
+<p>In practice, this can improve the performance of our matrix multiplication kernel by
+more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</p>
+</section>
+</section>
+<section id="final-result">
+<h2>Final Result<a class="headerlink" href="#final-result" title="Link to this heading">¶</a></h2>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
+
+<span class="kn">import</span> <span class="nn">triton</span>
+<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
+
+
+<span class="k">def</span> <span class="nf">is_cuda</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span>
+
+
+<span class="k">def</span> <span class="nf">is_hip_mi200</span><span class="p">():</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">target</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s1">&#39;hip&#39;</span> <span class="ow">and</span> <span class="n">target</span><span class="o">.</span><span class="n">arch</span> <span class="o">==</span> <span class="s1">&#39;gfx90a&#39;</span>
+
+
+<span class="k">def</span> <span class="nf">get_cuda_autotune_config</span><span class="p">():</span>
+    <span class="k">return</span> <span class="p">[</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+        <span class="c1"># Good config for fp8 inputs.</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+                      <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="p">]</span>
+
+
+<span class="k">def</span> <span class="nf">get_hip_autotune_config</span><span class="p">():</span>
+    <span class="k">return</span> <span class="p">[</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
+            <span class="p">{</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">16</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;waves_per_eu&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">},</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
+            <span class="p">{</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">16</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span> <span class="s1">&#39;waves_per_eu&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">},</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
+            <span class="p">{</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;waves_per_eu&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">},</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
+            <span class="p">{</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">,</span> <span class="s1">&#39;waves_per_eu&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">},</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
+            <span class="p">{</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span> <span class="s1">&#39;GROUP_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;waves_per_eu&#39;</span><span class="p">:</span> <span class="mi">8</span><span class="p">},</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">num_stages</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+    <span class="p">]</span>
+
+
+<span class="k">def</span> <span class="nf">get_autotune_config</span><span class="p">():</span>
+    <span class="k">if</span> <span class="n">is_cuda</span><span class="p">():</span>
+        <span class="k">return</span> <span class="n">get_cuda_autotune_config</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">get_hip_autotune_config</span><span class="p">()</span>
+
+
+<span class="c1"># `triton.jit`&#39;ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:</span>
+<span class="c1">#   - A list of `triton.Config` objects that define different configurations of</span>
+<span class="c1">#       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try</span>
+<span class="c1">#   - An auto-tuning *key* whose change in values will trigger evaluation of all the</span>
+<span class="c1">#       provided configs</span>
+<span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
+    <span class="n">configs</span><span class="o">=</span><span class="n">get_autotune_config</span><span class="p">(),</span>
+    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;M&#39;</span><span class="p">,</span> <span class="s1">&#39;N&#39;</span><span class="p">,</span> <span class="s1">&#39;K&#39;</span><span class="p">],</span>
+<span class="p">)</span>
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span> <span class="nf">matmul_kernel</span><span class="p">(</span>
+        <span class="c1"># Pointers to matrices</span>
+        <span class="n">a_ptr</span><span class="p">,</span> <span class="n">b_ptr</span><span class="p">,</span> <span class="n">c_ptr</span><span class="p">,</span>
+        <span class="c1"># Matrix dimensions</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>
+        <span class="c1"># The stride variables represent how much to increase the ptr by when moving by 1</span>
+        <span class="c1"># element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`</span>
+        <span class="c1"># by to get the element one row down (A has M rows).</span>
+        <span class="n">stride_am</span><span class="p">,</span> <span class="n">stride_ak</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">stride_bk</span><span class="p">,</span> <span class="n">stride_bn</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">stride_cm</span><span class="p">,</span> <span class="n">stride_cn</span><span class="p">,</span>
+        <span class="c1"># Meta-parameters</span>
+        <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">ACTIVATION</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span>  <span class="c1">#</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Kernel for computing the matmul C = A x B.</span>
+<span class="sd">    A has shape (M, K), B has shape (K, N) and C has shape (M, N)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># -----------------------------------------------------------</span>
+    <span class="c1"># Map program ids `pid` to the block of C it should compute.</span>
+    <span class="c1"># This is done in a grouped ordering to promote L2 data reuse.</span>
+    <span class="c1"># See above `L2 Cache Optimizations` section for details.</span>
+    <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">num_pid_m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">num_pid_n</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
+    <span class="n">group_id</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
+    <span class="n">first_pid_m</span> <span class="o">=</span> <span class="n">group_id</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span>
+    <span class="n">group_size_m</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">num_pid_m</span> <span class="o">-</span> <span class="n">first_pid_m</span><span class="p">,</span> <span class="n">GROUP_SIZE_M</span><span class="p">)</span>
+    <span class="n">pid_m</span> <span class="o">=</span> <span class="n">first_pid_m</span> <span class="o">+</span> <span class="p">((</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">%</span> <span class="n">group_size_m</span><span class="p">)</span>
+    <span class="n">pid_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid</span> <span class="o">%</span> <span class="n">num_pid_in_group</span><span class="p">)</span> <span class="o">//</span> <span class="n">group_size_m</span>
+
+    <span class="c1"># ----------------------------------------------------------</span>
+    <span class="c1"># Create pointers for the first blocks of A and B.</span>
+    <span class="c1"># We will advance this pointer as we move in the K direction</span>
+    <span class="c1"># and accumulate</span>
+    <span class="c1"># `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers</span>
+    <span class="c1"># `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers</span>
+    <span class="c1"># See above `Pointer Arithmetic` section for details</span>
+    <span class="n">offs_am</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">))</span> <span class="o">%</span> <span class="n">M</span>
+    <span class="n">offs_bn</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">))</span> <span class="o">%</span> <span class="n">N</span>
+    <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)</span>
+    <span class="n">a_ptrs</span> <span class="o">=</span> <span class="n">a_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_am</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_am</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_ak</span><span class="p">)</span>
+    <span class="n">b_ptrs</span> <span class="o">=</span> <span class="n">b_ptr</span> <span class="o">+</span> <span class="p">(</span><span class="n">offs_k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_bk</span> <span class="o">+</span> <span class="n">offs_bn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_bn</span><span class="p">)</span>
+
+    <span class="c1"># -----------------------------------------------------------</span>
+    <span class="c1"># Iterate to compute a block of the C matrix.</span>
+    <span class="c1"># We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block</span>
+    <span class="c1"># of fp32 values for higher accuracy.</span>
+    <span class="c1"># `accumulator` will be converted back to fp16 after the loop.</span>
+    <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)):</span>
+        <span class="c1"># Load the next block of A and B, generate a mask by checking the K dimension.</span>
+        <span class="c1"># If it is out of bounds, set it to 0.</span>
+        <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">K</span> <span class="o">-</span> <span class="n">k</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">b_ptrs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">offs_k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">K</span> <span class="o">-</span> <span class="n">k</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
+        <span class="c1"># We accumulate along the K dimension.</span>
+        <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">accumulator</span><span class="p">)</span>
+        <span class="c1"># Advance the ptrs to the next K block.</span>
+        <span class="n">a_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_ak</span>
+        <span class="n">b_ptrs</span> <span class="o">+=</span> <span class="n">BLOCK_SIZE_K</span> <span class="o">*</span> <span class="n">stride_bk</span>
+    <span class="c1"># You can fuse arbitrary activation functions here</span>
+    <span class="c1"># while the accumulator is still in FP32!</span>
+    <span class="k">if</span> <span class="n">ACTIVATION</span> <span class="o">==</span> <span class="s2">&quot;leaky_relu&quot;</span><span class="p">:</span>
+        <span class="n">accumulator</span> <span class="o">=</span> <span class="n">leaky_relu</span><span class="p">(</span><span class="n">accumulator</span><span class="p">)</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">accumulator</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+
+    <span class="c1"># -----------------------------------------------------------</span>
+    <span class="c1"># Write back the block of the output matrix C with masks.</span>
+    <span class="n">offs_cm</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+    <span class="n">offs_cn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">c_ptrs</span> <span class="o">=</span> <span class="n">c_ptr</span> <span class="o">+</span> <span class="n">stride_cm</span> <span class="o">*</span> <span class="n">offs_cm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">+</span> <span class="n">stride_cn</span> <span class="o">*</span> <span class="n">offs_cn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+    <span class="n">c_mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">offs_cm</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">offs_cn</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_ptrs</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">c_mask</span><span class="p">)</span>
+
+
+<span class="c1"># We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `matmul_kernel`.</span>
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span> <span class="nf">leaky_relu</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">x</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="mf">0.01</span> <span class="o">*</span> <span class="n">x</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>We can now create a convenience wrapper function that only takes two input tensors,
+and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">activation</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">):</span>
+    <span class="c1"># Check constraints.</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s2">&quot;Incompatible dimensions&quot;</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">(),</span> <span class="s2">&quot;Matrix A must be contiguous&quot;</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">K</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
+    <span class="c1"># Allocates output.</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="c1"># 1D launch kernel where each block gets its own program.</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">]),</span> <span class="p">)</span>
+    <span class="n">matmul_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
+        <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>  <span class="c1">#</span>
+        <span class="n">ACTIVATION</span><span class="o">=</span><span class="n">activation</span>  <span class="c1">#</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">c</span>
+</pre></div>
+</div>
+</section>
+<section id="unit-test">
+<h2>Unit Test<a class="headerlink" href="#unit-test" title="Link to this heading">¶</a></h2>
+<p>We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+<span class="n">triton_output</span> <span class="o">=</span> <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+<span class="n">torch_output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;triton_output_with_fp16_inputs=</span><span class="si">{</span><span class="n">triton_output</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;torch_output_with_fp16_inputs=</span><span class="si">{</span><span class="n">torch_output</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="c1"># Bigger tolerance for AMD MI200 devices.</span>
+<span class="c1"># MI200 devices use reduced precision fp16 and bf16 and flush input and</span>
+<span class="c1"># output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices</span>
+<span class="n">rtol</span> <span class="o">=</span> <span class="mf">1e-2</span> <span class="k">if</span> <span class="n">is_hip_mi200</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
+<span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">triton_output</span><span class="p">,</span> <span class="n">torch_output</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;✅ Triton and Torch match&quot;</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;❌ Triton and Torch differ&quot;</span><span class="p">)</span>
+
+<span class="n">TORCH_HAS_FP8</span> <span class="o">=</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="s2">&quot;float8_e5m2&quot;</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="ow">and</span> <span class="n">is_cuda</span><span class="p">():</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
+    <span class="c1"># pre-transpose b for efficiency.</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
+    <span class="n">triton_output</span> <span class="o">=</span> <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+    <span class="n">torch_output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span> <span class="n">b</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;triton_output_with_fp8_inputs=</span><span class="si">{</span><span class="n">triton_output</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;torch_output_with_fp8_inputs=</span><span class="si">{</span><span class="n">torch_output</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">triton_output</span><span class="p">,</span> <span class="n">torch_output</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">0.125</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;✅ Triton and Torch match&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;❌ Triton and Torch differ&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>triton_output_with_fp16_inputs=tensor([[-10.9531,  -4.7109,  15.6953,  ..., -28.4062,   4.3320, -26.4219],
+        [ 26.8438,  10.0469,  -5.4297,  ..., -11.2969,  -8.5312,  30.7500],
+        [-13.2578,  15.8516,  18.0781,  ..., -21.7656,  -8.6406,  10.2031],
+        ...,
+        [ 40.2812,  18.6094, -25.6094,  ...,  -2.7598,  -3.2441,  41.0000],
+        [ -6.1211, -16.8281,   4.4844,  ..., -21.0312,  24.7031,  15.0234],
+        [-17.0938, -19.0000,  -0.3831,  ...,  21.5469, -30.2344, -13.2188]],
+       device=&#39;cuda:0&#39;, dtype=torch.float16)
+torch_output_with_fp16_inputs=tensor([[-10.9531,  -4.7109,  15.6953,  ..., -28.4062,   4.3320, -26.4219],
+        [ 26.8438,  10.0469,  -5.4297,  ..., -11.2969,  -8.5312,  30.7500],
+        [-13.2578,  15.8516,  18.0781,  ..., -21.7656,  -8.6406,  10.2031],
+        ...,
+        [ 40.2812,  18.6094, -25.6094,  ...,  -2.7598,  -3.2441,  41.0000],
+        [ -6.1211, -16.8281,   4.4844,  ..., -21.0312,  24.7031,  15.0234],
+        [-17.0938, -19.0000,  -0.3831,  ...,  21.5469, -30.2344, -13.2188]],
+       device=&#39;cuda:0&#39;, dtype=torch.float16)
+✅ Triton and Torch match
+triton_output_with_fp8_inputs=tensor([[-21.4375,  13.1719,   6.0352,  ...,  28.7031,   8.6719, -40.7500],
+        [ 10.0000,  37.0000,  -5.5664,  ...,  20.9844,  46.8125,  30.8281],
+        [ 19.5625,  -3.0078, -20.0469,  ...,  -2.1309,  -8.0625,  12.5625],
+        ...,
+        [-18.1562, -34.1562, -27.4219,  ..., -27.3906, -24.0938, -12.3516],
+        [ -3.3945,  -8.6250, -23.6562,  ...,  -4.1094,  -3.5332, -16.0781],
+        [-23.9688,  -3.2637, -33.6875,  ...,  17.3125, -36.6250,  25.8594]],
+       device=&#39;cuda:0&#39;, dtype=torch.float16)
+torch_output_with_fp8_inputs=tensor([[-21.4375,  13.1719,   6.0352,  ...,  28.7031,   8.6719, -40.7500],
+        [ 10.0000,  37.0000,  -5.5664,  ...,  20.9844,  46.8125,  30.8281],
+        [ 19.5625,  -3.0078, -20.0469,  ...,  -2.1309,  -8.0625,  12.5625],
+        ...,
+        [-18.1562, -34.1562, -27.4219,  ..., -27.3906, -24.0938, -12.3516],
+        [ -3.3945,  -8.6250, -23.6562,  ...,  -4.1094,  -3.5332, -16.0781],
+        [-23.9688,  -3.2637, -33.6875,  ...,  17.3125, -36.6250,  25.8594]],
+       device=&#39;cuda:0&#39;, dtype=torch.float16)
+✅ Triton and Torch match
+</pre></div>
+</div>
+</section>
+<section id="benchmark">
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading">¶</a></h2>
+<section id="square-matrix-performance">
+<h3>Square Matrix Performance<a class="headerlink" href="#square-matrix-performance" title="Link to this heading">¶</a></h3>
+<p>We can now compare the performance of our kernel against that of cuBLAS or rocBLAS. Here we focus on square matrices,
+but feel free to arrange this script as you wish to benchmark any other matrix shape.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">ref_lib</span> <span class="o">=</span> <span class="s1">&#39;cuBLAS&#39;</span> <span class="k">if</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="k">else</span> <span class="s1">&#39;rocBLAS&#39;</span>
+
+<span class="n">configs</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">fp8_inputs</span> <span class="ow">in</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">fp8_inputs</span> <span class="ow">and</span> <span class="p">(</span><span class="ow">not</span> <span class="n">TORCH_HAS_FP8</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">is_cuda</span><span class="p">()):</span>
+        <span class="k">continue</span>
+    <span class="n">configs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
+            <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">,</span> <span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="s2">&quot;K&quot;</span><span class="p">],</span>  <span class="c1"># Argument names to use as an x-axis for the plot</span>
+            <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">128</span> <span class="o">*</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">33</span><span class="p">)],</span>  <span class="c1"># Different possible values for `x_name`</span>
+            <span class="n">line_arg</span><span class="o">=</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span>  <span class="c1"># Argument name whose value corresponds to a different line in the plot</span>
+            <span class="c1"># Possible values for `line_arg`</span>
+            <span class="c1"># Don&#39;t compare to cublas for fp8 cases as torch.matmul doesn&#39;t support fp8 at the moment.</span>
+            <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;triton&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">fp8_inputs</span> <span class="k">else</span> <span class="p">[</span><span class="n">ref_lib</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span> <span class="s2">&quot;triton&quot;</span><span class="p">],</span>  <span class="c1"># Label name for the lines</span>
+            <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Triton&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">fp8_inputs</span> <span class="k">else</span> <span class="p">[</span><span class="n">ref_lib</span><span class="p">,</span> <span class="s2">&quot;Triton&quot;</span><span class="p">],</span>  <span class="c1"># Line styles</span>
+            <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;green&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
+            <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;TFLOPS&quot;</span><span class="p">,</span>  <span class="c1"># Label name for the y-axis</span>
+            <span class="n">plot_name</span><span class="o">=</span><span class="s2">&quot;matmul-performance-&quot;</span> <span class="o">+</span>
+            <span class="p">(</span><span class="s2">&quot;fp16&quot;</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">fp8_inputs</span> <span class="k">else</span> <span class="s2">&quot;fp8&quot;</span><span class="p">),</span>  <span class="c1"># Name for the plot, used also as a file name for saving the plot.</span>
+            <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;fp8_inputs&quot;</span><span class="p">:</span> <span class="n">fp8_inputs</span><span class="p">},</span>
+        <span class="p">))</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span><span class="n">configs</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">benchmark</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">fp8_inputs</span><span class="p">):</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="ow">and</span> <span class="n">fp8_inputs</span><span class="p">:</span>
+        <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
+    <span class="n">quantiles</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="n">ref_lib</span><span class="o">.</span><span class="n">lower</span><span class="p">():</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton&#39;</span><span class="p">:</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+    <span class="n">perf</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">ms</span><span class="p">:</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">*</span> <span class="mf">1e-12</span> <span class="o">/</span> <span class="p">(</span><span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-3</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">perf</span><span class="p">(</span><span class="n">ms</span><span class="p">),</span> <span class="n">perf</span><span class="p">(</span><span class="n">max_ms</span><span class="p">),</span> <span class="n">perf</span><span class="p">(</span><span class="n">min_ms</span><span class="p">)</span>
+
+
+<span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<ul class="sphx-glr-horizontal">
+<li><img src="../../_images/sphx_glr_03-matrix-multiplication_001.png" srcset="../../_images/sphx_glr_03-matrix-multiplication_001.png" alt="03 matrix multiplication" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_03-matrix-multiplication_002.png" srcset="../../_images/sphx_glr_03-matrix-multiplication_002.png" alt="03 matrix multiplication" class = "sphx-glr-multi-img"/></li>
+</ul>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>matmul-performance-fp16:
+         M       N       K      cuBLAS      Triton
+0    256.0   256.0   256.0    4.096000    4.096000
+1    384.0   384.0   384.0   11.059200   12.288000
+2    512.0   512.0   512.0   26.214401   26.214401
+3    640.0   640.0   640.0   42.666665   42.666665
+4    768.0   768.0   768.0   63.195428   68.056616
+5    896.0   896.0   896.0   78.051553   87.808000
+6   1024.0  1024.0  1024.0  110.376426   99.864382
+7   1152.0  1152.0  1152.0  135.726544  129.825388
+8   1280.0  1280.0  1280.0  157.538463  157.538463
+9   1408.0  1408.0  1408.0  155.765024  132.970149
+10  1536.0  1536.0  1536.0  176.947204  157.286398
+11  1664.0  1664.0  1664.0  183.651271  176.449258
+12  1792.0  1792.0  1792.0  172.914215  204.353162
+13  1920.0  1920.0  1920.0  200.347822  164.571430
+14  2048.0  2048.0  2048.0  223.696203  188.508043
+15  2176.0  2176.0  2176.0  211.827867  207.460296
+16  2304.0  2304.0  2304.0  219.154788  223.251141
+17  2432.0  2432.0  2432.0  203.583068  202.118452
+18  2560.0  2560.0  2560.0  224.438347  218.453323
+19  2688.0  2688.0  2688.0  199.647657  198.602388
+20  2816.0  2816.0  2816.0  211.719459  211.719459
+21  2944.0  2944.0  2944.0  222.482283  220.513412
+22  3072.0  3072.0  3072.0  206.653671  208.173173
+23  3200.0  3200.0  3200.0  214.765101  216.949149
+24  3328.0  3328.0  3328.0  207.467716  205.103410
+25  3456.0  3456.0  3456.0  217.308808  216.724640
+26  3584.0  3584.0  3584.0  216.142772  206.227962
+27  3712.0  3712.0  3712.0  208.990259  213.455857
+28  3840.0  3840.0  3840.0  208.664143  207.489687
+29  3968.0  3968.0  3968.0  208.587935  212.956259
+30  4096.0  4096.0  4096.0  219.668951  215.784121
+matmul-performance-fp8:
+         M       N       K      Triton
+0    256.0   256.0   256.0    3.276800
+1    384.0   384.0   384.0    9.216000
+2    512.0   512.0   512.0   20.164923
+3    640.0   640.0   640.0   34.133334
+4    768.0   768.0   768.0   42.130286
+5    896.0   896.0   896.0   61.083825
+6   1024.0  1024.0  1024.0   61.680940
+7   1152.0  1152.0  1152.0   80.702267
+8   1280.0  1280.0  1280.0  102.400003
+9   1408.0  1408.0  1408.0   82.602666
+10  1536.0  1536.0  1536.0   98.303997
+11  1664.0  1664.0  1664.0  116.868992
+12  1792.0  1792.0  1792.0  133.802668
+13  1920.0  1920.0  1920.0  100.173911
+14  2048.0  2048.0  2048.0  114.912434
+15  2176.0  2176.0  2176.0  121.226797
+16  2304.0  2304.0  2304.0  134.201527
+17  2432.0  2432.0  2432.0  132.521057
+18  2560.0  2560.0  2560.0  146.941707
+19  2688.0  2688.0  2688.0  118.171514
+20  2816.0  2816.0  2816.0  129.036114
+21  2944.0  2944.0  2944.0  139.988852
+22  3072.0  3072.0  3072.0  144.816120
+23  3200.0  3200.0  3200.0  138.828637
+24  3328.0  3328.0  3328.0  131.370982
+25  3456.0  3456.0  3456.0  138.525029
+26  3584.0  3584.0  3584.0  148.866543
+27  3712.0  3712.0  3712.0  141.297511
+28  3840.0  3840.0  3840.0  138.240003
+29  3968.0  3968.0  3968.0  145.961642
+30  4096.0  4096.0  4096.0  155.885867
+</pre></div>
+</div>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 17.130 seconds)</p>
+<div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
+<div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
+<p><a class="reference download internal" download="" href="../../_downloads/b51b68bc1c6b1a5e509f67800b6235af/03-matrix-multiplication.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">03-matrix-multiplication.ipynb</span></code></a></p>
+</div>
+<div class="sphx-glr-download sphx-glr-download-python docutils container">
+<p><a class="reference download internal" download="" href="../../_downloads/d5fee5b55a64e47f1b5724ec39adf171/03-matrix-multiplication.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">03-matrix-multiplication.py</span></code></a></p>
+</div>
+</div>
+<p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="02-fused-softmax.html" class="btn btn-neutral float-left" title="Fused Softmax" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="04-low-memory-dropout.html" class="btn btn-neutral float-right" title="Low-Memory Dropout" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

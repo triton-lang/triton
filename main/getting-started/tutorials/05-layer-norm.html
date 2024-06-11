@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Layer Normalization &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+        <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Fused Attention" href="06-fused-attention.html" />
+    <link rel="prev" title="Low-Memory Dropout" href="04-low-memory-dropout.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="01-vector-add.html">Vector Addition</a></li>
+<li class="toctree-l2"><a class="reference internal" href="02-fused-softmax.html">Fused Softmax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="03-matrix-multiplication.html">Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="04-low-memory-dropout.html">Low-Memory Dropout</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Layer Normalization</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#motivations">Motivations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#backward-pass">Backward pass</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#benchmark">Benchmark</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#references">References</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="09-persistent-fp8-matmul.html">Persistent FP8 Matmul</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Layer Normalization</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/getting-started/tutorials/05-layer-norm.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <div class="sphx-glr-download-link-note admonition note">
+<p class="admonition-title">Note</p>
+<p><a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-05-layer-norm-py"><span class="std std-ref">Go to the end</span></a>
+to download the full example code.</p>
+</div>
+<section class="sphx-glr-example-title" id="layer-normalization">
+<span id="sphx-glr-getting-started-tutorials-05-layer-norm-py"></span><h1>Layer Normalization<a class="headerlink" href="#layer-normalization" title="Link to this heading">¶</a></h1>
+<p>In this tutorial, you will write a high-performance layer normalization
+kernel that runs faster than the PyTorch implementation.</p>
+<p>In doing so, you will learn about:</p>
+<ul class="simple">
+<li><p>Implementing backward pass in Triton.</p></li>
+<li><p>Implementing parallel reduction in Triton.</p></li>
+</ul>
+<section id="motivations">
+<h2>Motivations<a class="headerlink" href="#motivations" title="Link to this heading">¶</a></h2>
+<p>The <em>LayerNorm</em> operator was first introduced in <a class="reference internal" href="#ba2016" id="id1"><span>[BA2016]</span></a> as a way to improve the performance
+of sequential models (e.g., Transformers) or neural networks with small batch size.
+It takes a vector <span class="math notranslate nohighlight">\(x\)</span> as input and produces a vector <span class="math notranslate nohighlight">\(y\)</span> of the same shape as output.
+The normalization is performed by subtracting the mean and dividing by the standard deviation of <span class="math notranslate nohighlight">\(x\)</span>.
+After the normalization, a learnable linear transformation with weights <span class="math notranslate nohighlight">\(w\)</span> and biases <span class="math notranslate nohighlight">\(b\)</span> is applied.
+The forward pass can be expressed as follows:</p>
+<div class="math notranslate nohighlight">
+\[y = \frac{ x - \text{E}[x] }{ \sqrt{\text{Var}(x) + \epsilon} } * w + b\]</div>
+<p>where <span class="math notranslate nohighlight">\(\epsilon\)</span> is a small constant added to the denominator for numerical stability.
+Let’s first take a look at the forward pass implementation.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
+
+<span class="kn">import</span> <span class="nn">triton</span>
+<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="c1"># This is https://github.com/NVIDIA/apex, NOT the apex on PyPi, so it</span>
+    <span class="c1"># should not be added to extras_require in setup.py.</span>
+    <span class="kn">import</span> <span class="nn">apex</span>
+    <span class="n">HAS_APEX</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">except</span> <span class="ne">ModuleNotFoundError</span><span class="p">:</span>
+    <span class="n">HAS_APEX</span> <span class="o">=</span> <span class="kc">False</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span> <span class="nf">_layer_norm_fwd_fused</span><span class="p">(</span>
+    <span class="n">X</span><span class="p">,</span>  <span class="c1"># pointer to the input</span>
+    <span class="n">Y</span><span class="p">,</span>  <span class="c1"># pointer to the output</span>
+    <span class="n">W</span><span class="p">,</span>  <span class="c1"># pointer to the weights</span>
+    <span class="n">B</span><span class="p">,</span>  <span class="c1"># pointer to the biases</span>
+    <span class="n">Mean</span><span class="p">,</span>  <span class="c1"># pointer to the mean</span>
+    <span class="n">Rstd</span><span class="p">,</span>  <span class="c1"># pointer to the 1/std</span>
+    <span class="n">stride</span><span class="p">,</span>  <span class="c1"># how much to increase the pointer when moving by 1 row</span>
+    <span class="n">N</span><span class="p">,</span>  <span class="c1"># number of columns in X</span>
+    <span class="n">eps</span><span class="p">,</span>  <span class="c1"># epsilon to avoid division by zero</span>
+    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="c1"># Map the program id to the row of X and Y it should compute.</span>
+    <span class="n">row</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">Y</span> <span class="o">+=</span> <span class="n">row</span> <span class="o">*</span> <span class="n">stride</span>
+    <span class="n">X</span> <span class="o">+=</span> <span class="n">row</span> <span class="o">*</span> <span class="n">stride</span>
+    <span class="c1"># Compute mean</span>
+    <span class="n">mean</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">_mean</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">BLOCK_SIZE</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">off</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">):</span>
+        <span class="n">cols</span> <span class="o">=</span> <span class="n">off</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
+        <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">X</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">cols</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="n">_mean</span> <span class="o">+=</span> <span class="n">a</span>
+    <span class="n">mean</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">_mean</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">N</span>
+    <span class="c1"># Compute variance</span>
+    <span class="n">_var</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">BLOCK_SIZE</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">off</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">):</span>
+        <span class="n">cols</span> <span class="o">=</span> <span class="n">off</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">X</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">cols</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">cols</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">,</span> <span class="n">x</span> <span class="o">-</span> <span class="n">mean</span><span class="p">,</span> <span class="mf">0.</span><span class="p">)</span>
+        <span class="n">_var</span> <span class="o">+=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">x</span>
+    <span class="n">var</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">_var</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">N</span>
+    <span class="n">rstd</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">/</span> <span class="n">tl</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">var</span> <span class="o">+</span> <span class="n">eps</span><span class="p">)</span>
+    <span class="c1"># Write mean / rstd</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">Mean</span> <span class="o">+</span> <span class="n">row</span><span class="p">,</span> <span class="n">mean</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">Rstd</span> <span class="o">+</span> <span class="n">row</span><span class="p">,</span> <span class="n">rstd</span><span class="p">)</span>
+    <span class="c1"># Normalize and apply linear transformation</span>
+    <span class="k">for</span> <span class="n">off</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">):</span>
+        <span class="n">cols</span> <span class="o">=</span> <span class="n">off</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="n">cols</span> <span class="o">&lt;</span> <span class="n">N</span>
+        <span class="n">w</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">W</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">B</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">X</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="n">x_hat</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">mean</span><span class="p">)</span> <span class="o">*</span> <span class="n">rstd</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="n">x_hat</span> <span class="o">*</span> <span class="n">w</span> <span class="o">+</span> <span class="n">b</span>
+        <span class="c1"># Write output</span>
+        <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">Y</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="backward-pass">
+<h2>Backward pass<a class="headerlink" href="#backward-pass" title="Link to this heading">¶</a></h2>
+<p>The backward pass for the layer normalization operator is a bit more involved than the forward pass.
+Let <span class="math notranslate nohighlight">\(\hat{x}\)</span> be the normalized inputs <span class="math notranslate nohighlight">\(\frac{ x - \text{E}[x] }{ \sqrt{\text{Var}(x) + \epsilon} }\)</span> before the linear transformation,
+the Vector-Jacobian Products (VJP) <span class="math notranslate nohighlight">\(\nabla_{x}\)</span> of <span class="math notranslate nohighlight">\(x\)</span> are given by:</p>
+<div class="math notranslate nohighlight">
+\[\nabla_{x} = \frac{1}{\sigma}\Big( \nabla_{y} \odot w - \underbrace{ \big( \frac{1}{N} \hat{x} \cdot (\nabla_{y} \odot w) \big) }_{c_1} \odot \hat{x} - \underbrace{ \frac{1}{N} \nabla_{y} \cdot w }_{c_2} \Big)\]</div>
+<p>where <span class="math notranslate nohighlight">\(\odot\)</span> denotes the element-wise multiplication, <span class="math notranslate nohighlight">\(\cdot\)</span> denotes the dot product, and <span class="math notranslate nohighlight">\(\sigma\)</span> is the standard deviation.
+<span class="math notranslate nohighlight">\(c_1\)</span> and <span class="math notranslate nohighlight">\(c_2\)</span> are intermediate constants that improve the readability of the following implementation.</p>
+<p>For the weights <span class="math notranslate nohighlight">\(w\)</span> and biases <span class="math notranslate nohighlight">\(b\)</span>, the VJPs <span class="math notranslate nohighlight">\(\nabla_{w}\)</span> and <span class="math notranslate nohighlight">\(\nabla_{b}\)</span> are more straightforward:</p>
+<div class="math notranslate nohighlight">
+\[\nabla_{w} = \nabla_{y} \odot \hat{x} \quad \text{and} \quad \nabla_{b} = \nabla_{y}\]</div>
+<p>Since the same weights <span class="math notranslate nohighlight">\(w\)</span> and biases <span class="math notranslate nohighlight">\(b\)</span> are used for all rows in the same batch, their gradients need to sum up.
+To perform this step efficiently, we use a parallel reduction strategy: each kernel instance accumulates
+partial <span class="math notranslate nohighlight">\(\nabla_{w}\)</span> and <span class="math notranslate nohighlight">\(\nabla_{b}\)</span> across certain rows into one of <span class="math notranslate nohighlight">\(\text{GROUP_SIZE_M}\)</span> independent buffers.
+These buffers stay in the L2 cache and then are further reduced by another function to compute the actual <span class="math notranslate nohighlight">\(\nabla_{w}\)</span> and <span class="math notranslate nohighlight">\(\nabla_{b}\)</span>.</p>
+<p>Let the number of input rows <span class="math notranslate nohighlight">\(M = 4\)</span> and <span class="math notranslate nohighlight">\(\text{GROUP_SIZE_M} = 2\)</span>,
+here’s a diagram of the parallel reduction strategy for <span class="math notranslate nohighlight">\(\nabla_{w}\)</span> (<span class="math notranslate nohighlight">\(\nabla_{b}\)</span> is omitted for brevity):</p>
+<blockquote>
+<div><img alt="../../_images/parallel_reduction.png" src="../../_images/parallel_reduction.png" />
+</div></blockquote>
+<p>In Stage 1, the rows of X that have the same color share the same buffer and thus a lock is used to ensure that only one kernel instance writes to the buffer at a time.
+In Stage 2, the buffers are further reduced to compute the final <span class="math notranslate nohighlight">\(\nabla_{w}\)</span> and <span class="math notranslate nohighlight">\(\nabla_{b}\)</span>.
+In the following implementation, Stage 1 is implemented by the function <code class="code docutils literal notranslate"><span class="pre">_layer_norm_bwd_dx_fused</span></code> and Stage 2 is implemented by the function <code class="code docutils literal notranslate"><span class="pre">_layer_norm_bwd_dwdb</span></code>.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span> <span class="nf">_layer_norm_bwd_dx_fused</span><span class="p">(</span><span class="n">DX</span><span class="p">,</span>  <span class="c1"># pointer to the input gradient</span>
+                             <span class="n">DY</span><span class="p">,</span>  <span class="c1"># pointer to the output gradient</span>
+                             <span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
+                             <span class="n">DB</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of biases gradient</span>
+                             <span class="n">X</span><span class="p">,</span>  <span class="c1"># pointer to the input</span>
+                             <span class="n">W</span><span class="p">,</span>  <span class="c1"># pointer to the weights</span>
+                             <span class="n">Mean</span><span class="p">,</span>  <span class="c1"># pointer to the mean</span>
+                             <span class="n">Rstd</span><span class="p">,</span>  <span class="c1"># pointer to the 1/std</span>
+                             <span class="n">Lock</span><span class="p">,</span>  <span class="c1"># pointer to the lock</span>
+                             <span class="n">stride</span><span class="p">,</span>  <span class="c1"># how much to increase the pointer when moving by 1 row</span>
+                             <span class="n">N</span><span class="p">,</span>  <span class="c1"># number of columns in X</span>
+                             <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="c1"># Map the program id to the elements of X, DX, and DY it should compute.</span>
+    <span class="n">row</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">cols</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="n">cols</span> <span class="o">&lt;</span> <span class="n">N</span>
+    <span class="n">X</span> <span class="o">+=</span> <span class="n">row</span> <span class="o">*</span> <span class="n">stride</span>
+    <span class="n">DY</span> <span class="o">+=</span> <span class="n">row</span> <span class="o">*</span> <span class="n">stride</span>
+    <span class="n">DX</span> <span class="o">+=</span> <span class="n">row</span> <span class="o">*</span> <span class="n">stride</span>
+    <span class="c1"># Offset locks and weights/biases gradient pointer for parallel reduction</span>
+    <span class="n">lock_id</span> <span class="o">=</span> <span class="n">row</span> <span class="o">%</span> <span class="n">GROUP_SIZE_M</span>
+    <span class="n">Lock</span> <span class="o">+=</span> <span class="n">lock_id</span>
+    <span class="n">Count</span> <span class="o">=</span> <span class="n">Lock</span> <span class="o">+</span> <span class="n">GROUP_SIZE_M</span>
+    <span class="n">DW</span> <span class="o">=</span> <span class="n">DW</span> <span class="o">+</span> <span class="n">lock_id</span> <span class="o">*</span> <span class="n">N</span> <span class="o">+</span> <span class="n">cols</span>
+    <span class="n">DB</span> <span class="o">=</span> <span class="n">DB</span> <span class="o">+</span> <span class="n">lock_id</span> <span class="o">*</span> <span class="n">N</span> <span class="o">+</span> <span class="n">cols</span>
+    <span class="c1"># Load data to SRAM</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">X</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">dy</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DY</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">w</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">W</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">mean</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Mean</span> <span class="o">+</span> <span class="n">row</span><span class="p">)</span>
+    <span class="n">rstd</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Rstd</span> <span class="o">+</span> <span class="n">row</span><span class="p">)</span>
+    <span class="c1"># Compute dx</span>
+    <span class="n">xhat</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">mean</span><span class="p">)</span> <span class="o">*</span> <span class="n">rstd</span>
+    <span class="n">wdy</span> <span class="o">=</span> <span class="n">w</span> <span class="o">*</span> <span class="n">dy</span>
+    <span class="n">xhat</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">xhat</span><span class="p">,</span> <span class="mf">0.</span><span class="p">)</span>
+    <span class="n">wdy</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">wdy</span><span class="p">,</span> <span class="mf">0.</span><span class="p">)</span>
+    <span class="n">c1</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">xhat</span> <span class="o">*</span> <span class="n">wdy</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">N</span>
+    <span class="n">c2</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">wdy</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">N</span>
+    <span class="n">dx</span> <span class="o">=</span> <span class="p">(</span><span class="n">wdy</span> <span class="o">-</span> <span class="p">(</span><span class="n">xhat</span> <span class="o">*</span> <span class="n">c1</span> <span class="o">+</span> <span class="n">c2</span><span class="p">))</span> <span class="o">*</span> <span class="n">rstd</span>
+    <span class="c1"># Write dx</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">DX</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">dx</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+    <span class="c1"># Accumulate partial sums for dw/db</span>
+    <span class="n">partial_dw</span> <span class="o">=</span> <span class="p">(</span><span class="n">dy</span> <span class="o">*</span> <span class="n">xhat</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">w</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="n">partial_db</span> <span class="o">=</span> <span class="p">(</span><span class="n">dy</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">w</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="k">while</span> <span class="n">tl</span><span class="o">.</span><span class="n">atomic_cas</span><span class="p">(</span><span class="n">Lock</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="n">count</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Count</span><span class="p">)</span>
+    <span class="c1"># First store doesn&#39;t accumulate</span>
+    <span class="k">if</span> <span class="n">count</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">tl</span><span class="o">.</span><span class="n">atomic_xchg</span><span class="p">(</span><span class="n">Count</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">partial_dw</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DW</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+        <span class="n">partial_db</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DB</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">DW</span><span class="p">,</span> <span class="n">partial_dw</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">DB</span><span class="p">,</span> <span class="n">partial_db</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+    <span class="c1"># Release the lock</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">atomic_xchg</span><span class="p">(</span><span class="n">Lock</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span> <span class="nf">_layer_norm_bwd_dwdb</span><span class="p">(</span><span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
+                         <span class="n">DB</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of biases gradient</span>
+                         <span class="n">FINAL_DW</span><span class="p">,</span>  <span class="c1"># pointer to the weights gradient</span>
+                         <span class="n">FINAL_DB</span><span class="p">,</span>  <span class="c1"># pointer to the biases gradient</span>
+                         <span class="n">M</span><span class="p">,</span>  <span class="c1"># GROUP_SIZE_M</span>
+                         <span class="n">N</span><span class="p">,</span>  <span class="c1"># number of columns</span>
+                         <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="c1"># Map the program id to the elements of DW and DB it should compute.</span>
+    <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">cols</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+    <span class="n">dw</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="c1"># Iterate through the rows of DW and DB to sum the partial sums.</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">):</span>
+        <span class="n">rows</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">rows</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">M</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">cols</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+        <span class="n">offs</span> <span class="o">=</span> <span class="n">rows</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">N</span> <span class="o">+</span> <span class="n">cols</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+        <span class="n">dw</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DW</span> <span class="o">+</span> <span class="n">offs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span>
+        <span class="n">db</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DB</span> <span class="o">+</span> <span class="n">offs</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="mf">0.</span><span class="p">)</span>
+    <span class="c1"># Write the final sum to the output.</span>
+    <span class="n">sum_dw</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dw</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">sum_db</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">FINAL_DW</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">sum_dw</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">cols</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">FINAL_DB</span> <span class="o">+</span> <span class="n">cols</span><span class="p">,</span> <span class="n">sum_db</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">cols</span> <span class="o">&lt;</span> <span class="n">N</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="benchmark">
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Link to this heading">¶</a></h2>
+<p>We can now compare the performance of our kernel against that of PyTorch.
+Here we focus on inputs that have Less than 64KB per feature.
+Specifically, one can set <code class="code docutils literal notranslate"><span class="pre">'mode':</span> <span class="pre">'backward'</span></code> to benchmark the backward pass.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">LayerNorm</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">normalized_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">):</span>
+        <span class="c1"># allocate output</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="c1"># reshape input data into 2D tensor</span>
+        <span class="n">x_arg</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">x_arg</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">mean</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">rstd</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="c1"># Less than 64KB per feature: enqueue fused kernel</span>
+        <span class="n">MAX_FUSED_SIZE</span> <span class="o">=</span> <span class="mi">65536</span> <span class="o">//</span> <span class="n">x</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span>
+        <span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">MAX_FUSED_SIZE</span><span class="p">,</span> <span class="n">triton</span><span class="o">.</span><span class="n">next_power_of_2</span><span class="p">(</span><span class="n">N</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">N</span> <span class="o">&gt;</span> <span class="n">BLOCK_SIZE</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;This layer norm doesn&#39;t support feature dim &gt;= 64KB.&quot;</span><span class="p">)</span>
+        <span class="c1"># heuristics for number of warps</span>
+        <span class="n">num_warps</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="n">BLOCK_SIZE</span> <span class="o">//</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="mi">8</span><span class="p">)</span>
+        <span class="c1"># enqueue kernel</span>
+        <span class="n">_layer_norm_fwd_fused</span><span class="p">[(</span><span class="n">M</span><span class="p">,</span> <span class="p">)](</span>  <span class="c1">#</span>
+            <span class="n">x_arg</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">mean</span><span class="p">,</span> <span class="n">rstd</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">x_arg</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">N</span><span class="p">,</span> <span class="n">eps</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="n">BLOCK_SIZE</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span> <span class="n">num_ctas</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">save_for_backward</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">mean</span><span class="p">,</span> <span class="n">rstd</span><span class="p">)</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">BLOCK_SIZE</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">num_warps</span> <span class="o">=</span> <span class="n">num_warps</span>
+        <span class="n">ctx</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+        <span class="k">return</span> <span class="n">y</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">dy</span><span class="p">):</span>
+        <span class="n">x</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">v</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
+        <span class="c1"># heuristics for amount of parallel reduction stream for DW/DB</span>
+        <span class="n">N</span> <span class="o">=</span> <span class="n">w</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">GROUP_SIZE_M</span> <span class="o">=</span> <span class="mi">64</span>
+        <span class="k">if</span> <span class="n">N</span> <span class="o">&lt;=</span> <span class="mi">8192</span><span class="p">:</span> <span class="n">GROUP_SIZE_M</span> <span class="o">=</span> <span class="mi">96</span>
+        <span class="k">if</span> <span class="n">N</span> <span class="o">&lt;=</span> <span class="mi">4096</span><span class="p">:</span> <span class="n">GROUP_SIZE_M</span> <span class="o">=</span> <span class="mi">128</span>
+        <span class="k">if</span> <span class="n">N</span> <span class="o">&lt;=</span> <span class="mi">1024</span><span class="p">:</span> <span class="n">GROUP_SIZE_M</span> <span class="o">=</span> <span class="mi">256</span>
+        <span class="c1"># allocate output</span>
+        <span class="n">locks</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">_dw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">_db</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">dw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">db</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">w</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">dx</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">dy</span><span class="p">)</span>
+        <span class="c1"># enqueue kernel using forward pass heuristics</span>
+        <span class="c1"># also compute partial sums for DW and DB</span>
+        <span class="n">x_arg</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="n">x_arg</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">_layer_norm_bwd_dx_fused</span><span class="p">[(</span><span class="n">M</span><span class="p">,</span> <span class="p">)](</span>  <span class="c1">#</span>
+            <span class="n">dx</span><span class="p">,</span> <span class="n">dy</span><span class="p">,</span> <span class="n">_dw</span><span class="p">,</span> <span class="n">_db</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">locks</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">x_arg</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">N</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_SIZE</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">GROUP_SIZE_M</span><span class="o">=</span><span class="n">GROUP_SIZE_M</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">num_warps</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">num_warps</span><span class="p">)</span>
+        <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">[</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">])]</span>
+        <span class="c1"># accumulate partial sums in separate kernel</span>
+        <span class="n">_layer_norm_bwd_dwdb</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
+            <span class="n">_dw</span><span class="p">,</span> <span class="n">_db</span><span class="p">,</span> <span class="n">dw</span><span class="p">,</span> <span class="n">db</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="n">GROUP_SIZE_M</span><span class="p">,</span> <span class="n">M</span><span class="p">),</span> <span class="n">N</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>  <span class="c1">#</span>
+            <span class="n">BLOCK_SIZE_N</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">num_ctas</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">dx</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dw</span><span class="p">,</span> <span class="n">db</span><span class="p">,</span> <span class="kc">None</span>
+
+
+<span class="n">layer_norm</span> <span class="o">=</span> <span class="n">LayerNorm</span><span class="o">.</span><span class="n">apply</span>
+
+
+<span class="k">def</span> <span class="nf">test_layer_norm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">):</span>
+    <span class="c1"># create data</span>
+    <span class="n">x_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
+    <span class="n">w_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="p">)</span>
+    <span class="n">weight</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">w_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">bias</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">w_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="o">-</span><span class="mf">2.3</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">x_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">dy</span> <span class="o">=</span> <span class="mf">.1</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+    <span class="n">x</span><span class="o">.</span><span class="n">requires_grad_</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+    <span class="c1"># forward pass</span>
+    <span class="n">y_tri</span> <span class="o">=</span> <span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span>
+    <span class="n">y_ref</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="c1"># backward pass (triton)</span>
+    <span class="n">y_tri</span><span class="o">.</span><span class="n">backward</span><span class="p">(</span><span class="n">dy</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">dx_tri</span><span class="p">,</span> <span class="n">dw_tri</span><span class="p">,</span> <span class="n">db_tri</span> <span class="o">=</span> <span class="p">[</span><span class="n">_</span><span class="o">.</span><span class="n">grad</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="p">[</span><span class="n">x</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">]]</span>
+    <span class="n">x</span><span class="o">.</span><span class="n">grad</span><span class="p">,</span> <span class="n">weight</span><span class="o">.</span><span class="n">grad</span><span class="p">,</span> <span class="n">bias</span><span class="o">.</span><span class="n">grad</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+    <span class="c1"># backward pass (torch)</span>
+    <span class="n">y_ref</span><span class="o">.</span><span class="n">backward</span><span class="p">(</span><span class="n">dy</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">dx_ref</span><span class="p">,</span> <span class="n">dw_ref</span><span class="p">,</span> <span class="n">db_ref</span> <span class="o">=</span> <span class="p">[</span><span class="n">_</span><span class="o">.</span><span class="n">grad</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="p">[</span><span class="n">x</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">]]</span>
+    <span class="c1"># compare</span>
+    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_tri</span><span class="p">,</span> <span class="n">y_ref</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">dx_tri</span><span class="p">,</span> <span class="n">dx_ref</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">db_tri</span><span class="p">,</span> <span class="n">db_ref</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">dw_tri</span><span class="p">,</span> <span class="n">dw_ref</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
+        <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;N&#39;</span><span class="p">],</span>
+        <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">512</span> <span class="o">*</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">32</span><span class="p">)],</span>
+        <span class="n">line_arg</span><span class="o">=</span><span class="s1">&#39;provider&#39;</span><span class="p">,</span>
+        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;triton&#39;</span><span class="p">,</span> <span class="s1">&#39;torch&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s1">&#39;apex&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_APEX</span> <span class="k">else</span> <span class="p">[]),</span>
+        <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;Triton&#39;</span><span class="p">,</span> <span class="s1">&#39;Torch&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s1">&#39;Apex&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_APEX</span> <span class="k">else</span> <span class="p">[]),</span>
+        <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;orange&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)],</span>
+        <span class="n">ylabel</span><span class="o">=</span><span class="s1">&#39;GB/s&#39;</span><span class="p">,</span>
+        <span class="n">plot_name</span><span class="o">=</span><span class="s1">&#39;layer-norm-backward&#39;</span><span class="p">,</span>
+        <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;M&#39;</span><span class="p">:</span> <span class="mi">4096</span><span class="p">,</span> <span class="s1">&#39;dtype&#39;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="s1">&#39;mode&#39;</span><span class="p">:</span> <span class="s1">&#39;backward&#39;</span><span class="p">},</span>
+    <span class="p">))</span>
+<span class="k">def</span> <span class="nf">bench_layer_norm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;backward&#39;</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">):</span>
+    <span class="c1"># create data</span>
+    <span class="n">x_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
+    <span class="n">w_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="p">)</span>
+    <span class="n">weight</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">w_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">bias</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">w_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="o">-</span><span class="mf">2.3</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">x_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">dy</span> <span class="o">=</span> <span class="mf">.1</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+    <span class="n">x</span><span class="o">.</span><span class="n">requires_grad_</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">quantiles</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">y_fwd</span><span class="p">():</span>
+
+        <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;triton&quot;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
+
+        <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;torch&quot;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
+
+        <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;apex&quot;</span><span class="p">:</span>
+            <span class="n">apex_layer_norm</span> <span class="o">=</span> <span class="p">(</span><span class="n">apex</span><span class="o">.</span><span class="n">normalization</span><span class="o">.</span><span class="n">FusedLayerNorm</span><span class="p">(</span><span class="n">w_shape</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">device</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">))</span>
+            <span class="k">return</span> <span class="n">apex_layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
+
+    <span class="c1"># forward pass</span>
+    <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s1">&#39;forward&#39;</span><span class="p">:</span>
+        <span class="n">gbps</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">ms</span><span class="p">:</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">/</span> <span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-6</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">y_fwd</span><span class="p">,</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">,</span> <span class="n">rep</span><span class="o">=</span><span class="mi">500</span><span class="p">)</span>
+    <span class="c1"># backward pass</span>
+    <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s1">&#39;backward&#39;</span><span class="p">:</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="n">y_fwd</span><span class="p">()</span>
+        <span class="n">gbps</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">ms</span><span class="p">:</span> <span class="mi">3</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">/</span> <span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-6</span>  <span class="c1"># noqa: F811, E704</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">y</span><span class="o">.</span><span class="n">backward</span><span class="p">(</span><span class="n">dy</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">,</span>
+                                                     <span class="n">grad_to_none</span><span class="o">=</span><span class="p">[</span><span class="n">x</span><span class="p">],</span> <span class="n">rep</span><span class="o">=</span><span class="mi">500</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">gbps</span><span class="p">(</span><span class="n">ms</span><span class="p">),</span> <span class="n">gbps</span><span class="p">(</span><span class="n">max_ms</span><span class="p">),</span> <span class="n">gbps</span><span class="p">(</span><span class="n">min_ms</span><span class="p">)</span>
+
+
+<span class="n">test_layer_norm</span><span class="p">(</span><span class="mi">1151</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+<span class="n">bench_layer_norm</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<img src="../../_images/sphx_glr_05-layer-norm_001.png" srcset="../../_images/sphx_glr_05-layer-norm_001.png" alt="05 layer norm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>layer-norm-backward:
+          N      Triton       Torch
+0    1024.0  133.565214  378.092307
+1    1536.0  201.442627  444.144584
+2    2048.0  265.686491  517.389457
+3    2560.0  335.737711  568.888888
+4    3072.0  411.888279  609.322328
+5    3584.0  491.520018  547.872604
+6    4096.0  626.140119  561.737163
+7    4608.0  575.999980  567.138460
+8    5120.0  768.000019  566.267298
+9    5632.0  809.389194  563.200014
+10   6144.0  837.818175  562.809189
+11   6656.0  902.508503  566.468098
+12   7168.0  940.065592  540.981122
+13   7680.0  935.634512  546.943612
+14   8192.0  963.764723  547.654599
+15   8704.0  687.157925  561.548373
+16   9216.0  727.578980  565.687967
+17   9728.0  750.713801  569.443892
+18  10240.0  758.518534  562.379850
+19  10752.0  797.675451  553.751076
+20  11264.0  819.199976  559.701851
+21  11776.0  812.137928  567.518063
+22  12288.0  830.738036  572.644636
+23  12800.0  855.710312  577.443635
+24  13312.0  897.438192  578.782596
+25  13824.0  899.121984  578.006963
+26  14336.0  919.957230  567.762361
+27  14848.0  923.191711  568.344496
+28  15360.0  933.265799  579.622631
+29  15872.0  913.496396  580.682936
+</pre></div>
+</div>
+</section>
+<section id="references">
+<h2>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h2>
+<div role="list" class="citation-list">
+<div class="citation" id="ba2016" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id1">BA2016</a><span class="fn-bracket">]</span></span>
+<p>Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, “Layer Normalization”, Arxiv 2016</p>
+</div>
+</div>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 28.831 seconds)</p>
+<div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-05-layer-norm-py">
+<div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
+<p><a class="reference download internal" download="" href="../../_downloads/ae7fff29e1b574187bc930ed94bcc353/05-layer-norm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">05-layer-norm.ipynb</span></code></a></p>
+</div>
+<div class="sphx-glr-download sphx-glr-download-python docutils container">
+<p><a class="reference download internal" download="" href="../../_downloads/935c0dd0fbeb4b2e69588471cbb2d4b2/05-layer-norm.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">05-layer-norm.py</span></code></a></p>
+</div>
+</div>
+<p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="04-low-memory-dropout.html" class="btn btn-neutral float-left" title="Low-Memory Dropout" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="06-fused-attention.html" class="btn btn-neutral float-right" title="Fused Attention" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

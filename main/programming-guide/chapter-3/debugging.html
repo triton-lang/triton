@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Debugging Triton &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="prev" title="Related Work" href="../chapter-2/related-work.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Debugging Triton</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#using-triton-s-debugging-operations">Using Triton’s Debugging Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#using-the-interpreter">Using the Interpreter</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#limitations">Limitations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#using-third-party-tools">Using Third-party Tools</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Debugging Triton</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/programming-guide/chapter-3/debugging.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="debugging-triton">
+<h1>Debugging Triton<a class="headerlink" href="#debugging-triton" title="Link to this heading">¶</a></h1>
+<p>This tutorial provides guidance for debugging Triton programs.
+It is mostly documented for Triton users.
+Developers interested in exploring Triton’s backend, including MLIR code transformation and LLVM code generation,
+can refer to this <a class="reference external" href="https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking">section</a> to explore debugging options.</p>
+<section id="using-triton-s-debugging-operations">
+<h2>Using Triton’s Debugging Operations<a class="headerlink" href="#using-triton-s-debugging-operations" title="Link to this heading">¶</a></h2>
+<p>Triton includes four debugging operators that allow users to check and inspect tensor values:</p>
+<ul class="simple">
+<li><p><code class="code docutils literal notranslate"><span class="pre">static_print</span></code> and <code class="code docutils literal notranslate"><span class="pre">static_assert</span></code> are intended for compile-time debugging.</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">device_print</span></code> and <code class="code docutils literal notranslate"><span class="pre">device_assert</span></code> are used for runtime debugging.</p></li>
+</ul>
+<p><code class="code docutils literal notranslate"><span class="pre">device_assert</span></code> executes only when <code class="code docutils literal notranslate"><span class="pre">TRITON_DEBUG</span></code> is set to <code class="code docutils literal notranslate"><span class="pre">1</span></code>.
+Other debugging operators execute regardless of the value of <code class="code docutils literal notranslate"><span class="pre">TRITON_DEBUG</span></code>.</p>
+</section>
+<section id="using-the-interpreter">
+<h2>Using the Interpreter<a class="headerlink" href="#using-the-interpreter" title="Link to this heading">¶</a></h2>
+<p>The interpreter is a straightforward and helpful tool for debugging Triton programs.
+It allows Triton users to run Triton programs on the CPU and inspect the intermediate results of each operation.
+To enable the interpreter mode, set the environment variable <code class="code docutils literal notranslate"><span class="pre">TRITON_INTERPRET</span></code> to <code class="code docutils literal notranslate"><span class="pre">1</span></code>.
+This setting causes all Triton kernels to bypass compilation and be simulated by the interpreter using numpy equivalents of Triton operations.
+The interpreter processes each Triton program instance sequentially, executing operations one at a time.</p>
+<p>There are three primary ways to use the interpreter:</p>
+<ul>
+<li><p>Print the intermediate results of each operation using the Python <code class="code docutils literal notranslate"><span class="pre">print</span></code> function. To inspect an entire tensor, use <code class="code docutils literal notranslate"><span class="pre">print(tensor)</span></code>. To examine individual tensor values at <code class="code docutils literal notranslate"><span class="pre">idx</span></code>, use <code class="code docutils literal notranslate"><span class="pre">print(tensor.handle.data[idx])</span></code>.</p></li>
+<li><p>Attach <code class="code docutils literal notranslate"><span class="pre">pdb</span></code> for step-by-step debugging of the Triton program:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">TRITON_INTERPRET</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>pdb<span class="w"> </span>main.py
+b<span class="w"> </span>main.py:&lt;line<span class="w"> </span>number&gt;
+r
+</pre></div>
+</div>
+</li>
+<li><p>Import the <code class="code docutils literal notranslate"><span class="pre">pdb</span></code> package and set breakpoints in the Triton program:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">triton</span>
+<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
+<span class="kn">import</span> <span class="nn">pdb</span>
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span> <span class="nf">kernel</span><span class="p">(</span><span class="n">x_ptr</span><span class="p">,</span> <span class="n">y_ptr</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+  <span class="n">pdb</span><span class="o">.</span><span class="n">set_trace</span><span class="p">()</span>
+  <span class="n">offs</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
+  <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">x_ptr</span> <span class="o">+</span> <span class="n">offs</span><span class="p">)</span>
+  <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">y_ptr</span> <span class="o">+</span> <span class="n">offs</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span>
+</pre></div>
+</div>
+</li>
+</ul>
+<section id="limitations">
+<h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h3>
+<p>The interpreter has several known limitations:</p>
+<ul>
+<li><p>It does not support operations on <code class="code docutils literal notranslate"><span class="pre">bfloat16</span></code> numeric types. To perform operations on <code class="code docutils literal notranslate"><span class="pre">bfloat16</span></code> tensors, use <code class="code docutils literal notranslate"><span class="pre">tl.cast(tensor)</span></code> to convert the tensor to <code class="code docutils literal notranslate"><span class="pre">float32</span></code>.</p></li>
+<li><p>It does not support indirect memory access patterns such as:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">ptr</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">ptr</span><span class="p">)</span>
+</pre></div>
+</div>
+</li>
+<li><p>Unlike the compilation mode, a scalar in interpreter mode is treated as a simple float or integer but not as a 0-d tensor. This means it lacks tensor attributes such as <code class="code docutils literal notranslate"><span class="pre">x.dtype</span></code>. A workaround is to explicitly convert the scalar to a tensor using <code class="code docutils literal notranslate"><span class="pre">tl.to_tensor(x)</span></code>, where <code class="code docutils literal notranslate"><span class="pre">x</span></code> is the scalar.</p></li>
+</ul>
+</section>
+</section>
+<section id="using-third-party-tools">
+<h2>Using Third-party Tools<a class="headerlink" href="#using-third-party-tools" title="Link to this heading">¶</a></h2>
+<p>For debugging on NVIDIA GPUs, <a class="reference external" href="https://docs.nvidia.com/cuda/compute-sanitizer/index.html">compute-sanitizer</a> is an effective tool for checking data races and memory access issues.
+To use it, prepend <code class="code docutils literal notranslate"><span class="pre">compute-sanitizer</span></code> to your command to run the Triton program.</p>
+<p>For debugging on AMD GPUs, you may want to try the LLVM <a class="reference external" href="https://rocm.docs.amd.com/en/latest/conceptual/using-gpu-sanitizer.html">AddressSanitizer</a> for ROCm.</p>
+<p>For detailed visualization of memory access in Triton programs, consider using the <a class="reference external" href="https://github.com/Deep-Learning-Profiling-Tools/triton-viz">triton-viz</a> tool, which is agnostic to the underlying GPUs.</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../chapter-2/related-work.html" class="btn btn-neutral float-left" title="Related Work" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

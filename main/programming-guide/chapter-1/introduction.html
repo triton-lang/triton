@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Introduction &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=61a4c737" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Related Work" href="../chapter-2/related-work.html" />
+    <link rel="prev" title="NVGPUOps" href="../../dialects/NVGPUOps.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Introduction</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#motivations">Motivations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#challenges">Challenges</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#references">References</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Introduction</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/programming-guide/chapter-1/introduction.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="introduction">
+<h1>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h1>
+<section id="motivations">
+<h2>Motivations<a class="headerlink" href="#motivations" title="Link to this heading">¶</a></h2>
+<p>Over the past decade, Deep Neural Networks (DNNs) have emerged as an important class of Machine Learning (ML) models, capable of achieving state-of-the-art performance across many domains ranging from natural language processing <a class="reference internal" href="#sutskever2014" id="id1"><span>[SUTSKEVER2014]</span></a> to computer vision <a class="reference internal" href="#redmon2016" id="id2"><span>[REDMON2016]</span></a> to computational neuroscience <a class="reference internal" href="#lee2017" id="id3"><span>[LEE2017]</span></a>. The strength of these models lies in their hierarchical structure, composed of a sequence of parametric (e.g., convolutional) and non-parametric (e.g., rectified linearity) <em>layers</em>. This pattern, though notoriously computationally expensive, also generates a large amount of highly parallelizable work particularly well suited for multi- and many- core processors.</p>
+<p>As a consequence, Graphics Processing Units (GPUs) have become a cheap and accessible resource for exploring and/or deploying novel research ideas in the field. This trend has been accelerated by the release of several frameworks for General-Purpose GPU (GPGPU) computing, such as CUDA and OpenCL, which have made the development of high-performance programs easier. Yet, GPUs remain incredibly challenging to optimize for locality and parallelism, especially for computations that cannot be efficiently implemented using a combination of pre-existing optimized primitives. To make matters worse, GPU architectures are also rapidly evolving and specializing, as evidenced by the addition of tensor cores to NVIDIA (and more recently AMD) micro-architectures.</p>
+<p>This tension between the computational opportunities offered by DNNs and the practical difficulty of GPU programming has created substantial academic and industrial interest for Domain-Specific Languages (DSLs) and compilers. Regrettably, these systems – whether they be based on polyhedral machinery (e.g., Tiramisu <a class="reference internal" href="../chapter-2/related-work.html#baghdadi2021" id="id4"><span>[BAGHDADI2021]</span></a>, Tensor Comprehensions <a class="reference internal" href="../chapter-2/related-work.html#vasilache2018" id="id5"><span>[VASILACHE2018]</span></a>) or scheduling languages (e.g., Halide <a class="reference internal" href="#jrk2013" id="id6"><span>[JRK2013]</span></a>, TVM <a class="reference internal" href="#chen2018" id="id7"><span>[CHEN2018]</span></a>) – remain less flexible and (for the same algorithm) markedly slower than the best handwritten compute kernels available in libraries like <a class="reference external" href="https://docs.nvidia.com/cuda/cublas/index.html">cuBLAS</a>, <a class="reference external" href="https://docs.nvidia.com/deeplearning/cudnn/api/index.html">cuDNN</a> or <a class="reference external" href="https://docs.nvidia.com/deeplearning/tensorrt/developer-guide/index.html">TensorRT</a>.</p>
+<p>The main premise of this project is the following: programming paradigms based on blocked algorithms <a class="reference internal" href="#lam1991" id="id8"><span>[LAM1991]</span></a> can facilitate the construction of high-performance compute kernels for neural networks. We specifically revisit traditional “Single Program, Multiple Data” (SPMD <a class="reference internal" href="#auguin1983" id="id9"><span>[AUGUIN1983]</span></a>) execution models for GPUs, and propose a variant in which programs – rather than threads – are blocked. For example, in the case of matrix multiplication, CUDA and Triton differ as follows:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 50.0%" />
+<col style="width: 50.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>CUDA Programming Model</p>
+<p>(Scalar Program, Blocked Threads)</p>
+</th>
+<th class="head"><p>Triton Programming Model</p>
+<p>(Blocked Program, Scalar Threads)</p>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><div class="highlight-C notranslate"><div class="highlight"><pre><span></span><span class="cp">#pragma parallel</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">M</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="o">++</span><span class="p">)</span>
+<span class="cp">#pragma parallel</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">N</span><span class="p">;</span><span class="w"> </span><span class="n">n</span><span class="o">++</span><span class="p">){</span>
+<span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="n">acc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">K</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="o">++</span><span class="p">)</span>
+<span class="w">    </span><span class="n">acc</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">A</span><span class="p">[</span><span class="n">m</span><span class="p">,</span><span class="w"> </span><span class="n">k</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">k</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">];</span>
+
+<span class="w">  </span><span class="n">C</span><span class="p">[</span><span class="n">m</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">acc</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</td>
+<td><div class="highlight-C notranslate"><div class="highlight"><pre><span></span><span class="cp">#pragma parallel</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">M</span><span class="p">;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">MB</span><span class="p">)</span>
+<span class="cp">#pragma parallel</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">N</span><span class="p">;</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">NB</span><span class="p">){</span>
+<span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="n">acc</span><span class="p">[</span><span class="n">MB</span><span class="p">,</span><span class="w"> </span><span class="n">NB</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">K</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">KB</span><span class="p">)</span>
+<span class="w">    </span><span class="n">acc</span><span class="w"> </span><span class="o">+=</span><span class="w">  </span><span class="n">A</span><span class="p">[</span><span class="n">m</span><span class="o">:</span><span class="n">m</span><span class="o">+</span><span class="n">MB</span><span class="p">,</span><span class="w"> </span><span class="n">k</span><span class="o">:</span><span class="n">k</span><span class="o">+</span><span class="n">KB</span><span class="p">]</span>
+<span class="w">          </span><span class="err">@</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">k</span><span class="o">:</span><span class="n">k</span><span class="o">+</span><span class="n">KB</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="o">:</span><span class="n">n</span><span class="o">+</span><span class="n">NB</span><span class="p">];</span>
+<span class="w">  </span><span class="n">C</span><span class="p">[</span><span class="n">m</span><span class="o">:</span><span class="n">m</span><span class="o">+</span><span class="n">MB</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="o">:</span><span class="n">n</span><span class="o">+</span><span class="n">NB</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">acc</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</td>
+</tr>
+<tr class="row-odd"><td><p><img alt="pic1" src="../../_images/cuda-parallel-matmul.png" /></p></td>
+<td><p><img alt="pic2" src="../../_images/triton-parallel-matmul.png" /></p></td>
+</tr>
+</tbody>
+</table>
+<p>A key benefit of this approach is that it leads to block-structured iteration spaces that offer programmers more flexibility than existing DSLs when implementing sparse operations, all while allowing compilers to aggressively optimize programs for data locality and parallelism.</p>
+</section>
+<section id="challenges">
+<h2>Challenges<a class="headerlink" href="#challenges" title="Link to this heading">¶</a></h2>
+<p>The main challenge posed by our proposed paradigm is that of work scheduling, i.e., how the work done by each program instance should be partitioned for efficient execution on modern GPUs. To address this issue, the Triton compiler makes heavy use of <em>block-level data-flow analysis</em>, a technique for scheduling iteration blocks statically based on the control- and data-flow structure of the target program. The resulting system actually works surprisingly well: our compiler manages to apply a broad range of interesting optimization automatically (e.g., automatic coalescing, thread swizzling, pre-fetching, automatic vectorization, tensor core-aware instruction selection, shared memory allocation/synchronization, asynchronous copy scheduling). Of course doing all this is not trivial; one of the purposes of this guide is to give you a sense of how it works.</p>
+</section>
+<section id="references">
+<h2>References<a class="headerlink" href="#references" title="Link to this heading">¶</a></h2>
+<div role="list" class="citation-list">
+<div class="citation" id="sutskever2014" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id1">SUTSKEVER2014</a><span class="fn-bracket">]</span></span>
+<ol class="upperroman simple">
+<li><p>Sutskever et al., “Sequence to Sequence Learning with Neural Networks”, NIPS 2014</p></li>
+</ol>
+</div>
+<div class="citation" id="redmon2016" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id2">REDMON2016</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="10">
+<li><p>Redmon et al., “You Only Look Once: Unified, Real-Time Object Detection”, CVPR 2016</p></li>
+</ol>
+</div>
+<div class="citation" id="lee2017" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id3">LEE2017</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="11">
+<li><p>Lee et al., “Superhuman Accuracy on the SNEMI3D Connectomics Challenge”, ArXiV 2017</p></li>
+</ol>
+</div>
+<div class="citation" id="baghdadi2021" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id4">BAGHDADI2021</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="18">
+<li><p>Baghdadi et al., “Tiramisu: A Polyhedral Compiler for Expressing Fast and Portable Code”, CGO 2021</p></li>
+</ol>
+</div>
+<div class="citation" id="vasilache2018" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id5">VASILACHE2018</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="14">
+<li><p>Vasilache et al., “Tensor Comprehensions: Framework-Agnostic High-Performance Machine Learning Abstractions”, ArXiV 2018</p></li>
+</ol>
+</div>
+<div class="citation" id="jrk2013" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id6">JRK2013</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="10">
+<li><p>Ragan-Kelley et al., “Halide: A Language and Compiler for Optimizing Parallelism, Locality, and Recomputation in Image Processing Pipelines”, PLDI 2013</p></li>
+</ol>
+</div>
+<div class="citation" id="chen2018" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id7">CHEN2018</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="20">
+<li><p>Chen et al., “TVM: An Automated End-to-End Optimizing Compiler for Deep Learning”, OSDI 2018</p></li>
+</ol>
+</div>
+<div class="citation" id="lam1991" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id8">LAM1991</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="13">
+<li><p>Lam et al., “The Cache Performance and Optimizations of Blocked Algorithms”, ASPLOS 1991</p></li>
+</ol>
+</div>
+<div class="citation" id="auguin1983" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id9">AUGUIN1983</a><span class="fn-bracket">]</span></span>
+<ol class="upperalpha simple" start="13">
+<li><p>Auguin et al., “Opsila: an advanced SIMD for numerical analysis and signal processing”, EUROMICRO 1983</p></li>
+</ol>
+</div>
+</div>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../../dialects/NVGPUOps.html" class="btn btn-neutral float-left" title="NVGPUOps" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../chapter-2/related-work.html" class="btn btn-neutral float-right" title="Related Work" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
