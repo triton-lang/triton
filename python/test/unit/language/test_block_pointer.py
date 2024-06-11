@@ -3,6 +3,7 @@ import torch
 
 import triton
 import triton.language as tl
+from test_core import check_type_supported
 
 
 @triton.jit
@@ -30,6 +31,8 @@ def test_block_copy(dtypes_str, n, padding_option, device):
     dst_dtype_str = dtypes_str[1]
     src_dtype = getattr(torch, src_dtype_str)
     dst_dtype = getattr(torch, dst_dtype_str)
+    check_type_supported(src_dtype, device)
+    check_type_supported(dst_dtype, device)
     if src_dtype_str in ("bool", "int16", "int32"):
         if padding_option == "nan":
             pytest.skip("Padding with NaN is not supported for integer types")
