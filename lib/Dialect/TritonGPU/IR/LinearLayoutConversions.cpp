@@ -423,11 +423,11 @@ LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
 
   assert(((shape[mIndex] == 1 || shape[mIndex] >= mfma.getMDim()) &&
           (shape[nIndex] == 1 || shape[nIndex] >= mfma.getNDim())) &&
-         "unsupported tensor shape for given mfma layout");
+         "Unsupported tensor shape for given mfma layout");
 
   assert(((mfma.getMDim() == 32 && mfma.getNDim() == 32) ||
-          (mfma.getMDim() == 16 || mfma.getNDim() == 16)) &&
-         "unsupported mfma type");
+          (mfma.getMDim() == 16 && mfma.getNDim() == 16)) &&
+         "Unsupported mfma type");
 
   MLIRContext *ctx = mfma.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);

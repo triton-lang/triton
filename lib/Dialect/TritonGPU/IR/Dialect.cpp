@@ -254,6 +254,9 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     SmallVector<unsigned> order(rank);
     std::iota(order.rbegin(), order.rend(), 0);
     if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
+      // For transposed MFMA layouts, we swap M and N dimensions, which is
+      // always the first two in order; as we can have an optional batch
+      // dimension following them.
       if (mfmaLayout.getIsTransposed())
         std::swap(order[0], order[1]);
     }
@@ -270,13 +273,8 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     unsigned dim = sliceLayout.getDim();
     SmallVector<unsigned> order;
     for (unsigned d : parentOrder) {
-      if (d == dim)
-        continue;
-
-      if (d > dim)
-        order.push_back(d - 1);
-      else
-        order.push_back(d);
+      if (d != dim)
+        order.push_back(d > dim ? d - 1 : d);
     }
     return order;
   }
