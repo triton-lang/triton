@@ -1,6 +1,6 @@
 // RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s
 
-// COM: Tests reduction when threads_per_warp(=32) < num_warps(=64). This case coulc be supported in future GPU architectures.
+// COM: Tests reduction when threads_per_warp(=32) < num_warps(=64). This case could be supported in future GPU architectures.
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [64], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 64 : i32} {

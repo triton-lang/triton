@@ -377,10 +377,10 @@ private:
              "sizeInterWarps must be 2^m.");
       assert(threadsPerWarp > 1 &&
              "threadsPerWarp must be larger than 1 to do warp reduce.");
-      // It is a batched reduction with the initial problem shape 
-      // [batch, sizeInterWarps]. The threadsPerWarp is 2^n. 
-      // The sizeInterWarps is 2^m. With the horizontal warp reduction, 
-      //the problem size becomes [batch, ceil(N / threadsPerWarp)] 
+      // It is a batched reduction with the initial problem shape
+      // [batch, sizeInterWarps]. The threadsPerWarp is 2^n.
+      // The sizeInterWarps is 2^m. With the horizontal warp reduction,
+      // the problem size becomes [batch, ceil(N / threadsPerWarp)]
       // from [batch, N] in each reduction iteration.
       unsigned problemBatchSize = elems / sizeInterWarps;
       for (unsigned problemSize = sizeInterWarps; problemSize > 0;
