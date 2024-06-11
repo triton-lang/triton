@@ -1,7 +1,6 @@
 import functools
 import hashlib
 import os
-import re
 
 from dataclasses import dataclass
 from typing import Any, Tuple
@@ -141,8 +140,12 @@ class CPUBackend(BaseBackend):
     @staticmethod
     def make_bc(src, metadata, options):
         if os.environ.get("TRITON_CPU_ASM_DUMP", "0") == "1":
-            print("********** Module ASM **********")
-            print(llvm.translate_to_host_asm(src, options.enable_fp_fusion))
+            from triton.runtime.cache import get_cache_manager
+
+            asm = llvm.translate_to_host_asm(src, options.enable_fp_fusion)
+            fn_cache_manager = get_cache_manager(metadata['hash'])
+            fn_cache_manager.put(asm, f"{metadata['name']}.asm")
+
         ret = llvm.translate_to_bc(src)
         return ret
 
