@@ -13,7 +13,9 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
@@ -583,10 +585,8 @@ bool supportMMA(Value value, int version) {
 }
 
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
-  auto srcLayout = srcTy.getEncoding();
-  auto dstLayout = dstTy.getEncoding();
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcLayout);
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstLayout);
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
     return false;
   // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
@@ -618,16 +618,53 @@ bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
 // For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
-  auto srcLayout = srcTy.getEncoding();
-  auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = cast<NvidiaMmaEncodingAttr>(srcLayout);
-  auto dotOperandLayout = cast<DotOperandEncodingAttr>(dstLayout);
+  auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!mmaLayout || !dotOperandLayout) {
+    return false;
+  }
   int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
-  auto ans = mmaLayout.getVersionMajor() == 3 &&
-             dotOperandLayout.getOpIdx() == 0 &&
-             isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
-             (elementTypeSize == 16 || elementTypeSize == 8);
+  auto ans =
+      mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
+      isMmaToMmaShortcut(dotOperandLayout.getParent(), srcTy.getEncoding()) &&
+      (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
+}
+
+bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
+  MLIRContext *ctx = srcTy.getContext();
+  std::optional<LinearLayout> srcLayout =
+      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+  std::optional<LinearLayout> dstLayout =
+      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+  if (srcLayout.has_value() && dstLayout.has_value()) {
+    // comp describes the layout function for converting from src to dst.
+    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
+    StringAttr kLane = StringAttr::get(ctx, "lane");
+    StringAttr kWarp = StringAttr::get(ctx, "warp");
+    StringAttr kBlock = StringAttr::get(ctx, "block");
+    // In principle, there's no need for shared memory if there's no
+    // communication between warps.  However, right now we only have implemented
+    // the shortcut case where there's no communication between *threads*.
+    //
+    // TODO(jlebar): Remove the kLane layout once we add support for
+    // shuffle-based layout conversions in ConvertLayoutToLLVM.
+    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kLane),
+                                                  kLane, kLane) *
+                         LinearLayout::identity1D(comp.getInDimSize(kWarp),
+                                                  kWarp, kWarp) *
+                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
+                                                  kBlock, kBlock))
+            .has_value()) {
+      return false;
+    }
+  }
+
+  // TODO(jlebar): Remove these special cases once they're fully subsumed by the
+  // linear-layout check above.
+  return !isMmaToMmaShortcut(srcTy, dstTy) &&
+         !isMmaToDotShortcut(srcTy, dstTy) &&
+         !isMfmaToDotShortcut(srcTy, dstTy);
 }
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
@@ -635,11 +672,9 @@ bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
     return true;
   // dot_op<opIdx=0, parent=#mma> = #mma
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
-  auto srcLayout = srcTy.getEncoding();
-  auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(srcLayout);
-  auto dotOperandLayout = mlir::cast<DotOperandEncodingAttr>(dstLayout);
-  return mmaLayout.getVersionMajor() == 2 &&
+  auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  return mmaLayout && dotOperandLayout && mmaLayout.getVersionMajor() == 2 &&
          mmaLayout.getWarpsPerCTA()[1] == 1 &&
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getParent() == mmaLayout &&
