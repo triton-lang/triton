@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <random>
 
@@ -517,6 +518,74 @@ TEST_F(InferLayoutTest, FuzzReshape) {
   //   $ $(git rev-parse --show-toplevel)/.venv/bin/ctest --verbose
   printf("Fuzz success rate: %d/%d = %.2f%%\n", numSuccess, numTests,
          100.0 * numSuccess / numTests);
+}
+
+class AMDMfmaLayoutTest : public ::testing::Test {
+public:
+  AMDMfmaLayoutTest() {
+    ctx.getOrLoadDialect<TritonGPUDialect>();
+    ctaLayout =
+        triton::gpu::CTALayoutAttr::get(&ctx, ctaPerCGA, ctaSplit, ctaOrder);
+    f16Ty = FloatType::getF16(&ctx);
+  }
+
+  triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
+                                              ArrayRef<unsigned> warpsPerCTA) {
+    return triton::gpu::AMDMfmaEncodingAttr::get(
+        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/false, ctaLayout);
+  }
+
+  triton::gpu::AMDMfmaEncodingAttr
+  createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
+    return triton::gpu::AMDMfmaEncodingAttr::get(
+        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/true, ctaLayout);
+  }
+
+protected:
+  MLIRContext ctx;
+  const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
+  const SmallVector<unsigned> ctaSplit{1, 1, 1};
+  const SmallVector<unsigned> ctaOrder{2, 1, 0};
+  triton::gpu::CTALayoutAttr ctaLayout;
+  Type f16Ty;
+};
+
+TEST_F(AMDMfmaLayoutTest, mfma32) {
+  auto mfma2d = createMFMA(32, 32, {2, 4});
+  ASSERT_THAT(mfma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(mfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+
+  auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
+  ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
+  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(0u, 1u));
+
+  auto mfma3d = createMFMA(32, 32, {2, 4, 1});
+  ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(mfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+
+  auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
+  ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
+  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(1u, 2u, 0u));
+}
+
+TEST_F(AMDMfmaLayoutTest, mfma16) {
+  auto mfma2d = createMFMA(16, 16, {2, 4});
+  ASSERT_THAT(mfma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(mfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+
+  auto tmfma2d = createTransposedMFMA(16, 16, {2, 4});
+  ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
+  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(0u, 1u));
+
+  auto mfma3d = createMFMA(16, 16, {2, 4, 1});
+  ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(mfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+
+  auto tmfma3d = createTransposedMFMA(16, 16, {2, 4, 1});
+  ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
+  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(1u, 2u, 0u));
 }
 
 } // anonymous namespace
