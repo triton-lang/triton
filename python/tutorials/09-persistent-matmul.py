@@ -454,7 +454,7 @@ def validate(M, N, K, dtype):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-K", type=int, required=False)
+    parser.add_argument("-K", type=int, required=False, default=512)
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=512)
     parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp8")
@@ -466,7 +466,7 @@ if __name__ == "__main__":
 
     dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 
-    if args.K:
+    if args.K and args.K_range is None:
         args.K_range = [args.K, args.K]
         args.K_step = 1  # doesn't matter as long as it's not 0
 
