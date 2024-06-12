@@ -40,11 +40,12 @@ void init_triton_ir(pybind11::module &&m);
 void init_triton_llvm(pybind11::module &&m);
 void init_triton_interpreter(pybind11::module &&m);
 void init_triton_passes(pybind11::module &&m);
+void init_triton_stacktrace_hook(pybind11::module &m);
 FOR_EACH_P(DECLARE_BACKEND, TRITON_BACKENDS_TUPLE)
 
 PYBIND11_MODULE(libtriton, m) {
   m.doc() = "Python bindings to the C++ Triton API";
-  llvm::sys::PrintStackTraceOnErrorSignal("triton_python");
+  init_triton_stacktrace_hook(m);
   init_triton_env_vars(m);
   init_triton_ir(m.def_submodule("ir"));
   init_triton_passes(m.def_submodule("passes"));
