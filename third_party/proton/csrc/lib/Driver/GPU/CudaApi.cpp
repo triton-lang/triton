@@ -49,7 +49,8 @@ Device getDevice(uint64_t index) {
   int minor;
   cuda::deviceGetAttribute<true>(
       &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
-  auto arch = major * 10 + minor;
+  std::string arch = std::to_string(major * 10 + minor);
+
   return Device(DeviceType::CUDA, index, clockRate, memoryClockRate, busWidth,
                 numSms, arch);
 }
