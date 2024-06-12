@@ -23,7 +23,7 @@ DEFINE_DISPATCH(ExternLibHip, deviceGetAttribute, hipDeviceGetAttribute, int *,
 
 DEFINE_DISPATCH(ExternLibHip, getDeviceCount, hipGetDeviceCount, int *);
 
-DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDevicePropertiesR0600,
+DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
                 hipDeviceProp_t *, int);
 
 Device getDevice(uint64_t index) {
