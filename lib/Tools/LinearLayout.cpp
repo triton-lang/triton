@@ -6,10 +6,13 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/StrUtil.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Alignment.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+
+#define DEBUG_TYPE "linear_layout"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton {
 
@@ -139,6 +142,41 @@ void assertDimsEqualIgnoringOrder(T &&a, U &&b) {
                              "don't.  Got dims: [" +
                              Twine(triton::join(a, ", ")) + "] and [" +
                              triton::join(b, ", ") + "]");
+  }
+}
+
+void eraseEmptyInOutDims(BasesT &bases,
+                         llvm::MapVector<StringAttr, int32_t> &outDims) {
+  // Erase empty out-dims.
+  SmallVector<int> emptyOutDims;
+  for (auto [i, outDim] : llvm::enumerate(
+           llvm::to_vector_of<StringAttr>(llvm::make_first_range(outDims)))) {
+    if (outDims[outDim] == 1) {
+      emptyOutDims.push_back(i);
+      outDims.erase(outDim);
+    }
+  }
+  if (outDims.empty()) {
+    bases.clear();
+    return;
+  }
+
+  for (auto &[inDim, inDimBases] : bases) {
+    for (auto &basis : inDimBases) {
+      // Erase the basis elements corresponding to the empty out-dims.
+      for (int i : llvm::reverse(emptyOutDims)) {
+        basis.erase(basis.begin() + i);
+      }
+    }
+  }
+
+  // Erase empty in-dims.
+  // TODO: This needs a test-case.
+  for (StringAttr inDim :
+       llvm::to_vector_of<StringAttr>(llvm::make_first_range(bases))) {
+    if (bases[inDim].empty()) {
+      bases.erase(inDim);
+    }
   }
 }
 
@@ -545,6 +583,50 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
                       inner.isSurjective() && outer.isSurjective());
 }
 
+std::optional<LinearLayout>
+LinearLayout::divideLeft(const LinearLayout &divisor) {
+  // TODO(jlebar): Implement.
+  return std::nullopt;
+}
+
+std::optional<LinearLayout>
+LinearLayout::divideRight(const LinearLayout &divisor) {
+  // Strip off the top N bases for each input dimension of divisor.  This gives
+  // a candidate quotient.  Then check if quotient * divisor equals `this`.
+  BasesT newBases = bases;
+  for (StringAttr inDim : divisor.getInDimNames()) {
+    if (getInDimSizeLog2(inDim) < divisor.getInDimSizeLog2(inDim)) {
+      return std::nullopt;
+    }
+    auto &newInDimBases = newBases[inDim];
+    newInDimBases.resize(newInDimBases.size() -
+                         divisor.getInDimSizeLog2(inDim));
+  }
+
+  llvm::MapVector<StringAttr, int32_t> newOutDims = outDims;
+  for (const auto [outDim, outDimSize] : divisor.outDims) {
+    if (newOutDims[outDim] < outDimSize) {
+      return std::nullopt;
+    }
+    newOutDims[outDim] /= outDimSize;
+  }
+
+  eraseEmptyInOutDims(newBases, newOutDims);
+
+  LDBG("this->divideRight(divisor)=candidate_quotient");
+  LDBG("this:" << *this);
+  LDBG("divisor:" << divisor);
+  LinearLayout candidateQuotient(std::move(newBases),
+                                 std::move(newOutDims).takeVector(),
+                                 /*requireSurjective=*/false);
+  LDBG("candidate_quotient:" << candidateQuotient);
+
+  if (candidateQuotient * divisor == *this) {
+    return candidateQuotient;
+  }
+  return std::nullopt;
+}
+
 SmallVector<std::pair<StringAttr, int32_t>>
 LinearLayout::apply(ArrayRef<std::pair<StringAttr, int32_t>> ins) const {
   assertDimsEqualIgnoringOrder(llvm::make_first_range(ins), getInDimNames());
@@ -723,9 +805,22 @@ std::string LinearLayout::toString() const {
   // sense for the first line of this list to be on the same line as any
   // previous text.
   std::string ret = "\n";
+  std::string outDimsStr =
+      "[" +
+      join(outDims, ", ",
+           [](auto dimAndSize) {
+             auto [outDim, size] = dimAndSize;
+             return outDim.str() + " (size " + std::to_string(size) + ")";
+           }) +
+      "]";
 
-  if (bases.empty())
-    return "\n(empty layout)";
+  if (bases.empty()) {
+    if (outDims.empty()) {
+      return "\n(empty layout)";
+    } else {
+      return "\n(empty layout with out-dims " + outDimsStr + ")";
+    }
+  }
 
   // TODO: Add spaces for alignment.
   for (const auto &[inDim, inDimBases] : bases) {
@@ -742,13 +837,7 @@ std::string LinearLayout::toString() const {
                 }) +
            "\n";
   }
-  ret += "where out dims are: [" +
-         join(outDims, ", ",
-              [](auto dimAndSize) {
-                auto [outDim, size] = dimAndSize;
-                return outDim.str() + " (size " + std::to_string(size) + ")";
-              }) +
-         "]";
+  ret += "where out dims are: " + outDimsStr;
   return ret;
 }
 

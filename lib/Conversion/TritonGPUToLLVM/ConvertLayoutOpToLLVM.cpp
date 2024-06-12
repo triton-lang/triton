@@ -1,31 +1,26 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Support/LogicalResult.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "triton/Analysis/Allocation.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
-using mlir::isLayoutMmaV1;
-using mlir::LLVM::getMultiDimOffset;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using mlir::LLVM::getWrappedMultiDimOffset;
-using ::mlir::LLVM::linearize;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getOrder;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::getSizePerThread;
-using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::isaDistributedLayout;
-using ::mlir::triton::gpu::SharedEncodingAttr;
-
+namespace mlir::triton::gpu {
 namespace {
 
-struct LocalLoadOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
+using ::mlir::isLayoutMmaV1;
+using ::mlir::LLVM::getMultiDimOffset;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::getStridesFromShapeAndOrder;
+using ::mlir::LLVM::getWrappedMultiDimOffset;
+using ::mlir::LLVM::linearize;
+
+struct LocalLoadOpConversion : public ConvertOpToLLVMPattern<LocalLoadOp> {
 public:
   LocalLoadOpConversion(LLVMTypeConverter &typeConverter,
                         const TargetInfoBase &targetInfo,
@@ -34,7 +29,7 @@ public:
   }
 
   LogicalResult
-  matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
+  matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
@@ -55,8 +50,7 @@ public:
 
 private:
   LogicalResult
-  lowerSharedToDotOpFMA(triton::gpu::LocalLoadOp op,
-                        triton::gpu::LocalLoadOpAdaptor adaptor,
+  lowerSharedToDotOpFMA(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
                         const LLVMTypeConverter *typeConverter,
                         ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
@@ -73,8 +67,7 @@ private:
     return success();
   }
   LogicalResult
-  lowerSharedToDistributed(triton::gpu::LocalLoadOp op,
-                           triton::gpu::LocalLoadOpAdaptor adaptor,
+  lowerSharedToDistributed(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
@@ -106,7 +99,7 @@ private:
 };
 
 struct ConvertLayoutOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
+    : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
 public:
   ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
                             const TargetInfoBase &targetInfo,
@@ -115,7 +108,7 @@ public:
   }
 
   LogicalResult
-  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     RankedTensorType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
@@ -221,8 +214,7 @@ private:
   // blocked/mma -> blocked/mma.
   // Data padding in shared memory to avoid bank conflict.
   LogicalResult
-  lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
-                                OpAdaptor adaptor,
+  lowerDistributedToDistributed(ConvertLayoutOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
@@ -311,11 +303,133 @@ private:
 private:
   const TargetInfoBase &targetInfo;
 };
+
+struct ConvertLayoutOpUsingLinearLayoutsConversion
+    : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
+  // Set benefit to 2 so that this pattern applies before other convert-layout
+  // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
+  explicit ConvertLayoutOpUsingLinearLayoutsConversion(
+      LLVMTypeConverter &typeConverter, PatternBenefit benefit = 2)
+      : ConvertOpToLLVMPattern(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = op.getContext();
+
+    const auto &shape = op.getType().getShape();
+    std::optional<LinearLayout> srcLayout =
+        gpu::toLinearLayout(shape, op.getSrc().getType().getEncoding());
+    std::optional<LinearLayout> dstLayout =
+        gpu::toLinearLayout(shape, op.getType().getEncoding());
+    if (!srcLayout.has_value() || !dstLayout.has_value()) {
+      return failure();
+    }
+
+    // There are four cases to handle.
+    //
+    //  1. Transfer between values in the same thread, in which case we simply
+    //     reorder the elements of adaptor.getSrc().
+    //  2. Transfer between values in the same warp, in which case we move
+    //     values using warp shuffles.
+    //  3. Transfer between values in the same CTA, in which case we move values
+    //     through shared memory.
+    //  4. Transfer between values in different CTAs, in which case we move
+    //     values through distributed shared memory.
+    //
+    // We can tell which case we're in by examining `conversion`.  If e.g. the
+    // block -> block mapping is {1, 2, 4, ...} then there's no movement between
+    // data in different CTAs and we know we're not in case 4.
+    LinearLayout conversion = srcLayout->invertAndCompose(*dstLayout);
+
+    int numLanes = conversion.getInDimSize(str_attr("lane"));
+    int numWarps = conversion.getInDimSize(str_attr("warp"));
+    int numBlocks = conversion.getInDimSize(str_attr("block"));
+
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+    if (std::optional<LinearLayout> c = conversion.divideRight(
+            LinearLayout::identity1D(numLanes, kLane, kLane) *
+            LinearLayout::identity1D(numWarps, kWarp, kWarp) *
+            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
+        c.has_value()) {
+      return transferWithinThread(*c, op, adaptor, rewriter);
+    }
+
+    if (std::optional<LinearLayout> c = conversion.divideRight(
+            LinearLayout::identity1D(numWarps, kWarp, kWarp) *
+            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
+        c.has_value()) {
+      return transferWithinLane(*c, op, adaptor, rewriter);
+    }
+
+    if (std::optional<LinearLayout> c = conversion.divideRight(
+            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
+        c.has_value()) {
+      return transferWithinBlock(*c, op, adaptor, rewriter);
+    }
+
+    return transferWithinBlockGroup(conversion, op, adaptor, rewriter);
+  }
+
+  LogicalResult
+  transferWithinThread(const LinearLayout &conversion, ConvertLayoutOp op,
+                       OpAdaptor adaptor,
+                       ConversionPatternRewriter &rewriter) const {
+    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+
+    MLIRContext *ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    StringAttr kRegister = str_attr("register");
+    SmallVector<Value> outVals(conversion.getOutDimSize(kRegister));
+    for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
+      auto dstIdx = conversion.apply({{kRegister, i}});
+      assert(ArrayRef(to_vector(make_first_range(dstIdx))) ==
+             ArrayRef{kRegister});
+      outVals[dstIdx.begin()->second] = inVals[i];
+    }
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  LogicalResult transferWithinLane(const LinearLayout &conversion,
+                                   ConvertLayoutOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter) const {
+    // TODO(jlebar): Implement me.
+    return failure();
+  }
+
+  LogicalResult transferWithinBlock(const LinearLayout &conversion,
+                                    ConvertLayoutOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter) const {
+    // TODO(jlebar): Implement me.
+    return failure();
+  }
+
+  LogicalResult
+  transferWithinBlockGroup(const LinearLayout &conversion, ConvertLayoutOp op,
+                           OpAdaptor adaptor,
+                           ConversionPatternRewriter &rewriter) const {
+    // TODO(jlebar): Implement me.
+    return failure();
+  }
+};
+
 } // namespace
+} // namespace mlir::triton::gpu
 
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
+      typeConverter, benefit.getBenefit() + 1);
+  patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
+                                               benefit);
+  patterns.add<gpu::LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
 }

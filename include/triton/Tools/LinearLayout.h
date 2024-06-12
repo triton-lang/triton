@@ -493,6 +493,8 @@ public:
   //
   // This only works across the first (i.e. the most-minor) dimension of in/out.
   // If you want it to work across more dimensions, flatten the layout.
+  //
+  // DO NOT SUBMIT: Delete me and use divideLeft instead.
   int32_t getNumConsecutiveInOut() const;
 
   // Reorders the in/out dimensions of the layout.  This is mostly cosmetic
@@ -574,10 +576,11 @@ public:
     return *this;
   }
 
-  // TODO(jlebar): Implement the inverse of operator*, namely
-  //   std::optional<LinearLayout> divideLeft(const LinearLayout&);
-  //   std::optional<LinearLayout> divideRight(const LinearLayout&);
-  // In particular, these might subsume getNumConsecutiveInOut.
+  // divideLeft and divideRight are the inverses of operator*.
+  //
+  // If c = a * b, then a = c.divideRight(b) and b = c.divideLeft(a).
+  std::optional<LinearLayout> divideLeft(const LinearLayout &divisor);
+  std::optional<LinearLayout> divideRight(const LinearLayout &divisor);
 
   // Computes and returns L(x, y, z).
   //
