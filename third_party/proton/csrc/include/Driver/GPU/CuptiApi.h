@@ -21,6 +21,10 @@ CUptiResult enableDomain(uint32_t enable, CUpti_SubscriberHandle subscriber,
                          CUpti_CallbackDomain domain);
 
 template <bool CheckSuccess>
+CUptiResult enableCallback(uint32_t enable, CUpti_SubscriberHandle subscriber,
+                           CUpti_CallbackDomain domain, CUpti_CallbackId cbid);
+
+template <bool CheckSuccess>
 CUptiResult activityEnableContext(CUcontext context, CUpti_ActivityKind kind);
 
 template <bool CheckSuccess>
