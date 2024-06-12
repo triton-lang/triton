@@ -3,6 +3,7 @@ import torch
 
 import triton
 import triton.language as tl
+from test_core import check_type_supported
 
 
 @triton.jit
@@ -20,16 +21,19 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option:
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtypes_str, n, padding_option", [  #
     (dtypes_str, n, padding)
-    for dtypes_str in (("bool", "bool"), ("int16", "int16"), ("float16", "float16"), ("int16", "float16"))
+    for dtypes_str in (("bool", "bool"), ("int16", "int16"), ("int32", "int32"), ("float16", "float16"),
+                       ("float32", "float32"), ("bfloat16", "bfloat16"))
     for n in (64, 128, 256, 512, 1024)
     for padding in ("zero", "nan")  #
 ])
 def test_block_copy(dtypes_str, n, padding_option, device):
     src_dtype_str = dtypes_str[0]
-    dst_dtype_str = dtypes_str[0]
+    dst_dtype_str = dtypes_str[1]
     src_dtype = getattr(torch, src_dtype_str)
     dst_dtype = getattr(torch, dst_dtype_str)
-    if src_dtype_str in ("bool", "int16"):
+    check_type_supported(src_dtype, device)
+    check_type_supported(dst_dtype, device)
+    if src_dtype_str in ("bool", "int16", "int32"):
         if padding_option == "nan":
             pytest.skip("Padding with NaN is not supported for integer types")
         a = torch.randint(0, 2, (n, ), device=device, dtype=src_dtype)
