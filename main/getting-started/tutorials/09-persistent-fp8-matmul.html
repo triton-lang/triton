@@ -114,7 +114,7 @@ to download the full example code.</p>
 <section class="sphx-glr-example-title" id="persistent-fp8-matmul">
 <span id="sphx-glr-getting-started-tutorials-09-persistent-fp8-matmul-py"></span><h1>Persistent FP8 Matmul<a class="headerlink" href="#persistent-fp8-matmul" title="Link to this heading">¶</a></h1>
 <p>This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
-It includes various matmul methods, such as naive, persistent, and TMA (Tile Matrix Accumulation) based approaches, and only supports GPUs with compute capability &gt;= 9.0.
+It includes various matmul methods, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches, and only supports GPUs with compute capability &gt;= 9.0.
 Triton and CuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
 Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>This tutorial fp8_matmul is only supported on CUDA with cc &gt;= 90
@@ -534,7 +534,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
         <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;This tutorial fp8_matmul is only supported on CUDA with cc &gt;= 90&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.028 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.025 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-fp8-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/c640f91b8ed671656d9d9ec8f7d29d34/09-persistent-fp8-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-fp8-matmul.ipynb</span></code></a></p>
