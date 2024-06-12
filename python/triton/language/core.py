@@ -1950,14 +1950,19 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
+    :type input: Tensor
     :param axis: the dimension along which the reduction should be done
-    :param keep_dims: if true, keep the reduced dimensions with length 1"""
+    :type axis: int
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool"""
         if return_indices_arg is not None:
             docstr += f"""
-    :param {return_indices_arg}: if true, return index corresponding to the {name} value"""
+    :param {return_indices_arg}: if true, return index corresponding to the {name} value
+    :type {return_indices_arg}: bool"""
         if tie_break_arg is not None:
             docstr += f"""
-    :param {tie_break_arg}: if true, return the left-most indices in case of ties for values that aren't NaN"""
+    :param {tie_break_arg}: if true, in case of a tie (i.e., multiple elements have the same {name} value), return the left-most index for values that aren't NaN
+    :type {tie_break_arg}: bool"""
 
         func.__doc__ = docstr.format(name=name)
         return func
@@ -1978,9 +1983,13 @@ def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=N
     """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
 
     :param input: the input tensor, or tuple of tensors
+    :type input: Tensor
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
+    :type axis: int | None
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
 
     """
     if isinstance(input, tensor):
@@ -2060,7 +2069,9 @@ def _add_scan_docstr(name: str) -> Callable[[T], T]:
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
-    :param axis: the dimension along which the scan should be done"""
+    :type input: Tensor
+    :param axis: the dimension along which the scan should be done
+    :type axis: int"""
         func.__doc__ = docstr.format(name=name)
         return func
 
@@ -2073,9 +2084,13 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
     """Applies the combine_fn to each elements with a carry in :code:`input` tensors along the provided :code:`axis` and update the carry
 
     :param input: the input tensor, or tuple of tensors
+    :type input: Tensor
     :param axis: the dimension along which the reduction should be done
+    :type axis: int
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
-    :param reverse: apply the associative scan in the reverse direction along axis.
+    :type combine_fn: Callable
+    :param reverse: whether to apply the associative scan in the reverse direction along axis
+    :type reverse: bool
 
     """
     if isinstance(input, tensor):
@@ -2109,7 +2124,9 @@ def histogram(input, num_bins, _builder=None, _generator=None):
     """computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.
 
     :param input: the input tensor
+    :type input: Tensor
     :param num_bins: number of histogram bins
+    :type num_bins: int
 
     """
     num_bins = _constexpr_to_value(num_bins)
