@@ -23,6 +23,9 @@ DEFINE_DISPATCH(ExternLibHip, deviceGetAttribute, hipDeviceGetAttribute, int *,
 
 DEFINE_DISPATCH(ExternLibHip, getDeviceCount, hipGetDeviceCount, int *);
 
+DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
+                hipDeviceProp_t *, int);
+
 Device getDevice(uint64_t index) {
   int clockRate;
   (void)hip::deviceGetAttribute<true>(&clockRate, hipDeviceAttributeClockRate,
@@ -37,11 +40,28 @@ Device getDevice(uint64_t index) {
   (void)hip::deviceGetAttribute<true>(
       &smCount, hipDeviceAttributeMultiprocessorCount, index);
 
-  // TODO: Compute capability is a NVIDIA concept. It doesn't map naturally to
-  // AMD GPUs. Figure out a better way to support this.
-  uint64_t arch = 0;
+  std::string arch = getHipArchName(index);
+
   return Device(DeviceType::HIP, index, clockRate, memoryClockRate, busWidth,
                 smCount, arch);
+}
+
+// TODO: hipDeviceProp_t was updated to point from hipDeviceProp_tR0000 ->
+// hipDeviceProp_tR0600 as part of a breaking API change in Rocm 6.0
+// https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/driver.c
+// uses hipDeviceProp_tR0000 and imports the hip_deprecated.h header file to be
+// be back compatible with ROCm 5.x. PyTorch stills needs to support 5.x and the
+// hipDeviceProp_tR0600 symbol does not exist pre-Rocm 6.0. Calling
+// hipDeviceProp_tR0000 here with Rocm 6.1 causes a stack corruption. Therefore
+// were will use hipDeviceProp_t and investigate if we can unify the definitions
+// in the two files.
+
+const std::string getHipArchName(uint64_t index) {
+  hipDeviceProp_t devProp;
+  (void)hip::getDeviceProperties<true>(&devProp, index);
+  std::string gcnArchName(devProp.gcnArchName);
+  std::string hipArch = gcnArchName.substr(0, 6);
+  return hipArch;
 }
 
 const char *getKernelNameRef(const hipFunction_t f) {
