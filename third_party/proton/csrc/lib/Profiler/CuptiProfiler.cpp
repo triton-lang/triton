@@ -4,6 +4,7 @@
 #include "Driver/Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
+#include "Utility/Map.h"
 
 #include <cstdlib>
 #include <memory>
@@ -12,8 +13,12 @@
 namespace proton {
 
 template <>
-thread_local GPUProfiler<CuptiProfiler>::ProfilerState
+thread_local GPUProfiler<CuptiProfiler>::ThreadState
     GPUProfiler<CuptiProfiler>::profilerState(CuptiProfiler::instance());
+
+template <>
+thread_local std::deque<size_t>
+    GPUProfiler<CuptiProfiler>::Correlation::externIdQueue{};
 
 namespace {
 
@@ -38,48 +43,46 @@ std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
 
 void addMetric(size_t scopeId, std::set<Data *> &dataSet,
                CUpti_Activity *activity) {
-  for (auto *data : dataSet) {
+  for (auto *data : dataSet)
     data->addMetric(scopeId, convertActivityToMetric(activity));
-  }
+}
+
+void addName(size_t externId, std::set<Data *> &dataSet,
+             const std::string &name) {
+  for (auto *data : dataSet)
+    data->addScope(externId, name);
 }
 
 uint32_t
-processActivityExternalCorrelation(std::map<uint32_t, size_t> &corrIdToExternId,
-                                   CUpti_Activity *activity) {
-  auto *externalActivity =
-      reinterpret_cast<CUpti_ActivityExternalCorrelation *>(activity);
-  corrIdToExternId[externalActivity->correlationId] =
-      externalActivity->externalId;
-  return externalActivity->correlationId;
-}
-
-uint32_t processActivityKernel(std::map<uint32_t, size_t> &corrIdToExternId,
-                               std::set<Data *> &dataSet,
-                               CUpti_Activity *activity) {
+processActivityKernel(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+                      CuptiProfiler::ApiExternIdSet &apiExternIds,
+                      std::set<Data *> &dataSet, CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
-  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end())
+  if (!corrIdToExternId.contain(correlationId))
     return correlationId;
-  auto externalId = corrIdToExternId[correlationId];
-  addMetric(externalId, dataSet, activity);
+  auto externId = corrIdToExternId.at(correlationId);
+  if (apiExternIds.contain(externId)) {
+    // It's triggered by a CUDA op but not triton op
+    addName(externId, dataSet, kernel->name);
+    apiExternIds.erase(externId);
+  }
+  addMetric(externId, dataSet, activity);
   // Track correlation ids from the same stream and erase those < correlationId
   corrIdToExternId.erase(correlationId);
   return correlationId;
 }
 
-uint32_t processActivity(std::map<uint32_t, size_t> &corrIdToExternId,
+uint32_t processActivity(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+                         CuptiProfiler::ApiExternIdSet &apiExternIds,
                          std::set<Data *> &dataSet, CUpti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->kind) {
-  case CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION: {
-    correlationId =
-        processActivityExternalCorrelation(corrIdToExternId, activity);
-    break;
-  }
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    correlationId = processActivityKernel(corrIdToExternId, dataSet, activity);
+    correlationId = processActivityKernel(corrIdToExternId, apiExternIds,
+                                          dataSet, activity);
     break;
   }
   default:
@@ -88,40 +91,42 @@ uint32_t processActivity(std::map<uint32_t, size_t> &corrIdToExternId,
   return correlationId;
 }
 
-std::pair<bool, bool> matchKernelCbId(CUpti_CallbackId cbId) {
-  bool isRuntimeApi = false;
-  bool isDriverApi = false;
-  switch (cbId) {
-  // TODO: switch to directly subscribe the APIs
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_v3020:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_ptsz_v7000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_ptsz_v7000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_v11060:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_ptsz_v11060:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_v9000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_ptsz_v9000:
-  case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernelMultiDevice_v9000: {
-    isRuntimeApi = true;
-    break;
-  }
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunch:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice: {
-    isDriverApi = true;
-    break;
-  }
-  default:
-    break;
-  }
-  return std::make_pair(isRuntimeApi, isDriverApi);
+void setRuntimeCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
+#define CALLBACK_ENABLE(id)                                                    \
+  cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
+                              CUPTI_CB_DOMAIN_RUNTIME_API, id)
+
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_v3020);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_ptsz_v7000);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_ptsz_v7000);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_v11060);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernelExC_ptsz_v11060);
+  CALLBACK_ENABLE(CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_v9000);
+  CALLBACK_ENABLE(
+      CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_ptsz_v9000);
+  CALLBACK_ENABLE(
+      CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernelMultiDevice_v9000);
+
+#undef CALLBACK_ENABLE
+}
+
+void setDriverCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
+#define CALLBACK_ENABLE(id)                                                    \
+  cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
+                              CUPTI_CB_DOMAIN_DRIVER_API, id)
+
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunch);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz);
+  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice);
+#undef CALLBACK_ENABLE
 }
 
 } // namespace
@@ -132,12 +137,9 @@ struct CuptiProfiler::CuptiProfilerPimpl
       : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~CuptiProfilerPimpl() = default;
 
-  void startOp(const Scope &scope);
-  void stopOp(const Scope &scope);
-
-  void doStart();
-  void doFlush();
-  void doStop();
+  void doStart() override;
+  void doFlush() override;
+  void doStop() override;
 
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize,
                           size_t *maxNumRecords);
@@ -148,8 +150,8 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
   static constexpr size_t AlignSize = 8;
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
+  static constexpr size_t AttributeSize = sizeof(size_t);
 
-  std::map<uint32_t, size_t> corrIdToExternId;
   CUpti_SubscriberHandle subscriber{};
 };
 
@@ -169,9 +171,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        uint8_t *buffer,
                                                        size_t size,
                                                        size_t validSize) {
-  CuptiProfiler &profiler =
-      dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
-  auto &pImpl = dynamic_cast<CuptiProfilerPimpl &>(*profiler.pImpl.get());
+  CuptiProfiler &profiler = profilerState.profiler;
   auto &dataSet = profiler.dataSet;
   uint32_t maxCorrelationId = 0;
   CUptiResult status;
@@ -180,7 +180,8 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
       auto correlationId =
-          processActivity(pImpl.corrIdToExternId, dataSet, activity);
+          processActivity(profiler.correlation.corrIdToExternId,
+                          profiler.correlation.apiExternIds, dataSet, activity);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
@@ -198,53 +199,27 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                                                    CUpti_CallbackDomain domain,
                                                    CUpti_CallbackId cbId,
                                                    const void *cbData) {
-  auto [isRuntimeAPI, isDriverAPI] = matchKernelCbId(cbId);
-  if (!(isRuntimeAPI || isDriverAPI)) {
-    return;
-  }
-  CuptiProfiler &profiler =
-      dynamic_cast<CuptiProfiler &>(CuptiProfiler::instance());
+  CuptiProfiler &profiler = profilerState.profiler;
   const CUpti_CallbackData *callbackData =
       reinterpret_cast<const CUpti_CallbackData *>(cbData);
   if (callbackData->callbackSite == CUPTI_API_ENTER) {
-    if (callbackData->context) {
-      // Valid context and outermost level of the kernel launch
-      auto scopeId = Scope::getNewScopeId();
-      auto scope = Scope(
-          scopeId, callbackData->symbolName ? callbackData->symbolName : "");
-      profilerState.record(scope);
-    }
-    profilerState.enterOp();
+    auto scopeId = Scope::getNewScopeId();
+    profilerState.record(scopeId);
+    profilerState.enterOp(scopeId);
+    profiler.correlation.correlate(callbackData->correlationId);
   } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
     profilerState.exitOp();
     profiler.correlation.submit(callbackData->correlationId);
   }
 }
 
-void CuptiProfiler::CuptiProfilerPimpl::startOp(const Scope &scope) {
-  cupti::activityPushExternalCorrelationId<true>(
-      CUPTI_EXTERNAL_CORRELATION_KIND_CUSTOM0, scope.scopeId);
-}
-
-void CuptiProfiler::CuptiProfilerPimpl::stopOp(const Scope &scope) {
-  uint64_t correlationId;
-  cupti::activityPopExternalCorrelationId<true>(
-      CUPTI_EXTERNAL_CORRELATION_KIND_CUSTOM0, &correlationId);
-}
-
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
-  cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION);
-  // Enable driver and runtime activities after external correlation so that
-  // external correlation id returned is not 0
-  cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_DRIVER);
-  cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_RUNTIME);
-  cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   // TODO: switch to directly subscribe the APIs and measure overhead
   cupti::subscribe<true>(&subscriber, callbackFn, nullptr);
-  cupti::enableDomain<true>(1, subscriber, CUPTI_CB_DOMAIN_DRIVER_API);
-  cupti::enableDomain<true>(1, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API);
+  setRuntimeCallbacks(subscriber, /*enable=*/true);
+  setDriverCallbacks(subscriber, /*enable=*/true);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
@@ -273,13 +248,9 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
-  cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_EXTERNAL_CORRELATION);
-  cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_DRIVER);
-  cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_RUNTIME);
-  cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_FUNCTION);
   cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
-  cupti::enableDomain<true>(0, subscriber, CUPTI_CB_DOMAIN_DRIVER_API);
-  cupti::enableDomain<true>(0, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API);
+  setRuntimeCallbacks(subscriber, /*enable=*/false);
+  setDriverCallbacks(subscriber, /*enable=*/false);
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
 }

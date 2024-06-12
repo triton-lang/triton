@@ -33,7 +33,10 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
 };
 
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
+    // clang-format off
     "TRITON_REPRODUCER_PATH",
+    "TRITON_DISABLE_PYTHON_STACKTRACE"
+    // clang-format on
 };
 
 namespace tools {
