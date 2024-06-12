@@ -17,6 +17,7 @@
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
@@ -419,4 +420,10 @@ void init_triton_llvm(py::module &&m) {
       }
     }
   });
+}
+
+void init_triton_stacktrace_hook(pybind11::module &m) {
+  if (!mlir::triton::tools::getBoolEnv("TRITON_DISABLE_PYTHON_STACKTRACE")) {
+    llvm::sys::PrintStackTraceOnErrorSignal("triton_python");
+  }
 }
