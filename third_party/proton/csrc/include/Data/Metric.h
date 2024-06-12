@@ -2,7 +2,6 @@
 #define PROTON_DATA_METRIC_H_
 
 #include "Utility/Traits.h"
-#include <iostream>
 #include <variant>
 #include <vector>
 
@@ -141,8 +140,8 @@ public:
   virtual bool isAggregable(int valueId) const { return AGGREGABLE[valueId]; }
 
 private:
-  const static inline bool AGGREGABLE[kernelMetricKind::Count] = {false, false,
-                                                                  true, true};
+  const static inline bool AGGREGABLE[kernelMetricKind::Count] = {
+      false, false, true, true, false, false};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
       "StartTime (ns)", "EndTime (ns)", "Count",
       "Time (ns)",      "DeviceId",     "DeviceType",

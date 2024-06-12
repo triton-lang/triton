@@ -88,8 +88,8 @@ public:
     if (isOpInProgress()) {
       return;
     }
-    setOpInProgress(true);
     startOp(scope);
+    setOpInProgress(true);
   }
   void exitOp(const Scope &scope) {
     if (!isOpInProgress()) {
@@ -106,11 +106,7 @@ protected:
   virtual void setOpInProgress(bool value) = 0;
 };
 
-/// Internal op interface is used for objects that do not internally generate
-/// new ops. For example, the TreeData object and the TraceData object do not
-/// generate new ops. In contrast, the CuptiProfiler object may contribute to
-/// new ops not trackable by the user.
-class InternalOpInterface : public OpInterface {
+class ThreadLocalOpInterface : public OpInterface {
 public:
   using OpInterface::OpInterface;
 
@@ -124,7 +120,7 @@ protected:
 
 private:
   inline static const int MAX_CACHE_OBJECTS = 10;
-  static thread_local std::map<InternalOpInterface *, bool> opInProgress;
+  static thread_local std::map<ThreadLocalOpInterface *, bool> opInProgress;
 };
 
 } // namespace proton
