@@ -566,6 +566,50 @@ TEST_F(LinearLayoutTest, DivideRight_Simple) {
             LinearLayout::empty());
 }
 
+TEST_F(LinearLayoutTest, DivideRight_2D) {
+  LinearLayout l1(
+      {
+          {S("in1"), {{1, 1}, {2, 2}, {0, 8}, {0, 4}}},
+          {S("in2"), {{0, 2}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in1"), {{2}, {1}}}}, {S("out2")});
+  LinearLayout l3(
+      {
+          {S("in1"), {{1, 1}, {2, 2}}},
+          {S("in2"), {{0, 2}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  ASSERT_EQ(l1.divideRight(l2), l3);
+  EXPECT_EQ(l1.divideRight(l2).value() * l2, l1);
+}
+
+TEST_F(LinearLayoutTest, DivideRight_EliminateInDim) {
+  LinearLayout l1(
+      {
+          {S("in2"), {{0, 1}, {1, 0}}},
+          {S("in1"), {{2, 0}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in1"), {{1, 0}, {0, 1}}}}, {S("out1"), S("out2")});
+  LinearLayout l3({{S("in2"), {{0, 1}, {1, 0}}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l3 * l2, l1);
+  EXPECT_EQ(l1.divideRight(l2), l3);
+}
+
+TEST_F(LinearLayoutTest, DivideRight_EliminateOutDim) {
+  LinearLayout l1(
+      {
+          {S("in2"), {{1, 0}, {1, 0}}},
+          {S("in1"), {{2, 0}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in1"), {{1, 0}, {0, 1}}}}, {S("out1"), S("out2")});
+  LinearLayout l3({{S("in2"), {{1}, {1}}}}, {S("out1")});
+  ASSERT_EQ(l3 * l2, l1);
+  EXPECT_EQ(l1.divideRight(l2), l3);
+}
+
 TEST_F(LinearLayoutTest, DivideRight_Assertion) {
   LinearLayout l1({{S("register"),
                     {{0, 1, 0, 0}, {0, 2, 0, 0}, {0, 0, 2, 0}, {1, 0, 0, 0}}},
@@ -583,8 +627,6 @@ TEST_F(LinearLayoutTest, DivideRight_Assertion) {
                     LinearLayout::identity1D(1, S("block"), S("block"));
   EXPECT_EQ(l1.divideRight(l2), std::nullopt);
 }
-
-// XXX: Lots more tests.
 
 } // anonymous namespace
 } // namespace mlir::triton

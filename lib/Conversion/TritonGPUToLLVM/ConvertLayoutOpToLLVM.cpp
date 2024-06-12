@@ -330,8 +330,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     //
     //  1. Transfer between values in the same thread, in which case we simply
     //     reorder the elements of adaptor.getSrc().
-    //  2. Transfer between values in the same warp, in which case we move
-    //     values using warp shuffles.
+    //  2. Transfer between values in the same warp, in which case we try to
+    //     move values using warp shuffles, though if the pattern is complicated
+    //     enough we may fall back to using shared memory (case 3).
     //  3. Transfer between values in the same CTA, in which case we move values
     //     through shared memory.
     //  4. Transfer between values in different CTAs, in which case we move
@@ -350,6 +351,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
 
+    // TODO(jlebar): These checks are overly-restrictive.  For example, we can
+    // transfer by shuffling registers (case 1) if and only if all of the bases
+    // for `register` have 0s for lane, warp, and block.  But the check below is
+    // stronger than this, checking also that the choice of lane/warp/block does
+    // not affect the permutation of registers.  If we allow different
+    // lane/warp/blocks to have different permutations, we can generalize this.
     if (std::optional<LinearLayout> c = conversion.divideRight(
             LinearLayout::identity1D(numLanes, kLane, kLane) *
             LinearLayout::identity1D(numWarps, kWarp, kWarp) *
@@ -378,18 +385,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   transferWithinThread(const LinearLayout &conversion, ConvertLayoutOp op,
                        OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
-    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
     StringAttr kRegister = str_attr("register");
+
+    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+    assert(ArrayRef(to_vector(conversion.getInDimNames())) ==
+           ArrayRef{kRegister});
+    assert(ArrayRef(to_vector(conversion.getOutDimNames())) ==
+           ArrayRef{kRegister});
+
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals(conversion.getOutDimSize(kRegister));
     for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
       auto dstIdx = conversion.apply({{kRegister, i}});
-      assert(ArrayRef(to_vector(make_first_range(dstIdx))) ==
-             ArrayRef{kRegister});
       outVals[dstIdx.begin()->second] = inVals[i];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
@@ -427,6 +436,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
+  // We prefer using the linear layout conversion, so it gets a higher benefit.
+  // Eventually the LL conversion will subsume all of the others and be the only
+  // one left.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
       typeConverter, benefit.getBenefit() + 1);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,

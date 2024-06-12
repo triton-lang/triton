@@ -494,7 +494,7 @@ public:
   // This only works across the first (i.e. the most-minor) dimension of in/out.
   // If you want it to work across more dimensions, flatten the layout.
   //
-  // DO NOT SUBMIT: Delete me and use divideLeft instead.
+  // TODO(jlebar): Replace with divideLeft.
   int32_t getNumConsecutiveInOut() const;
 
   // Reorders the in/out dimensions of the layout.  This is mostly cosmetic
@@ -579,7 +579,9 @@ public:
   // divideLeft and divideRight are the inverses of operator*.
   //
   // If c = a * b, then a = c.divideRight(b) and b = c.divideLeft(a).
-  std::optional<LinearLayout> divideLeft(const LinearLayout &divisor);
+  //
+  // TODO(jlebar): Implement divideLeft.
+  // std::optional<LinearLayout> divideLeft(const LinearLayout &divisor);
   std::optional<LinearLayout> divideRight(const LinearLayout &divisor);
 
   // Computes and returns L(x, y, z).
@@ -651,7 +653,19 @@ public:
   }
 
 private:
-  void checkInvariants(bool requireSurjective);
+  // Factory function that gracefully fails rather than asserts if the layout is
+  // not well-formed.
+  static std::optional<LinearLayout>
+  tryCreate(BasesT bases, ArrayRef<std::pair<StringAttr, int32_t>> outDims,
+            bool requireSurjective);
+
+  // Constructor that does not check invariants.  Used by tryCreate.
+  struct NoCheckInvariants {};
+  LinearLayout(BasesT bases, ArrayRef<std::pair<StringAttr, int32_t>> outDims,
+               NoCheckInvariants);
+
+  [[nodiscard]] std::optional<std::string>
+  checkInvariants(bool requireSurjective);
 };
 
 inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
