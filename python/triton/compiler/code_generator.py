@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor, str_to_ty
+from ..language.core import _unwrap_if_constexpr
 from ..runtime.jit import _normalize_ty
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
@@ -60,10 +61,6 @@ def _is_triton_scalar(o: Any) -> bool:
 
 def _is_list_like(o: Any) -> bool:
     return isinstance(o, (list, tuple))
-
-
-def _unwrap_if_constexpr(o: Any):
-    return o.value if isinstance(o, constexpr) else o
 
 
 def _check_fn_args(node, fn, args):

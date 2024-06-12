@@ -7,10 +7,6 @@ from . import math
 # constexpr utilities
 
 
-def _unwrap_if_constexpr(o):
-    return o.value if isinstance(o, core.constexpr) else o
-
-
 def _log2(i: core.constexpr):
     log2 = 0
     n = i.value
@@ -395,8 +391,8 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
 
 
 def _get_flip_dim(dim, shape):
-    dim = _unwrap_if_constexpr(dim)
-    shape = _unwrap_if_constexpr(shape)
+    dim = core._unwrap_if_constexpr(dim)
+    shape = core._unwrap_if_constexpr(shape)
     if dim is None:
         dim = len(shape) - 1
     assert dim == len(shape) - 1, "Currently only support flipping the last dimension"
