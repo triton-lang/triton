@@ -149,6 +149,176 @@ def _to_tensor(x, builder):
     assert False, f"cannot convert {x} of type {type(x)} to tensor"
 
 
+# -----------------------
+# constexpr
+# -----------------------
+
+
+class const:
+    """
+    This class is used as a type annotation to mark pointers to constant data.
+    The `store` function cannot be called with a pointer to const. Constness
+    is part of the pointer type and the usual Triton type consistency rules
+    apply. For example you cannot have a function that returns constant pointer
+    in one return statement and non-constant pointer in another.
+    """
+    pass
+
+
+class constexpr:
+    """
+    This class is used to store a value that is known at compile-time.
+    """
+
+    def __init__(self, value):
+        if isinstance(value, constexpr):
+            self.value = value.value
+        else:
+            self.value = value
+
+    def __repr__(self) -> str:
+        return f"constexpr[{self.value}]"
+
+    def __index__(self):
+        return self.value
+
+    # In interpreter mode, constant values are not wrapped in constexpr,
+    # and therefore do not have a .value attribute.
+    # As a result, from here and below, we need to call the _constexpr_to_value
+    # function to obtain either constexpr.value or the value itself.
+    def __add__(self, other):
+        return constexpr(self.value + _constexpr_to_value(other))
+
+    def __radd__(self, other):
+        return constexpr(_constexpr_to_value(other) + self.value)
+
+    def __sub__(self, other):
+        return constexpr(self.value - _constexpr_to_value(other))
+
+    def __rsub__(self, other):
+        return constexpr(_constexpr_to_value(other) - self.value)
+
+    def __mul__(self, other):
+        return constexpr(self.value * _constexpr_to_value(other))
+
+    def __mod__(self, other):
+        return constexpr(self.value % _constexpr_to_value(other))
+
+    def __rmul__(self, other):
+        return constexpr(_constexpr_to_value(other) * self.value)
+
+    def __truediv__(self, other):
+        return constexpr(self.value / _constexpr_to_value(other))
+
+    def __rtruediv__(self, other):
+        return constexpr(_constexpr_to_value(other) / self.value)
+
+    def __floordiv__(self, other):
+        return constexpr(self.value // _constexpr_to_value(other))
+
+    def __rfloordiv__(self, other):
+        return constexpr(_constexpr_to_value(other) // self.value)
+
+    def __gt__(self, other):
+        return constexpr(self.value > _constexpr_to_value(other))
+
+    def __rgt__(self, other):
+        return constexpr(_constexpr_to_value(other) > self.value)
+
+    def __ge__(self, other):
+        return constexpr(self.value >= _constexpr_to_value(other))
+
+    def __rge__(self, other):
+        return constexpr(_constexpr_to_value(other) >= self.value)
+
+    def __lt__(self, other):
+        return constexpr(self.value < _constexpr_to_value(other))
+
+    def __rlt__(self, other):
+        return constexpr(_constexpr_to_value(other) < self.value)
+
+    def __le__(self, other):
+        return constexpr(self.value <= _constexpr_to_value(other))
+
+    def __rle__(self, other):
+        return constexpr(_constexpr_to_value(other) <= self.value)
+
+    def __eq__(self, other):
+        return constexpr(self.value == _constexpr_to_value(other))
+
+    def __ne__(self, other):
+        return constexpr(self.value != _constexpr_to_value(other))
+
+    def __bool__(self):
+        return bool(self.value)
+
+    def __neg__(self):
+        return constexpr(-self.value)
+
+    def __and__(self, other):
+        return constexpr(self.value & _constexpr_to_value(other))
+
+    def logical_and(self, other):
+        return constexpr(self.value and _constexpr_to_value(other))
+
+    def __or__(self, other):
+        return constexpr(self.value | _constexpr_to_value(other))
+
+    def __xor__(self, other):
+        return constexpr(self.value ^ _constexpr_to_value(other))
+
+    def logical_or(self, other):
+        return constexpr(self.value or _constexpr_to_value(other))
+
+    def __pos__(self):
+        return constexpr(+self.value)
+
+    def __invert__(self):
+        return constexpr(~self.value)
+
+    def __pow__(self, other):
+        return constexpr(self.value**_constexpr_to_value(other))
+
+    def __rpow__(self, other):
+        return constexpr(_constexpr_to_value(other)**self.value)
+
+    def __rshift__(self, other):
+        return constexpr(self.value >> _constexpr_to_value(other))
+
+    def __lshift__(self, other):
+        return constexpr(self.value << _constexpr_to_value(other))
+
+    def __not__(self):
+        return constexpr(not self.value)
+
+    def __iter__(self):
+        return iter(self.value)
+
+    def __call__(self, *args, **kwds):
+        return self.value(*args, **kwds)
+
+
+CONSTEXPR_0 = constexpr(0)
+
+
+def _unwrap_if_constexpr(o):
+    return o.value if isinstance(o, constexpr) else o
+
+
+def check_bit_width(value, shift_value):
+    if isinstance(value, tensor) and isinstance(shift_value, constexpr):
+        bitwidth = value.type.scalar.primitive_bitwidth
+        if shift_value.value >= bitwidth:
+            warn(
+                f"Value {shift_value.value} exceeds the maximum bitwidth ({bitwidth}) for type '{value.dtype}'. This may result in undefined behavior."
+            )
+
+
+# -----------------------
+# dtype
+# -----------------------
+
+
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
@@ -161,8 +331,7 @@ class dtype:
         UNSIGNED = 1
 
     def __init__(self, name):
-        if hasattr(name, 'value'):
-            name = name.value
+        name = _unwrap_if_constexpr(name)
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         if name in dtype.SINT_TYPES:
@@ -388,6 +557,7 @@ _DtypeClass = dtype
 class pointer_type(dtype):
 
     def __init__(self, element_ty: dtype, address_space: int = 1):
+        element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
@@ -551,164 +721,8 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
 
 
 # -----------------------
-# constexpr
+# tensor
 # -----------------------
-
-
-class const:
-    """
-    This class is used as a type annotation to mark pointers to constant data.
-    The `store` function cannot be called with a pointer to const. Constness
-    is part of the pointer type and the usual Triton type consistency rules
-    apply. For example you cannot have a function that returns constant pointer
-    in one return statement and non-constant pointer in another.
-    """
-    pass
-
-
-class constexpr:
-    """
-    This class is used to store a value that is known at compile-time.
-    """
-
-    def __init__(self, value):
-        if isinstance(value, constexpr):
-            self.value = value.value
-        else:
-            self.value = value
-
-    def __repr__(self) -> str:
-        return f"constexpr[{self.value}]"
-
-    def __index__(self):
-        return self.value
-
-    # In interpreter mode, constant values are not wrapped in constexpr,
-    # and therefore do not have a .value attribute.
-    # As a result, from here and below, we need to call the _constexpr_to_value
-    # function to obtain either constexpr.value or the value itself.
-    def __add__(self, other):
-        return constexpr(self.value + _constexpr_to_value(other))
-
-    def __radd__(self, other):
-        return constexpr(_constexpr_to_value(other) + self.value)
-
-    def __sub__(self, other):
-        return constexpr(self.value - _constexpr_to_value(other))
-
-    def __rsub__(self, other):
-        return constexpr(_constexpr_to_value(other) - self.value)
-
-    def __mul__(self, other):
-        return constexpr(self.value * _constexpr_to_value(other))
-
-    def __mod__(self, other):
-        return constexpr(self.value % _constexpr_to_value(other))
-
-    def __rmul__(self, other):
-        return constexpr(_constexpr_to_value(other) * self.value)
-
-    def __truediv__(self, other):
-        return constexpr(self.value / _constexpr_to_value(other))
-
-    def __rtruediv__(self, other):
-        return constexpr(_constexpr_to_value(other) / self.value)
-
-    def __floordiv__(self, other):
-        return constexpr(self.value // _constexpr_to_value(other))
-
-    def __rfloordiv__(self, other):
-        return constexpr(_constexpr_to_value(other) // self.value)
-
-    def __gt__(self, other):
-        return constexpr(self.value > _constexpr_to_value(other))
-
-    def __rgt__(self, other):
-        return constexpr(_constexpr_to_value(other) > self.value)
-
-    def __ge__(self, other):
-        return constexpr(self.value >= _constexpr_to_value(other))
-
-    def __rge__(self, other):
-        return constexpr(_constexpr_to_value(other) >= self.value)
-
-    def __lt__(self, other):
-        return constexpr(self.value < _constexpr_to_value(other))
-
-    def __rlt__(self, other):
-        return constexpr(_constexpr_to_value(other) < self.value)
-
-    def __le__(self, other):
-        return constexpr(self.value <= _constexpr_to_value(other))
-
-    def __rle__(self, other):
-        return constexpr(_constexpr_to_value(other) <= self.value)
-
-    def __eq__(self, other):
-        return constexpr(self.value == _constexpr_to_value(other))
-
-    def __ne__(self, other):
-        return constexpr(self.value != _constexpr_to_value(other))
-
-    def __bool__(self):
-        return bool(self.value)
-
-    def __neg__(self):
-        return constexpr(-self.value)
-
-    def __and__(self, other):
-        return constexpr(self.value & _constexpr_to_value(other))
-
-    def logical_and(self, other):
-        return constexpr(self.value and _constexpr_to_value(other))
-
-    def __or__(self, other):
-        return constexpr(self.value | _constexpr_to_value(other))
-
-    def __xor__(self, other):
-        return constexpr(self.value ^ _constexpr_to_value(other))
-
-    def logical_or(self, other):
-        return constexpr(self.value or _constexpr_to_value(other))
-
-    def __pos__(self):
-        return constexpr(+self.value)
-
-    def __invert__(self):
-        return constexpr(~self.value)
-
-    def __pow__(self, other):
-        return constexpr(self.value**_constexpr_to_value(other))
-
-    def __rpow__(self, other):
-        return constexpr(_constexpr_to_value(other)**self.value)
-
-    def __rshift__(self, other):
-        return constexpr(self.value >> _constexpr_to_value(other))
-
-    def __lshift__(self, other):
-        return constexpr(self.value << _constexpr_to_value(other))
-
-    def __not__(self):
-        return constexpr(not self.value)
-
-    def __iter__(self):
-        return iter(self.value)
-
-    def __call__(self, *args, **kwds):
-        return self.value(*args, **kwds)
-
-
-CONSTEXPR_0 = constexpr(0)
-
-
-def check_bit_width(value, shift_value):
-    if isinstance(value, tensor) and isinstance(shift_value, constexpr):
-        bitwidth = value.type.scalar.primitive_bitwidth
-        if shift_value.value >= bitwidth:
-            warn(
-                f"Value {shift_value.value} exceeds the maximum bitwidth ({bitwidth}) for type '{value.dtype}'. This may result in undefined behavior."
-            )
 
 
 class tensor:
@@ -986,8 +1000,8 @@ class tensor:
         """
         # Triton doesn't like core functions calling other core functions, so we
         # just copy-paste the implementation of cast here.  It's not too bad.
-        if isinstance(bitcast, constexpr):
-            bitcast = bitcast.value
+        dtype = _unwrap_if_constexpr(dtype)
+        bitcast = _unwrap_if_constexpr(bitcast)
         if bitcast:
             return semantic.bitcast(self, dtype, _builder)
         return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
