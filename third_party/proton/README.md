@@ -174,7 +174,7 @@ Proton can register hooks to analyze the metadata of triton kernels, while nsys 
 
 - CUDA Graph
 
-AMD GPUs do not yet support CUDA Graph profiling.
+Proton does not yet support graph profiling on AMD GPUs.
 
 `hooks` cannot be used to accurately accumulate the number of FLOPs in CUDA graph mode profiling because kernels are captured and launched separately; metrics are not accumulated when kernels are launched in graph mode. This issue can be circumvented by using `scope` to supply FLOPs.
 
