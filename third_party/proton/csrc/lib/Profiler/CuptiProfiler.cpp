@@ -78,12 +78,9 @@ processActivityKernel(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
       data->addMetric(externId, convertActivityToMetric(activity));
     }
   }
-  // If the scope is a CUDA op, erase the correlation id from the map
   apiExternIds.erase(parentId);
   --numInstances;
   if (numInstances == 0) {
-    // Track correlation ids from the same stream and erase those <
-    // correlationId
     corrIdToExternId.erase(correlationId);
   } else {
     corrIdToExternId[correlationId].second = numInstances;
