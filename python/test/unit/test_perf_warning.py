@@ -1,10 +1,26 @@
 import triton
 import triton.language as tl
+import os
+import pytest
+import torch
+
+
+def is_perf_warning_enabled():
+    return os.environ.get('MLIR_ENABLE_REMARK', '0') == '1'
+
+
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
 def test_mma_remark(capfd):
+    if is_cuda():
+        capability = torch.cuda.get_device_capability()
+        if capability[0] < 8:
+            pytest.skip("Requires sm >= 80 to run")
 
-    # 32, 32, 128
+    os.environ['MLIR_ENABLE_REMARK'] = '1'
+
     @triton.jit
     def matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn):
         a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak), offsets=(0, 0),
@@ -26,5 +42,6 @@ def test_mma_remark(capfd):
             }, constants={}))
     captured = capfd.readouterr()
 
-    assert "test_perf_warning.py:18:18: remark: Warning: can't use MMA V3 for the dot op" in captured.err, "expect MMA V3 remark"
-    assert "test_perf_warning.py:18:18: note: see current operation:" in captured.err
+    assert "test_perf_warning.py:34:18: remark: Warning: can't use MMA V3 for the dot op" in captured.err, "expect MMA V3 remark"
+    assert "test_perf_warning.py:34:18: note: see current operation:" in captured.err
+    os.environ['MLIR_ENABLE_REMARK'] = '0'
