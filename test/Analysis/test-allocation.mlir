@@ -185,13 +185,13 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %cst_1 = triton_gpu.local_alloc : () -> !tt.memdesc<16x4xf16, #A_SHARED, #triton_gpu.shared_memory>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
   // CHECK-NEXT: scratch offset = 128, size = 1152
-  %0 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #AL>
+  %0 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %1 = triton_gpu.local_load %cst : !tt.memdesc<4x8xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<4x8xf16, #AL>
   // CHECK-NEXT: offset = 0, size = 128
   %cst_3 = triton_gpu.local_alloc : () -> !tt.memdesc<4x16xf16, #A_SHARED, #triton_gpu.shared_memory>
   %2 = triton_gpu.local_load %cst_0 : !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<4x4xf16, #AL>
   // CHECK-NEXT: scratch offset = 0, size = 1152
-  %3 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #AL>
+  %3 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   // CHECK-NEXT: offset = 0, size = 256
   %cst_4 = triton_gpu.local_alloc : () -> !tt.memdesc<4x32xf16, #A_SHARED, #triton_gpu.shared_memory>
   // CHECK-NEXT: offset = 256, size = 64
@@ -212,7 +212,7 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %7 = triton_gpu.local_load %cst_1 : !tt.memdesc<16x4xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<16x4xf16, #AL>
   %8 = triton_gpu.local_load %cst_4 : !tt.memdesc<4x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<4x32xf16, #AL>
   // CHECK-NEXT: scratch offset = 0, size = 1152
-  %9 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #AL>
+  %9 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %cst_11 = arith.constant dense<0.000000e+00> : tensor<4x4xf16, #AL>
   %10 = triton_gpu.local_load %cst_7 : !tt.memdesc<2x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<2x32xf16, #AL>
   %cst_12 = arith.constant dense<0.000000e+00> : tensor<4x16xf16, #AL>
@@ -232,7 +232,7 @@ tt.func @multi_color_multi_rounds(%arg0: !tt.ptr<f16>) {
   %cst_1 = triton_gpu.local_alloc : () -> !tt.memdesc<1024x4xf16, #A_SHARED, #triton_gpu.shared_memory>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
   // CHECK-NEXT: scratch offset = 128, size = 1152
-  %0 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #AL>
+  %0 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %1 = triton_gpu.local_load %cst : !tt.memdesc<4x4xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<4x4xf16, #AL>
   // CHECK-NEXT: offset = 1152, size = 128
   %cst_3 = triton_gpu.local_alloc : () -> !tt.memdesc<2x32xf16, #A_SHARED, #triton_gpu.shared_memory>
@@ -242,7 +242,7 @@ tt.func @multi_color_multi_rounds(%arg0: !tt.ptr<f16>) {
   %3 = triton_gpu.local_load %cst_0 : !tt.memdesc<16x4xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<16x4xf16, #AL>
   %4 = triton_gpu.local_load %cst_1 : !tt.memdesc<1024x4xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<1024x4xf16, #AL>
   // CHECK-NEXT: scratch offset = 0, size = 1152
-  %5 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #AL>
+  %5 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %6 = triton_gpu.local_load %cst_3 : !tt.memdesc<2x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<2x32xf16, #AL>
   // CHECK-NEXT: size = 10240
   tt.return
