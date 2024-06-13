@@ -76,8 +76,6 @@ protected:
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
-    // Graph mode: N->N mapping.
-    // Non-graph mode: N->1 mapping.
     CorrIdToExternIdMap corrIdToExternId;
     // A set of kernels triggered by GPU runtime APIs (e.g., torch
     // kernels) other than Triton.
