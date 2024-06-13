@@ -163,7 +163,6 @@ class CUDABackend(BaseBackend):
             srcMgr = llvm.source_mgr()
             diag = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
-            #mod.context.printStackTraceOnDiagnostic(True)
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
