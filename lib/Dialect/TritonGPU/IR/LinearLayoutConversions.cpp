@@ -489,6 +489,68 @@ LinearLayout mfmaToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, mfma.getCTALayout(), shape);
 }
 
+LinearLayout wmmaToLinearLayout(ArrayRef<int64_t> shape,
+                                AMDWmmaEncodingAttr wmma) {
+  int rank = shape.size();
+  assert(rank == wmma.getWarpsPerCTA().size());
+
+  bool hasBatchDim = rank == 3;
+  int mIndex = 0 + hasBatchDim;
+  int nIndex = 1 + hasBatchDim;
+  (void)mIndex, (void)nIndex;
+
+  SmallVector<unsigned> mnkDim = wmma.getMNKDimPerWMMAInstr();
+  unsigned mDim = mnkDim[0], nDim = mnkDim[1];
+  (void)mDim, (void)nDim;
+
+  assert(((shape[mIndex] == 1 || shape[mIndex] >= mDim) &&
+          (shape[nIndex] == 1 || shape[nIndex] >= nDim)) &&
+         "Unsupported tensor shape for given wmma layout");
+
+  MLIRContext *ctx = wmma.getContext();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+
+  // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
+  // register and lane layout for mfma instructions.
+
+  // We use the order from fastest varying to slowest varying. So each base
+  // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
+  SmallVector<unsigned> order = triton::gpu::getOrder(wmma);
+
+  // For wmma with 16x16 output, each of the 32 threads holds 8 elements.
+  //
+  // For the register (i.e., element) dimension, these 8 elements are along
+  // the matrix C's M dimension, with 1 consecutive elements spanning 1 row
+  // and then the next 1 row being a gap.
+  //
+  // For the lane (i.e., thread) dimension, these threads are along the
+  // matrix C's N dimension, with 16 consecutive threads covering a whole
+  // row and the next 16 threads start at the next row.
+  LinearLayout tileLayout(
+      {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
+       {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
+      {outDimNames[order[0]], outDimNames[order[1]]});
+
+  if (hasBatchDim) {
+    assert(order[2] == 0);
+    // Extend the base vector with one value to accomodate for the batch
+    // dimension, which appears at the last.
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
+  }
+
+  // And each warp takes the same register and lane sub-layout. So mulitply with
+  // an identity layout for the warp.
+  LinearLayout warpLayout =
+      identityND(S("warp"), wmma.getWarpsPerCTA(), order, outDimNames);
+  LinearLayout ctaLayout = tileLayout * warpLayout;
+
+  return combineCtaCgaWithShape(ctaLayout, wmma.getCTALayout(), shape);
+}
+
 std::optional<LinearLayout> sliceToLinearLayout(ArrayRef<int64_t> shape,
                                                 SliceEncodingAttr slice) {
   MLIRContext *ctx = slice.getContext();
@@ -685,6 +747,9 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   }
   if (auto mfma = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     return mfmaToLinearLayout(shape, mfma);
+  }
+  if (auto wmma = dyn_cast<AMDWmmaEncodingAttr>(layout)) {
+    return wmmaToLinearLayout(shape, wmma);
   }
   if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mma.isAmpere()) {

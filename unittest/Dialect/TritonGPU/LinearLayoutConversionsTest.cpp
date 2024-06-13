@@ -50,6 +50,15 @@ public:
         isTransposed, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
+  AMDWmmaEncodingAttr wmma(ArrayRef<unsigned> warps) {
+    SmallVector<unsigned> cpg(warps.size(), 1u);
+    SmallVector<unsigned> cSplit(warps.size(), 1u);
+    SmallVector<unsigned> cOrd(warps.size());
+    std::iota(cOrd.begin(), cOrd.end(), 0);
+    return AMDWmmaEncodingAttr::get(
+        &ctx, warps, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+  }
+
   SliceEncodingAttr slice(Attribute parent, int dim) {
     return SliceEncodingAttr::get(&ctx, dim, parent);
   }
@@ -633,6 +642,79 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4x1Warps) {
                  {S("warp"), {{0, 32, 0}, {0, 0, 0}, {1, 0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1"), S("dim2")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, WMMA_2x4Warps) {
+  auto legacy = wmma(/*warps=*/{2, 4});
+
+  EXPECT_EQ(toLinearLayout({16, 16}, legacy),
+            LinearLayout({{S("register"), {{2, 0}, {4, 0}, {8, 0}}},
+                          {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}}},
+                          {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  // For 32x16, we need 2x1 WMMA instances. We have 2x4 warps, so we are
+  // broadcasted along the warp N dimension, distributed along the warp M
+  // dimension.
+  EXPECT_EQ(toLinearLayout({32, 16}, legacy),
+            LinearLayout({{S("register"), {{2, 0}, {4, 0}, {8, 0}}},
+                          {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}}},
+                          {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  // For 16x32, we need 1x2 WMMA instances. We have 2x4 warps, so along the warp
+  // N dimension, warp 0/2 gets the first distributed instance, warp 1/3 gets
+  // the second distributed instance. Along the warp M dimension, all are
+  // broadcasted.
+  EXPECT_EQ(toLinearLayout({16, 32}, legacy),
+            LinearLayout({{S("register"), {{2, 0}, {4, 0}, {8, 0}}},
+                          {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}}},
+                          {S("warp"), {{0, 16}, {0, 0}, {0, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+  // For 128x128, we need 8x8 WMMA instances. Given that we have 2x4 warps, each
+  // warp handles 4x2 instances. So for both the warp M and N dimension, we
+  // distribute. The register dimension will handle (8 x 4x2 =) 64 values--those
+  // additonal base vectors after the intrinsic shape are next power of two
+  // values following the warp dimension, given that we are tiling cyclically
+  // among warps.
+  EXPECT_EQ(toLinearLayout({128, 128}, legacy),
+            LinearLayout({{S("register"),
+                           {{2, 0}, {4, 0}, {8, 0}, {0, 64}, {32, 0}, {64, 0}}},
+                          {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}}},
+                          {S("warp"), {{0, 16}, {0, 32}, {16, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, WMMA_2x4x1Warps) {
+  auto legacy = wmma(/*warps=*/{2, 4, 1});
+
+  EXPECT_EQ(
+      toLinearLayout({1, 16, 16}, legacy),
+      LinearLayout(
+          {{S("register"), {{0, 2, 0}, {0, 4, 0}, {0, 8, 0}}},
+           {S("lane"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}, {0, 0, 8}, {0, 1, 0}}},
+           {S("warp"), {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1"), S("dim2")}));
+  EXPECT_EQ(
+      toLinearLayout({2, 16, 16}, legacy),
+      LinearLayout(
+          {{S("register"), {{0, 2, 0}, {0, 4, 0}, {0, 8, 0}}},
+           {S("lane"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}, {0, 0, 8}, {0, 1, 0}}},
+           {S("warp"), {{0, 0, 0}, {0, 0, 0}, {1, 0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1"), S("dim2")}));
+  EXPECT_EQ(
+      toLinearLayout({8, 16, 16}, legacy),
+      LinearLayout(
+          {{S("register"),
+            {{0, 2, 0}, {0, 4, 0}, {0, 8, 0}, {2, 0, 0}, {4, 0, 0}}},
+           {S("lane"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}, {0, 0, 8}, {0, 1, 0}}},
+           {S("warp"), {{0, 0, 0}, {0, 0, 0}, {1, 0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1"), S("dim2")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
