@@ -44,6 +44,20 @@ std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth = std::nullopt);
 
+// Given a linear layout with input dims and output dims containing a "block"
+// dimension, determines if the layout moves data across block boundaries.
+bool isCrossCTAConversion(const LinearLayout &layout);
+
+// Chooses a good shared layout for use when converting between the two given
+// register layouts.
+//
+// src and dst must have input dimensions [register, lane, warp, block] and
+// output dimensions [dimi..] and [dimj..] (the output dimensions are allowed to
+// be in a different order, but they must otherwise be the same).  The result
+// has input dimensions [offset, block] and output dimensions matching src's.
+LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
+                                                   const LinearLayout &dst);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

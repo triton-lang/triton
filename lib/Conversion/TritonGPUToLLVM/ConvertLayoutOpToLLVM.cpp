@@ -1,10 +1,13 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "triton/Analysis/Allocation.h"
+#include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -306,11 +309,15 @@ private:
 
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
+  const TargetInfoBase &targetInfo;
+
   // Set benefit to 2 so that this pattern applies before other convert-layout
   // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
   explicit ConvertLayoutOpUsingLinearLayoutsConversion(
-      LLVMTypeConverter &typeConverter, PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern(typeConverter, benefit) {}
+      LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+      PatternBenefit benefit = 2)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
@@ -325,6 +332,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     if (!srcLayout.has_value() || !dstLayout.has_value()) {
       return failure();
     }
+    // llvm::errs() << "XXX Handling conversion op: " << op << "\n";
 
     // There are four cases to handle.
     //
@@ -372,13 +380,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return transferWithinLane(*c, op, adaptor, rewriter);
     }
 
-    if (std::optional<LinearLayout> c = conversion.divideRight(
-            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
-        c.has_value()) {
-      return transferWithinBlock(*c, op, adaptor, rewriter);
-    }
-
-    return transferWithinBlockGroup(conversion, op, adaptor, rewriter);
+    return transferWithinBlockOrGroup(conversion, op, *srcLayout, *dstLayout,
+                                      adaptor, rewriter);
   }
 
   LogicalResult
@@ -414,19 +417,222 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return failure();
   }
 
-  LogicalResult transferWithinBlock(const LinearLayout &conversion,
-                                    ConvertLayoutOp op, OpAdaptor adaptor,
-                                    ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
+  LogicalResult
+  transferWithinBlockOrGroup(const LinearLayout &conversion, ConvertLayoutOp op,
+                             const LinearLayout &srcLayout,
+                             const LinearLayout &dstLayout, OpAdaptor adaptor,
+                             ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = op.getContext();
+    auto loc = op.getLoc();
+
+    assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+
+    // TODO(jlebar): For now we handle only blocked/slice -> blocked/slice
+    // conversions.  Once we have ldmatrix support in
+    // load/storeDistributedToShared, we can remove this constraint.
+    std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
+      if (isa<BlockedEncodingAttr>(layout)) {
+        return true;
+      }
+      if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
+        return layoutIsOK(slice.getParent());
+      }
+      return false;
+    };
+    if (!layoutIsOK(op.getSrc().getType().getEncoding()) ||
+        !layoutIsOK(op.getType().getEncoding())) {
+      return failure();
+    }
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    assert(!inVals.empty());
+    Type origTy = inVals[0].getType();
+
+    // Munge inVals into the right type.
+    assert(!inVals.empty());
+    for (auto &v : inVals) {
+      if (isa<LLVM::LLVMPointerType>(v.getType())) {
+        v = ptrtoint(int_ty(64), v);
+      }
+      // Currently can't handle sub-byte stores to shmem.
+      int bitwidth = v.getType().getIntOrFloatBitWidth();
+      if (bitwidth < 8) {
+        v = zext(int_ty(8), bitcast(v, int_ty(bitwidth)));
+      }
+    }
+
+    SmallVector<Value> outVals = transferWithinBlockOrGroupImpl(
+        inVals, conversion, op, srcLayout, dstLayout, adaptor, rewriter);
+
+    // Un-munge dstVals.
+    for (auto &v : outVals) {
+      if (isa<LLVM::LLVMPointerType>(origTy)) {
+        v = inttoptr(origTy, v);
+      }
+      int bitwidth = origTy.getIntOrFloatBitWidth();
+      if (bitwidth < 8) {
+        v = bitcast(trunc(int_ty(bitwidth), v), origTy);
+      }
+    }
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
   }
 
-  LogicalResult
-  transferWithinBlockGroup(const LinearLayout &conversion, ConvertLayoutOp op,
-                           OpAdaptor adaptor,
-                           ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
+  SmallVector<Value> transferWithinBlockOrGroupImpl(
+      ArrayRef<Value> inVals, const LinearLayout &conversion,
+      ConvertLayoutOp op, const LinearLayout &srcLayout,
+      const LinearLayout &dstLayout, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = op.getContext();
+    auto loc = op.getLoc();
+
+    auto sharedPtrTy = ptr_ty(ctx, /*addressSpace=*/3);
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    StringAttr kOffset = str_attr("offset");
+    StringAttr kDim = str_attr("dim");
+
+    Value threadId = getThreadId(rewriter, loc);
+    Value threadsPerWarp = i32_val(srcLayout.getInDimSize(kLane));
+    Value laneId = urem(threadId, threadsPerWarp);
+    Value warpId = udiv(threadId, threadsPerWarp);
+
+    // llvm::errs() << "XXX srcLayout: " << srcLayout << "\n";
+    // llvm::errs() << "XXX dstLayout: " << dstLayout << "\n";
+
+    LinearLayout sharedLayout =
+        chooseShemLayoutForRegToRegConversion(srcLayout, dstLayout);
+    // llvm::errs() << "XXX sharedLayout: " << sharedLayout << "\n";
+    const int shmemAllocatedNumElems = product(getRepShapeForCvtLayout(op));
+
+    // Layout for the store from registers to shared memory.
+    //
+    // Note: If two threads in the same warp write to the same shmem offset, the
+    // hardware resolves that without a stall or a bank conflict.  Therefore we
+    // don't need to avoid duplicate writes.
+    LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
+    // llvm::errs() << "XXX shmemStoreLayout: " << shmemStoreLayout << "\n";
+    int storeVec = shmemStoreLayout.getNumConsecutiveInOut();
+    assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+
+    // Layout for the load from shmem to registers.
+    //
+    // TODO(jlebar): A rearrangement of the registers (which is free!) might
+    // lead to better vectorization.  Same for stores.
+    LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
+    int loadVec = shmemLoadLayout.getNumConsecutiveInOut();
+
+    Type elemTy = inVals[0].getType();
+    int bitwidth = elemTy.getIntOrFloatBitWidth();
+
+    // Suppose we have 8 registers per thread in the input and output layouts.
+    // The naive approach would be to write all 8 registers to shared memory,
+    // and then read them all in the new layout.  This works, but it requires
+    // enough shared memory for all 8 values across all warps in the block.
+    //
+    // At the other extreme, we could write one register, then read it in, and
+    // repeat that 8 times.  This uses 8x less shared memory, but potentially it
+    // robs us of the opportunity to do vectoried loads/stores to shmem.
+    //
+    // We compromise by writing one vector's worth of registers per stage.
+    int maxVecElems = std::min(
+        std::max(loadVec, storeVec),
+        std::max(1, targetInfo.getMaxSharedAccessBitwidth() / bitwidth));
+    if (shmemStoreLayout.getInDimSize(kRegister) > maxVecElems &&
+        shmemLoadLayout.getInDimSize(kRegister) > maxVecElems) {
+      // By construction, the first N input registers are adjacent in shared
+      // memory.
+      // XXX XXX
+    }
+
+    bool isCrossCTA = isCrossCTAConversion(conversion);
+
+    // Avoid emitting a call to getClusterCTAId if we know it's always 0.
+    std::optional<Value> ctaId;
+    if (conversion.getInDimSize(kBlock) > 1) {
+      ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+    }
+
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+
+    if (isCrossCTA) {
+      rewriter.create<nvidia_gpu::ClusterArriveOp>(loc, /*relaxed=*/false);
+      rewriter.create<nvidia_gpu::ClusterWaitOp>(loc);
+    } else {
+      barrier();
+    }
+
+    // XXX: CSE applyLinearLayout.
+    for (int i = 0; i < inVals.size(); i += storeVec) {
+      auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
+          applyLinearLayout(loc, rewriter, shmemStoreLayout,
+                            {{kRegister, i32_val(i)},
+                             {kLane, laneId},
+                             {kWarp, warpId},
+                             {kBlock, ctaId.value_or(i32_val(0))}})));
+      assert(offsetAndBlock.size() == 2);
+      Value offset = offsetAndBlock[0];
+      std::optional<Value> block =
+          isCrossCTA ? std::make_optional(offsetAndBlock[1]) : std::nullopt;
+
+      auto vecAddr = gep(sharedPtrTy, elemTy, smemBase, offset);
+      vecAddr.setInbounds(true);
+
+      Value valsVec =
+          packLLVector(loc, ArrayRef(inVals).slice(i, storeVec), rewriter);
+      targetInfo.storeDShared(rewriter, loc, vecAddr, block, valsVec,
+                              /*pred=*/true_val());
+    }
+
+    // XXX: Move into TargetInfo.
+    if (isCrossCTA) {
+      rewriter.create<nvidia_gpu::ClusterArriveOp>(loc, /*relaxed=*/false);
+      rewriter.create<nvidia_gpu::ClusterWaitOp>(loc);
+    } else {
+      barrier();
+    }
+
+    SmallVector<Value> outVals;
+    for (int i = 0; i < dstLayout.getInDimSize(kRegister); i += loadVec) {
+      auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
+          applyLinearLayout(loc, rewriter, shmemLoadLayout,
+                            {{kRegister, i32_val(i)},
+                             {kLane, laneId},
+                             {kWarp, warpId},
+                             {kBlock, ctaId.value_or(i32_val(0))}})));
+      assert(offsetAndBlock.size() == 2);
+      Value offset = offsetAndBlock[0];
+      std::optional<Value> block =
+          isCrossCTA ? std::make_optional(offsetAndBlock[1]) : std::nullopt;
+
+      auto vecAddr = gep(sharedPtrTy, elemTy, smemBase, offset);
+      vecAddr.setInbounds(true);
+      Value valsVec = targetInfo.loadDShared(rewriter, loc, vecAddr, block,
+                                             vec_ty(elemTy, loadVec),
+                                             /*pred=*/true_val());
+
+      for (Value v : unpackLLVector(loc, valsVec, rewriter)) {
+        outVals.push_back(v);
+      }
+    }
+
+    // XXX: Move to TargetInfo
+    if (isCrossCTA) {
+      rewriter.create<nvidia_gpu::ClusterArriveOp>(loc, /*relaxed=*/false);
+      rewriter.create<nvidia_gpu::ClusterWaitOp>(loc);
+    } else {
+      barrier();
+    }
+
+    return outVals;
   }
 };
 
@@ -440,7 +646,7 @@ void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
   // Eventually the LL conversion will subsume all of the others and be the only
   // one left.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, benefit.getBenefit() + 1);
+      typeConverter, targetInfo, benefit.getBenefit() + 1);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
                                                benefit);
   patterns.add<gpu::LocalLoadOpConversion>(typeConverter, targetInfo, benefit);

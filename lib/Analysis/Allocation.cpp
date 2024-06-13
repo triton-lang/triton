@@ -82,9 +82,13 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> repShape(rank);
   for (unsigned d = 0; d < rank; ++d) {
-    repShape[d] =
-        std::max(std::min<unsigned>(srcShapePerCTA[d], srcShapePerCTATile[d]),
-                 std::min<unsigned>(dstShapePerCTA[d], dstShapePerCTATile[d]));
+    // XXX This uses a lot more shmem!
+    repShape[d] = std::max(srcShapePerCTA[d], dstShapePerCTA[d]);
+    // repShape[d] =
+    //     std::max(std::min<unsigned>(srcShapePerCTA[d],
+    //     srcShapePerCTATile[d]),
+    //              std::min<unsigned>(dstShapePerCTA[d],
+    //              dstShapePerCTATile[d]));
   }
   return repShape;
 }

@@ -1,6 +1,7 @@
 #include "triton/Tools/LinearLayout.h"
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
 #include "mlir/IR/BuiltinAttributes.h"
@@ -913,6 +914,41 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     retOutDims.push_back({dim, outer.getInDimSize(dim)});
   }
   return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
+}
+
+llvm::MapVector<StringAttr, int32_t>
+LinearLayout::getFreeVariableMasks() const {
+  std::unique_ptr<uint64_t[]> mat = getMatrix(*this);
+  int numRows = getTotalOutDimSizeLog2();
+  int numCols = getTotalInDimSizeLog2();
+
+  // stride is specified in number of 64-bit words per row, and we pack our
+  // matrix so that there's only one uint64_t per row.
+  assert(numCols <= 64);
+  f2reduce::inplace_rref_strided(mat.get(), numRows, numCols, /*stride=*/1);
+
+  // For each row in the RREF matrix, identify the column with the first "1".
+  // These columns correspond to the basic (i.e. non-free) variables.
+  std::set<int32_t> basicVars;
+  for (int r = 0; r < numRows; r++) {
+    if (mat[r] == 0) {
+      continue;
+    }
+    basicVars.insert(__builtin_ctzll(mat[r]));
+  }
+
+  llvm::MapVector<StringAttr, int32_t> ret;
+  int c = 0;
+  for (StringAttr dim : getInDimNames()) {
+    int32_t mask = 0;
+    for (int i = 0; i < getInDimSizeLog2(dim); i++, c++) {
+      if (basicVars.count(c) == 0) {
+        mask |= (1 << i);
+      }
+    }
+    ret[dim] = mask;
+  }
+  return ret;
 }
 
 bool operator==(LinearLayout lhs, LinearLayout rhs) {

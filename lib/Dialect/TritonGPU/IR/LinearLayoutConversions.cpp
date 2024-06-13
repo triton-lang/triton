@@ -7,6 +7,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -37,6 +38,25 @@ SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
     ret.push_back(S("dim" + llvm::Twine(i)));
   }
   return ret;
+}
+
+void assertIsRegisterLayout(const LinearLayout &layout) {
+  assert(layout.getNumInDims() > 0);
+  MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
+
+  const auto &ins = layout.getInDimNames();
+  assert(llvm::SmallVector<StringAttr>(ins.begin(), ins.end()) ==
+         llvm::SmallVector({kRegister, kLane, kWarp, kBlock}));
+
+  const auto &outs = layout.getOutDimNames();
+  const auto &expectedOuts = standardOutDimNames(ctx, layout.getNumOutDims());
+  assert(llvm::SmallDenseSet<StringAttr>(outs.begin(), outs.end()) ==
+         llvm::SmallDenseSet<StringAttr>(expectedOuts.begin(),
+                                         expectedOuts.end()));
 }
 
 // Returns a 1D -> ND layout that's equivalent to creating a 1D -> 1D mapping of
@@ -773,6 +793,92 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 
   // TODO(jlebar): Other layouts
   return std::nullopt;
+}
+
+bool isCrossCTAConversion(const LinearLayout &layout) {
+  assert(!layout.getInDimNames().empty());
+  MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
+
+  StringAttr kBlock = S("block");
+  assert(layout.hasInDim(kBlock));
+  assert(layout.hasOutDim(kBlock));
+
+  SetVector<StringAttr> nonBlockInDims(layout.getInDimNames().begin(),
+                                       layout.getInDimNames().end());
+  nonBlockInDims.remove(kBlock);
+
+  // This layout moves data between CTAs if
+  // - the value for any input dim other than block affects the output block, or
+  // - input (0, ..., block=i) does not map to output (0, ..., block=i).
+  return !layout.sublayoutIsZero(nonBlockInDims.getArrayRef(), {kBlock}) ||
+         !layout.sublayoutIsIdentity({kBlock}, {kBlock});
+}
+
+LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
+                                                   const LinearLayout &dst) {
+  assertIsRegisterLayout(src);
+  assertIsRegisterLayout(dst);
+  MLIRContext *ctx = src.getInDimNames().begin()->getContext();
+
+  StringAttr kBlock = S("block");
+  StringAttr kOffset = S("offset");
+
+  // Choose a shared layout that matches the src layout, with duplicate
+  // elements within a block removed.  Specifically, the shared layout is:
+  //
+  //   for b in range(numBlocks):
+  //     seen = set()
+  //     offset = 0
+  //     for w in range(numWarps):
+  //       for l in range(numLanes):
+  //         for r in range(numRegsPerThread):
+  //           out = src.apply(register=r, lane=l, warp=w, block=b)
+  //           if idx not in seen:
+  //             let shmem[offset] in block b contain output element `out`.
+  //             offset += 1
+  //             seen.add(out)
+  //
+  // This is simpler than it may seem.  There are some bits in the inputs that
+  // don't affect the output; these are the "free variables".  Our layout simply
+  // sets these to 0, and then everything works as we want.
+  //
+  // TODO(jlebar): Currently we ignore dst entirely; we're just choosing
+  // something which is good for src.
+  llvm::MapVector<StringAttr, int> freeVars = src.getFreeVariableMasks();
+  LinearLayout::BasesT bases;
+
+  // Ensure kOffset is present even if the whole src layout is free variables
+  // (meaning there's only one unique element per block).
+  bases.insert({kOffset, {}});
+
+  for (StringAttr inDim : src.getInDimNames()) {
+    if (inDim == kBlock) {
+      continue;
+    }
+    assert(freeVars.contains(inDim));
+    int32_t dimFreeVars = freeVars[inDim];
+    for (int i = 0; i < src.getInDimSizeLog2(inDim); i++) {
+      bool isFree = dimFreeVars & (1 << i);
+      if (isFree) {
+        continue;
+      }
+
+      llvm::MapVector<StringAttr, int> inIdx;
+      for (StringAttr d : src.getInDimNames()) {
+        inIdx[d] = 0;
+      }
+      inIdx[inDim] = 1 << i;
+
+      auto outIdx = to_vector(make_second_range(src.apply(inIdx.takeVector())));
+      bases[kOffset].push_back(
+          std::vector<int32_t>(outIdx.begin(), outIdx.end()));
+    }
+  }
+
+  // The `block` bases match the input layout exactly.  This is so there's no
+  // cross-CTA transfers.
+  bases[kBlock] = src.getBases().lookup(kBlock);
+  return LinearLayout(std::move(bases), to_vector(src.getOutDimNames()));
 }
 
 } // namespace mlir::triton::gpu

@@ -62,6 +62,8 @@ public:
 
   bool enableLinearLayout() const override { return false; }
 
+  int getMaxSharedAccessBitwidth() const override { return 128; }
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   RewriterBase &rewriter, bool useStdErr) const;
