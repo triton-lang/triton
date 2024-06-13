@@ -68,8 +68,10 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
         }
 
         Value convertedElems;
-        if (type.isBF16() || type.isF16()) {
+        if (type.isF16()) {
           convertedElems = rawElems;
+        } else if (type.isBF16()) {
+          convertedElems = bitcast(rawElems, vec_ty(i16_ty, kWidth));
         } else {
           convertedElems = bitcast(
               rawElems, vec_ty(i32_ty, kWidth * type.getIntOrFloatBitWidth() /
