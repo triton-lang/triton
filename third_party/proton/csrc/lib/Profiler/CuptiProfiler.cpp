@@ -7,6 +7,7 @@
 #include "Utility/Map.h"
 
 #include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 
@@ -56,8 +57,8 @@ processActivityKernel(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
   if (kernel->graphId == 0) {
     // Non-graph kernels
     for (auto *data : dataSet) {
-      auto scopeId = Scope::DummyScopeId;
-      if (apiExternIds.contain(parentId)) {
+      auto scopeId = parentId;
+      if (apiExternIds.contain(scopeId)) {
         // It's triggered by a CUDA op but not triton op
         scopeId = data->addScope(parentId, kernel->name);
       }
