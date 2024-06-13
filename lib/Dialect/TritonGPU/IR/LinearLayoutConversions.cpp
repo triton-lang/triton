@@ -519,7 +519,6 @@ LinearLayout wmmaToLinearLayout(ArrayRef<int64_t> shape,
   // We use the order from fastest varying to slowest varying. So each base
   // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
   SmallVector<unsigned> order = triton::gpu::getOrder(wmma);
-  auto tileLayout = LinearLayout::empty();
 
   // For wmma with 16x16 output, each of the 32 threads holds 8 elements.
   //
@@ -530,10 +529,10 @@ LinearLayout wmmaToLinearLayout(ArrayRef<int64_t> shape,
   // For the lane (i.e., thread) dimension, these threads are along the
   // matrix C's N dimension, with 16 consecutive threads covering a whole
   // row and the next 16 threads start at the next row.
-  tileLayout =
-      LinearLayout({{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
-                    {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
-                   {outDimNames[order[0]], outDimNames[order[1]]});
+  LinearLayout tileLayout(
+      {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
+       {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
+      {outDimNames[order[0]], outDimNames[order[1]]});
 
   if (hasBatchDim) {
     assert(order[2] == 0);
