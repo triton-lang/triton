@@ -556,6 +556,78 @@ TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
                    .getNumConsecutiveInOut());
 }
 
+TEST_F(LinearLayoutTest, DivideRight_Simple) {
+  EXPECT_EQ(LinearLayout::identity1D(8, S("in"), S("out"))
+                .divideRight(LinearLayout::identity1D(4, S("in"), S("out"))),
+            LinearLayout::identity1D(2, S("in"), S("out")));
+
+  EXPECT_EQ(LinearLayout::identity1D(8, S("in"), S("out"))
+                .divideRight(LinearLayout::identity1D(8, S("in"), S("out"))),
+            LinearLayout::empty());
+}
+
+TEST_F(LinearLayoutTest, DivideRight_2D) {
+  LinearLayout l1(
+      {
+          {S("in1"), {{1, 1}, {2, 2}, {0, 8}, {0, 4}}},
+          {S("in2"), {{0, 2}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in1"), {{2}, {1}}}}, {S("out2")});
+  LinearLayout l3(
+      {
+          {S("in1"), {{1, 1}, {2, 2}}},
+          {S("in2"), {{0, 2}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  ASSERT_EQ(l1.divideRight(l2), l3);
+  EXPECT_EQ(l1.divideRight(l2).value() * l2, l1);
+}
+
+TEST_F(LinearLayoutTest, DivideRight_EliminateInDim) {
+  LinearLayout l1(
+      {
+          {S("in2"), {{0, 1}, {1, 0}}},
+          {S("in1"), {{2, 0}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in1"), {{1, 0}, {0, 1}}}}, {S("out1"), S("out2")});
+  LinearLayout l3({{S("in2"), {{0, 1}, {1, 0}}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l3 * l2, l1);
+  EXPECT_EQ(l1.divideRight(l2), l3);
+}
+
+TEST_F(LinearLayoutTest, DivideRight_EliminateOutDim) {
+  LinearLayout l1(
+      {
+          {S("in2"), {{1, 0}, {1, 0}}},
+          {S("in1"), {{2, 0}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in1"), {{1, 0}, {0, 1}}}}, {S("out1"), S("out2")});
+  LinearLayout l3({{S("in2"), {{1}, {1}}}}, {S("out1")});
+  ASSERT_EQ(l3 * l2, l1);
+  EXPECT_EQ(l1.divideRight(l2), l3);
+}
+
+TEST_F(LinearLayoutTest, DivideRight_Assertion) {
+  LinearLayout l1({{S("register"),
+                    {{0, 1, 0, 0}, {0, 2, 0, 0}, {0, 0, 2, 0}, {1, 0, 0, 0}}},
+                   {S("lane"),
+                    {{0, 4, 0, 0},
+                     {0, 8, 0, 0},
+                     {0, 16, 0, 0},
+                     {0, 0, 1, 0},
+                     {2, 0, 0, 0}}},
+                   {S("warp"), {{4, 0, 0, 0}, {8, 0, 0, 0}}},
+                   {S("block"), {}}},
+                  {S("register"), S("lane"), S("warp"), S("block")});
+  LinearLayout l2 = LinearLayout::identity1D(32, S("lane"), S("lane")) *
+                    LinearLayout::identity1D(4, S("warp"), S("warp")) *
+                    LinearLayout::identity1D(1, S("block"), S("block"));
+  EXPECT_EQ(l1.divideRight(l2), std::nullopt);
+}
+
 } // anonymous namespace
 } // namespace mlir::triton
 

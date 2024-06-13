@@ -63,26 +63,13 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
+  if (!cvtNeedsSharedMemory(srcTy, dstTy)) {
+    return {};
+  }
+
   if (shouldUseDistSmem(srcLayout, dstLayout)) {
     // TODO: padding to avoid bank conflicts
     return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
-  }
-
-  if (isMfmaToDotShortcut(srcTy, dstTy))
-    return {};
-
-  // MmaToDotShortcut and MmaToMmaShortcut doesn't use shared mem
-  if (auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
-    if (mlir::isa<DotOperandEncodingAttr>(dstLayout)) {
-      if (isMmaToDotShortcut(srcTy, dstTy)) {
-        return {};
-      }
-    } else if (auto dstMmaLayout =
-                   mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout)) {
-      if (isMmaToMmaShortcut(srcTy, dstTy)) {
-        return {};
-      }
-    }
   }
 
   assert(srcLayout && dstLayout && "Unexpected layout in getRepShape()");
