@@ -60,6 +60,12 @@ CUptiResult unsubscribe(CUpti_SubscriberHandle subscriber);
 
 template <bool CheckSuccess> CUptiResult finalize();
 
+template <bool CheckSuccess>
+CUptiResult getGraphExecId(CUgraphExec graph, uint32_t *pId);
+
+template <bool CheckSuccess>
+CUptiResult getGraphId(CUgraph graph, uint32_t *pId);
+
 } // namespace cupti
 
 } // namespace proton

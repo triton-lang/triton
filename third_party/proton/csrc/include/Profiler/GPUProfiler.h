@@ -26,7 +26,9 @@ public:
   virtual ~GPUProfiler() = default;
 
   using CorrIdToExternIdMap =
-      ThreadSafeMap<uint64_t, size_t, std::unordered_map<uint64_t, size_t>>;
+      ThreadSafeMap<uint64_t,
+                    std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
+                    std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
   using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
 
 protected:
@@ -74,6 +76,8 @@ protected:
     std::atomic<uint64_t> maxSubmittedCorrelationId{0};
     std::atomic<uint64_t> maxCompletedCorrelationId{0};
     // Mapping from a native profiler correlation id to an external id.
+    // Graph mode: N->N mapping.
+    // Non-graph mode: N->1 mapping.
     CorrIdToExternIdMap corrIdToExternId;
     // A set of kernels triggered by GPU runtime APIs (e.g., torch
     // kernels) other than Triton.
@@ -96,10 +100,10 @@ protected:
     void popExternId() { externIdQueue.pop_front(); }
 
     // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId) {
+    void correlate(uint64_t correlationId, size_t numInstances = 1) {
       if (externIdQueue.empty())
         return;
-      corrIdToExternId[correlationId] = externIdQueue.back();
+      corrIdToExternId[correlationId] = {externIdQueue.back(), numInstances};
     }
 
     template <typename FlushFnT>
@@ -117,7 +121,7 @@ protected:
     }
   };
 
-  static thread_local ThreadState profilerState;
+  static thread_local ThreadState threadState;
   Correlation correlation;
 
   // Use the pimpl idiom to hide the implementation details. This lets us avoid
