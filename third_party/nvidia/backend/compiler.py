@@ -159,7 +159,7 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
         # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK"):
+        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
             diag = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
