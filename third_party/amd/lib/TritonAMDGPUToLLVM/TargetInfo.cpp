@@ -10,12 +10,11 @@ namespace mlir::triton::AMD {
 namespace {
 template <typename T>
 LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
-                                     ConversionPatternRewriter &rewriter,
-                                     StringRef name,
+                                     RewriterBase &rewriter, StringRef name,
                                      LLVM::LLVMFunctionType type) {
   LLVM::LLVMFuncOp ret;
   if (!(ret = moduleOp.template lookupSymbol<LLVM::LLVMFuncOp>(name))) {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
     ret = rewriter.create<LLVM::LLVMFuncOp>(loc, name, type,
                                             LLVM::Linkage::External);
@@ -24,7 +23,7 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
 }
 
 // Extend all values to 64-bit per printf call requirements.
-Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
+Value printfPromoteValue(RewriterBase &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto loc = UnknownLoc::get(context);
   auto type = value.getType();
@@ -68,8 +67,8 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
 }
 
-Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
-                         Type type, Value cmp) const {
+Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
+                         Value cmp) const {
   auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");
   SmallVector<Value> operands = {cmp};
   Value asmResult =
@@ -78,12 +77,12 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
   return asmResult;
 }
 
-void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Value val, Value pred) const {
+void TargetInfo::storeShared(RewriterBase &rewriter, Location loc, Value ptr,
+                             Value val, Value pred) const {
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
+Value TargetInfo::loadShared(RewriterBase &rewriter, Location loc,
                              const TypeConverter *converter, Value ptr,
                              Type elemTy, Value pred) const {
   Value falseVal = rewriter.create<arith::ConstantOp>(
@@ -91,32 +90,32 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
 }
 
-Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::AMD::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
-                            Value val, int i) const {
+Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
+                            int i) const {
   return LLVM::AMD::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, Value i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             Value i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
+Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
-bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
@@ -124,7 +123,7 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 bool TargetInfo::processReplicaUsingStMatrix(
-    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+    RewriterBase &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
@@ -133,8 +132,7 @@ bool TargetInfo::processReplicaUsingStMatrix(
 }
 
 void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
-                            ValueRange args,
-                            ConversionPatternRewriter &rewriter,
+                            ValueRange args, RewriterBase &rewriter,
                             bool useStdErr) const {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto *ctx = rewriter.getContext();
@@ -205,14 +203,13 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   return funcName;
 }
 
-void TargetInfo::printf(ConversionPatternRewriter &rewriter,
-                        Value formatStrStart, int formatStrByteCount,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
+                        int formatStrByteCount, ValueRange args) const {
   return printfImpl(formatStrStart, formatStrByteCount, args, rewriter,
                     /*useStdError=*/false);
 }
 
-void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   // Compose and print an assert message.
