@@ -32,59 +32,6 @@
 using namespace mlir;
 using namespace mlir::triton::nvgpu;
 
-void LoadDSmemOp::build(OpBuilder &builder, OperationState &state,
-                        Type resultTy, Value addr, Value ctaId) {
-  unsigned vec, bitwidth;
-  if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultTy)) {
-    auto types = structTy.getBody();
-    assert(types.size() > 0 && "Invalid result type of LoadDSmemOp");
-    vec = types.size();
-    for (unsigned i = 0; i < vec; ++i)
-      assert(types[0] == types[i]);
-    bitwidth = types[0].getIntOrFloatBitWidth();
-  } else {
-    vec = 1;
-    bitwidth = resultTy.getIntOrFloatBitWidth();
-  }
-  build(builder, state, resultTy, addr, ctaId, bitwidth, vec);
-}
-
-void LoadDSmemOp::build(OpBuilder &builder, OperationState &state, Value addr,
-                        Value ctaId, unsigned bitwidth, unsigned vec) {
-  Type resultTy = builder.getIntegerType(bitwidth);
-  if (vec > 1) {
-    SmallVector<Type> types(vec, resultTy);
-    resultTy = LLVM::LLVMStructType::getLiteral(builder.getContext(), types);
-  }
-  build(builder, state, resultTy, addr, ctaId, bitwidth, vec);
-}
-
-void LoadDSmemOp::build(OpBuilder &builder, OperationState &state, Value addr,
-                        Value ctaId, unsigned bitwidth) {
-  build(builder, state, addr, ctaId, bitwidth, /*vec*/ 1);
-}
-
-void StoreDSmemOp::build(OpBuilder &builder, OperationState &state, Value addr,
-                         Value ctaId, Value value, Value pred) {
-  SmallVector<Value> values = {value};
-  build(builder, state, addr, ctaId, values, pred);
-}
-
-unsigned StoreDSmemOp::getBitwidth() {
-  auto addrTy = getAddr().getType();
-  assert(isa<LLVM::LLVMPointerType>(addrTy) && "addr must be a pointer type");
-  if (getValues().empty())
-    return 0;
-  auto elemTy = getValues().back().getType();
-  return elemTy.getIntOrFloatBitWidth();
-}
-
-unsigned StoreDSmemOp::getVec() { return getValues().size(); }
-
-static LogicalResult verify(mlir::triton::nvgpu::WGMMAOp op) {
-  return success();
-}
-
 void mlir::triton::nvgpu::NVGPUDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
