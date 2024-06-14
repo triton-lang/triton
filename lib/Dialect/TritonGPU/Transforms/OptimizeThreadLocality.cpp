@@ -122,7 +122,7 @@ class TritonGPUOptimizeThreadLocalityPass
         return;
       for (auto operand : reduce->getOperands()) {
         auto def = operand.getDefiningOp();
-        if (!isa<triton::LoadOp>(def))
+        if (def == nullptr || !isa<triton::LoadOp>(def))
           return;
       }
       auto elemsPerThread =
