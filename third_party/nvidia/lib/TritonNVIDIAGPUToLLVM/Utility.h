@@ -40,19 +40,15 @@ namespace LLVM {
 namespace NVIDIA {
 
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
-Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i);
-Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                int i);
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i);
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 Value i);
-Value permute(Location loc, ConversionPatternRewriter &rewriter, Value a,
-              Value b, Value mask);
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
+Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
+              Value mask);
 
-Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
-               ModuleOp moduleOp, int axis);
+Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               int axis);
 
 /// Usage of macro load_dsmem
 /// (1) load_dsmem(addr, ctaId)

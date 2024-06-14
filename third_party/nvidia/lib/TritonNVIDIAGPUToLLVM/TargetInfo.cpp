@@ -14,8 +14,7 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 namespace {
 Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
-                          ConversionPatternRewriter &rewriter,
-                          int swizzleByteWidth) {
+                          RewriterBase &rewriter, int swizzleByteWidth) {
   Value rowInMat = urem(laneId, i32_val(8)); // row in the 8x8 matrix
   // linear index of the matrix in the 2x2 matrices
   // Decompose matIndex => s_0, s_1, that is the coordinate in 2x2 matrices in
@@ -34,7 +33,7 @@ Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
 
 void stMatrixm8n8x4(Value offset, ArrayRef<Value> vals, int indexOffset,
                     Value smemBase, Type elemTy, Location loc,
-                    ConversionPatternRewriter &rewriter) {
+                    RewriterBase &rewriter) {
   SmallVector<Value> inputs;
   auto prTy = ptr_ty(rewriter.getContext(), 3);
   // Pack the input into 2xf16
@@ -53,8 +52,8 @@ void stMatrixm8n8x4(Value offset, ArrayRef<Value> vals, int indexOffset,
 void storeDistributedToSharedWithStMatrix(
     RankedTensorType tensorTy, Type elemTy, SmallVector<Value> &inVals,
     Value smemBase, ArrayRef<unsigned> paddedRepShape,
-    ArrayRef<unsigned> origRepShape, Location loc,
-    ConversionPatternRewriter &rewriter, int swizzlingByteWidth) {
+    ArrayRef<unsigned> origRepShape, Location loc, RewriterBase &rewriter,
+    int swizzlingByteWidth) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
   auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   auto order = triton::gpu::getOrder(mmaLayout);
@@ -140,7 +139,7 @@ bool isStMatrixCompatible(RankedTensorType tensorTy, int swizzlingByteWidth) {
 }
 
 // declare vprintf(i8*, i8*) as external function
-LLVM::LLVMFuncOp getVprintfDeclaration(ConversionPatternRewriter &rewriter) {
+LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("vprintf");
   Operation *funcOp = moduleOp.lookupSymbol(funcName);
@@ -152,7 +151,7 @@ LLVM::LLVMFuncOp getVprintfDeclaration(ConversionPatternRewriter &rewriter) {
   SmallVector<Type> argsType{ptr_ty(context), ptr_ty(context)};
   auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType);
 
-  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  RewriterBase::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
 
   return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(context), funcName,
@@ -161,8 +160,7 @@ LLVM::LLVMFuncOp getVprintfDeclaration(ConversionPatternRewriter &rewriter) {
 
 // extend integer to int32, extend float to float64
 // this comes from vprintf alignment requirements.
-std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
-                                          Value value) {
+std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto type = value.getType();
   Value newOp = value;
@@ -186,7 +184,7 @@ std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
   return {newType, newOp};
 }
 
-LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
+LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("__assertfail");
   {
@@ -200,7 +198,7 @@ LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
   SmallVector<Type> argsType{ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
                              rewriter.getIntegerType(sizeof(size_t) * 8)};
   auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
-  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  RewriterBase::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
   auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx),
                                                   funcName, funcType);
@@ -260,13 +258,13 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
                                                         rewriter.getI32Type());
 }
 
-Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
-                         Type type, Value cmp) const {
+Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
+                         Value cmp) const {
   Value threadMask = int_val(type.getIntOrFloatBitWidth(), -1);
   return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
 }
-void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Value val, Value pred) const {
+void TargetInfo::storeShared(RewriterBase &rewriter, Location loc, Value ptr,
+                             Value val, Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
   unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
@@ -279,7 +277,7 @@ void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
   builder.launch(rewriter, loc, void_ty(ctx));
 }
 
-Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
+Value TargetInfo::loadShared(RewriterBase &rewriter, Location loc,
                              const TypeConverter *converter, Value ptr,
                              Type elemTy, Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
@@ -297,31 +295,31 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return builder.launch(rewriter, loc, elemTy);
 }
 
-Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::NVIDIA::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
-                            Value val, int i) const {
+Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
+                            int i) const {
   return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, Value i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             Value i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
+Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
-bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
@@ -362,7 +360,7 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
   return false;
 }
 bool TargetInfo::processReplicaUsingStMatrix(
-    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+    RewriterBase &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
@@ -383,9 +381,8 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   return funcName;
 }
 
-void TargetInfo::printf(ConversionPatternRewriter &rewriter,
-                        Value formatStrStart, int /*formatStrByteCount*/,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
+                        int /*formatStrByteCount*/, ValueRange args) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -426,7 +423,7 @@ void TargetInfo::printf(ConversionPatternRewriter &rewriter,
   call(funcOp, operands);
 }
 
-void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   auto funcOp = getAssertfailDeclaration(rewriter);

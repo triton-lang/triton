@@ -202,9 +202,9 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 namespace gpu {
 Type getFunctionType(Type resultType, ValueRange operands);
 
-LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
-                                         Operation *op, StringRef funcName,
-                                         Type funcType, StringRef libname = "",
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
+                                         StringRef funcName, Type funcType,
+                                         StringRef libname = "",
                                          StringRef libpath = "");
 } // namespace gpu
 
@@ -305,7 +305,7 @@ struct SharedMemoryObject {
   }
 
   Value getBaseBeforeSlice(int order, Location loc,
-                           ConversionPatternRewriter &rewriter) const {
+                           RewriterBase &rewriter) const {
     Value cSwizzleOffset = getCSwizzleOffset(order);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();
@@ -313,9 +313,10 @@ struct SharedMemoryObject {
   }
 };
 
-SharedMemoryObject
-getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
-                                ConversionPatternRewriter &rewriter);
+SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
+                                                   Value llvmStruct,
+                                                   Type elemTy,
+                                                   RewriterBase &rewriter);
 
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
@@ -329,15 +330,14 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
                                Value linear, ArrayRef<unsigned> shape);
 
-Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
-                ArrayRef<unsigned> order);
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                ArrayRef<unsigned> shape, ArrayRef<unsigned> order);
 
-Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                ArrayRef<unsigned> shape);
 
-Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content);
+Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
+                        StringRef content);
 
 // Given an elemId which represents the index of an element from the list of
 // elements that are in the thread's registers (i.e. total of
@@ -346,7 +346,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 // when converting distributed to distributed layout. Also, a replica is the
 // smallest CTA tile that is common between input and output layouts.
 SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
-                                     ConversionPatternRewriter &rewriter,
+                                     RewriterBase &rewriter,
                                      const TargetInfoBase &targetInfo,
                                      unsigned elemId, RankedTensorType type,
                                      ArrayRef<unsigned> multiDimCTAInRepId,
@@ -355,15 +355,15 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
 // Given a multiDimOffset, this function wraps around each dimension to be
 // within shape.
 SmallVector<Value> getWrappedMultiDimOffset(
-    ConversionPatternRewriter &rewriter, Location loc,
-    ArrayRef<Value> multiDimOffset, ArrayRef<unsigned> shape,
-    SmallVector<unsigned> shapePerCTATile, SmallVector<int64_t> shapePerCTA);
+    RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDimOffset,
+    ArrayRef<unsigned> shape, SmallVector<unsigned> shapePerCTATile,
+    SmallVector<int64_t> shapePerCTA);
 
 inline bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
 
-inline Value getStackPointer(PatternRewriter &rewriter,
+inline Value getStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
   auto mod = funcOp->getParentOfType<ModuleOp>();
   LLVM::GlobalOp globalBase = nullptr;
@@ -378,8 +378,7 @@ inline Value getStackPointer(PatternRewriter &rewriter,
     return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
-inline Value getSharedMemoryBase(Location loc,
-                                 ConversionPatternRewriter &rewriter,
+inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                                  Operation *op) {
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
   FunctionOpInterface func =
@@ -1566,9 +1565,9 @@ inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
   }
 }
 
-inline Value
-getStructFromSharedMemoryObject(Location loc, const SharedMemoryObject &smemObj,
-                                ConversionPatternRewriter &rewriter) {
+inline Value getStructFromSharedMemoryObject(Location loc,
+                                             const SharedMemoryObject &smemObj,
+                                             RewriterBase &rewriter) {
   auto elems = smemObj.getElems();
   auto types = smemObj.getTypes();
   auto structTy =
@@ -1582,9 +1581,8 @@ getStructFromSharedMemoryObject(Location loc, const SharedMemoryObject &smemObj,
   return llvmStruct;
 }
 
-inline SmallVector<Value>
-unpackLLElements(Location loc, Value llvmStruct,
-                 ConversionPatternRewriter &rewriter) {
+inline SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
+                                           RewriterBase &rewriter) {
   assert(bool(llvmStruct) && "can not unpack null values");
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
       isa<triton::PointerType>(llvmStruct.getType()) ||
@@ -1602,8 +1600,8 @@ unpackLLElements(Location loc, Value llvmStruct,
 
 inline Value packLLElements(Location loc,
                             const LLVMTypeConverter *typeConverter,
-                            ValueRange resultVals,
-                            ConversionPatternRewriter &rewriter, Type type) {
+                            ValueRange resultVals, RewriterBase &rewriter,
+                            Type type) {
   auto structType =
       dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
   if (!structType) {
