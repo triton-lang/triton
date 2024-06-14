@@ -187,8 +187,10 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
   CUpti_SubscriberHandle subscriber{};
 
-  std::unordered_map<uint32_t, size_t> graphIdToNumInstances;
-  std::unordered_map<uint32_t, uint32_t> graphExecIdToGraphId;
+  ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
+      graphIdToNumInstances;
+  ThreadSafeMap<uint32_t, uint32_t, std::unordered_map<uint32_t, uint32_t>>
+      graphExecIdToGraphId;
 };
 
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
@@ -250,8 +252,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       cupti::getGraphExecId<true>(graphData->graphExec, &graphExecId);
     if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED ||
         cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
-      if (pImpl->graphIdToNumInstances.find(graphId) ==
-          pImpl->graphIdToNumInstances.end())
+      if (!pImpl->graphIdToNumInstances.contain(graphId))
         pImpl->graphIdToNumInstances[graphId] = 1;
       else
         pImpl->graphIdToNumInstances[graphId]++;
@@ -285,11 +286,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         // number of instances belonging to the graph and thus cannot delete the
         // map entry.
         numInstances = std::numeric_limits<size_t>::max();
-        auto it = pImpl->graphExecIdToGraphId.find(graphExecId);
-        if (it != pImpl->graphExecIdToGraphId.end()) {
-          auto graphId = it->second;
-          if (pImpl->graphIdToNumInstances.find(graphId) !=
-              pImpl->graphIdToNumInstances.end())
+        if (pImpl->graphExecIdToGraphId.contain(graphExecId)) {
+          auto graphId = pImpl->graphExecIdToGraphId[graphExecId];
+          if (pImpl->graphIdToNumInstances.contain(graphId))
             numInstances = pImpl->graphIdToNumInstances[graphId];
         }
       }
