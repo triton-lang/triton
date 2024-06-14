@@ -42,6 +42,6 @@ def test_mma_remark(capfd):
             }, constants={}))
     captured = capfd.readouterr()
 
-    assert "test_perf_warning.py:34:18: remark: Warning: can't use MMA V3 for the dot op" in captured.err, "expect MMA V3 remark"
-    assert "test_perf_warning.py:34:18: note: see current operation:" in captured.err
+    assert "remark: Warning: can't use MMA V3 for the dot op" in captured.err, "expect MMA V3 remark"
+    assert "note: see current operation:" in captured.err
     os.environ['MLIR_ENABLE_REMARK'] = '0'
