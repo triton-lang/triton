@@ -12,7 +12,7 @@ using CoordTy = SmallVector<Value>;
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
 static SmallVector<CoordTy>
-getMNCoords(Value thread, Location loc, ConversionPatternRewriter &rewriter,
+getMNCoords(Value thread, Location loc, RewriterBase &rewriter,
             ArrayRef<unsigned int> wpt, const NvidiaMmaEncodingAttr &mmaLayout,
             ArrayRef<int64_t> shape, bool isARow, bool isBRow, bool isAVec4,
             bool isBVec4) {
@@ -120,9 +120,8 @@ Type getFunctionType(Type resultType, ValueRange operands) {
   return LLVM::LLVMFunctionType::get(resultType, operandTypes);
 }
 
-LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
-                                         Operation *op, StringRef funcName,
-                                         Type funcType,
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
+                                         StringRef funcName, Type funcType,
                                          StringRef libname /*= ""*/,
                                          StringRef libpath /*= ""*/) {
   using LLVM::LLVMFuncOp;
@@ -496,9 +495,10 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                           builder.getIntegerAttr(ty, value));
 }
 
-SharedMemoryObject
-getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
-                                ConversionPatternRewriter &rewriter) {
+SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
+                                                   Value llvmStruct,
+                                                   Type elemTy,
+                                                   RewriterBase &rewriter) {
   ArrayRef<Type> types =
       cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
   SmallVector<Value> elems(types.size());
@@ -580,15 +580,14 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
   return multiDim;
 }
 
-Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
-                ArrayRef<unsigned> order) {
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                ArrayRef<unsigned> shape, ArrayRef<unsigned> order) {
   return linearize(rewriter, loc, applyPermutation(multiDim, order),
                    applyPermutation(shape, order));
 }
 
-Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape) {
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                ArrayRef<unsigned> shape) {
   auto rank = multiDim.size();
   Value linear = i32_val(0);
   if (rank > 0) {
@@ -602,8 +601,8 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
   return linear;
 }
 
-Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content) {
+Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
+                        StringRef content) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto ctx = moduleOp.getContext();
   unsigned stringNumber = 0;
@@ -619,7 +618,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 
   LLVM::GlobalOp global;
   {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
     global = rewriter.create<LLVM::GlobalOp>(
         UnknownLoc::get(ctx), globalType,
@@ -637,7 +636,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
-                                     ConversionPatternRewriter &rewriter,
+                                     RewriterBase &rewriter,
                                      const TargetInfoBase &targetInfo,
                                      unsigned elemId, RankedTensorType type,
                                      ArrayRef<unsigned> multiDimCTAInRepId,
@@ -791,9 +790,9 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
 }
 
 SmallVector<Value> getWrappedMultiDimOffset(
-    ConversionPatternRewriter &rewriter, Location loc,
-    ArrayRef<Value> multiDimOffset, ArrayRef<unsigned> shape,
-    SmallVector<unsigned> shapePerCTATile, SmallVector<int64_t> shapePerCTA) {
+    RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDimOffset,
+    ArrayRef<unsigned> shape, SmallVector<unsigned> shapePerCTATile,
+    SmallVector<int64_t> shapePerCTA) {
   unsigned rank = shape.size();
   SmallVector<Value> multiDimOffsetWrapped(rank);
   for (unsigned d = 0; d < rank; ++d) {

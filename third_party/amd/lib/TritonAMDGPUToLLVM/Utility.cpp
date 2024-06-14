@@ -38,9 +38,8 @@ std::string mangleFunc(std::string name, Type type) {
 } // namespace
 
 namespace mlir::LLVM::AMD {
-static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, Value i, int strideInt, ShflKind mode,
-                           Value clamp) {
+static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
+                           Value i, int strideInt, ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
@@ -126,30 +125,26 @@ static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
   return Value();
 }
 
-Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::bfly,
                        i32_val(0x1f));
 }
 
-Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                int i) {
+Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::up,
                        i32_val(0x0));
 }
 
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleIdx(loc, rewriter, val, i32_val(i));
 }
 
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 Value i) {
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, 0, ShflKind::idx, i32_val(0x1f));
 }
 
-Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
-               ModuleOp moduleOp, int axis) {
+Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               int axis) {
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
@@ -160,8 +155,8 @@ Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
-Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-             Type elemTy, Value pred, Value falseVal) {
+Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
+             Value pred, Value falseVal) {
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
   auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Load, funcType);
@@ -174,8 +169,8 @@ Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return loadVal;
 }
 
-void llStore(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-             Value val, Value pred) {
+void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
+             Value pred) {
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();

@@ -8,9 +8,8 @@ namespace LLVM {
 namespace NVIDIA {
 using namespace mlir::triton;
 
-static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, Value i, NVVM::ShflKind mode,
-                           Value clamp) {
+static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
+                           Value i, NVVM::ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -42,31 +41,27 @@ static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
   return result;
 }
 
-Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
                        i32_val(0x1f));
 }
 
-Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                int i) {
+Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
                        i32_val(0x0));
 }
 
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleIdx(loc, rewriter, val, i32_val(i));
 }
 
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 Value i) {
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, NVVM::ShflKind::idx,
                        i32_val(0x1f));
 }
 
-Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
-               ModuleOp moduleOp, int axis) {
+Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               int axis) {
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
@@ -92,8 +87,8 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   return val;
 }
 
-Value permute(Location loc, ConversionPatternRewriter &rewriter, Value a,
-              Value b, Value mask) {
+Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
+              Value mask) {
   PTXBuilder builder;
   auto &prmt = builder.create("prmt")->o("b32");
   auto *destOpr = builder.newOperand("=r");
