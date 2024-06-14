@@ -12,6 +12,14 @@
 
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
 
+// CHECK-LABEL: empty
+tt.func @empty(%A : !tt.ptr<f16>) {
+  %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  %0 = triton_gpu.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #AL>
+  tt.return
+  // CHECK: size = 0
+}
+
 // CHECK-LABEL: matmul_loop
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %a_ptr_init = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
