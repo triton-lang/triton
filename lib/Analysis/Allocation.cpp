@@ -270,8 +270,7 @@ private:
       unsigned inVec = 0;
       unsigned outVec = 0;
       auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
-      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
+      auto elems = getNumElements<unsigned>(smemShape);
       auto bytes =
           isa<triton::PointerType>(srcTy.getElementType())
               ? elems * kPtrBitWidth / 8
@@ -286,8 +285,7 @@ private:
         // nothing to do
       } else {
         auto smemShape = getScratchConfigForAtomicRMW(atomicRMWOp);
-        unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                         std::multiplies{});
+        auto elems = getNumElements<unsigned>(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();
         auto bytes =
@@ -305,8 +303,7 @@ private:
         // nothing to do
       } else {
         auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
-        unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                         std::multiplies{});
+        auto elems = getNumElements<unsigned>(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();
         auto bytes = isa<triton::PointerType>(elemTy)
