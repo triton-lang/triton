@@ -29,11 +29,6 @@ using namespace mlir::triton;
     ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
   } while (0)
 
-#define load_dsmem(...)                                                        \
-  ::mlir::LLVM::NVIDIA::createLoadDSmem(loc, rewriter, __VA_ARGS__)
-#define store_dsmem(...)                                                       \
-  ::mlir::LLVM::NVIDIA::createStoreDSmem(loc, rewriter, __VA_ARGS__)
-
 namespace mlir {
 namespace LLVM {
 
@@ -49,29 +44,6 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                int axis);
-
-/// Usage of macro load_dsmem
-/// (1) load_dsmem(addr, ctaId)
-/// (2) load_dsmem(addr, ctaId, vec)
-Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Type elemTy);
-SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
-                                   Value addr, Value ctaId, unsigned vec,
-                                   Type elemTy);
-
-/// Usage of macro store_dsmem
-/// (1) store_dsmem(addr, ctaId, value, pred)
-/// (2) store_dsmem(addr, ctaId, value)
-/// (3) store_dsmem(addr, ctaId, values, pred)
-/// (4) store_dsmem(addr, ctaId, values)
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Value value, Value pred);
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Value value);
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, ArrayRef<Value> values, Value pred);
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, ArrayRef<Value> values);
 
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, PatternRewriter &rewriter);

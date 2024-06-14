@@ -77,14 +77,23 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return asmResult;
 }
 
-void TargetInfo::storeShared(RewriterBase &rewriter, Location loc, Value ptr,
-                             Value val, Value pred) const {
+void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Value val,
+                              Value pred) const {
+  if (ctaId.has_value()) {
+    llvm::report_fatal_error(
+        "AMDGPU does not support cross-CTA shared memory transfers");
+  }
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-Value TargetInfo::loadShared(RewriterBase &rewriter, Location loc,
-                             const TypeConverter *converter, Value ptr,
-                             Type elemTy, Value pred) const {
+Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Type elemTy,
+                              Value pred) const {
+  if (ctaId.has_value()) {
+    llvm::report_fatal_error(
+        "AMDGPU does not support cross-CTA shared memory transfers");
+  }
   Value falseVal = rewriter.create<arith::ConstantOp>(
       loc, elemTy, rewriter.getZeroAttr(elemTy));
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
