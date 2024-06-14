@@ -5,6 +5,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <numeric>
@@ -61,8 +62,7 @@ static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
   unsigned inVec = 0;
   unsigned outVec = 0;
   auto smemShape = triton::getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
-  unsigned elems =
-      std::accumulate(smemShape.begin(), smemShape.end(), 1, std::multiplies{});
+  unsigned elems = getNumElements<unsigned>(smemShape);
   auto srcType = cvtOp.getSrc().getType();
   auto bytes =
       isa<triton::PointerType>(srcType.getElementType())
