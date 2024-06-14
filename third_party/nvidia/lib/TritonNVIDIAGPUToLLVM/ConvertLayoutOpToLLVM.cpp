@@ -363,6 +363,7 @@ private:
   lowerDistToDistWithDistSmem(triton::gpu::ConvertLayoutOp op,
                               OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
     auto srcTy = op.getSrc().getType();
@@ -427,7 +428,8 @@ private:
         Value localOffset = linearize(rewriter, loc, localCoord, smemShape);
 
         Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
-        outVals.push_back(load_dsmem(ptr, remoteCTAId, llvmElemTy));
+        outVals.push_back(targetInfo.loadDShared(
+            rewriter, loc, ptr, remoteCTAId, llvmElemTy, /*pred=*/true_val()));
       }
 
       Value result =
@@ -772,6 +774,9 @@ void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // For now give ConvertLayoutOpConversion higher benefit, I can split before
   // merging
+  //
+  // TODO(jlebar): lowerDistributedToDistributed does not get hit in any
+  // testcases.  Is this dead code?  Does the benefit need to be increased?
   patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
   // Same default benefit
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
