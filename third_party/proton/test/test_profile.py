@@ -78,7 +78,7 @@ def test_cudagraph():
         c = a + b
         foo[(1, )](a, b, c)
 
-    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+    with open("test.hatchet", "w+") as f:
         proton.start(f.name.split(".")[0], context="shadow")
 
         # warmup
@@ -106,7 +106,9 @@ def test_cudagraph():
                 test_frame = child
                 break
         assert test_frame is not None
-        assert len(test_frame["children"]) >= 4
+        # {torch.ones, add, foo}
+        # cuGraphLaunch may also invoke additional kernels to reset outputs
+        assert len(test_frame["children"]) >= 3
         assert test_frame["children"][0]["metrics"]["Time (ns)"] > 0
 
 

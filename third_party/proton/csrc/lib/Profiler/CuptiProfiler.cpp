@@ -281,16 +281,21 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                              ->hGraph;
         uint32_t graphExecId = 0;
         cupti::getGraphExecId<true>(graphExec, &graphExecId);
-        // It's possible that the graph is not captured, because proton starts
-        // profiling after the graph is created. In this case, we cannot get the
-        // number of instances belonging to the graph and thus cannot delete the
-        // map entry.
         numInstances = std::numeric_limits<size_t>::max();
+        auto findGraph = false;
         if (pImpl->graphExecIdToGraphId.contain(graphExecId)) {
           auto graphId = pImpl->graphExecIdToGraphId[graphExecId];
-          if (pImpl->graphIdToNumInstances.contain(graphId))
+          if (pImpl->graphIdToNumInstances.contain(graphId)) {
             numInstances = pImpl->graphIdToNumInstances[graphId];
+            findGraph = true;
+          }
         }
+        if (!findGraph)
+          std::cerr << "[PROTON] Cannot find graph for graphExecId: "
+                    << graphExecId
+                    << ", and t may cause memory leak. To avoid this problem, "
+                       "please start profiling before the graph is created."
+                    << std::endl;
       }
       profiler.correlation.correlate(callbackData->correlationId, numInstances);
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
