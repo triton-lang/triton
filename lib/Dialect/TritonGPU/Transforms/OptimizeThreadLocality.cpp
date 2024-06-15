@@ -121,8 +121,7 @@ class TritonGPUOptimizeThreadLocalityPass
       if (!(isa<triton::gpu::BlockedEncodingAttr>(srcEncoding) && rank > 1))
         return;
       for (auto operand : reduce->getOperands()) {
-        auto def = operand.getDefiningOp();
-        if (!isa<triton::LoadOp>(def))
+        if (!operand.getDefiningOp<triton::LoadOp>())
           return;
       }
       auto elemsPerThread =
