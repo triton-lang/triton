@@ -203,7 +203,9 @@ def open_url(url):
 
 
 def get_triton_cache_path():
-    user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
+    user_home = os.getenv("TRITON_HOME")
+    if not user_home:
+        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
     if not user_home:
         raise RuntimeError("Could not find user home directory")
     return os.path.join(user_home, ".triton")
@@ -577,7 +579,7 @@ def get_entry_points():
 
 
 def get_install_requires():
-    install_requires = ["filelock"]
+    install_requires = ["filelock", "llnl-hatchet"]
     return install_requires
 
 
@@ -631,7 +633,6 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
-            "llnl-hatchet",
         ],
         "tutorials": [
             "matplotlib",
