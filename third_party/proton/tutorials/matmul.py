@@ -26,32 +26,13 @@ def metadata_fn(
     num_stages = metadata.num_stages
     cluster_x, cluster_y, cluster_z = metadata.cluster_dims
     shared_memory = metadata.shared
+    M, K = args["a_ptr"].shape
+    K, N = args["b_ptr"].shape
     return {
         "name":
-        f"matmul_<grid:{grid_x}x{grid_y}x{grid_z}>_<cluster:{cluster_x}x{cluster_y}x{cluster_z}>_<warps:{num_warps}>_<shared:{shared_memory}>_<stages:{num_stages}>"
-    }
-
-
-def matmul_metrics_fn(
-    grid_x: int,
-    grid_y: int,
-    grid_z: int,
-    num_warps: int,
-    num_ctas: int,
-    cluster_x: int,
-    cluster_y: int,
-    cluster_z: int,
-    shared_memory: int,
-    stream: int,
-    function: int,
-    metadata,
-    *args,
-):
-    M, K = args[0].shape
-    K, N = args[1].shape
-    return {
+        f"matmul_<grid:{grid_x}x{grid_y}x{grid_z}>_<cluster:{cluster_x}x{cluster_y}x{cluster_z}>_<warps:{num_warps}>_<shared:{shared_memory}>_<stages:{num_stages}>",
         "flops": 2 * M * N * K,
-        "bytes": (M * N + N * K + K * M) * args[0].element_size(),
+        "bytes": (M * N + N * K + K * M) * args["a_ptr"].element_size(),
     }
 
 
@@ -255,6 +236,12 @@ def matmul(a, b, activation=""):
     return c
 
 
+argparser = argparse.ArgumentParser()
+argparser.add_argument("--profile", action="store_true")
+argparser.add_argument("--cudagraph", action="store_true", default=False)
+args = argparser.parse_args()
+
+
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
@@ -274,6 +261,9 @@ def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
     quantiles = [0.5, 0.2, 0.8]
+    if args.cudagraph:
+        stream = torch.cuda.Stream()
+        torch.cuda.set_stream(stream)
     with proton.scope(f"matmul_{M}_{N}_{K}"):
         if provider == "cublas":
 
@@ -287,7 +277,11 @@ def benchmark(M, N, K, provider):
             def cublas_matmul(a, b):
                 torch.matmul(a, b)
 
-            ms, min_ms, max_ms = triton.testing.do_bench(lambda: cublas_matmul(a, b), quantiles=quantiles)
+            if args.cudagraph:
+                ms = triton.testing.do_bench_cudagraph(lambda: cublas_matmul(a, b))
+                min_ms = max_ms = ms
+            else:
+                ms, min_ms, max_ms = triton.testing.do_bench(lambda: cublas_matmul(a, b), quantiles=quantiles)
         if provider == "triton":
 
             def enter_autotune(args, reset_only=False):
@@ -301,17 +295,17 @@ def benchmark(M, N, K, provider):
             matmul_kernel.pre_hook = enter_autotune
             matmul_kernel.post_hook = exit_autotune
             with proton.scope("triton"):
-                ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+                if args.cudagraph:
+                    ms = triton.testing.do_bench_cudagraph(lambda: matmul(a, b))
+                    min_ms = max_ms = ms
+                else:
+                    ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
 
     def perf(ms):
         return 2 * M * N * K * 1e-12 / (ms * 1e-3)
 
     return perf(ms), perf(max_ms), perf(min_ms)
 
-
-argparser = argparse.ArgumentParser()
-argparser.add_argument("--profile", action="store_true")
-args = argparser.parse_args()
 
 if args.profile:
     proton.start("matmul", hook="triton")

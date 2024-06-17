@@ -543,6 +543,8 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   auto value = adaptor.getSrc();
   if (!value)
     return {};
+  if (!isa<FloatAttr, IntegerAttr>(value))
+    return {};
   auto shapedType = cast<ShapedType>(getType());
   auto ret = SplatElementsAttr::get(shapedType, ArrayRef<Attribute>(value));
   return ret;
