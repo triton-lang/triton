@@ -64,6 +64,12 @@ DEFINE_DISPATCH(ExternLibCupti, unsubscribe, cuptiUnsubscribe,
 
 DEFINE_DISPATCH(ExternLibCupti, finalize, cuptiFinalize)
 
+DEFINE_DISPATCH(ExternLibCupti, getGraphExecId, cuptiGetGraphExecId,
+                CUgraphExec, uint32_t *);
+
+DEFINE_DISPATCH(ExternLibCupti, getGraphId, cuptiGetGraphId, CUgraph,
+                uint32_t *);
+
 } // namespace cupti
 
 } // namespace proton
