@@ -31,7 +31,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/Debug.h"
 
-#include "PipelineExpander.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 
 #define DEBUG_TYPE "triton-loop-pipelining"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
