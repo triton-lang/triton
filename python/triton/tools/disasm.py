@@ -26,8 +26,6 @@ import re
 import subprocess
 import tempfile
 
-from ..common.backend import path_to_cuobjdump, path_to_nvdisasm
-
 FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
 SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')
 FNAME_RE = re.compile(r'\s*Function : (\w+)\s*')
@@ -78,9 +76,7 @@ def get_sass(cubin_asm, fun=None):
 
 
 def extract(file_path, fun):
-    cuobjdump, _ = path_to_cuobjdump()
-    nvdisasm, _ = path_to_nvdisasm()
-    os.environ["NVDISASM_PATH"] = nvdisasm
+    cuobjdump = "cuobjdump"
     if fun is None:
         sass_str = subprocess.check_output([cuobjdump, "-sass", file_path])
     else:
