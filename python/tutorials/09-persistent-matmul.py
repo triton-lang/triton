@@ -27,6 +27,7 @@ else:
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
+
 def supports_tma():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
@@ -447,7 +448,7 @@ def validate(M, N, K, dtype):
                                                 atol=1.0) else "❌"
     if tma_persistent_result is not None:
         naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
-                                                    tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
+                                                        tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
     print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
     if torch_result is not None:
         print(f"torch: {naive_vs_torch} ", end="")
@@ -475,7 +476,7 @@ if __name__ == "__main__":
     if args.K and args.K_range is None:
         args.K_range = [args.K, args.K]
         args.K_step = 1  # doesn't matter as long as it's not 0
- 
+
     torch.manual_seed(0)
 
     validate(32, 32, 32, dtype)
