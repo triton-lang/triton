@@ -1034,9 +1034,9 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
 // CHECK:  %[[ADDI_44:.*]] = arith.addi %[[ARG11]], %{{.*}}
 // CHECK:  %[[CMPI_45:.*]] = arith.cmpi slt, %[[ADDI_44]], %{{.*}}
 // CHECK:  %[[SELECT_46:.*]] = arith.select %[[CMPI_45]], %[[ADDI_44]], %{{.*}}
-// CHECK:  %[[MEMDESC_SUBVIEW_47:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%[[SELECT_46]], %{{.*}}, %{{.*}}]
+// CHECK:  %[[MEMDESC_SUBVIEW_47:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_46]], %{{.*}}, %{{.*}}]
 // CHECK:  triton_gpu.local_store %[[LOAD_35]], %[[MEMDESC_SUBVIEW_47]]
-// CHECK:  %[[MEMDESC_SUBVIEW_48:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_46]], %{{.*}}, %{{.*}}]
+// CHECK:  %[[MEMDESC_SUBVIEW_48:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_46]], %{{.*}}, %{{.*}}]
 // CHECK:  triton_gpu.local_store %[[LOAD_41]], %[[MEMDESC_SUBVIEW_48]]
 // CHECK:  scf.yield %[[DOT_31]], %[[ADDPTR_32]], %[[ADDPTR_33]], %[[SELECT_26]], %[[SELECT_46]], %[[MEMDESC_SUBVIEW_47]], %[[MEMDESC_SUBVIEW_48]], %[[LOAD_43]]
 // CHECK:  }
