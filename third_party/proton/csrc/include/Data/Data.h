@@ -19,8 +19,9 @@ public:
   virtual ~Data() = default;
 
   /// Add a new scope to the data.
+  /// If the scope is already present, add a child scope under/inside it.
   /// [MT] The implementation must be thread-safe.
-  virtual void addScope(size_t scopeId, const std::string &name = {}) = 0;
+  virtual size_t addScope(size_t scopeId, const std::string &name = {}) = 0;
 
   /// Add a single metric to the data.
   /// [MT] The implementation must be thread-safe.
