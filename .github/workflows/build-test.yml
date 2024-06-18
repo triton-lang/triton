@@ -70,4 +70,4 @@ jobs:
 
       - name: Run python unit tests
         run: |
-          python -m pytest -n 32 --device cpu python/test/unit/language/test_core.py -m cpu
+          python -m pytest -s -n 32 --device cpu python/test/unit/language/test_core.py -m cpu
