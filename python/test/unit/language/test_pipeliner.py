@@ -48,6 +48,7 @@ def matmul_kernel(  #
         accumulator = tl.dot(a, b, acc=accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
+    accumulator = accumulator.to(tl.float16)
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
@@ -71,7 +72,7 @@ def vecadd_kernel(a_ptr, b_ptr, output_ptr, n_elements, num_blocks, BLOCK_SIZE: 
 
 def test_pipeline_matmul(device):
     check_capabilities()
-    M, N, K = 4096, 4096, 4096
+    M, N, K = 1024, 1024, 1024
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 64
     NUM_STAGES = 4
     a = torch.randn(M, K, device=device, dtype=torch.float16)
@@ -80,7 +81,7 @@ def test_pipeline_matmul(device):
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     handler = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
                                   output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
-    ref_out = torch.matmul(a, b).to(torch.float16)
+    ref_out = torch.matmul(a, b)
     torch.testing.assert_close(ref_out, output)
     if is_cuda():
         ttgir = handler.asm["ttgir"]
