@@ -225,10 +225,12 @@ struct ReduceScanOpConversionBase : public OpConversionPattern<OpT> {
   createShuffleDummies(Location loc, ValueRange inputs,
                        ConversionPatternRewriter &rewriter) const {
     if (shuffleDummies.empty()) {
+      SmallVector<int64_t, 1> dummyShape({1});
       for (auto val : inputs) {
         auto ty = cast<VectorType>(val.getType());
         shuffleDummies.push_back(rewriter.create<arith::ConstantOp>(
-            loc, rewriter.getZeroAttr(ty.cloneWith(1, ty.getElementType()))));
+            loc, rewriter.getZeroAttr(
+                     ty.cloneWith(dummyShape, ty.getElementType()))));
       }
     }
     return shuffleDummies;

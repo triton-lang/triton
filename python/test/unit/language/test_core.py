@@ -1703,6 +1703,15 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     if is_hip() and (dtype_z in ("bfloat16", "float8_e4m3fn") or dtype_x == "float8_e4m3fn"):
         pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 not supported on HIP.')
 
+    if is_cpu() and (dtype_x in torch_float8_dtypes or dtype_z in torch_float8_dtypes):
+        pytest.skip(f'test_cast{(dtype_x, dtype_z)} is not supported on CPU.')
+
+    # fptrunc fp32->fp16 is broken in LLVM for large vectors:
+    #   https://github.com/llvm/llvm-project/issues/95274
+    # TODO: remove the change after the bug is fixed.
+    if is_cpu() and dtype_x == "float32" and dtype_z == "float16":
+        size = 512
+
     # bf16 vector cast is broken in LLVM for large vectors:
     #   https://github.com/llvm/llvm-project/issues/92471
     # TODO: Remove the change after the bug is fixed.
@@ -2247,6 +2256,12 @@ reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
+
+    # fpext fp16->fp32 is broken in LLVM for large vectors:
+    #   https://github.com/llvm/llvm-project/issues/95278
+    # TODO: remove the change after the bug is fixed.
+    if is_cpu() and dtype_str == "float16":
+        shape = (min(shape[0], 512), min(shape[1], 512))
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
