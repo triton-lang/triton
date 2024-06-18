@@ -114,19 +114,23 @@ void TreeData::startOp(const Scope &scope) {
 
 void TreeData::stopOp(const Scope &scope) {}
 
-void TreeData::addScope(size_t scopeId, const std::string &name) {
+size_t TreeData::addScope(size_t parentScopeId, const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(scopeId);
+  auto scopeIdIt = scopeIdToContextId.find(parentScopeId);
+  auto scopeId = parentScopeId;
   if (scopeIdIt == scopeIdToContextId.end()) {
     std::vector<Context> contexts;
     if (contextSource != nullptr)
       contexts = contextSource->getContexts();
     // Record the parent context
-    scopeIdToContextId[scopeId] = tree->addNode(contexts);
+    scopeIdToContextId[parentScopeId] = tree->addNode(contexts);
   } else {
     // Add a new context under it and update the context
-    scopeIdIt->second = tree->addNode(Context(name), scopeIdIt->second);
+    scopeId = Scope::getNewScopeId();
+    scopeIdToContextId[scopeId] =
+        tree->addNode(Context(name), scopeIdIt->second);
   }
+  return scopeId;
 }
 
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {

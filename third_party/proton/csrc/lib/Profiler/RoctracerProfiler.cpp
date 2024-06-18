@@ -22,8 +22,7 @@ namespace proton {
 
 template <>
 thread_local GPUProfiler<RoctracerProfiler>::ThreadState
-    GPUProfiler<RoctracerProfiler>::profilerState(
-        RoctracerProfiler::instance());
+    GPUProfiler<RoctracerProfiler>::threadState(RoctracerProfiler::instance());
 
 template <>
 thread_local std::deque<size_t>
@@ -89,27 +88,17 @@ convertActivityToMetric(const roctracer_record_t *activity) {
   return metric;
 }
 
-void addMetric(size_t scopeId, std::set<Data *> &dataSet,
-               const roctracer_record_t *activity) {
-  for (auto *data : dataSet) {
-    data->addMetric(scopeId, convertActivityToMetric(activity));
-  }
-}
-
-void addName(size_t externId, std::set<Data *> &dataSet,
-             const std::string &name) {
-  for (auto *data : dataSet)
-    data->addScope(externId, name);
-}
-
 void processActivityKernel(size_t externId, std::set<Data *> &dataSet,
                            const roctracer_record_t *activity, bool isAPI) {
   if (externId == Scope::DummyScopeId)
     return;
   auto correlationId = activity->correlation_id;
-  if (isAPI)
-    addName(externId, dataSet, activity->kernel_name);
-  addMetric(externId, dataSet, activity);
+  for (auto *data : dataSet) {
+    auto scopeId = externId;
+    if (isAPI)
+      scopeId = data->addScope(/*parentId=*/externId, activity->kernel_name);
+    data->addMetric(scopeId, convertActivityToMetric(activity));
+  }
 }
 
 void processActivity(size_t externId, std::set<Data *> &dataSet,
@@ -188,11 +177,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
       auto scopeId = Scope::getNewScopeId();
-      profilerState.record(scopeId);
-      profilerState.enterOp(scopeId);
+      threadState.record(scopeId);
+      threadState.enterOp(scopeId);
       profiler.correlation.correlate(data->correlation_id);
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
-      profilerState.exitOp();
+      threadState.exitOp();
       // Track outstanding op for flush
       profiler.correlation.submit(data->correlation_id);
     }
@@ -217,9 +206,10 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     // data on stop
     maxCorrelationId =
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
+    // TODO(Keren): Roctracer doesn't support cuda graph yet.
     auto externId =
         correlation.corrIdToExternId.contain(record->correlation_id)
-            ? correlation.corrIdToExternId.at(record->correlation_id)
+            ? correlation.corrIdToExternId.at(record->correlation_id).first
             : Scope::DummyScopeId;
     auto isAPI = correlation.apiExternIds.contain(externId);
     processActivity(externId, dataSet, record, isAPI);

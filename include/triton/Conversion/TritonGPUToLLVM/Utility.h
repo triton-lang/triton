@@ -124,6 +124,9 @@ using namespace mlir::triton;
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
+#define i1_val(val) LLVM::createConstantI1(loc, rewriter, val)
+#define true_val() i1_val(true)
+#define false_val() i1_val(false)
 #define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
@@ -213,30 +216,20 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 namespace LLVM {
 using namespace mlir::triton;
 
+Value createConstantI1(Location loc, OpBuilder &rewriter, bool v);
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
-
-/// Create a 64-bit integer constant.
 Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
-
-/// Create a 16-bit float constant.
 Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
-
-/// Create a 32-bit float constant.
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
-
-/// Create a 64-bit float constant.
 Value createConstantF64(Location loc, OpBuilder &rewriter, double v);
-
-/// Create NaN constant of specified type.
 Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
-
-/// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
                           const TypeConverter *converter, int64_t value);
-
-/// Create an integer constant of \param width bits.
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value);
+
+// Is v an integer or floating-point scalar constant equal to 0?
+bool isConstantZero(Value v);
 
 /// Helper function to get strides from a given shape and its order
 SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,

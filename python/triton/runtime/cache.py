@@ -8,16 +8,20 @@ from typing import Dict, List, Optional
 import hashlib
 
 
+def get_home_dir():
+    return os.getenv("TRITON_HOME", Path.home())
+
+
 def default_cache_dir():
-    return os.path.join(Path.home(), ".triton", "cache")
+    return os.path.join(get_home_dir(), ".triton", "cache")
 
 
 def default_override_dir():
-    return os.path.join(Path.home(), ".triton", "override")
+    return os.path.join(get_home_dir(), ".triton", "override")
 
 
 def default_dump_dir():
-    return os.path.join(Path.home(), ".triton", "dump")
+    return os.path.join(get_home_dir(), ".triton", "dump")
 
 
 class CacheManager(ABC):

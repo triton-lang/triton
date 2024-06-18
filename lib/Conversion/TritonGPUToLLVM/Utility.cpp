@@ -441,6 +441,12 @@ using namespace mlir::triton;
 using mlir::triton::gpu::getOrder;
 using mlir::triton::gpu::getSizePerThread;
 
+Value createConstantI1(Location loc, OpBuilder &rewriter, bool v) {
+  auto i1ty = rewriter.getIntegerType(1);
+  return rewriter.create<LLVM::ConstantOp>(loc, i1ty,
+                                           IntegerAttr::get(i1ty, v));
+}
+
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
   return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
@@ -493,6 +499,18 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
   Type ty = builder.getIntegerType(width);
   return builder.create<LLVM::ConstantOp>(loc, ty,
                                           builder.getIntegerAttr(ty, value));
+}
+
+bool isConstantZero(Value v) {
+  if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
+      return attr.getValue().isZero();
+    }
+    if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
+      return attr.getValue().isZero();
+    }
+  }
+  return false;
 }
 
 SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
