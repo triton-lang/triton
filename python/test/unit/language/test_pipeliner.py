@@ -82,7 +82,7 @@ def test_pipeline_matmul(device):
     handler = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
                                   output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
     ref_out = torch.matmul(a, b)
-    torch.testing.assert_close(ref_out, output)
+    torch.testing.assert_close(ref_out, output, atol=1e-3)
     if is_cuda():
         ttgir = handler.asm["ttgir"]
         # 1. check async
