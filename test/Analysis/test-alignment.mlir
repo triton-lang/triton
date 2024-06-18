@@ -827,3 +827,33 @@ tt.func @tensor_ptr(%arg0: !tt.ptr<tensor<64x16xi32>, 1>) {
   %0 = tt.load %arg0 : !tt.ptr<tensor<64x16xi32>, 1>
   tt.return
 }
+
+
+// -----
+
+// CHECK-LABEL: @chained_for
+tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = 16 : i32}) {
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x64xbf16>
+  // CHECK: contiguity = [1], divisibility = [16], constancy = [1], constant_value = 16
+  %c16_i32 = arith.constant 16 : i32
+  // CHECK: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK: contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0
+  %c0_i32 = arith.constant 0 : i32
+  // CHECK: contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 64], constant_value = 64
+  %cst_0 = arith.constant dense<64> : tensor<128x64xi32>
+  // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>
+  %9 = scf.for %arg7 = %c0_i32 to %c16_i32 step %c1_i32 iter_args(%arg8 = %8) -> (tensor<128x64x!tt.ptr<bf16>>)  : i32 {
+    %11 = tt.addptr %arg8, %cst_0 : tensor<128x64x!tt.ptr<bf16>>, tensor<128x64xi32>
+    scf.yield %11 : tensor<128x64x!tt.ptr<bf16>>
+  }
+  // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>
+  // CHECK: contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>
+  %10 = scf.for %arg7 = %c0_i32 to %c16_i32 step %c1_i32 iter_args(%arg8 = %9) -> (tensor<128x64x!tt.ptr<bf16>>)  : i32 {
+    tt.store %arg8, %cst : tensor<128x64x!tt.ptr<bf16>>
+    %11 = tt.addptr %arg8, %cst_0 : tensor<128x64x!tt.ptr<bf16>>, tensor<128x64xi32>
+    scf.yield %11 : tensor<128x64x!tt.ptr<bf16>>
+  }
+  tt.return
+}
