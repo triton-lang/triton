@@ -257,7 +257,6 @@ jobs:
           cd python/test/unit
           python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
            language/test_random.py language/test_block_pointer.py language/test_subprocess.py \
-           operators/test_flash_attention.py::test_op \
            ../../tutorials/06-fused-attention.py::test_op --device cpu
       - name: Run C++ unittests
         run: |
@@ -384,7 +383,7 @@ jobs:
           cd python/test/unit
           ## test_subprocess.py is flaky on the AMD CI.
           ## TODO (lixun) find a solution and re-enable it.
-          pytest --capture=tee-sys -rfs -n 32 language operators \
+          pytest --capture=tee-sys -rfs -n 32 language \
                  hopper/test_mixed_io.py \
                  hopper/test_gemm.py \
                  hopper/test_tma_store_gemm.py \
