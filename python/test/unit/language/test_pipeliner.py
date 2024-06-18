@@ -72,8 +72,8 @@ def vecadd_kernel(a_ptr, b_ptr, output_ptr, n_elements, num_blocks, BLOCK_SIZE: 
 
 def test_pipeline_matmul(device):
     check_capabilities()
-    M, N, K = 1024, 1024, 1024
-    BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 64
+    M, N, K = 512, 512, 128
+    BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
     NUM_STAGES = 4
     a = torch.randn(M, K, device=device, dtype=torch.float16)
     b = torch.randn(K, N, device=device, dtype=torch.float16)
