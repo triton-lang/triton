@@ -110,6 +110,8 @@ class CUDABackend(BaseBackend):
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = self.capability >= 89
         args["allow_fp8e4b15"] = self.capability < 90
+        if not "enable_fp_fusion" in args:
+            args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 

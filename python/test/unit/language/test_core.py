@@ -5185,7 +5185,8 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
 
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, device):
+@pytest.mark.parametrize("default_override", [False, True])
+def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
     if is_hip():
         pytest.skip(
             'test_enable_fp_fusion for HIP currently broken in https://github.com/triton-lang/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
@@ -5198,7 +5199,11 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
         tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
-    h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
+    if default_override:
+        os.environ["TRITON_DEFAULT_FP_FUSION"] = "1" if enable_fp_fusion else "0"
+        h = mul_add[(1, )](data)
+    else:
+        h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
 
     if not is_cuda():
         return
