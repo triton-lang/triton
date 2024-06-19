@@ -88,6 +88,8 @@ public:
       // encoding not available
       return resultVals;
     Attribute baseEncoding = encoding;
+    if (isa<AMDMfmaEncodingAttr>(baseEncoding))
+      return resultVals;
     while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
       baseEncoding = sliced.getParent();
     if (isa<NvidiaMmaEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
