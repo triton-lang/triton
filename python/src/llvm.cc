@@ -18,6 +18,7 @@
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
@@ -149,6 +150,8 @@ using ret = py::return_value_policy;
 void init_triton_llvm(py::module &&m) {
 
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
+      .def(py::init<>());
+  py::class_<llvm::SourceMgr>(m, "source_mgr", py::module_local())
       .def(py::init<>());
 
   py::class_<llvm::Module::FunctionListType>(m, "function_list")
