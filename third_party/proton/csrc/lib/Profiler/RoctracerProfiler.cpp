@@ -90,13 +90,14 @@ convertActivityToMetric(const roctracer_record_t *activity) {
   return metric;
 }
 
-void processActivityKernel(size_t externId, std::set<Data *> &dataSet,
+void processActivityKernel(RoctracerProfiler::CorrIdToExternIdMap & corrIdToExternId, size_t externId, std::set<Data *> &dataSet,
                            const roctracer_record_t *activity, bool isAPI, bool isGraphKernel) {
   if (externId == Scope::DummyScopeId)
     return;
   auto correlationId = activity->correlation_id;
   if(isGraphKernel)
   	printf("correlation_id=%ld\n", correlationId );
+  auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
   for (auto *data : dataSet) {
     auto scopeId = externId;
     if (isAPI)
@@ -105,12 +106,14 @@ void processActivityKernel(size_t externId, std::set<Data *> &dataSet,
   }
 }
 
-void processActivity(size_t externId, std::set<Data *> &dataSet,
+void processActivity(RoctracerProfiler::CorrIdToExternIdMap & corrIdToExternId,
+		     RoctracerProfiler::ApiExternIdSet &apiExternIds,
+		     size_t externId, std::set<Data *> &dataSet,
                      const roctracer_record_t *record, bool isAPI, bool isGraphKernel) {
   switch (record->kind) {
   case 0x11F1: // Task - kernel enqueued by graph launch
   case kHipVdiCommandKernel: {
-    processActivityKernel(externId, dataSet, record, isAPI, isGraphKernel);
+    processActivityKernel(corrIdToExternId, externId, dataSet, record, isAPI, isGraphKernel);
     break;
   }
   default:
@@ -229,7 +232,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
 //    if (pImpl->CorrIdToIsHipGraphMap.contain(record->correlation_id)) {
 //    	printf("correlation_id=%ld, isGraphKernel,%d\n",  record->correlation_id, pImpl->CorrIdToIsHipGraphMap.at(record->correlation_id));
 //    }
-    processActivity(externId, dataSet, record, isAPI, isGraphKernel);
+    processActivity(correlation.corrIdToExternId, correlation.apiExternIds, externId, dataSet, record, isAPI, isGraphKernel);
     // Track correlation ids from the same stream and erase those <
     // correlationId
     correlation.corrIdToExternId.erase(record->correlation_id);
