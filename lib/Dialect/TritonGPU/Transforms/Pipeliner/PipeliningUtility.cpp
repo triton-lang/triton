@@ -1,4 +1,4 @@
-#include "PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -34,11 +34,9 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
     return op;
-  if (isa<ttg::AsyncCommitGroupOp>(op))
+  if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
-  if (isa<ttg::AsyncWaitOp>(op))
-    return op;
-  if (isa<ttg::LocalLoadOp>(op))
+  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
