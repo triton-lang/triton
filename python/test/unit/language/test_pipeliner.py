@@ -14,6 +14,11 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+def is_hip_mi200():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == 'hip' and target.arch == 'gfx90a'
+
+
 def check_capabilities():
     if is_cuda():
         cc = torch.cuda.get_device_capability()
@@ -82,7 +87,12 @@ def test_pipeline_matmul(device):
     handler = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
                                   output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
     ref_out = torch.matmul(a, b)
-    torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=0)
+    atol = 1e-2 if is_hip() else None
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    rtol = 1e-2 if is_hip_mi200() else None
+    torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
     if is_cuda():
         ttgir = handler.asm["ttgir"]
         # 1. check async
