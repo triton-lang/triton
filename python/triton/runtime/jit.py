@@ -589,6 +589,8 @@ class JITFunction(KernelInterface[T]):
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
         kwargs["debug"] = self.debug
+        kwargs["grid"] = grid
+        kwargs["warmup"] = warmup
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
