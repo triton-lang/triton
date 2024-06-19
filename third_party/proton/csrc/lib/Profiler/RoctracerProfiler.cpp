@@ -74,12 +74,14 @@ convertActivityToMetric(const roctracer_record_t *activity) {
   std::shared_ptr<Metric> metric;
   switch (activity->kind) {
   case kHipVdiCommandKernel: {
+  if (activity->begin_ns < activity->end_ns) {
     metric = std::make_shared<KernelMetric>(
         static_cast<uint64_t>(activity->begin_ns),
         static_cast<uint64_t>(activity->end_ns), 1,
         static_cast<uint64_t>(
             DeviceInfo::instance().mapDeviceId(activity->device_id)),
         static_cast<uint64_t>(DeviceType::HIP));
+  }
     break;
   }
   default:
@@ -89,10 +91,12 @@ convertActivityToMetric(const roctracer_record_t *activity) {
 }
 
 void processActivityKernel(size_t externId, std::set<Data *> &dataSet,
-                           const roctracer_record_t *activity, bool isAPI) {
+                           const roctracer_record_t *activity, bool isAPI, bool isGraphKernel) {
   if (externId == Scope::DummyScopeId)
     return;
   auto correlationId = activity->correlation_id;
+  if(isGraphKernel)
+  	printf("correlation_id=%ld\n", correlationId );
   for (auto *data : dataSet) {
     auto scopeId = externId;
     if (isAPI)
@@ -102,11 +106,11 @@ void processActivityKernel(size_t externId, std::set<Data *> &dataSet,
 }
 
 void processActivity(size_t externId, std::set<Data *> &dataSet,
-                     const roctracer_record_t *record, bool isAPI) {
+                     const roctracer_record_t *record, bool isAPI, bool isGraphKernel) {
   switch (record->kind) {
   case 0x11F1: // Task - kernel enqueued by graph launch
   case kHipVdiCommandKernel: {
-    processActivityKernel(externId, dataSet, record, isAPI);
+    processActivityKernel(externId, dataSet, record, isAPI, isGraphKernel);
     break;
   }
   default:
@@ -160,6 +164,8 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
   static void activityCallback(const char *begin, const char *end, void *arg);
 
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
+  ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
+      CorrIdToIsHipGraphMap;  
 };
 
 void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
@@ -168,12 +174,18 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
   if (!(isRuntimeAPI || isDriverAPI)) {
     return;
   }
+  
   auto &profiler =
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
-  auto &pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl &>(
-      *profiler.pImpl);
+  auto *pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl *>(profiler.pImpl.get());
   if (domain == ACTIVITY_DOMAIN_HIP_API) {
     const hip_api_data_t *data = (const hip_api_data_t *)(callbackData);
+    if(cid == HIP_API_ID_hipGraphLaunch){
+	pImpl->CorrIdToIsHipGraphMap[data->correlation_id] = true;
+    }
+//    else{
+//	    pImpl->CorrIdToIsHipGraphMap[data->correlation_id] = false;
+//    }
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
       auto scopeId = Scope::getNewScopeId();
@@ -192,6 +204,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     const char *begin, const char *end, void *arg) {
   auto &profiler =
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
+  auto *pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl *>(profiler.pImpl.get());
   auto &dataSet = profiler.dataSet;
   auto &correlation = profiler.correlation;
 
@@ -212,7 +225,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
             ? correlation.corrIdToExternId.at(record->correlation_id).first
             : Scope::DummyScopeId;
     auto isAPI = correlation.apiExternIds.contain(externId);
-    processActivity(externId, dataSet, record, isAPI);
+    bool isGraphKernel = pImpl->CorrIdToIsHipGraphMap.contain(record->correlation_id);
+//    if (pImpl->CorrIdToIsHipGraphMap.contain(record->correlation_id)) {
+//    	printf("correlation_id=%ld, isGraphKernel,%d\n",  record->correlation_id, pImpl->CorrIdToIsHipGraphMap.at(record->correlation_id));
+//    }
+    processActivity(externId, dataSet, record, isAPI, isGraphKernel);
     // Track correlation ids from the same stream and erase those <
     // correlationId
     correlation.corrIdToExternId.erase(record->correlation_id);
