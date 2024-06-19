@@ -246,7 +246,7 @@ def compile(src, target=None, options=None):
     enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
     fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
-    file_name = src.name[:100]
+    file_name = src.name[:50]
     metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
