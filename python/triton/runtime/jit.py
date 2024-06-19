@@ -589,12 +589,13 @@ class JITFunction(KernelInterface[T]):
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
         kwargs["debug"] = self.debug
-        kwargs["grid"] = grid
-        kwargs["warmup"] = warmup
+        param_kwargs = dict()
+        param_kwargs["grid"] = grid
+        param_kwargs["warmup"] = warmup
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
-            hook(*args, **kwargs)
+            hook(*args, **{**kwargs, **param_kwargs})
 
         if self.binder is None:
             self.create_binder()
