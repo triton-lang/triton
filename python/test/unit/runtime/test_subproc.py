@@ -71,3 +71,31 @@ def test_compile_in_forked_subproc() -> None:
     proc.start()
     proc.join()
     assert proc.exitcode == 0
+
+
+def compile_empty_kernel_with_gc(attrs):
+
+    @triton.jit
+    def empty_kernel():
+        pass
+
+    import gc
+    gc.collect()
+    src = ASTSource(fn=empty_kernel, signature={}, attrs=attrs, constants=dict())
+    triton.compile(src=src, target=target)
+
+
+def test_compile_in_forked_subproc_with_forced_gc() -> None:
+    reset_tmp_dir()
+    import gc
+    gc.disable()
+
+    config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
+    compile_empty_kernel_with_gc(config)
+
+    reset_tmp_dir()
+    assert multiprocessing.get_start_method() == 'fork'
+    proc = multiprocessing.Process(target=compile_empty_kernel_with_gc, args=(config, ))
+    proc.start()
+    proc.join()
+    assert proc.exitcode == 0
