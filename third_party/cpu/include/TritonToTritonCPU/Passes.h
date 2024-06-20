@@ -19,6 +19,7 @@ namespace cpu {
 #include "cpu/include/TritonToTritonCPU/Passes.h.inc"
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertElementwiseOps();
+std::unique_ptr<OperationPass<ModuleOp>> createConvertElemManipOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertMemoryOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertPtrOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertDotOp();

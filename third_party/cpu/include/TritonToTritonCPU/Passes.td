@@ -31,6 +31,20 @@ def ConvertElementwiseOps : Pass<"triton-cpu-convert-elementwise-ops", "mlir::Mo
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def ConvertElemManipOps : Pass<"triton-cpu-convert-elem-manip-ops", "mlir::ModuleOp"> {
+    let summary = "Convert elements manipulation ops (transpose, shuffle, etc.).";
+    let description = [{
+
+    }];
+    let constructor = "mlir::triton::cpu::createConvertElemManipOps()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::memref::MemRefDialect",
+                             "mlir::vector::VectorDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 def ConvertPtrOps : Pass<"triton-cpu-convert-ptr-ops", "mlir::ModuleOp"> {
     let summary = "Convert Triton ops related to pointer arithmetics.";
     let description = [{

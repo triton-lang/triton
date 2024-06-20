@@ -11,6 +11,7 @@ void tritonToTritonCPUPipelineBuilder(OpPassManager &pm) {
   pm.addPass(mlir::triton::cpu::createConvertMemoryOps());
   pm.addPass(mlir::triton::cpu::createConvertPtrOps());
   pm.addPass(mlir::triton::cpu::createConvertElementwiseOps());
+  pm.addPass(mlir::triton::cpu::createConvertElemManipOps());
   pm.addPass(mlir::triton::cpu::createConvertDotOp());
   pm.addPass(mlir::triton::cpu::createConvertHistogramOp());
   pm.addPass(mlir::triton::cpu::createConvertReductionOp());
