@@ -969,8 +969,8 @@ class CodeGenerator(ast.NodeVisitor):
             names = []
             for name in self.local_defs:
                 if name in liveins:
-                    assert _is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
-                    assert _is_triton_tensor(liveins[name])
+                    assert _is_triton_tensor(self.local_defs[name]), f'cannot reassign constxpr {name} in the loop'
+                    assert _is_triton_tensor(liveins[name]), f'cannot reassign constxpr {name} in the loop'
                     assert self.local_defs[name].type == liveins[name].type, \
                         f'Loop-carried variable {name} has initial type {liveins[name].type} '\
                         f'but is re-assigned to {self.local_defs[name].type} in loop! '\
