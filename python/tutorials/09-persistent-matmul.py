@@ -10,10 +10,10 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 import argparse
 import time
 
-import numpy as np
 import torch
 import triton
 import triton.language as tl
+import triton.tools.experimental_descriptor
 import triton.profiler as proton
 
 if torch.cuda.is_available():
@@ -333,23 +333,18 @@ def matmul_tma_persistent(a, b):
     dtype = a.dtype
 
     c = torch.zeros((M, N), device=a.device, dtype=dtype)
-
-    TMA_SIZE = 128
-
-    desc_a = np.empty(TMA_SIZE, dtype=np.int8)
-    desc_b = np.empty(TMA_SIZE, dtype=np.int8)
-    desc_c = np.empty(TMA_SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), M, K, configs[dtype]["BLOCK_SIZE_M"],
-                                                              configs[dtype]["BLOCK_SIZE_K"], a.element_size(), desc_a)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), N, K, configs[dtype]["BLOCK_SIZE_N"],
-                                                              configs[dtype]["BLOCK_SIZE_K"], b.element_size(), desc_b)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(c.data_ptr(), M, N, configs[dtype]["BLOCK_SIZE_M"],
-                                                              configs[dtype]["BLOCK_SIZE_N"], c.element_size(), desc_c)
-
-    desc_a = torch.tensor(desc_a, device="cuda")
-    desc_b = torch.tensor(desc_b, device="cuda")
-    desc_c = torch.tensor(desc_c, device="cuda")
-
+    desc_a = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K,
+                                                                           configs[dtype]["BLOCK_SIZE_M"],
+                                                                           configs[dtype]["BLOCK_SIZE_K"],
+                                                                           a.element_size())
+    desc_b = triton.tools.experimental_descriptor.create_2d_tma_descriptor(b.data_ptr(), N, K,
+                                                                           configs[dtype]["BLOCK_SIZE_N"],
+                                                                           configs[dtype]["BLOCK_SIZE_K"],
+                                                                           b.element_size())
+    desc_c = triton.tools.experimental_descriptor.create_2d_tma_descriptor(c.data_ptr(), M, N,
+                                                                           configs[dtype]["BLOCK_SIZE_M"],
+                                                                           configs[dtype]["BLOCK_SIZE_N"],
+                                                                           c.element_size())
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
 
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
