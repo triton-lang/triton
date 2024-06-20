@@ -79,6 +79,41 @@ static bool gatherDFG(Operation *op, Block *block,
   return leadsToLoad;
 }
 
+static bool hasAtomic(Operation *op) {
+  if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(op))
+    return true;
+  for (auto &subregion : op->getRegions()) {
+    for (auto &subblock : subregion) {
+      for (auto &sop : subblock) {
+        if (hasAtomic(&sop))
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
+static llvm::ilist<Operation>::iterator findEarlyLocation(
+    Block *block, Operation *op, Value src) {
+  auto loc = block->begin();
+  for (auto bi = block->begin(); bi != block->end(); ++bi) {
+    auto *bop = &*bi;
+    if (bop == op) // don't move later than current location
+      break;
+    if (src) {
+      // check for ops accessing src
+      for (auto opr : op->getOperands()) {
+        if (opr == src)
+          loc = bi;
+      }
+    }
+    // atomics used for syncronization?
+    if (hasAtomic(bop))
+      loc = bi;
+  }
+  return loc;
+}
+
 class TritonAMDGPUReorderInstructionsPass
     : public TritonAMDGPUReorderInstructionsBase<
           TritonAMDGPUReorderInstructionsPass> {
@@ -125,12 +160,13 @@ public:
       moveAfter(op, argOp);
     });
     SmallVector<Operation *> moveOps;
+    // Move local stores early if it's global load is outside loop
     m.walk([&](triton::gpu::LocalStoreOp op) {
-      // Move local stores early if it's global load is outside loop
       moveOps.push_back(op);
     });
+    // Move global loads early (prefetch)
+    // - these should be moved last 
     m.walk([&](triton::LoadOp op) {
-      // Move global loads early (prefetch)
       moveOps.push_back(op);
     });
     for (auto op : moveOps) {
@@ -139,9 +175,17 @@ public:
       SmallVector<Operation *> dfg{op};
       bool leadsToLoad = gatherDFG(op, block, dfg);
       if (!isa<triton::gpu::LocalStoreOp>(op) || !leadsToLoad) {
+        Value src;
+        if (auto ld = dyn_cast<triton::LoadOp>(op))
+          src = ld.getPtr();
+        // 0. find earliest insertion point
+        auto loc = findEarlyLocation(block, op, src);
         // 1. move to beginning of enclosing block
-        for (auto *op : dfg)
-          op->moveAfter(block, block->begin());
+        for (auto *op : dfg) {
+          // only move up (not down)
+          if (loc->isBeforeInBlock(op))
+            op->moveAfter(block, loc);
+        }
       }
     }
   }
