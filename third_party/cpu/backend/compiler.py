@@ -42,7 +42,7 @@ class CPUBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        self.binary_ext = "bc"
+        self.binary_ext = "asm"
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts}
@@ -138,22 +138,14 @@ class CPUBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_bc(src, metadata, options):
-        if os.environ.get("TRITON_CPU_ASM_DUMP", "0") == "1":
-            from triton.runtime.cache import get_cache_manager
-
-            asm = llvm.translate_to_host_asm(src, options.enable_fp_fusion)
-            fn_cache_manager = get_cache_manager(metadata['hash'])
-            fn_cache_manager.put(asm, f"{metadata['name']}.asm")
-
-        ret = llvm.translate_to_bc(src)
-        return ret
+    def make_asm(src, metadata, options):
+        return llvm.translate_to_host_asm(src, options.enable_fp_fusion)
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttcir"] = lambda src, metadata: self.make_ttcir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["bc"] = lambda src, metadata: self.make_bc(src, metadata, options)
+        stages["asm"] = lambda src, metadata: self.make_asm(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):
