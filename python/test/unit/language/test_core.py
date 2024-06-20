@@ -2588,6 +2588,7 @@ def test_histogram(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op", ['sum', 'max', 'min'])
 @pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
@@ -2633,7 +2634,7 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device=device)
     y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device=device)
     h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N, NUM_PID_N=num_pid_n)
-    if not is_interpreter():
+    if not is_interpreter() and not is_cpu():
         assert h.asm['ttgir'].count(
             '"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
     y_ref = numpy_op(x.cpu().numpy(), axis=1, keepdims=True)
@@ -5846,6 +5847,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 # -----------------------
 
 
+@pytest.mark.cpu
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
 def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
@@ -5867,10 +5869,12 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
     else:
         h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
 
-    if not is_cuda():
-        return
-    found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
-    assert found_fma == enable_fp_fusion
+    if is_cuda():
+        found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+        assert found_fma == enable_fp_fusion
+    elif is_cpu():
+        found_fma = re.search(r'vfma', h.asm["asm"].decode('utf-8')) is not None
+        assert found_fma == enable_fp_fusion
 
 
 # -----------------------
