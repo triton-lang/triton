@@ -1,0 +1,38 @@
+[
+  {
+    "children": [
+      {
+        "children": [],
+        "frame": {
+          "name": "/home/user/projects/example.py/test.py:foo@1",
+          "type": "function"
+        },
+        "metrics": {
+          "Count": 1,
+          "DeviceId": "0",
+          "DeviceType": "HIP",
+          "Time (ns)": 204800
+        }
+      }
+    ],
+    "frame": {
+      "name": "ROOT",
+      "type": "function"
+    },
+    "metrics": {
+      "Count": 0,
+      "Time (ns)": 0
+    }
+  },
+  {
+    "HIP": {
+      "0": {
+        "arch": "gfx90a",
+        "bus_width": 4096,
+        "clock_rate": 1700000,
+        "memory_clock_rate": 1600000,
+        "num_sms": 104
+      }
+    }
+  }
+]
