@@ -48,6 +48,7 @@ public:
     addIllegalOp<triton::TransOp>();
     addIllegalOp<triton::JoinOp>();
     addIllegalOp<triton::CatOp>();
+    addIllegalOp<triton::SplitOp>();
   }
 };
 
@@ -166,6 +167,45 @@ struct CatOpConversion : public OpConversionPattern<triton::CatOp> {
   }
 };
 
+struct SplitOpConversion : public OpConversionPattern<triton::SplitOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::SplitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto src = rewriter.getRemappedValue(op.getSrc());
+    auto srcTy = cast<VectorType>(src.getType());
+    auto resTy = getTypeConverter()->convertType(op.getType(0));
+
+    SmallVector<Value> results;
+    if (srcTy.getRank() == 1) {
+      results.push_back(rewriter.create<vector::ExtractOp>(loc, src, 0));
+      results.push_back(rewriter.create<vector::ExtractOp>(loc, src, 1));
+    } else {
+      SmallVector<int64_t> tmpShape({srcTy.getNumElements()});
+      auto tmp = rewriter.create<vector::ShapeCastOp>(
+          loc, VectorType::get(tmpShape, srcTy.getElementType()), src);
+
+      SmallVector<int64_t> evenIndices;
+      SmallVector<int64_t> oddIndices;
+      for (int64_t i = 0; i < srcTy.getNumElements(); i += 2) {
+        evenIndices.push_back(i);
+        oddIndices.push_back(i + 1);
+      }
+
+      Value res1 =
+          rewriter.create<vector::ShuffleOp>(loc, tmp, tmp, evenIndices);
+      Value res2 =
+          rewriter.create<vector::ShuffleOp>(loc, tmp, tmp, oddIndices);
+      results.push_back(rewriter.create<vector::ShapeCastOp>(loc, resTy, res1));
+      results.push_back(rewriter.create<vector::ShapeCastOp>(loc, resTy, res2));
+    }
+    rewriter.replaceOp(op, results);
+    return success();
+  }
+};
+
 struct ConvertElemManipOps
     : public triton::impl::ConvertElemManipOpsBase<ConvertElemManipOps> {
   using ConvertElemManipOpsBase::ConvertElemManipOpsBase;
@@ -187,6 +227,7 @@ struct ConvertElemManipOps
     patterns.add<TransOpConversion>(typeConverter, context);
     patterns.add<JoinOpConversion>(typeConverter, context);
     patterns.add<CatOpConversion>(typeConverter, context);
+    patterns.add<SplitOpConversion>(typeConverter, context);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
