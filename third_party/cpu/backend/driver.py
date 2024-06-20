@@ -8,74 +8,9 @@ from triton.backends.driver import DriverBase
 from triton.backends.compiler import GPUTarget
 
 dirname = os.getenv("TRITON_SYS_PATH", default="/usr/local")
-llvm_root = os.getenv("LLVM_PATH", default="~/.triton/llvm")
-llvm_root = os.path.expanduser(llvm_root)
-llvm_dirs = os.listdir(llvm_root)
-if len(llvm_dirs) == 1:
-    llvm_root = os.path.join(llvm_root, llvm_dirs[0])
-include_dir = [
-    os.path.join(dirname, "include"),
-    os.path.join(llvm_root, "include"),
-]
-library_dir = [os.path.join(dirname, "lib"), os.path.join(llvm_root, "lib")]
-libraries = [
-    "LLVMOrcJIT",
-    "LLVMPasses",
-    "LLVMX86CodeGen",
-    "LLVMX86AsmParser",
-    "LLVMX86Desc",
-    "LLVMX86Info",
-    "LLVMGlobalISel",
-    "LLVMSelectionDAG",
-    "LLVMHipStdPar",
-    "LLVMCoroutines",
-    "LLVMipo",
-    "LLVMFrontendOpenMP",
-    "LLVMInstrumentation",
-    "LLVMAsmPrinter",
-    "LLVMCodeGen",
-    "LLVMObjCARCOpts",
-    "LLVMLinker",
-    "LLVMVectorize",
-    "LLVMScalarOpts",
-    "LLVMInstCombine",
-    "LLVMFrontendOffloading",
-    "LLVMExecutionEngine",
-    "LLVMAggressiveInstCombine",
-    "LLVMTransformUtils",
-    "LLVMTarget",
-    "LLVMRuntimeDyld",
-    "LLVMJITLink",
-    "LLVMIRPrinter",
-    "LLVMBitWriter",
-    "LLVMAnalysis",
-    "LLVMProfileData",
-    "LLVMSymbolize",
-    "LLVMDebugInfoDWARF",
-    "LLVMObject",
-    "LLVMTextAPI",
-    "LLVMMCParser",
-    "LLVMMCDisassembler",
-    "LLVMMC",
-    "LLVMIRReader",
-    "LLVMCFGuard",
-    "LLVMBitReader",
-    "LLVMAsmParser",
-    "LLVMCore",
-    "LLVMBinaryFormat",
-    "LLVMOrcTargetProcess",
-    "LLVMTargetParser",
-    "LLVMRemarks",
-    "LLVMOrcShared",
-    "LLVMOption",
-    "LLVMDebugInfoCodeView",
-    "LLVMCodeGenTypes",
-    "LLVMBitstreamReader",
-    "LLVMSupport",
-    "LLVMDemangle",
-    "stdc++",
-    "z",
-]
+include_dir = [os.path.join(dirname, "include")]
+library_dir = [os.path.join(dirname, "lib")]
+libraries = ["stdc++"]
 
 
 def compile_module_from_src(src, name):
@@ -110,9 +45,26 @@ class CPUUtils(object):
         return cls.instance
 
     def __init__(self):
-        dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "driver.cpp")).read_text(), "cpu_utils")
-        self.load_binary = mod.load_binary
+        pass
+
+    def load_binary(self, name, src, shared_mem, device):
+        # src actually holds asm text, compile to a shared library.
+        key = hashlib.md5(src).hexdigest()
+        cache = get_cache_manager(key)
+        cache_path = cache.get_file(f"{name}.so")
+        if cache_path is None:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                asm_path = os.path.join(tmpdir, "kernel.s")
+                Path(asm_path).write_bytes(src)
+                Path("kernel.s").write_bytes(src)
+                so = _build(name, asm_path, tmpdir, library_dir, include_dir, ["gcc", "m"])
+                with open(so, "rb") as f:
+                    cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+        import ctypes
+        lib = ctypes.cdll.LoadLibrary(cache_path)
+        fn_ptr = getattr(lib, name)
+        fn_ptr_as_void_p = ctypes.cast(fn_ptr, ctypes.c_void_p).value
+        return (fn_ptr, fn_ptr_as_void_p, 0, 0)
 
     def get_device_properties(self, *args):
         return {"max_shared_mem": 0}
