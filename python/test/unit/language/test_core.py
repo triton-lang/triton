@@ -5147,7 +5147,7 @@ def test_max_num_imprecise_acc(in_type_str, low_precision_acc, device):
     else:
         torch.testing.assert_close(ref_out, C)
     if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] >= 9:
-        assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (K / low_precision_acc)
+        assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (BLOCK_K / low_precision_acc)
 
 
 # -----------------------
