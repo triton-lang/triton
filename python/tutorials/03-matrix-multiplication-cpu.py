@@ -158,7 +158,7 @@ BLOCK_SIZE_M = 32
 BLOCK_SIZE_N = 32
 BLOCK_SIZE_K = 32
 GROUP_SIZE_M = 8
-USE_GPU = True
+USE_GPU = False
 
 
 @triton.jit
@@ -217,9 +217,9 @@ def matmul_kernel(
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
 
-        #TODO: Currently masked load is not supported yet.
-        #a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-        #b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        # TODO: Currently masked load is not supported yet.
+        # a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        # b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         # We accumulate along the K dimension.
@@ -237,9 +237,9 @@ def matmul_kernel(
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
 
-    #TODO: Currently masked load is not supported yet.
-    #c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    #tl.store(c_ptrs, c, mask=c_mask)
+    # TODO: Currently masked load is not supported yet.
+    # c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    # tl.store(c_ptrs, c, mask=c_mask)
     tl.store(c_ptrs, c)
 
 
@@ -309,9 +309,9 @@ else:
 # We can now compare the performance of our kernel against that of Pytorch. Here we focus on square matrices,
 # but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-LINE_VALS = ['triton-cpu-single', 'triton-cpu', 'torch-cpu']
-LINE_NAMES = ['TritonCPU 1', 'TritonCPU', 'TorchCPU']
-LINE_STYLES = [('blue', '-'), ('green', '-'), ('cyan', '-')]
+LINE_VALS = ['triton-cpu-single', 'triton-cpu', 'torch-cpu-native', 'torch-cpu-compile']
+LINE_NAMES = ['TritonCPU 1', 'TritonCPU', 'TorchCPU (native)', 'TorchCPU (compile)']
+LINE_STYLES = [('blue', '--'), ('blue', '-'), ('green', '--'), ('green', '-')]
 
 if USE_GPU and triton.runtime.driver.get_active_gpus():
     triton.runtime.driver.set_active_to_gpu()
@@ -366,12 +366,14 @@ def benchmark(M, N, K, provider):
     b = torch.randn((K, N), device=device, dtype=torch.float32)
 
     if device == 'cpu':
+        c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         triton.runtime.driver.set_active_to_cpu()
         if 'single' in provider:
             os.environ['TRITON_CPU_SINGLE_CORE'] = '1'
         else:
             os.unsetenv('TRITON_CPU_SINGLE_CORE')
     else:
+        c = None
         triton.runtime.driver.set_active_to_gpu()
 
     quantiles = [0.5, 0.2, 0.8]
@@ -379,15 +381,15 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     elif provider == 'triton-gpu':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, None), quantiles=quantiles)
-    elif provider == 'torch-cpu':
-        c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    elif provider == 'torch-cpu-native':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b, out=c), quantiles=quantiles,
                                                      is_cpu=True)
+    elif provider == 'torch-cpu-compile':
+        compiled = torch.compile(torch.matmul)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: compiled(a, b, out=c), quantiles=quantiles, is_cpu=True)
     elif provider == 'triton-cpu-single':
-        c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c), quantiles=quantiles, is_cpu=True)
     elif provider == 'triton-cpu':
-        c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c), quantiles=quantiles, is_cpu=True)
     perf = lambda ms: 2 * M * N * K * 1e-9 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
