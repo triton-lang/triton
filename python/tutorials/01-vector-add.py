@@ -25,7 +25,7 @@ import triton.language as tl
 
 GPU_BLOCK_SIZE = 1024
 CPU_BLOCK_SIZE = 4096
-USE_GPU = True
+USE_GPU = False
 
 
 @triton.jit
@@ -89,7 +89,7 @@ size = 98432
 triton.runtime.driver.set_active_to_cpu()
 x = torch.rand(size, device='cpu')
 y = torch.rand(size, device='cpu')
-output_torch_cpu = x + y
+output_torch_cpu = torch.add(x, y)
 output_triton_cpu = add(x, y, None, is_cpu=True)
 print(output_torch_cpu)
 print(output_triton_cpu)
@@ -98,7 +98,7 @@ print(f'The maximum difference between torch-cpu and triton-cpu is '
 
 LINE_VALS = ['triton-cpu-single', 'triton-cpu', 'torch-cpu']
 LINE_NAMES = ['TritonCPU 1', 'TritonCPU', 'TorchCPU']
-LINE_STYLES = [('blue', '-'), ('green', '-'), ('cyan', '-')]
+LINE_STYLES = [('blue', '--'), ('blue', '-'), ('green', '-')]
 
 if USE_GPU and triton.runtime.driver.get_active_gpus():
     triton.runtime.driver.set_active_to_gpu()
@@ -150,31 +150,35 @@ def benchmark(size, provider):
     y = torch.rand(size, device=device, dtype=torch.float32)
 
     if device == 'cpu':
+        is_cpu = True
         triton.runtime.driver.set_active_to_cpu()
         if 'single' in provider:
             os.environ['TRITON_CPU_SINGLE_CORE'] = '1'
         else:
             os.unsetenv('TRITON_CPU_SINGLE_CORE')
     else:
+        is_cpu = False
         triton.runtime.driver.set_active_to_gpu()
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-gpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y, quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y, quantiles=quantiles, is_cpu=is_cpu)
     elif provider == 'triton-gpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, None, False), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, None, False), quantiles=quantiles, is_cpu=is_cpu)
     elif provider == 'torch-cpu':
         # Note that we preallocate the output buffer here to only measure the kernel performance
         # without a large chunk of memory allocation.
         output = torch.empty_like(x)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.add(x, y, out=output), quantiles=quantiles,
-                                                     is_cpu=True)
+                                                     is_cpu=is_cpu)
     elif provider == 'triton-cpu-single':
         output = torch.empty_like(x)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, True), quantiles=quantiles, is_cpu=True)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, True), quantiles=quantiles,
+                                                     is_cpu=is_cpu)
     elif provider == 'triton-cpu':
         output = torch.empty_like(x)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, True), quantiles=quantiles, is_cpu=True)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, True), quantiles=quantiles,
+                                                     is_cpu=is_cpu)
     gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
