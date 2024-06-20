@@ -88,6 +88,7 @@ def compile_empty_kernel_with_gc(attrs):
 def test_compile_in_forked_subproc_with_forced_gc() -> None:
     reset_tmp_dir()
     import gc
+    old_gc_state = gc.isenabled()
     gc.disable()
 
     config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
@@ -98,4 +99,8 @@ def test_compile_in_forked_subproc_with_forced_gc() -> None:
     proc = multiprocessing.Process(target=compile_empty_kernel_with_gc, args=(config, ))
     proc.start()
     proc.join()
+
+    # restore gc state
+    if old_gc_state:
+        gc.enable()
     assert proc.exitcode == 0
