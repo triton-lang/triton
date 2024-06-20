@@ -425,8 +425,13 @@ void init_triton_llvm(py::module &&m) {
   });
 }
 
+void triton_stacktrace_signal_handler(void *) {
+  llvm::sys::PrintStackTrace(llvm::errs());
+  PyErr_SetInterrupt();
+}
+
 void init_triton_stacktrace_hook(pybind11::module &m) {
   if (!mlir::triton::tools::getBoolEnv("TRITON_DISABLE_PYTHON_STACKTRACE")) {
-    llvm::sys::PrintStackTraceOnErrorSignal("triton_python");
+    llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
   }
 }
