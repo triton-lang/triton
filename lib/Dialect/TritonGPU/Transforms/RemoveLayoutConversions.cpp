@@ -509,7 +509,8 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
       assert(layoutIt->second.encodings.size() == 1 &&
              "we should have resolved to a single encoding");
       Attribute encodingPicked = *(layoutIt->second.encodings.begin());
-      if (encodingPicked == tensorType.getEncoding())
+      if (encodingPicked == tensorType.getEncoding() ||
+          rewriteMapping.count({value, encoding}) == 0)
         rewrittenValue = value;
       else
         rewrittenValue = rewriteMapping[{value, encodingPicked}];
