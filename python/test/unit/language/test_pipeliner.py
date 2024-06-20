@@ -4,7 +4,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-import numpy as np
+import triton.tools.experimental_descriptor
 
 
 def is_cuda():
@@ -115,21 +115,12 @@ def test_pipeline_matmul(device):
     output = torch.empty((M, N), dtype=torch.float16, device=device)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     if is_cuda_tma_available():
-        TMA_SIZE = 128
-
-        desc_a = np.empty(TMA_SIZE, dtype=np.int8)
-        desc_b = np.empty(TMA_SIZE, dtype=np.int8)
-        desc_output = np.empty(TMA_SIZE, dtype=np.int8)
-        triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), M, K, BLOCK_M, BLOCK_K,
-                                                                  a.element_size(), desc_a)
-        triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), K, N, BLOCK_K, BLOCK_N,
-                                                                  b.element_size(), desc_b)
-        triton.runtime.driver.active.utils.fill_2d_tma_descriptor(output.data_ptr(), M, N, BLOCK_M, BLOCK_N,
-                                                                  output.element_size(), desc_output)
-
-        a_tma = torch.tensor(desc_a, device=device)
-        b_tma = torch.tensor(desc_b, device=device)
-        output_tma = torch.tensor(desc_output, device=device)
+        a_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K, BLOCK_M, BLOCK_K,
+                                                                              a.element_size())
+        b_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(b.data_ptr(), K, N, BLOCK_K, BLOCK_N,
+                                                                              b.element_size())
+        output_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(output.data_ptr(), M, N, BLOCK_M,
+                                                                                   BLOCK_N, output.element_size())
         handler = matmul_kernel_tma[grid](a_tma, b_tma, output_tma, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
                                           NUM_STAGES=NUM_STAGES)
     else:
