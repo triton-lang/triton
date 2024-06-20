@@ -123,9 +123,20 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
     return derived_metrics + original_metrics
 
 
-def parse(metrics, filename, include, exclude, threshold, depth):
+def format_frames(gf, format):
+    if format == "file_function_line":
+        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split("/")[-1])
+    elif format == "function_line":
+        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split(":")[-1])
+    elif format == "file_function":
+        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split("/")[-1].split("@")[0])
+    return gf
+
+
+def parse(metrics, filename, include, exclude, threshold, depth, format):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
+        gf = format_frames(gf, format)
         assert len(raw_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
         metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
@@ -169,7 +180,7 @@ Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
 - flop/s, gflop/s, tflop/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
-- util: max(sum(flops<width>) / peak_flops<width>_time, bytes / peak_bandwidth_time))
+- util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
 """,
     )
     argparser.add_argument(
@@ -197,7 +208,6 @@ There are two modes:
         default=None,
         help="Exclude frames(kernels) that match the given regular expression",
     )
-
     argparser.add_argument(
         "-t",
         "--threshold",
@@ -206,7 +216,6 @@ There are two modes:
         help=
         "Exclude frames(kernels) whose metrics are below the given threshold. This filter only applies on the first metric.",
     )
-
     argparser.add_argument(
         "-d",
         "--depth",
@@ -214,6 +223,14 @@ There are two modes:
         default=100,
         help="The depth of the tree to display",
     )
+    argparser.add_argument(
+        "-f", "--format", type=str, choices=["full", "file_function_line", "function_line", "file_function"],
+        default="full", help="""Formating the frame name.
+- full: include the path, file name, function name and line number.
+- file_function_line: include the file name, function name and line number.
+- function_line: include the function name and line number.
+- file_function: include the file name and function name.
+""")
 
     args, target_args = argparser.parse_known_args()
     assert len(target_args) == 1, "Must specify a file to read"
@@ -224,12 +241,13 @@ There are two modes:
     exclude = args.exclude
     threshold = args.threshold
     depth = args.depth
+    format = args.format
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        parse(metrics, file_name, include, exclude, threshold, depth)
+        parse(metrics, file_name, include, exclude, threshold, depth, format)
 
 
 if __name__ == "__main__":
