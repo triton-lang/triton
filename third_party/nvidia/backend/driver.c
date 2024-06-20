@@ -263,12 +263,11 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   uint64_t dim;
   uint32_t tensorDim;
   int elementSize;
-  Py_buffer desc_buffer;
-  if (!PyArg_ParseTuple(args, "KKiiy*", &global_address, &dim, &tensorDim,
-                        &elementSize, &desc_buffer)) {
+  unsigned long long desc_address;
+  if (!PyArg_ParseTuple(args, "KKiiK", &global_address, &dim, &tensorDim,
+                        &elementSize, &desc_address)) {
     return NULL;
   }
-  char *desc = (char *)desc_buffer.buf;
   uint64_t dims[1] = {dim};
   uint64_t globalStrides[1] = {dim * elementSize};
   uint32_t boxDim[1] = {tensorDim};
@@ -290,7 +289,7 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   assert((elementSize * tensorDim) >= 32 && "block size too small.");
   int rank = 1;
   CUresult result = cuTensorMapEncodeTiled(
-      (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
+      (CUtensorMap *)desc_address, type, rank, (void *)global_address, dims,
       globalStrides, boxDim, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
@@ -305,13 +304,12 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   uint64_t dims[2];
   uint32_t tensorDims[2];
   int elementSize;
-  Py_buffer desc_buffer;
-  if (!PyArg_ParseTuple(args, "KKKiiiy*", &global_address, &dims[1], &dims[0],
+  unsigned long long desc_address;
+  if (!PyArg_ParseTuple(args, "KKKiiiK", &global_address, &dims[1], &dims[0],
                         &tensorDims[1], &tensorDims[0], &elementSize,
-                        &desc_buffer)) {
+                        &desc_address)) {
     return NULL;
   }
-  char *desc = (char *)desc_buffer.buf;
   uint64_t globalStrides[2] = {dims[0] * elementSize,
                                dims[0] * dims[1] * elementSize};
   uint32_t elementStrides[2] = {1, 1};
@@ -351,7 +349,7 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
     tensorDims[0] = 128 / elementSize;
   }
   CUresult result = cuTensorMapEncodeTiled(
-      (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
+      (CUtensorMap *)desc_address, type, rank, (void *)global_address, dims,
       globalStrides, tensorDims, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
