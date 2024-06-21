@@ -584,6 +584,26 @@ public:
   // std::optional<LinearLayout> divideLeft(const LinearLayout &divisor);
   std::optional<LinearLayout> divideRight(const LinearLayout &divisor);
 
+  // Gets a layout with only these in/out dimensions.
+  //
+  // In other words, gets a layout where the in-dims not mentioned in inDimNames
+  // are set to 0, and the out-dims not mentioned in outDimNames are omitted.
+  //
+  // The output-dim sizes are unchanged.  The order of the in/out dims in the
+  // returned layout matches the order of the original layout, not the order of
+  // the arguments.
+  LinearLayout sublayout(ArrayRef<StringAttr> inDimNames,
+                         ArrayRef<StringAttr> outDimNames) const;
+
+  // Is the sublayout restricted to inDimNames + outDimNames all zeros?
+  bool sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
+                       ArrayRef<StringAttr> outDimNames) const;
+
+  // Is the sublayout restricted to inDimNames + outDimNames and then flattened
+  // to 1D the identity layout (ignoring out-dim sizes)?
+  bool sublayoutIsIdentity(ArrayRef<StringAttr> inDimNames,
+                           ArrayRef<StringAttr> outDimNames) const;
+
   // Computes and returns L(x, y, z).
   //
   // If you want to apply the layout to mlir Values instead of integers, that
@@ -651,6 +671,7 @@ public:
   friend bool operator!=(LinearLayout lhs, LinearLayout rhs) {
     return !(lhs == rhs);
   }
+  bool equalIgnoringOutDimSizes(const LinearLayout &other) const;
 
 private:
   // Factory function that gracefully fails rather than asserts if the layout is
