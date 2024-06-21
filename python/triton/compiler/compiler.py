@@ -246,7 +246,12 @@ def compile(src, target=None, options=None):
     enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
     fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
-    metadata_filename = f"{src.name}.json"
+    # Pre-truncate the file name here to avoid hitting the 255 character limit on common platforms.
+    # The final file name in the cache will have a format of f"{filename}.{ext}.tmp.pid_{pid}_{uuid}".
+    # A PID string can be 5-character long. A UUID string has typically 36 characters. Let's truncate
+    # the file name to 150 characters to be safe.
+    file_name = src.name[:150]
+    metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
     always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
@@ -280,7 +285,7 @@ def compile(src, target=None, options=None):
     use_ttgir_loc = os.environ.get("USE_TTGIR_LOC", "0") == "1"
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
-        ir_filename = f"{src.name}.{ext}"
+        ir_filename = f"{file_name}.{ext}"
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
