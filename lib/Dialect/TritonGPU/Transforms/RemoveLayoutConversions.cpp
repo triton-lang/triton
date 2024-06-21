@@ -20,6 +20,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include <deque>
 #include <memory>
 
 namespace mlir {
@@ -440,10 +441,10 @@ bool reduceToScalar(Operation *op) {
 }
 
 void LayoutPropagation::rewriteRegion(Region &region) {
-  SmallVector<Region *> queue = {&region};
+  std::deque<Region *> queue = {&region};
   while (!queue.empty()) {
-    Region *currentRegion = queue.back();
-    queue.pop_back();
+    Region *currentRegion = queue.front();
+    queue.pop_front();
     for (Operation &op : currentRegion->getOps()) {
       bool needRewrite = false;
       SmallVector<Value> results = op.getResults();
@@ -509,8 +510,7 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
       assert(layoutIt->second.encodings.size() == 1 &&
              "we should have resolved to a single encoding");
       Attribute encodingPicked = *(layoutIt->second.encodings.begin());
-      if (encodingPicked == tensorType.getEncoding() ||
-          rewriteMapping.count({value, encoding}) == 0)
+      if (encodingPicked == tensorType.getEncoding())
         rewrittenValue = value;
       else
         rewrittenValue = rewriteMapping[{value, encodingPicked}];
