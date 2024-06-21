@@ -164,7 +164,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 
 **Helpful environment variables**
 
-- `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs.
+- `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
+   kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
   GPU.  You can insert Python breakpoints in your kernel code!
