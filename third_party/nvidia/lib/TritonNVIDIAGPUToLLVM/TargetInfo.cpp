@@ -321,7 +321,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   // 4, split it into multiple ops.
   if (vec > 4) {
     // TODO(jlebar): Implement this once we can write a testcase.
-    assert(false && "not yet implemented");
+    assert(false && "vec > 4 not yet implemented");
   }
 
   // Get pointer to remote shared memory if needed.
@@ -335,19 +335,18 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                 .o("shared", !ctaId.has_value())
                 .b(bitwidth)
                 .v(vec, /*predicate=*/vec > 1);
-
-  PTXBuilder::Operand *valOpr;
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
 
-  std::string elemConstraint = getConstraintForBitwidth(bitwidth);
+  PTXBuilder::Operand *valOpr;
+  std::string constraint = getConstraintForBitwidth(bitwidth);
   if (vecTy) {
-    SmallVector<Value> vecVals;
+    SmallVector<std::pair<Value, std::string>> vecVals;
     for (int i = 0; i < vec; i++) {
-      vecVals.push_back(extract_element(val, i32_val(i)));
+      vecVals.push_back({extract_element(val, i32_val(i)), constraint});
     }
-    valOpr = builder.newListOperand(vec, elemConstraint);
+    valOpr = builder.newListOperand(vecVals);
   } else {
-    valOpr = builder.newOperand(val, elemConstraint);
+    valOpr = builder.newOperand(val, constraint);
   }
   st(ptrOpr, valOpr).predicate(pred, "b");
   builder.launch(rewriter, loc, void_ty(ctx));
@@ -377,7 +376,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   // 4, split it into multiple ops.
   if (vec > 4) {
     // TODO(jlebar): Implement this once we can write a testcase.
-    assert(false && "not yet implemented");
+    assert(false && "vec > 4 not yet implemented");
   }
 
   // Get pointer to remote shared memory if needed.
@@ -389,36 +388,38 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   auto ld = builder.create<>("ld")
                 ->o("shared::cta", ctaId.has_value())
                 .o("shared", !ctaId.has_value())
-                .b(bitwidth)
-                .v(vec, /*predicate=*/vec > 1);
+                .v(vec, /*predicate=*/vec > 1)
+                .b(bitwidth);
 
   std::string elemConstraint = "=" + getConstraintForBitwidth(bitwidth);
   auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
                           : builder.newListOperand(vec, elemConstraint);
   ld(outOpr, builder.newAddrOperand(ptr, "r")).predicate(pred, "b");
 
-  Type resultTy;
-  if (vec == 1) {
-    resultTy = int_ty(bitwidth);
-  } else {
-    resultTy = struct_ty(SmallVector<Type>(vec, int_ty(bitwidth)));
-  }
+  Type resultTy =
+      vec == 1 ? Type(int_ty(bitwidth))
+               : Type(struct_ty(SmallVector<Type>(vec, int_ty(bitwidth))));
   Value load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
 
-  if (vecTy) {
-    // Unpack the struct returned by the inline asm into a vector.
-    SmallVector<Value> vals;
+  SmallVector<Value> resultVals;
+  if (vec == 1) {
+    resultVals.push_back(load);
+  } else {
     for (int i = 0; i < vec; i++) {
-      auto elem = extract_val(int_ty(bitwidth), load, i);
-      vals.push_back(bitcast(elem, vecTy.getElementType()));
+      resultVals.push_back(extract_val(load, i));
     }
+  }
+
+  if (vecTy) {
     Value ret = undef(loadTy);
     for (int i = 0; i < vec; i++) {
-      ret = insert_element(ret, i32_val(i), vals[i]);
+      ret = insert_element(ret, bitcast(resultVals[i], vecTy.getElementType()),
+                           i32_val(i));
     }
     return ret;
   } else {
-    return bitcast(load, loadTy);
+    assert(vec == 1);
+    return bitcast(resultVals[0], loadTy);
   }
 }
 
