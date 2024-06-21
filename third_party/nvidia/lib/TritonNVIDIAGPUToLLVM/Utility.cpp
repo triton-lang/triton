@@ -100,7 +100,7 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 }
 
 /// Create a predicate with just single active thread.
-Value createElectPredicate(Location loc, PatternRewriter &rewriter) {
+Value createElectPredicate(Location loc, RewriterBase &rewriter) {
   PTXBuilder ptxBuilder;
   auto &elect = *ptxBuilder.create<>("elect.sync _|$0, 0xffffffff;");
   elect({ptxBuilder.newOperand("=b")}, /*onlyAttachMLIRArgs=*/true);
