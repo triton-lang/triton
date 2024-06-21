@@ -246,7 +246,11 @@ def compile(src, target=None, options=None):
     enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
     fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
-    file_name = src.name[:50]
+    # Pre-truncate the file name here to avoid hitting the 255 character limit on common platforms.
+    # The final file name in the cache will have a format of f"{filename}.{ext}.tmp.pid_{pid}_{uuid}".
+    # A PID string can be 5-character long. A UUID string has typically 36 characters. Let's truncate
+    # the file name to 150 characters to be safe.
+    file_name = src.name[:150]
     metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
