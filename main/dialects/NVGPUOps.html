@@ -83,32 +83,22 @@
 <li class="toctree-l4"><a class="reference internal" href="#id1">Attributes:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#nvgpu-load-dsmem-triton-nvgpu-loaddsmemop"><code class="docutils literal notranslate"><span class="pre">nvgpu.load_dsmem</span></code> (triton::nvgpu::LoadDSmemOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id2">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#operands">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id3">Results:</a></li>
-</ul>
-</li>
-<li class="toctree-l3"><a class="reference internal" href="#nvgpu-store-dsmem-triton-nvgpu-storedsmemop"><code class="docutils literal notranslate"><span class="pre">nvgpu.store_dsmem</span></code> (triton::nvgpu::StoreDSmemOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id4">Operands:</a></li>
-</ul>
-</li>
 <li class="toctree-l3"><a class="reference internal" href="#nvgpu-stmatrix-triton-nvgpu-storematrixop"><code class="docutils literal notranslate"><span class="pre">nvgpu.stmatrix</span></code> (triton::nvgpu::StoreMatrixOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id5">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#operands">Operands:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-commit-group-triton-nvgpu-wgmmacommitgroupop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_commit_group</span></code> (triton::nvgpu::WGMMACommitGroupOp)</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-fence-triton-nvgpu-wgmmafenceop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_fence</span></code> (triton::nvgpu::WGMMAFenceOp)</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-triton-nvgpu-wgmmaop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma</span></code> (triton::nvgpu::WGMMAOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id6">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id7">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id8">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id2">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id3">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id4">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#nvgpu-wgmma-wait-group-triton-nvgpu-wgmmawaitgroupop"><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma_wait_group</span></code> (triton::nvgpu::WGMMAWaitGroupOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id9">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id10">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id11">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id5">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id6">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id7">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -210,89 +200,6 @@
 </table>
 </section>
 </section>
-<section id="nvgpu-load-dsmem-triton-nvgpu-loaddsmemop">
-<h2><code class="docutils literal notranslate"><span class="pre">nvgpu.load_dsmem</span></code> (triton::nvgpu::LoadDSmemOp)<a class="headerlink" href="#nvgpu-load-dsmem-triton-nvgpu-loaddsmemop" title="Link to this heading">¶</a></h2>
-<p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.load_dsmem` operands attr-dict `:` functional-type(operands, results)
-</pre></div>
-</div>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
-<section id="id2">
-<h3>Attributes:<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>bitwidth</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>vec</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-</table>
-</section>
-<section id="operands">
-<h3>Operands:<a class="headerlink" href="#operands" title="Link to this heading">¶</a></h3>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">addr</span></code></p></td>
-<td><p>LLVM pointer type</p></td>
-</tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">ctaId</span></code></p></td>
-<td><p>32-bit signless integer</p></td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="id3">
-<h3>Results:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>LLVM type with size</p></td>
-</tr>
-</tbody>
-</table>
-</section>
-</section>
-<section id="nvgpu-store-dsmem-triton-nvgpu-storedsmemop">
-<h2><code class="docutils literal notranslate"><span class="pre">nvgpu.store_dsmem</span></code> (triton::nvgpu::StoreDSmemOp)<a class="headerlink" href="#nvgpu-store-dsmem-triton-nvgpu-storedsmemop" title="Link to this heading">¶</a></h2>
-<p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.store_dsmem` operands attr-dict `:` type(operands)
-</pre></div>
-</div>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
-<section id="id4">
-<h3>Operands:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">addr</span></code></p></td>
-<td><p>LLVM pointer type</p></td>
-</tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">ctaId</span></code></p></td>
-<td><p>32-bit signless integer</p></td>
-</tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">values</span></code></p></td>
-<td><p>variadic of LLVM type with size</p></td>
-</tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
-<td><p>1-bit signless integer</p></td>
-</tr>
-</tbody>
-</table>
-</section>
-</section>
 <section id="nvgpu-stmatrix-triton-nvgpu-storematrixop">
 <h2><code class="docutils literal notranslate"><span class="pre">nvgpu.stmatrix</span></code> (triton::nvgpu::StoreMatrixOp)<a class="headerlink" href="#nvgpu-stmatrix-triton-nvgpu-storematrixop" title="Link to this heading">¶</a></h2>
 <p>Syntax:</p>
@@ -301,8 +208,8 @@
 </div>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
-<section id="id5">
-<h3>Operands:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<section id="operands">
+<h3>Operands:<a class="headerlink" href="#operands" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -340,8 +247,8 @@
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.wgmma` $opA `,` $opB (`,` $opC^)? attr-dict `:` functional-type(operands, $res)
 </pre></div>
 </div>
-<section id="id6">
-<h3>Attributes:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<section id="id2">
+<h3>Attributes:<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>m</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
@@ -382,8 +289,8 @@
 * col (`col`){{% /markdown %}}</details></td></tr>
 </table>
 </section>
-<section id="id7">
-<h3>Operands:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<section id="id3">
+<h3>Operands:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -403,8 +310,8 @@
 </tbody>
 </table>
 </section>
-<section id="id8">
-<h3>Results:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<section id="id4">
+<h3>Results:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -426,15 +333,15 @@
 </pre></div>
 </div>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
-<section id="id9">
-<h3>Attributes:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id5">
+<h3>Attributes:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
-<section id="id10">
-<h3>Operands:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id6">
+<h3>Operands:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -448,8 +355,8 @@
 </tbody>
 </table>
 </section>
-<section id="id11">
-<h3>Results:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id7">
+<h3>Results:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>

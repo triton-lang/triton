@@ -162,10 +162,10 @@ To install the dependencies for the tutorials:
 
 .. only:: html
 
-  .. image:: /getting-started/tutorials/images/thumb/sphx_glr_09-persistent-fp8-matmul_thumb.png
+  .. image:: /getting-started/tutorials/images/thumb/sphx_glr_09-persistent-matmul_thumb.png
     :alt:
 
-  :ref:`sphx_glr_getting-started_tutorials_09-persistent-fp8-matmul.py`
+  :ref:`sphx_glr_getting-started_tutorials_09-persistent-matmul.py`
 
 .. raw:: html
 
@@ -191,7 +191,7 @@ To install the dependencies for the tutorials:
    /getting-started/tutorials/06-fused-attention
    /getting-started/tutorials/07-extern-functions
    /getting-started/tutorials/08-grouped-gemm
-   /getting-started/tutorials/09-persistent-fp8-matmul
+   /getting-started/tutorials/09-persistent-matmul
 
 
 .. only:: html

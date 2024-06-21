@@ -133,11 +133,11 @@
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>input</strong> – the input values</p></li>
-<li><p><strong>axis</strong> – the dimension along which the reduction should be done</p></li>
-<li><p><strong>keep_dims</strong> – if true, keep the reduced dimensions with length 1</p></li>
-<li><p><strong>return_indices</strong> – if true, return index corresponding to the minimum value</p></li>
-<li><p><strong>return_indices_tie_break_left</strong> – if true, return the left-most indices in case of ties for values that aren’t NaN</p></li>
+<li><p><strong>input</strong> (<em>Tensor</em>) – the input values</p></li>
+<li><p><strong>axis</strong> (<em>int</em>) – the dimension along which the reduction should be done</p></li>
+<li><p><strong>keep_dims</strong> (<em>bool</em>) – if true, keep the reduced dimensions with length 1</p></li>
+<li><p><strong>return_indices</strong> (<em>bool</em>) – if true, return index corresponding to the minimum value</p></li>
+<li><p><strong>return_indices_tie_break_left</strong> (<em>bool</em>) – if true, in case of a tie (i.e., multiple elements have the same minimum value), return the left-most index for values that aren’t NaN</p></li>
 </ul>
 </dd>
 </dl>

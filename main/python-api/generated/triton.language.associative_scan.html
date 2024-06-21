@@ -131,10 +131,10 @@
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>input</strong> – the input tensor, or tuple of tensors</p></li>
-<li><p><strong>axis</strong> – the dimension along which the reduction should be done</p></li>
-<li><p><strong>combine_fn</strong> – a function to combine two groups of scalar tensors (must be marked with &#64;triton.jit)</p></li>
-<li><p><strong>reverse</strong> – apply the associative scan in the reverse direction along axis.</p></li>
+<li><p><strong>input</strong> (<em>Tensor</em>) – the input tensor, or tuple of tensors</p></li>
+<li><p><strong>axis</strong> (<em>int</em>) – the dimension along which the reduction should be done</p></li>
+<li><p><strong>combine_fn</strong> (<em>Callable</em>) – a function to combine two groups of scalar tensors (must be marked with &#64;triton.jit)</p></li>
+<li><p><strong>reverse</strong> (<em>bool</em>) – whether to apply the associative scan in the reverse direction along axis</p></li>
 </ul>
 </dd>
 </dl>

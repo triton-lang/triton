@@ -61,62 +61,6 @@ operation ::= `nvgpu.fence_async_shared` attr-dict
 <tr><td><code>bCluster</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
-### `nvgpu.load_dsmem` (triton::nvgpu::LoadDSmemOp)
-
-Syntax:
-
-```
-operation ::= `nvgpu.load_dsmem` operands attr-dict `:` functional-type(operands, results)
-```
-
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>bitwidth</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>vec</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `addr` | LLVM pointer type
-| `ctaId` | 32-bit signless integer
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | LLVM type with size
-
-### `nvgpu.store_dsmem` (triton::nvgpu::StoreDSmemOp)
-
-Syntax:
-
-```
-operation ::= `nvgpu.store_dsmem` operands attr-dict `:` type(operands)
-```
-
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `addr` | LLVM pointer type
-| `ctaId` | 32-bit signless integer
-| `values` | variadic of LLVM type with size
-| `pred` | 1-bit signless integer
-
 ### `nvgpu.stmatrix` (triton::nvgpu::StoreMatrixOp)
 
 Syntax:
