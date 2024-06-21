@@ -23,6 +23,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include <csignal>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
@@ -425,8 +426,13 @@ void init_triton_llvm(py::module &&m) {
   });
 }
 
+void triton_stacktrace_signal_handler(void *) {
+  llvm::sys::PrintStackTrace(llvm::errs());
+  raise(SIGABRT);
+}
+
 void init_triton_stacktrace_hook(pybind11::module &m) {
   if (!mlir::triton::tools::getBoolEnv("TRITON_DISABLE_PYTHON_STACKTRACE")) {
-    llvm::sys::PrintStackTraceOnErrorSignal("triton_python");
+    llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
   }
 }
