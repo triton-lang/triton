@@ -2478,7 +2478,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // Regression test:
   // The while loop use the result of the for loop as an argument.
   // When propagating the layout, we should only "forward" propagate the layout to the argument and the result of the while loop
-  // CHECK-LABEL: @for_arg_no_rewrite
+  // CHECK-LABEL: @while_use_for
   tt.func public @while_use_for(%arg0: !tt.ptr<f16>, %arg3: !tt.ptr<f32>, %arg6: i32) attributes {noinline = false} {
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
