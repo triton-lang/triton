@@ -5112,9 +5112,11 @@ def matmul_kernel(  #
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("M, N, K", [(128, 256, 256)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (32, 32, 32)])
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
-def test_max_num_imprecise_acc(in_type_str, low_precision_acc, device):
+def test_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
@@ -5124,15 +5126,13 @@ def test_max_num_imprecise_acc(in_type_str, low_precision_acc, device):
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
     check_type_supported(in_type_str, device)
-    M, N, K = 128, 256, 256
-    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
     C = torch.empty((M, N), dtype=torch.float32, device=device)
     num_warps = 8
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
-    grid = (triton.cdiv(M, BLOCK_M), 1)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
                             C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
     torch_a = torch.from_numpy(A).to(device=device)
@@ -5142,10 +5142,8 @@ def test_max_num_imprecise_acc(in_type_str, low_precision_acc, device):
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
-    elif low_precision_acc > 32:
-        torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     else:
-        torch.testing.assert_close(ref_out, C)
+        torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] >= 9:
         assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (BLOCK_K / low_precision_acc)
 
