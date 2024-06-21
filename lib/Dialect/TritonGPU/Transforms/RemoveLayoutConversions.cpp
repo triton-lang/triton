@@ -262,7 +262,7 @@ bool isLayoutAnchor(Operation *op) {
 }
 
 void LayoutPropagation::initAnchorLayout() {
-  auto maybeAddAnchor = [&](Value v) {
+  auto maybeAddAnchor = [&](Operation *op, Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
       // Workaround, don't popagate MMA layout unless there is a convert
       // back to mma further down to avoid generating reduction with MMA
@@ -275,6 +275,11 @@ void LayoutPropagation::initAnchorLayout() {
         return;
       }
       layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
+      if (auto loop = dyn_cast<LoopLikeOpInterface>(op)) {
+        OpResult result = cast<OpResult>(v);
+        auto arg = loop.getTiedLoopRegionIterArg(result);
+        layouts.insert({arg, LayoutInfo(tensorType.getEncoding())});
+      }
     }
   };
 
@@ -282,13 +287,13 @@ void LayoutPropagation::initAnchorLayout() {
   // you can pass a tensor with an encoding as an arg, instead of explicitly
   // calling tt.load.
   for (auto arg : funcOp.getArguments()) {
-    maybeAddAnchor(arg);
+    maybeAddAnchor(funcOp, arg);
   }
 
   funcOp.walk([&](Operation *op) {
     if (isLayoutAnchor(op)) {
       for (auto result : op->getResults()) {
-        maybeAddAnchor(result);
+        maybeAddAnchor(op, result);
       }
     }
   });
@@ -423,6 +428,11 @@ void LayoutPropagation::dump() {
     OpPrintingFlags flags;
     flags.skipRegions();
     it.first.print(llvm::errs(), flags);
+    if (isa_and_nonnull<scf::ForOp>(it.first.getDefiningOp())) {
+      llvm::errs() << " (for op)";
+      OpResult result = cast<OpResult>(it.first);
+      llvm::errs() << " " << result.getResultNumber();
+    }
     llvm::errs() << " \n encoding:\n";
     for (auto encoding : it.second.encodings) {
       encoding.print(llvm::errs());
@@ -458,8 +468,9 @@ void LayoutPropagation::rewriteRegion(Region &region) {
                "we should have resolved to a single encoding");
         auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
         // If the encoding is already what we want skip.
-        if (encoding == *info.encodings.begin())
+        if (encoding == *info.encodings.begin()) {
           continue;
+        }
         needRewrite = true;
       }
       if (needRewrite) {
@@ -510,8 +521,7 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
       assert(layoutIt->second.encodings.size() == 1 &&
              "we should have resolved to a single encoding");
       Attribute encodingPicked = *(layoutIt->second.encodings.begin());
-      if (encodingPicked == tensorType.getEncoding() ||
-          !rewriteMapping.count({value, encodingPicked}))
+      if (encodingPicked == tensorType.getEncoding())
         rewrittenValue = value;
       else
         rewrittenValue = rewriteMapping[{value, encodingPicked}];
