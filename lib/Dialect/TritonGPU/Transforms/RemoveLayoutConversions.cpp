@@ -455,9 +455,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
                "we should have resolved to a single encoding");
         auto encoding = cast<RankedTensorType>(result.getType()).getEncoding();
         // If the encoding is already what we want skip.
-        if (encoding == *info.encodings.begin()) {
+        if (encoding == *info.encodings.begin())
           continue;
-        }
         needRewrite = true;
       }
       if (needRewrite) {
