@@ -1569,6 +1569,12 @@ void init_triton_ir(py::module &&m) {
              bool haveDiagnostics =
                  ::triton::tools::getBoolEnv("MLIR_ENABLE_DIAGNOSTICS");
              bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+             std::string funcToDump;
+             if (!haveDump) {
+               funcToDump = triton::tools::getStrEnv("MLIR_ENABLE_DUMP");
+               if (!funcToDump.empty())
+                 haveDump = true;
+             }
              if (haveDiagnostics || haveDump) {
                context->disableMultithreading();
              }
@@ -1584,7 +1590,19 @@ void init_triton_ir(py::module &&m) {
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
                printingFlags.enableDebugInfo();
-               auto printAlways = [](Pass *, Operation *) { return true; };
+               auto printAlways = [funcToDump](Pass *, Operation *op) -> bool {
+                 if (funcToDump.empty())
+                   return true;
+                 if (auto mod = dyn_cast<mlir::ModuleOp>(op)) {
+                   return mod.lookupSymbol(funcToDump);
+                 }
+                 if (auto func = dyn_cast<triton::FuncOp>(op)) {
+                   return SymbolTable::getSymbolName(func).getValue() ==
+                          funcToDump;
+                 }
+
+                 return false;
+               };
                self.enableIRPrinting(
                    /*shouldPrintBeforePass=*/printAlways,
                    /*shouldPrintAfterPass=*/printAlways,
