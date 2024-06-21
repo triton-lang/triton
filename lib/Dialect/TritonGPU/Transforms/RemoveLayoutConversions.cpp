@@ -275,11 +275,6 @@ void LayoutPropagation::initAnchorLayout() {
         return;
       }
       layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
-      if (auto loop = dyn_cast<LoopLikeOpInterface>(op)) {
-        OpResult result = cast<OpResult>(v);
-        auto arg = loop.getTiedLoopRegionIterArg(result);
-        layouts.insert({arg, LayoutInfo(tensorType.getEncoding())});
-      }
     }
   };
 
