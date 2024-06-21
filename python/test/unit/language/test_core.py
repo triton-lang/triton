@@ -5116,7 +5116,7 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (32, 32, 32)])
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
-def test_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
+def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
