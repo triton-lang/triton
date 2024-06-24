@@ -226,8 +226,9 @@ static void createTMAAsyncCopy(
 }
 
 // If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return true and get the shared encoding that
-// needs to be used to be compatible with users' layouts.
+// the same dot operand encoding, return the shared encoding that needs to be
+// used to be compatible with users' layouts. If there are imcompatible shared
+// encodings set `incompatible` to true.
 static std::optional<ttg::SharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   ttg::SharedEncodingAttr attr;
@@ -455,12 +456,12 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         loadInfo.sharedEncoding =
             getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
       } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
-        bool imcompatible = false;
+        bool incompatible = false;
         loadInfo.sharedEncoding =
-            getSharedEncIfAllUsersAreDotEnc(op->getResult(0), imcompatible)
+            getSharedEncIfAllUsersAreDotEnc(op->getResult(0), incompatible)
                 .value_or(nullptr);
         // If we can't agree on a shared encoding skip pipelinig the load.
-        if (imcompatible)
+        if (incompatible)
           continue;
         // HACK: Triton LLVM codegen has a bug where local_loads from #shared to
         // #mma layout can lead to invalid code if the loaded shape is smaller
