@@ -26,12 +26,6 @@ DEFINE_DISPATCH(ExternLibHip, getDeviceCount, hipGetDeviceCount, int *);
 DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
                 hipDeviceProp_t *, int);
 
-DEFINE_DISPATCH(ExternLibHip, getGraphExecId, hipGetGraphExecId,
-                hipGraphExec_t, uint32_t *);
-
-DEFINE_DISPATCH(ExternLibHip, getGraphId, hipGetGraphId,
-               hipGraph_t, uint32_t *);
-
 
 Device getDevice(uint64_t index) {
   int clockRate;

@@ -186,9 +186,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     if(cid == HIP_API_ID_hipGraphLaunch){
 	pImpl->CorrIdToIsHipGraphMap[data->correlation_id] = true;
     }
-//    else{
-//	    pImpl->CorrIdToIsHipGraphMap[data->correlation_id] = false;
-//    }
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
       auto scopeId = Scope::getNewScopeId();

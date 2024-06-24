@@ -19,12 +19,6 @@ template <bool CheckSuccess> hipError_t getDeviceCount(int *count);
 template <bool CheckSuccess>
 hipError_t getDeviceProperties(hipDeviceProp_t *prop, int deviceId);
 
-template <bool CheckSuccess>
-hipError_t getGraphExecId(hipGraphExec_t graph, uint32_t *pId);
-
-template <bool CheckSuccess>
-hipError_t getGraphId(hipGraph_t graph, uint32_t *pId);
-
 Device getDevice(uint64_t index);
 
 const std::string getHipArchName(uint64_t index);
