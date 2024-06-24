@@ -7,7 +7,7 @@
 
 namespace proton {
 
-enum class MetricKind { Flexible, Kernel, Count };
+enum class MetricKind { Flexible, Kernel, PCSampling, Count };
 
 using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
 
@@ -145,6 +145,76 @@ private:
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
       "StartTime (ns)", "EndTime (ns)", "Count",
       "Time (ns)",      "DeviceId",     "DeviceType",
+  };
+};
+
+class PCSamplingMetric : public Metric {
+public:
+  enum PCSamplingMetricKind : int {
+    NumSamples,
+    NumStalledSamples,
+    StalledBranchResolving,
+    StalledNoInstruction,
+    StalledShortScoreboard,
+    StalledWait,
+    StalledLongScoreboard,
+    StalledTexThrottle,
+    StalledBarrier,
+    StalledMembar,
+    StalledIMCMiss,
+    StalledMIOThrottle,
+    StalledMathPipeThrottle,
+    StalledDrain,
+    StalledLGThrottle,
+    StalledNotSelected,
+    StalledMisc,
+    StalledDispatchStall,
+    StalledSleeping,
+    StalledSelected,
+    Count,
+  };
+
+  PCSamplingMetric()
+      : Metric(MetricKind::PCSampling, PCSamplingMetricKind::Count) {}
+
+  PCSamplingMetric(PCSamplingMetricKind kind, uint64_t samples,
+                   uint64_t stalledSamples)
+      : PCSamplingMetric() {
+    this->values[kind] = stalledSamples;
+    this->values[PCSamplingMetricKind::NumSamples] = samples;
+    this->values[PCSamplingMetricKind::NumStalledSamples] = stalledSamples;
+  }
+
+  virtual const std::string getName() const { return "PCSamplingMetric"; }
+
+  virtual const std::string getValueName(int valueId) const {
+    return VALUE_NAMES[valueId];
+  }
+
+  virtual bool isAggregable(int valueId) const { return true; }
+
+private:
+  const static inline std::string VALUE_NAMES[PCSamplingMetricKind::Count] = {
+      "NumSamples",
+      "NumStalledSamples",
+      "StalledBranchResolving",
+      "StalledNoInstruction",
+      "StalledShortScoreboard",
+      "StalledWait",
+      "StalledLongScoreboard",
+      "StalledTexThrottle",
+      "StalledBarrier",
+      "StalledMembar",
+      "StalledIMCMiss",
+      "StalledMIOThrottle",
+      "StalledMathPipeThrottle",
+      "StalledDrain",
+      "StalledLGThrottle",
+      "StalledNotSelected",
+      "StalledMisc",
+      "StalledDispatchStall",
+      "StalledSleeping",
+      "StalledSelected",
   };
 };
 

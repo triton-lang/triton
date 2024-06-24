@@ -1,3 +1,6 @@
+#ifndef PROTON_UTILITY_ATOMIC_H_
+#define PROTON_UTILITY_ATOMIC_H_
+
 #include <atomic>
 
 namespace proton {
@@ -17,3 +20,5 @@ template <typename T> T atomicMin(std::atomic<T> &target, T value) {
 }
 
 } // namespace proton
+
+#endif // PROTON_UTILITY_ATOMIC_H_

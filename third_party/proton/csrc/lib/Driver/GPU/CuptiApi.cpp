@@ -15,6 +15,9 @@ struct ExternLibCupti : public ExternLibBase {
 
 void *ExternLibCupti::lib = nullptr;
 
+DEFINE_DISPATCH(ExternLibCupti, getContextId, cuptiGetContextId, CUcontext,
+                uint32_t *);
+
 DEFINE_DISPATCH(ExternLibCupti, activityRegisterCallbacks,
                 cuptiActivityRegisterCallbacks,
                 CUpti_BuffersCallbackRequestFunc,
@@ -69,6 +72,40 @@ DEFINE_DISPATCH(ExternLibCupti, getGraphExecId, cuptiGetGraphExecId,
 
 DEFINE_DISPATCH(ExternLibCupti, getGraphId, cuptiGetGraphId, CUgraph,
                 uint32_t *);
+
+DEFINE_DISPATCH(ExternLibCupti, getCubinCrc, cuptiGetCubinCrc,
+                CUpti_GetCubinCrcParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, getSassToSourceCorrelation,
+                cuptiGetSassToSourceCorrelation,
+                CUpti_GetSassToSourceCorrelationParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, pcSamplingGetNumStallReasons,
+                cuptiPCSamplingGetNumStallReasons,
+                CUpti_PCSamplingGetNumStallReasonsParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, pcSamplingGetStallReasons,
+                cuptiPCSamplingGetStallReasons,
+                CUpti_PCSamplingGetStallReasonsParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, pcSamplingSetConfigurationAttribute,
+                cuptiPCSamplingSetConfigurationAttribute,
+                CUpti_PCSamplingConfigurationInfoParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, pcSamplingEnable, cuptiPCSamplingEnable,
+                CUpti_PCSamplingEnableParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, pcSamplingDisable, cuptiPCSamplingDisable,
+                CUpti_PCSamplingDisableParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, pcSamplingGetData, cuptiPCSamplingGetData,
+                CUpti_PCSamplingGetDataParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, pcSamplingStart, cuptiPCSamplingStart,
+                CUpti_PCSamplingStartParams *);
+
+DEFINE_DISPATCH(ExternLibCupti, pcSamplingStop, cuptiPCSamplingStop,
+                CUpti_PCSamplingStopParams *);
 
 } // namespace cupti
 

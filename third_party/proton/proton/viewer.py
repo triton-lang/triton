@@ -91,10 +91,10 @@ derivable_metrics = {
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
-    time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
-    time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
     for metric in metrics:
         if metric == "util":  # Tensor core only
+            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
+            time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
             min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
             min_time_flops = get_min_time_flops(gf.dataframe, device_info)
             time_sec = gf.dataframe[time_metric_name] * (time_factor_dict.factor[time_unit] /
@@ -102,6 +102,8 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
             derived_metrics.append("util (inc)")
         elif metric in derivable_metrics:
+            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
+            time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
             deriveable_metric = derivable_metrics[metric]
             metric_name = deriveable_metric.name
             metric_factor_dict = deriveable_metric.factor
@@ -111,6 +113,8 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
                                                metric_factor_dict[metric])
             derived_metrics.append(f"{metric} (inc)")
         elif metric in time_factor_dict.factor:
+            time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
+            time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
             metric_time_unit = time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = gf.dataframe[time_metric_name] * (
                 time_factor_dict.factor[time_unit] / time_factor_dict.factor[metric_time_unit])
