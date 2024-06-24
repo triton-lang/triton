@@ -60,7 +60,7 @@ public:
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
 
-  bool enableLinearLayout() const override { return false; }
+  bool enableLinearLayout() const override { return true; }
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
