@@ -296,9 +296,6 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
             offs_am = pid_m * BLOCK_SIZE_M
             offs_bn = pid_n * BLOCK_SIZE_N
 
-            offs_am = tl.multiple_of(offs_am, BLOCK_SIZE_M)
-            offs_bn = tl.multiple_of(offs_bn, BLOCK_SIZE_N)
-
         offs_k = ki * BLOCK_SIZE_K
 
         a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
