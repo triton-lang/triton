@@ -671,7 +671,8 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     %14 = tt.broadcast %11 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
-    // CHECK-NOT: triton_gpu.insert_slice_async
+    // check that the load didn't get pipelined.
+    // CHECK-NOT: alloc
     // CHECK: scf.for
     %17:2 = scf.for %arg2 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg3 = %cst_1, %arg4 = %cst_2) -> (tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>)  : i32 {
       %18 = tt.load %16 : tensor<64x16x!tt.ptr<f16>, #blocked>
@@ -1146,14 +1147,12 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     %51 = tt.addptr %50, %47 : tensor<64x256x!tt.ptr<i8>, #blocked>, tensor<64x256xi32, #blocked>
 
     // Check that both loads in the loop are pipelined.
-    // TODO(jlebar): https://github.com/triton-lang/triton/pull/3472 disables the
-    // relevant optimization.  Once we've reenabled it, we can uncomment this test.
     // CHECK: scf.for
-    // COM: CHECK-NOT: tt.load
+    // CHECK-NOT: tt.load
     // CHECK: triton_gpu.async_copy_global_to_local
-    // COM: CHECK-NOT: tt.load
-    // COM: CHECK: triton_gpu.async_copy_global_to_local
-    // COM: CHECK-NOT: tt.load
+    // CHECK-NOT: tt.load
+    // CHECK: triton_gpu.async_copy_global_to_local
+    // CHECK-NOT: tt.load
     // CHECK: scf.yield
     %54:3 = scf.for %arg9 = %c0_i32 to %c16_i32 step %c1_i32 iter_args(%arg10 = %cst_3, %arg11 = %41, %arg12 = %51) -> (tensor<16x256xf32, #mma>, tensor<16x128x!tt.ptr<f16>, #blocked1>, tensor<64x256x!tt.ptr<i8>, #blocked>)  : i32 {
       %78 = tt.load %arg11 : tensor<16x128x!tt.ptr<f16>, #blocked1>

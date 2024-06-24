@@ -226,11 +226,13 @@ static void createTMAAsyncCopy(
 }
 
 // If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return true and get the shared encoding that
-// needs to be used to be compatible with users' layouts.
+// the same dot operand encoding, return the shared encoding that needs to be
+// used to be compatible with users' layouts. If there are imcompatible shared
+// encodings set `incompatible` to true.
 static std::optional<ttg::SharedEncodingAttr>
-getSharedEncIfAllUsersAreDotEnc(Value val) {
+getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   ttg::SharedEncodingAttr attr;
+  incompatible = false;
   for (Operation *user : val.getUsers()) {
     ttg::SharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
@@ -240,7 +242,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
-      if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0)).has_value())
+      if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0), incompatible)
+               .has_value())
         return std::nullopt;
     } else {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
@@ -260,8 +263,10 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
           srcTy.getElementType().getIntOrFloatBitWidth(), /*needTrans=*/false);
     }
     // Check that the shared encodings needed by the users are compatible.
-    if (!tempAttr || (attr != nullptr && attr != tempAttr))
+    if (attr != nullptr && attr != tempAttr) {
+      incompatible = true;
       return std::nullopt;
+    }
     attr = tempAttr;
   }
   return attr;
@@ -451,9 +456,13 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         loadInfo.sharedEncoding =
             getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
       } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
+        bool incompatible = false;
         loadInfo.sharedEncoding =
-            getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
-
+            getSharedEncIfAllUsersAreDotEnc(op->getResult(0), incompatible)
+                .value_or(nullptr);
+        // If we can't agree on a shared encoding skip pipelinig the load.
+        if (incompatible)
+          continue;
         // HACK: Triton LLVM codegen has a bug where local_loads from #shared to
         // #mma layout can lead to invalid code if the loaded shape is smaller
         // than the mma tile (e.g. loading a 128x1 tensor for an MMAv2 dot with
