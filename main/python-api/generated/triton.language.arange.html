@@ -127,7 +127,19 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.arange">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">arange</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">end</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.arange" title="Link to this definition">¶</a></dt>
-<dd></dd></dl>
+<dd><p>Returns contiguous values within the half-open interval <code class="code docutils literal notranslate"><span class="pre">[start,</span>
+<span class="pre">end)</span></code>.  <code class="code docutils literal notranslate"><span class="pre">end</span> <span class="pre">-</span> <span class="pre">start</span></code> must be less than or equal to
+<code class="code docutils literal notranslate"><span class="pre">TRITON_MAX_TENSOR_NUMEL</span> <span class="pre">=</span> <span class="pre">1048576</span></code></p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>start</strong> (<em>int32</em>) – Start of the interval. Must be a power of two.</p></li>
+<li><p><strong>end</strong> (<em>int32</em>) – End of the interval. Must be a power of two greater than
+<code class="code docutils literal notranslate"><span class="pre">start</span></code>.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
 
 </section>
 

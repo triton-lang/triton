@@ -137,74 +137,66 @@ return at least one tensor, even if you don’t need it.  You can work
 around this by returning a dummy tensor of arbitrary type; it shouldn’t
 cost you anything if you don’t use it.</p>
 <p>Example using
-[PTX](<a class="reference external" href="https://docs.nvidia.com/cuda/parallel-thread-execution/index.html">https://docs.nvidia.com/cuda/parallel-thread-execution/index.html</a>)
+<a class="reference external" href="https://docs.nvidia.com/cuda/parallel-thread-execution/index.html">PTX</a>
 assembly:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span> <span class="nf">kernel</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span> <span class="n">BLOCK</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">A</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK</span><span class="p">))</span> <span class="c1"># uint8 tensor</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">B</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK</span><span class="p">))</span> <span class="c1"># float32 tensor</span>
+
+    <span class="c1"># For each (a,b) in zip(a,b), perform the following:</span>
+    <span class="c1"># - Let ai be `a` converted to int32.</span>
+    <span class="c1"># - Let af be `a` converted to float.</span>
+    <span class="c1"># - Let m be the max of ai and b.</span>
+    <span class="c1"># - Return ai and mi.</span>
+    <span class="c1"># Do the above 4 elements at a time.</span>
+    <span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">inline_asm_elementwise</span><span class="p">(</span>
+        <span class="n">asm</span><span class="o">=</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        {</span>
+<span class="s2">            // Unpack `a` into `ai`.</span>
+<span class="s2">            .reg .b8 tmp&lt;4&gt;;</span>
+<span class="s2">            mov.b32 {tmp0, tmp1, tmp2, tmp3}, $8;</span>
+<span class="s2">            cvt.u32.u8 $0, tmp0;</span>
+<span class="s2">            cvt.u32.u8 $1, tmp1;</span>
+<span class="s2">            cvt.u32.u8 $2, tmp2;</span>
+<span class="s2">            cvt.u32.u8 $3, tmp3;</span>
+<span class="s2">        }</span>
+<span class="s2">        // Convert `ai` to float.</span>
+<span class="s2">        cvt.rn.f32.s32 $4, $0;</span>
+<span class="s2">        cvt.rn.f32.s32 $5, $1;</span>
+<span class="s2">        cvt.rn.f32.s32 $6, $2;</span>
+<span class="s2">        cvt.rn.f32.s32 $7, $3;</span>
+<span class="s2">        // Take max of `ai` and `b`.</span>
+<span class="s2">        max.f32 $4, $4, $9;</span>
+<span class="s2">        max.f32 $5, $5, $10;</span>
+<span class="s2">        max.f32 $6, $6, $11;</span>
+<span class="s2">        max.f32 $7, $7, $12;</span>
+<span class="s2">        &quot;&quot;&quot;</span><span class="p">,</span>
+        <span class="n">constraints</span><span class="o">=</span><span class="p">(</span>
+            <span class="c1"># 8 output registers, namely</span>
+            <span class="c1">#   $0=ai0, $1=ai1, $2=ai2, $3=ai3,</span>
+            <span class="c1">#   $4=m0,  $5=m1,  $6=m2,  $7=m3.</span>
+            <span class="s2">&quot;=r,=r,=r,=r,=r,=r,=r,=r,&quot;</span>
+            <span class="c1"># 5 input registers, namely</span>
+            <span class="c1">#   $8=ai,</span>
+            <span class="c1">#   $9=b0, $10=b1, $11=b2, $12=b3.</span>
+            <span class="c1"># The four elements from `a` are all packed into one register.</span>
+            <span class="s2">&quot;r,r,r,r,r&quot;</span><span class="p">),</span>
+        <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">],</span>
+        <span class="n">dtype</span><span class="o">=</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+        <span class="n">is_pure</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="n">pack</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">C</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK</span><span class="p">),</span> <span class="n">c</span><span class="p">)</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">D</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK</span><span class="p">),</span> <span class="n">d</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>&#64;triton.jit
-def kernel(A, B, C, D, BLOCK: tl.constexpr):</p>
-<blockquote>
-<div><p>a = tl.load(A + tl.arange(0, BLOCK)) # uint8 tensor
-b = tl.load(B + tl.arange(0, BLOCK)) # float32 tensor</p>
-<p># For each (a,b) in zip(a,b), perform the following:
-# - Let ai be <cite>a</cite> converted to int32.
-# - Let af be <cite>a</cite> converted to float.
-# - Let m be the max of ai and b.
-# - Return ai and mi.
-# Do the above 4 elements at a time.
-(c, d) = tl.inline_asm_elementwise(</p>
-<blockquote>
-<div><p>asm=”””
-{</p>
-<blockquote>
-<div><p>// Unpack <cite>a</cite> into <cite>ai</cite>.
-.reg .b8 tmp&lt;4&gt;;
-mov.b32 {tmp0, tmp1, tmp2, tmp3}, $8;
-cvt.u32.u8 $0, tmp0;
-cvt.u32.u8 $1, tmp1;
-cvt.u32.u8 $2, tmp2;
-cvt.u32.u8 $3, tmp3;</p>
-</div></blockquote>
-<p>}
-// Convert <cite>ai</cite> to float.
-cvt.rn.f32.s32 $4, $0;
-cvt.rn.f32.s32 $5, $1;
-cvt.rn.f32.s32 $6, $2;
-cvt.rn.f32.s32 $7, $3;
-// Take max of <cite>ai</cite> and <cite>b</cite>.
-max.f32 $4, $4, $9;
-max.f32 $5, $5, $10;
-max.f32 $6, $6, $11;
-max.f32 $7, $7, $12;
-“””,
-constraints=(</p>
-<blockquote>
-<div><p># 8 output registers, namely
-#   $0=ai0, $1=ai1, $2=ai2, $3=ai3,
-#   $4=m0,  $5=m1,  $6=m2,  $7=m3.
-“=r,=r,=r,=r,=r,=r,=r,=r,”
-# 5 input registers, namely
-#   $8=ai,
-#   $9=b0, $10=b1, $11=b2, $12=b3.
-# The four elements from <cite>a</cite> are all packed into one register.
-“r,r,r,r,r”),</p>
-</div></blockquote>
-<p>args=[a, b],
-dtype=(tl.int32, tl.float32),
-is_pure=True,
-pack=4,</p>
-</div></blockquote>
-<p>)
-tl.store(C + tl.arange(0, BLOCK), c)
-tl.store(D + tl.arange(0, BLOCK), d)</p>
-</div></blockquote>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>asm</strong> – assembly to run.  Must match target’s assembly format.</p></li>
 <li><p><strong>constraints</strong> – asm constraints in
-[LLVM format](<a class="reference external" href="https://llvm.org/docs/LangRef.html#inline-asm-constraint-string">https://llvm.org/docs/LangRef.html#inline-asm-constraint-string</a>)</p></li>
+<a class="reference external" href="https://llvm.org/docs/LangRef.html#inline-asm-constraint-string">LLVM format</a></p></li>
 <li><p><strong>args</strong> – the input tensors, whose values are passed to the asm block</p></li>
 <li><p><strong>dtype</strong> – the element type(s) of the returned tensor(s)</p></li>
 <li><p><strong>is_pure</strong> – if true, the compiler assumes the asm block has no side-effects</p></li>

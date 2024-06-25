@@ -25,7 +25,7 @@ It includes various matmul methods, such as naive, persistent, and TMA (Tensor M
 Triton and CuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
 Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.
 
-.. GENERATED FROM PYTHON SOURCE LINES 9-484
+.. GENERATED FROM PYTHON SOURCE LINES 9-481
 
 
 
@@ -334,9 +334,6 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
                 offs_am = pid_m * BLOCK_SIZE_M
                 offs_bn = pid_n * BLOCK_SIZE_N
 
-                offs_am = tl.multiple_of(offs_am, BLOCK_SIZE_M)
-                offs_bn = tl.multiple_of(offs_bn, BLOCK_SIZE_N)
-
             offs_k = ki * BLOCK_SIZE_K
 
             a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
@@ -523,7 +520,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.827 seconds)
+   **Total running time of the script:** (0 minutes 1.809 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:

@@ -412,9 +412,6 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
             <span class="n">offs_am</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
             <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
 
-            <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
-            <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
-
         <span class="n">offs_k</span> <span class="o">=</span> <span class="n">ki</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span>
 
         <span class="n">a</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_descriptor_load</span><span class="p">(</span><span class="n">a_desc_ptr</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">offs_k</span><span class="p">],</span> <span class="p">[</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
@@ -599,7 +596,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
     <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.827 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.809 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>
