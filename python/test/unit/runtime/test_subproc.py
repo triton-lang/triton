@@ -87,15 +87,16 @@ def compile_empty_kernel_with_gc(attrs):
 
 def test_compile_in_forked_subproc_with_forced_gc() -> None:
     '''
-    Test checks that compilation artifacts can safely live in forked process.
+    Tests that compilation artifacts can safely live in forked process.
 
-    Scenario that is tested here is following ("p" stands for parent process, "c" is child process):
-    1.p compile kernel 1, produce compilation artifacts.
-    2.p fork process
-    3.c Delete compilation artifacts inherited from parent process, compile kernel 2, terminate child
-    3.p wait for child process and join it
+    Scenario being tested here ("p" stands for parent process, "c" is child process):
+    1. p compiles a kernel 1, and produces compilation artifacts.
+    2. p forks the process to create c.
+    3. c deletes compilation artifacts inherited from p, compiles kernel 2, and terminates.
+    3. p wait for c and join it.
 
-    This is a regression test that ensures thread pool in MLIRContext is released safely after compilation.
+    This is a regression test that ensures thread pool in MLIRContext is released
+    safely after compilation.
     '''
     reset_tmp_dir()
     import gc
