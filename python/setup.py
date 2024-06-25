@@ -751,7 +751,7 @@ setup(
             "autopep8",
             "flake8",
             "isort",
-            "numpy",
+            "numpy<2.0.0",
             "pytest",
             "pytest-forked",
             "pytest-xdist",

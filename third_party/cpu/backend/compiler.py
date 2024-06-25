@@ -43,6 +43,9 @@ class CPUBackend(BaseBackend):
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
         self.binary_ext = "asm"
+        self.cpu_arch = llvm.get_cpu_tripple().split("-")[0]
+        self.cpu_name = llvm.get_cpu_name()
+        self.cpu_features = llvm.get_cpu_features()
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts}
@@ -84,6 +87,19 @@ class CPUBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (opt.cluster_dims[0], opt.cluster_dims[1], opt.cluster_dims[2])
+        return mod
+
+    def make_tttcir(self, mod, metadata, opt):
+        # TTCIR -> Target TTCIR
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        if self.cpu_arch == "x86_64" and "avx512bf16" not in self.cpu_features:
+            cpu.passes.ttcpuir.add_convert_unsupported_ops(pm)
+            cpu.passes.ttcpuir.add_decompose_fp_conversions(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
+        passes.common.add_canonicalizer(pm)
+        pm.run(mod)
         return mod
 
     @staticmethod
@@ -144,6 +160,7 @@ class CPUBackend(BaseBackend):
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttcir"] = lambda src, metadata: self.make_ttcir(src, metadata, options)
+        stages["tttcir"] = lambda src, metadata: self.make_tttcir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["asm"] = lambda src, metadata: self.make_asm(src, metadata, options)
 
