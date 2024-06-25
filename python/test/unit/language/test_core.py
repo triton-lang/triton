@@ -1702,6 +1702,27 @@ def test_store_constant(dtype_str, num_ctas, device):
     assert torch.all(output == ref)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_store_constant_default_dtype(num_ctas, device):
+    """Tests that boolean True is stored as 1"""
+
+    @triton.jit
+    def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        value = 1
+        output = tl.full([BLOCK_SIZE], value=value, dtype=value.dtype)
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    block_size = 128
+    ref = torch.ones([block_size], dtype=getattr(torch, 'int32'), device=device)
+    output = torch.zeros([block_size], dtype=getattr(torch, 'int32'), device=device)
+    kernel[(1, )](output, block_size, BLOCK_SIZE=block_size, num_ctas=num_ctas)
+
+    assert torch.all(output == ref)
+
+
 def test_load_store_same_ptr(device):
 
     @triton.jit()

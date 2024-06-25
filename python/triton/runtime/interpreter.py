@@ -1136,7 +1136,7 @@ class InterpretedFunction:
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
-            self._rewrite_ast()
+            fn = self._rewrite_ast()
             return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
 
         self.run = run
@@ -1146,14 +1146,14 @@ class InterpretedFunction:
 
     def _rewrite_ast(self):
         if self.fn in self.rewritted_fn:
-            return
+            return self.rewritted_fn[self.fn]
         # If exception is raise, it means the function does not have source code available,
-        # e.g., dynamically generated functions, we cannot rewrite it and return the original function
+        # e.g., dynamically generated functions, we cannot rewrite it so just return the original function
         try:
             lines, lineno = inspect.getsourcelines(self.fn)
         except Exception:
             self.rewritted_fn[self.fn] = self.fn
-            return
+            return self.fn
         from .jit import _get_fn_file_line, JITFunction
         filename, lineno = _get_fn_file_line(JITFunction(self.fn))
         src = ''.join(lines)
@@ -1163,22 +1163,25 @@ class InterpretedFunction:
         transformed_ast = self.ast_transformer.visit(parsed_ast)
         transformed_ast = ast.fix_missing_locations(transformed_ast)
         compiled_code = compile(transformed_ast, filename=filename, mode='exec')
-        exec(compiled_code, self.fn.__globals__, self.kwargs)
-        self.rewritted_fn[self.fn] = self.fn
+        local_namespace = {**self.kwargs}
+        exec(compiled_code, globals(), local_namespace)
+        fn = local_namespace[self.fn.__name__].fn
+        self.rewritted_fn[self.fn] = fn
+        return fn
 
     @property
     def __name__(self):
         return self.fn.__name__
 
     def __getitem__(self, grid):
-        self._rewrite_ast()
-        return GridExecutor(self.fn, self.arg_names, grid)
+        fn = self._rewrite_ast()
+        return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
-        self._rewrite_ast()
-        _patch_lang(self.fn)
+        fn = self._rewrite_ast()
+        _patch_lang(fn)
         try:
-            return self.fn(*args, **kwargs)
+            return fn(*args, **kwargs)
         except Exception as e:
             raise InterpreterError(repr(e)) from e
