@@ -21,6 +21,8 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
+#include <list>
+
 using namespace mlir;
 
 static bool willIncreaseRegisterPressure(Operation *op) {
@@ -32,73 +34,56 @@ static bool willIncreaseRegisterPressure(Operation *op) {
   return false;
 }
 
-static bool isDescendent(Operation *op, Block *block) {
-  Block *b = op->getBlock();
-  while (b != nullptr) {
-    if (b == block)
-      return true;
-    b = b->getParentOp()->getBlock();
-  }
-  return false;
-}
-
+// Gather cone of DFG from the op's basic block.
+// - Collect dfg breadth first to keep relative order and
+//   reverse order for insertion after. An op may be captured
+//   multiple times if DFG reconverges and it will be moved multiple
+//   times to keep dominance correctness.
+// - Returns bool if this DFG leads to a load op. This
+//   condition is not desirable for moving ttg.local_stores
+//   early.
 static bool gatherDFG(Operation *op, Block *block,
                       SmallVector<Operation *> &dfg) {
-  // BFS (filo)
-  SmallVector<Operation *> oprs;
   bool leadsToLoad = false;
-  for (auto operand : op->getOperands()) {
-    if (Operation *pop = operand.getDefiningOp()) {
-      if (isDescendent(pop, block)) {
-        // only move ops that reside in same block
-        if (pop->getBlock() == block)
-          dfg.push_back(pop);
-        oprs.push_back(pop);
-        leadsToLoad |= isa<triton::LoadOp>(pop);
-      } else {
-        // only operands from current block or ancestor
-        assert(isDescendent(block->getParentOp(), pop->getBlock()));
-      }
-    }
-  }
-  // check sub-regions
-  for (auto &subregion : op->getRegions()) {
-    for (auto &subblock : subregion) {
-      for (auto &sop : subblock) {
-        if (gatherDFG(&sop, block, dfg))
-          leadsToLoad = true;
-      }
-    }
-  }
 
-  // process next level ops
-  for (auto *op : oprs) {
-    if (gatherDFG(op, block, dfg))
-      leadsToLoad = true;
+  std::list<Operation *> oprs{op};
+  auto checkOperands = [&](Operation *cop) {
+    for (auto operand : cop->getOperands()) {
+      if (Operation *oprOp = operand.getDefiningOp()) {
+        Block *oprBlk = oprOp->getBlock();
+        if (block->findAncestorOpInBlock(*oprOp)) {
+          // only move ops that reside in same block
+          if (oprBlk == block)
+            dfg.push_back(oprOp);
+          oprs.push_back(oprOp);
+          leadsToLoad |= isa<triton::LoadOp>(oprOp);
+        } else {
+          // should always be in parent block
+          assert(oprBlk->findAncestorOpInBlock(*block->getParentOp()));
+        }
+      }
+    }
+  };
+
+  // BFS (filo)
+  while (oprs.size()) {
+    Operation *nop = oprs.front();
+    oprs.pop_front();
+    // check next op and sub-regions
+    nop->walk(checkOperands);
   }
   return leadsToLoad;
 }
 
-static bool hasAtomic(Operation *op) {
-  if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(op))
-    return true;
-  for (auto &subregion : op->getRegions()) {
-    for (auto &subblock : subregion) {
-      for (auto &sop : subblock) {
-        if (hasAtomic(&sop))
-          return true;
-      }
-    }
-  }
-  return false;
-}
-
-static llvm::ilist<Operation>::iterator findEarlyLocation(
-    Block *block, Operation *op, Value src) {
+// Search thru block to find earliest insertion point for move
+// op. This can be either an atomic op or last usage of source pointer.
+// Search ends when move op encountered.
+static llvm::ilist<Operation>::iterator
+findEarlyInsertionPoint(Block *block, Operation *move, Value src) {
   auto loc = block->begin();
   for (auto bi = block->begin(); bi != block->end(); ++bi) {
-    auto *bop = &*bi;
-    if (bop == op) // don't move later than current location
+    auto *op = &*bi;
+    if (op == move) // don't move later than current location
       break;
     if (src) {
       // check for ops accessing src
@@ -108,8 +93,10 @@ static llvm::ilist<Operation>::iterator findEarlyLocation(
       }
     }
     // atomics used for syncronization?
-    if (hasAtomic(bop))
-      loc = bi;
+    op->walk([&](Operation *wop) {
+      if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
+        loc = bi;
+    });
   }
   return loc;
 }
@@ -160,15 +147,12 @@ public:
       moveAfter(op, argOp);
     });
     SmallVector<Operation *> moveOps;
-    // Move local stores early if it's global load is outside loop
-    m.walk([&](triton::gpu::LocalStoreOp op) {
-      moveOps.push_back(op);
-    });
-    // Move global loads early (prefetch)
-    // - these should be moved last 
-    m.walk([&](triton::LoadOp op) {
-      moveOps.push_back(op);
-    });
+    // Move local stores early if dependence distance greater than
+    // one iteration.
+    m.walk([&](triton::gpu::LocalStoreOp op) { moveOps.push_back(op); });
+    // Move global loads early (prefetch). These should be first in
+    // the block since they have the longest latency.
+    m.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
     for (auto op : moveOps) {
       // 0. gather DFG
       Block *block = op->getBlock();
@@ -178,14 +162,12 @@ public:
         Value src;
         if (auto ld = dyn_cast<triton::LoadOp>(op))
           src = ld.getPtr();
-        // 0. find earliest insertion point
-        auto loc = findEarlyLocation(block, op, src);
-        // 1. move to beginning of enclosing block
-        for (auto *op : dfg) {
-          // only move up (not down)
-          if (loc->isBeforeInBlock(op))
-            op->moveAfter(block, loc);
-        }
+        auto ip = findEarlyInsertionPoint(block, op, src);
+        // Remove ops that already precede the insertion point.
+        llvm::remove_if(
+            dfg, [&](Operation *op) { return !ip->isBeforeInBlock(op); });
+        for (auto *op : dfg)
+          op->moveAfter(block, ip);
       }
     }
   }
