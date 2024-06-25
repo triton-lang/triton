@@ -5365,12 +5365,12 @@ def test_tl_range(device):
         torch.testing.assert_close(ref_out, c, rtol=1e-2, atol=1e-1)
     else:
         torch.testing.assert_close(ref_out, c, rtol=1e-3, atol=1e-3)
-    if device in ['cuda']:
-        capability = torch.cuda.get_device_capability()
-        if capability[0] >= 8:
-            ptx = pgm.asm['ptx']
-            # check that the loop got pipelined with the right number of stages.
-            assert 'cp.async.wait_group 0x6' in ptx
+        if device in ['cuda']:
+            capability = torch.cuda.get_device_capability()
+            if capability[0] >= 8:
+                ptx = pgm.asm['ptx']
+                # check that the loop got pipelined with the right number of stages.
+                assert 'cp.async.wait_group 0x6' in ptx
 
 
 @triton.jit(noinline=True)
