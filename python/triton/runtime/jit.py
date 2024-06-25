@@ -525,8 +525,6 @@ class JITFunction(KernelInterface[T]):
 
         name = self.fn.__name__
         module = self.fn.__module__
-        arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}]({arg_reprs})"
 
         class JitFunctionInfo:
 
@@ -553,7 +551,7 @@ class JITFunction(KernelInterface[T]):
 
         return JITFunction.cache_hook(
             key=key,
-            repr=repr,
+            repr=key,
             fn=JitFunctionInfo(module, name, self),
             compile={"key": key, **kwargs},
             is_manual_warmup=False,
