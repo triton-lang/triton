@@ -1,5 +1,6 @@
 import contextlib
 import sys
+import platform
 import io
 import sysconfig
 import os
@@ -20,6 +21,7 @@ def quiet():
 
 def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
+    system = platform.system()
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
     cc = os.environ.get("CC")
@@ -42,6 +44,9 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
     include_dirs = include_dirs + [srcdir, py_include_dir]
     cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-o", so]
+    # Use dynamic lookup to load Python library on Mac
+    if system == "Darwin":
+        cc_cmd += ["-undefined", "dynamic_lookup"]
     cc_cmd += [f'-l{lib}' for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs]

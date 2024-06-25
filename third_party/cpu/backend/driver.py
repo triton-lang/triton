@@ -143,6 +143,7 @@ def make_launcher(constants, signature, ids):
 #include <optional>
 #include <stdio.h>
 #include <string>
+#include <memory>
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
