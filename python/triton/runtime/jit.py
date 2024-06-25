@@ -592,7 +592,7 @@ class JITFunction(KernelInterface[T]):
 
         # Execute pre run hooks with args and kwargs
         if len(self.pre_run_hooks) > 0: 
-            param_kwargs = dict()
+            param_kwargs = {}
             param_kwargs["grid"] = grid
             param_kwargs["warmup"] = warmup
             for hook in self.pre_run_hooks:
