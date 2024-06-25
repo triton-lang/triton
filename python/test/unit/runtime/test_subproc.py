@@ -86,18 +86,35 @@ def compile_empty_kernel_with_gc(attrs):
 
 
 def test_compile_in_forked_subproc_with_forced_gc() -> None:
+    '''
+    Test checks that compilation artifacts can safely live in forked process.
+
+    Scenario that is tested here is following ("p" stands for parent process, "c" is child process):
+    1.p compile kernel 1, produce compilation artifacts.
+    2.p fork process
+    3.c Delete compilation artifacts inherited from parent process, compile kernel 2, terminate child
+    3.p wait for child process and join it
+
+    This is a regression test that ensures thread pool in MLIRContext is released safely after compilation.
+    '''
     reset_tmp_dir()
     import gc
     old_gc_state = gc.isenabled()
+    # disable GC to manage resources manually in the manner described in comment above
     gc.disable()
 
+    # stage 1.p
     config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
     compile_empty_kernel_with_gc(config)
 
+    # stage 2.p
     reset_tmp_dir()
     assert multiprocessing.get_start_method() == 'fork'
     proc = multiprocessing.Process(target=compile_empty_kernel_with_gc, args=(config, ))
+
+    # stage 3.c
     proc.start()
+    # stage 3.p
     proc.join()
 
     # restore gc state
