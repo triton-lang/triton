@@ -10,7 +10,7 @@ from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor, str_to_ty
 from ..language.core import _unwrap_if_constexpr
-from ..runtime.jit import _normalize_ty, get_fn_file_line
+from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -1032,7 +1032,7 @@ class CodeGenerator(ast.NodeVisitor):
             prototype = language.function_type([], arg_types)
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
-            file_name, begin_line = get_fn_file_line(fn)
+            file_name, begin_line = get_jit_fn_file_line(fn)
             debug = self.debug if fn.debug is None else fn.debug
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
@@ -1255,7 +1255,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns):
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
-    file_name, begin_line = get_fn_file_line(fn)
+    file_name, begin_line = get_jit_fn_file_line(fn)
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,

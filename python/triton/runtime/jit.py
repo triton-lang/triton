@@ -938,7 +938,7 @@ def reinterpret(tensor, dtype):
         raise TypeError(f"Cannot reinterpret a {type(tensor)}.")
 
 
-def get_fn_file_line(fn):
+def get_jit_fn_file_line(fn):
     base_fn = fn
     while not isinstance(base_fn, JITFunction):
         base_fn = base_fn.fn
