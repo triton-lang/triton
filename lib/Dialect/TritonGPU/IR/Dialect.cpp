@@ -2875,7 +2875,8 @@ void LocalAllocOp::getEffects(
   effects.emplace_back(MemoryEffects::Allocate::get(),
                        mlir::triton::gpu::SharedMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(), getResult(),
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         getOperation()->getOpResult(0),
                          mlir::triton::gpu::SharedMemory::get());
 }
 
@@ -2898,7 +2899,7 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
 void LocalLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::gpu::SharedMemory::get());
 }
 
@@ -2906,7 +2907,7 @@ void LocalLoadOp::getEffects(
 void LocalStoreOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), getDst(),
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
                        mlir::triton::gpu::SharedMemory::get());
 }
 
@@ -2914,9 +2915,9 @@ void LocalStoreOp::getEffects(
 void AsyncCopyGlobalToLocalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), getResult(),
+  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
                        mlir::triton::gpu::SharedMemory::get());
 }
 
