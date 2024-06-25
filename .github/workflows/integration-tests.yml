@@ -9,13 +9,14 @@
 name: Integration Tests
 on:
   workflow_dispatch:
-  pull_request:
-    branches-ignore: ['llvm-**']
-  merge_group:
-    branches: [main, 'dev-**']
-    types: [checks_requested]
-  push:
-    branches: [main]
+# Disabled automatic triggers because tests in this workflow fail to run.
+#   pull_request:
+#     branches-ignore: ['llvm-**']
+#   merge_group:
+#     branches: [main, 'dev-**']
+#     types: [checks_requested]
+#   push:
+#     branches: [main]
 concurrency:
   group: ${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

@@ -3,6 +3,14 @@ run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      # You can name your branch dev-foo to get CI runs.
+      - 'dev-**'
+  push:
+    branches:
+      - main
 
 jobs:
   pre-commit:
