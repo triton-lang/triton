@@ -164,7 +164,7 @@ public:
           src = ld.getPtr();
         auto ip = findEarlyInsertionPoint(block, op, src);
         // Remove ops that already precede the insertion point.
-        llvm::remove_if(
+        llvm::erase_if(
             dfg, [&](Operation *op) { return !ip->isBeforeInBlock(op); });
         for (auto *op : dfg)
           op->moveAfter(block, ip);
