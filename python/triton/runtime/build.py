@@ -22,6 +22,7 @@ def quiet():
 def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     system = platform.system()
+    machine = platform.machine()
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
     cc = os.environ.get("CC")
@@ -57,6 +58,9 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cc_cmd += ["-std=c++17", "-fopenmp"]
     if src.endswith(".s"):
         cc_cmd += ["-gdwarf-5"]
+        if system == "Linux" and machine in ("aarch64", "arm64"):
+            # On Arm backend, some CPU (neoverse-v2) needs to be specified through -mcpu
+            cc_cmd += ["-mcpu=native"]
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
