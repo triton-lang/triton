@@ -1106,7 +1106,7 @@ class ASTTransformer(ast.NodeTransformer):
         for target in node.targets:
             names += [self.visit(target)]
         if len(names) > 1:
-            raise InterpreterError("Multiple assignments are not supported")
+            raise ValueError("Multiple assignments are not supported")
         # Modify the assignment x = value to
         # triton.core.language._to_tensor(value, interpreter_builder, False)
         node.value = ast.Call(
@@ -1119,6 +1119,7 @@ class ASTTransformer(ast.NodeTransformer):
         return node
 
     def generic_visit(self, node):
+        # Adjust the begin line number of the node
         if hasattr(node, 'lineno') and node.lineno is not None:
             node.lineno += self.offset
         if hasattr(node, 'end_lineno') and node.end_lineno is not None:
