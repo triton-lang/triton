@@ -1154,8 +1154,8 @@ class InterpretedFunction:
         except Exception:
             self.rewritted_fn[self.fn] = self.fn
             return self.fn
-        from .jit import _get_fn_file_line, JITFunction
-        filename, lineno = _get_fn_file_line(JITFunction(self.fn))
+        from .jit import get_fn_file_line, JITFunction
+        filename, lineno = get_fn_file_line(JITFunction(self.fn))
         src = ''.join(lines)
         src = textwrap.dedent(src)
         parsed_ast = ast.parse(src)
