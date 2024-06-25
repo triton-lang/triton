@@ -285,10 +285,11 @@ class CodeGenerator(ast.NodeVisitor):
                     getattr(val, "__triton_builtin__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     isinstance(val, language.dtype),  #
+                    self._is_constexpr_global(name),  #
                     # Allow accesses to globals while visiting an ast.arg
                     # because you should be able to do
                     #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
-                    self._is_constexpr_global(name), self.visiting_arg_default_value,  #
+                    self.visiting_arg_default_value,  #
                     os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"):
                 return val
             raise NameError(
