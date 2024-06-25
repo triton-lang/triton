@@ -1,4 +1,5 @@
 #include "TritonCPUToLLVM/Passes.h"
+#include "TritonCPUTransforms/Passes.h"
 #include "TritonToTritonCPU/Passes.h"
 
 #include "triton/Dialect/TritonCPU/IR/Dialect.h"
@@ -33,6 +34,12 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   });
   m.def("add_triton_cpu_to_llvmir_pipeline", [](mlir::PassManager &pm) {
     mlir::triton::cpu::tritonCPUToLLVMPipelineBuilder(pm);
+  });
+  m.def("add_convert_unsupported_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertUnsupportedOps());
+  });
+  m.def("add_decompose_fp_conversions", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createDecomposeFpConversions());
   });
   m.def("add_vector_to_scf", [](mlir::PassManager &pm, bool full_unroll,
                                 unsigned target_rank, bool lower_tensors) {

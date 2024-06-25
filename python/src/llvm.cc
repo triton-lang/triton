@@ -492,6 +492,22 @@ void init_triton_llvm(py::module &&m) {
       }
     }
   });
+
+  m.def("get_cpu_tripple", []() { return llvm::sys::getProcessTriple(); });
+
+  m.def("get_cpu_name", []() { return llvm::sys::getHostCPUName().str(); });
+
+  m.def("get_cpu_features", []() {
+    llvm::StringMap<bool> features;
+    llvm::sys::getHostCPUFeatures(features);
+
+    std::set<std::string> res;
+    for (auto &f : features) {
+      if (f.second)
+        res.insert(f.first().str());
+    }
+    return res;
+  });
 }
 
 void triton_stacktrace_signal_handler(void *) {

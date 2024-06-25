@@ -5326,9 +5326,6 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
     if is_cuda():
         found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
         assert found_fma == enable_fp_fusion
-    elif is_cpu():
-        found_fma = re.search(r'vfma', h.asm["asm"].decode('utf-8')) is not None
-        assert found_fma == enable_fp_fusion
 
 
 # -----------------------

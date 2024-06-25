@@ -628,7 +628,7 @@ setup(
             "autopep8",
             "flake8",
             "isort",
-            "numpy",
+            "numpy<2.0.0",
             "pytest",
             "scipy>=1.7.1",
             "llnl-hatchet",
