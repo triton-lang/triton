@@ -101,6 +101,11 @@ arbitrary LLVM version.
 
 - Set `TRITON_BUILD_WITH_CCACHE=true` to build with ccache.
 
+- Set `TRITON_HOME=/some/path` to change the location of the `.triton`
+  directory where Triton's cache is located and downloads are stored
+  during the build. By default, this is the user's home directory. It
+  can be changed anytime.
+
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
