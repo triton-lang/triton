@@ -25,7 +25,9 @@ public:
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto callOp = cast<LLVM::CallOp>(op);
-    if (isPredicatedLoad(callOp)) {
+    if (isPredicatedLoadNT(callOp)) {
+      return convertPredicatedLoadNT(callOp, rewriter);
+    } else if (isPredicatedLoad(callOp)) {
       return convertPredicatedLoad(callOp, rewriter);
     } else if (isPredicatedStore(callOp)) {
       return convertPredicatedStore(callOp, rewriter);
@@ -40,6 +42,11 @@ private:
   bool isPredicatedLoad(LLVM::CallOp callOp) const {
     return callOp.getCallee().value().find(mlir::LLVM::AMD::Predicated_Load) !=
            llvm::StringRef::npos;
+  }
+
+  bool isPredicatedLoadNT(LLVM::CallOp callOp) const {
+    return callOp.getCallee().value().find(
+               mlir::LLVM::AMD::Predicated_Load_NT) != llvm::StringRef::npos;
   }
 
   bool isPredicatedStore(LLVM::CallOp callOp) const {
@@ -101,6 +108,38 @@ private:
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
     rewriter.setInsertionPointToStart(trueBlock);
     auto loadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr);
+    rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
+    rewriter.setInsertionPointToStart(falseBlock);
+    rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
+    rewriter.setInsertionPointToStart(afterLoad);
+    Value loadVal = afterLoad->getArgument(0);
+    rewriter.replaceOp(callOp, loadVal);
+    return mlir::success();
+  }
+
+  LogicalResult convertPredicatedLoadNT(LLVM::CallOp callOp,
+                                        mlir::PatternRewriter &rewriter) const {
+    auto operands = callOp.getOperands();
+    auto result = callOp.getResult();
+
+    auto loc = callOp.getLoc();
+    auto elemTy = result.getType();
+    auto ptr = operands[0];
+    auto pred = operands[1];
+    auto falseVal = operands[2];
+
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *afterLoad =
+        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    afterLoad->addArgument({elemTy}, {loc});
+    Block *trueBlock = rewriter.createBlock(afterLoad);
+    Block *falseBlock =
+        rewriter.splitBlock(trueBlock, rewriter.getInsertionPoint());
+    rewriter.setInsertionPointToEnd(currentBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
+    rewriter.setInsertionPointToStart(trueBlock);
+    auto loadOp =
+        rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, 0, false, true);
     rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
     rewriter.setInsertionPointToStart(falseBlock);
     rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);

@@ -11,6 +11,7 @@
 namespace mlir::LLVM::AMD {
 
 const char Predicated_Load[] = "__predicated_load";
+const char Predicated_Load_NT[] = "__predicated_load_NT";
 const char Predicated_Store[] = "__predicated_store";
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
@@ -24,7 +25,7 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal);
+             Value pred, Value falseVal, bool nt = false);
 
 // Stores to shared or global memory with predication.
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
