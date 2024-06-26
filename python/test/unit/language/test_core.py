@@ -2096,19 +2096,20 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
                         for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                         for axis in [0, 1, 2]] + [(op, 'float32', (32, 2, 16), None, True)
                                                   for op in ['min', 'max', 'sum']]
+reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape in reduce2d_shapes for axis in [0, 1]]
 
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_str, shape, axis, keep_dims", reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config +
-    negative_config + keep_dims_2d_configs + keep_dims_3d_configs)
+    negative_config + keep_dims_2d_configs + keep_dims_3d_configs + reduce_bool)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
-               AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr):
+               AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr, USE_I1: tl.constexpr):
         range_m = tl.arange(0, BLOCK_M)
         range_n = tl.arange(0, BLOCK_N)
         range_k = tl.arange(0, BLOCK_K)
@@ -2117,8 +2118,9 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
                         range_k[None, None, :])
         else:
             x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
+        if USE_I1:
+            x = tl.cast(x, tl.int1)
         z = GENERATE_TEST_HERE
-
         z_ptr = Z
         if KEEP_DIMS and AXIS is None:
             if IS_3D:
@@ -2147,9 +2149,14 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     # limit the range of integers so that the sum does not overflow
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     x_tri = to_triton(x, device=device)
-    numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min, 'argmin': np.argmin, 'argmax': np.argmax}[op]
+    numpy_op = {
+        'sum': np.sum, 'max': np.max, 'min': np.min, 'argmin': np.argmin, 'argmax': np.argmax, 'xor_sum':
+        np.bitwise_xor.reduce
+    }[op]
     z_dtype_str = get_reduced_dtype(dtype_str, op)
     z_tri_dtype_str = z_dtype_str
+    if z_dtype_str == 'bool':
+        z_dtype_str = 'int8'
 
     # numpy result
     # Silence numpy error on axis out of bounds, to give triton a chance to fail
@@ -2168,14 +2175,15 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     z_tri = to_triton(numpy_random(z_shape, dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
+    USE_I1 = dtype_str == 'bool'
     if axis is not None and axis >= len(shape):
         with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                          KEEP_DIMS=keep_dims, num_ctas=num_ctas)
+                          KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas)
         return
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                      KEEP_DIMS=keep_dims, num_ctas=num_ctas)
+                      KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas)
 
     z_tri = to_numpy(z_tri)
 
