@@ -100,6 +100,8 @@ public:
     llvm::SmallVector<mlir::Operation *> chainedOps;
     while (true) {
       auto chainedOp = val.getDefiningOp();
+      if (!chainedOp)
+        return mlir::failure();
       if (llvm::isa<triton::gpu::ConvertLayoutOp>(chainedOp))
         break;
       if (!chainedOp->hasOneUse())
