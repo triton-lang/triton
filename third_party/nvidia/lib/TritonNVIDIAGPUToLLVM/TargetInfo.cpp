@@ -419,7 +419,10 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     return ret;
   } else {
     assert(vec == 1);
-    return bitcast(resultVals[0], loadTy);
+    Value result = resultVals[0];
+    if (loadTy.getIntOrFloatBitWidth() < bitwidth)
+      result = trunc(int_ty(loadTy.getIntOrFloatBitWidth()), result);
+    return bitcast(result, loadTy);
   }
 }
 
