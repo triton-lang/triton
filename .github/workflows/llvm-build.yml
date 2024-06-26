@@ -42,6 +42,15 @@ jobs:
       with:
         path: llvm-build
 
+    - name: Upload LLVM Artifacts to Azure
+      if: ${{ (github.repository == 'triton-lang/triton') }}
+      run: |
+        az login -i
+        touch "test.txt"
+        az storage blob upload --account-name oaitriton --auth-mode login --container-name llvm-builds --file "test.txt" --overwrite
+        URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name llvm-builds --name "test.txt")
+        echo "Blob URL: ${URL}"
+
     - name: Fetch LLVM Commit Hash
       shell: bash
       run: |
