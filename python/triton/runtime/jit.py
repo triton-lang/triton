@@ -98,7 +98,7 @@ class DependenciesFinder(ast.NodeVisitor):
             self.hasher.update(func_key.encode("utf-8"))
 
     def visit_Name(self, node):
-        if type(node.ctx) == ast.Store:
+        if type(node.ctx) is ast.Store:
             return node.id
 
         if node.id in self.local_names:
@@ -117,12 +117,11 @@ class DependenciesFinder(ast.NodeVisitor):
                 and not self.visiting_arg_default_value
                 # It would be pretty evil if someone did `import x` and then
                 # `x = blah`.
-                and type(val) != ModuleType
+                and type(val) is not ModuleType
                 # It would be pretty evil if we used function `foo` inside of
                 # `bar` and then someone did `foo = baz`.
                 and not isinstance(val, JITFunction) and not getattr(val, "__triton_builtin__", False)  #
-                and node.id not in self.supported_python_builtins  #
-            ):
+                and node.id not in self.supported_python_builtins):
             self.used_global_vals[(node.id, id(self.globals))] = (val, self.globals)
 
         self._update_hash(val)
@@ -650,7 +649,7 @@ class JITFunction(KernelInterface[T]):
 
         # Check that used global values have not changed.
         not_present = object()
-        for (name, globals_dict_id), (val, globals_dict) in self.used_global_vals.items():
+        for (name, _), (val, globals_dict) in self.used_global_vals.items():
             if (newVal := globals_dict.get(name, not_present)) != val:
                 raise RuntimeError(
                     f"Global variable {name} has changed since we compiled this kernel, from {val} to {newVal}")
