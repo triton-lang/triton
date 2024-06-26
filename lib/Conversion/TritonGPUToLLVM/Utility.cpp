@@ -231,8 +231,14 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
-  // TODO Investigate why LLVM do no optimize one "apply" call
-  // and applyLinearLayout + LL::apply produces better code
+  // Linear layout function is split in two parts below:
+  // L(r, t, w, b) = L(0, t, w, b) xor L(r, 0, 0, 0)
+  //     idxs      =    idxsBase   xor    idxsReg
+  //
+  // L(0, t, w, b) part is same for all registers, nested out of reg loop
+  //
+  // This approach produces code with lower register pressure and
+  // less computations, compared to fused L(r,t,w,b) method.
   auto idxsBase = applyLinearLayout(loc, rewriter, *ll,
                                     {{kRegister, i32_val(0)},
                                      {kLane, laneId},
