@@ -231,6 +231,8 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
+  // TODO Investigate why LLVM do no optimize one "apply" call
+  // and applyLinearLayout + LL::apply produces better code
   auto idxsBase = applyLinearLayout(loc, rewriter, *ll,
                                     {{kRegister, i32_val(0)},
                                      {kLane, laneId},
