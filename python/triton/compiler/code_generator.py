@@ -278,7 +278,7 @@ class CodeGenerator(ast.NodeVisitor):
             # The high-level rule is that only constexpr globals are allowed.
             # But actually a bunch of other things, such as module imports, are
             # technically Python globals. We have to allow these too!
-            if any(
+            if any([
                     val is absent, name in self.builtin_namespace,  #
                     type(val) is ModuleType,  #
                     isinstance(val, JITFunction),  #
@@ -290,7 +290,8 @@ class CodeGenerator(ast.NodeVisitor):
                     # because you should be able to do
                     #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
                     self.visiting_arg_default_value,  #
-                    os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"):
+                    os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"
+            ]):
                 return val
             raise NameError(
                 textwrap.dedent(f"""\
