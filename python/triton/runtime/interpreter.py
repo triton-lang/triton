@@ -1179,8 +1179,8 @@ class InterpretedFunction:
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
+        _patch_lang(self.fn)
         fn = self._rewrite_ast()
-        _patch_lang(fn)
         try:
             return fn(*args, **kwargs)
         except Exception as e:
