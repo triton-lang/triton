@@ -26,12 +26,12 @@ jobs:
       fail-fast: true
       matrix:
         config:
-        - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'x64'}
-        - {runner: 'Ubuntu 20.04 ARM64', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
+        # - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'x64'}
+        # - {runner: 'Ubuntu 20.04 ARM64', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
         - {runner: 'CentOS 7', runs_on: ['self-hosted', 'CPU'], target-os: 'centos', arch: 'x64'}
         - {runner: 'AlmaLinux 8', runs_on: ['self-hosted', 'CPU'], target-os: 'almalinux', arch: 'x64'}
-        - {runner: 'MacOS X64', runs_on: 'macos-12', target-os: 'macos', arch: 'x64'}
-        - {runner: 'MacOS ARM64', runs_on: 'macos-12', target-os: 'macos', arch: 'arm64'}
+        # - {runner: 'MacOS X64', runs_on: 'macos-12', target-os: 'macos', arch: 'x64'}
+        # - {runner: 'MacOS ARM64', runs_on: 'macos-12', target-os: 'macos', arch: 'arm64'}
         # TODO(#2805): add back once the workflow works and runs in comparable time to the other ones
         # - {runner: 'Windows Latest', runs_on: 'windows-latest', target-os: 'windows', arch: 'x64'}
 
@@ -286,20 +286,12 @@ jobs:
         path: |
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
 
-    - name: Azure Login
-      if: ${{ (github.repository == 'triton-lang/triton') }}
-      uses: azure/login@v2
-      with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
     - name: Upload LLVM Artifacts to Azure
       if: ${{ (github.repository == 'triton-lang/triton') }}
       run: |
-        az storage blob upload --account-name tritonlang --auth-mode login --container-name llvm-builds --file "${{ env.llvm_install_dir }}.tar.gz" --name "${{ env.llvm_install_dir }}.tar.gz" --overwrite
-
-        URL=$(az storage blob url --account-name tritonlang --auth-mode login --container-name llvm-builds --name "${{ env.llvm_install_dir }}.tar.gz")
+        az login -i
+        az storage blob upload --account-name oaitriton --auth-mode login --container-name llvm-builds --file "${{ env.llvm_install_dir }}.tar.gz" --name "${{ env.llvm_install_dir }}.tar.gz" --overwrite
+        URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name llvm-builds --name "${{ env.llvm_install_dir }}.tar.gz")
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
