@@ -1164,6 +1164,8 @@ class InterpretedFunction:
         transformed_ast = ast.fix_missing_locations(transformed_ast)
         compiled_code = compile(transformed_ast, filename=filename, mode='exec')
         local_namespace = {**self.kwargs}
+        if self.fn.__name__ in local_namespace:
+            raise ValueError(f"Function name {self.fn.__name__} is reserved")
         exec(compiled_code, globals(), local_namespace)
         fn = local_namespace[self.fn.__name__].fn
         self.rewritted_fn[self.fn] = fn
