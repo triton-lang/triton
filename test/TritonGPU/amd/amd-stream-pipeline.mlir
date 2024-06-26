@@ -1462,7 +1462,7 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 #shared1 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
 module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: dot_prologue_epilogue
-  // CHECK: {{.*}}, {{.*}}, %[[EXT:.*]]: i32, {{.*}}
+  // CHECK-SAME: {{.*}}, {{.*}}, %[[EXT:.*]]: i32, {{.*}}
   tt.func @dot_prologue_epilogue(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ext: i32, %inc: tensor<64x16xi32, #blocked> {tt.divisibility = 16 : i32}) -> tensor<128x16xf32, #mma1> {
     %cst = arith.constant dense<0> : tensor<64x16xi32, #blocked>
     %cst2 = arith.constant dense<0> : tensor<128x64xi32, #blocked1>
@@ -1486,8 +1486,8 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: %[[C0:.*]] = arith.constant 0 : i32
-    // CHECK: scf.for %[[IND_VAR:.*]] = %[[C0]]
-    // CHECK-NOT load
+    // CHECK: scf.for %[[IND_VAR:.*]] = %[[C0]] to
+    // CHECK-NOT: load
     // CHECK: %[[CND:.*]] = arith.cmpi slt, %[[IND_VAR]], %[[EXT]]
     // CHECK: scf.if %[[CND]]
     // CHECK: dot
@@ -1559,8 +1559,9 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: %[[C0:.*]] = arith.constant 0 : i32
-    // CHECK: scf.for %[[IND_VAR:.*]] = %[[C0]]
-    // CHECK-NOT load
+    // CHECK: scf.for %[[IND_VAR:.*]] = %[[C0]] to
+    // CHECK: load
+    // CHECK-NOT: load
     // CHECK: dot
     // CHECK: %[[CND:.*]] = arith.cmpi slt, %[[IND_VAR]], %[[EXT]]
     // CHECK: %[[IFRET:.*]]:2 = scf.if %[[CND]]
