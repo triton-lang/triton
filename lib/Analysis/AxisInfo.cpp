@@ -927,6 +927,10 @@ private:
       return 1;
     auto shift = rhs.getConstantValue().value();
     auto lhsDivisibility = lhs.getDivisibility(dim);
+    if (lhs.getContiguity(dim) > 1 && shift) {
+      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
+      lhsDivisibility = 1;
+    }
     return std::max<int64_t>(1, lhsDivisibility / (1 << shift));
   }
 
