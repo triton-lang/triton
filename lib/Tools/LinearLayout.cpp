@@ -7,6 +7,7 @@
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -18,6 +19,7 @@ namespace mlir::triton {
 
 namespace {
 using BasesT = LinearLayout::BasesT;
+using llvm::SmallDenseSet;
 using llvm::Twine;
 
 BasesT makeBasesMap(
@@ -119,6 +121,11 @@ getInjectiveMat(const LinearLayout &layout) {
 // outDim as columns.  In other words, finds the number of linearly-independent
 // bases for this output dimension.
 int getMatrixRank(std::unique_ptr<uint64_t[]> m, int numRows, int numCols) {
+  // f2reduce underflows if the number of cols is 0, return the rank early in
+  // this case.
+  if (numCols == 0) {
+    return 0;
+  }
   // stride is specified in number of 64-bit words per row, and we pack our
   // matrix so that there's only one uint64_t per row.
   assert(numCols <= 64);
@@ -135,13 +142,25 @@ int getMatrixRank(std::unique_ptr<uint64_t[]> m, int numRows, int numCols) {
 
 template <typename T, typename U>
 void assertDimsEqualIgnoringOrder(T &&a, U &&b) {
-  llvm::DenseSet<StringAttr> as(a.begin(), a.end());
-  llvm::DenseSet<StringAttr> bs(b.begin(), b.end());
+  SmallDenseSet<StringAttr> as(a.begin(), a.end());
+  SmallDenseSet<StringAttr> bs(b.begin(), b.end());
   if (as != bs) {
     llvm::report_fatal_error("Dimensions must match, ignoring order, but they "
                              "don't.  Got dims: [" +
                              Twine(triton::join(a, ", ")) + "] and [" +
                              triton::join(b, ", ") + "]");
+  }
+}
+
+template <typename T, typename U>
+void assertDimsSubsetIgnoringOrder(T &&small, U &&big) {
+  SmallDenseSet<StringAttr> smallSet(small.begin(), small.end());
+  SmallDenseSet<StringAttr> bigSet(big.begin(), big.end());
+  if (!llvm::set_is_subset(smallSet, bigSet)) {
+    llvm::report_fatal_error("Dimensions must be a subset, ignoring order, but "
+                             "they aren't.  Got dims: [" +
+                             Twine(triton::join(small, ", ")) + "] and [" +
+                             triton::join(big, ", ") + "]");
   }
 }
 
@@ -536,10 +555,10 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   // Check that elements common to both outerDimsRange and innerDimsRange
   // appear in the same relative order.
   auto checkCommonDims = [&](auto outerDimsRange, auto innerDimsRange) {
-    llvm::DenseSet<StringAttr> outerDims(outerDimsRange.begin(),
-                                         outerDimsRange.end());
-    llvm::DenseSet<StringAttr> innerDims(innerDimsRange.begin(),
-                                         innerDimsRange.end());
+    SmallDenseSet<StringAttr> outerDims(outerDimsRange.begin(),
+                                        outerDimsRange.end());
+    SmallDenseSet<StringAttr> innerDims(innerDimsRange.begin(),
+                                        innerDimsRange.end());
 
     std::vector<StringAttr> outerCommonDims;
     for (StringAttr dim : outerDimsRange) {
@@ -664,6 +683,74 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
     return *candidateQuotient;
   }
   return std::nullopt;
+}
+
+LinearLayout LinearLayout::sublayout(ArrayRef<StringAttr> inDimNames,
+                                     ArrayRef<StringAttr> outDimNames) const {
+  assertDimsSubsetIgnoringOrder(inDimNames, getInDimNames());
+  assertDimsSubsetIgnoringOrder(outDimNames, getOutDimNames());
+  SmallDenseSet<StringAttr> inDimSet(inDimNames.begin(), inDimNames.end());
+  SmallDenseSet<StringAttr> outDimSet(outDimNames.begin(), outDimNames.end());
+
+  SmallDenseSet<int> outDimIndicesToKeep;
+  for (auto [i, outDim] : llvm::enumerate(getOutDimNames())) {
+    if (outDimSet.contains(outDim)) {
+      outDimIndicesToKeep.insert(i);
+    }
+  }
+  BasesT newBases;
+  for (auto [inDim, inDimBases] : bases) {
+    if (!inDimSet.contains(inDim)) {
+      continue;
+    }
+    auto &newInDimBases = newBases[inDim];
+    for (auto &basis : inDimBases) {
+      auto &newBasis = newInDimBases.emplace_back();
+      for (int i : outDimIndicesToKeep) {
+        newBasis.push_back(basis[i]);
+      }
+    }
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto [outDim, outDimSize] : outDims) {
+    if (outDimSet.contains(outDim)) {
+      newOutDims.push_back({outDim, outDimSize});
+    }
+  }
+  return LinearLayout(std::move(newBases), std::move(newOutDims),
+                      /*requireSurjective=*/false);
+}
+
+bool LinearLayout::sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
+                                   ArrayRef<StringAttr> outDimNames) const {
+  LinearLayout ss = sublayout(inDimNames, outDimNames);
+  for (auto [inDim, inDimBases] : ss.bases) {
+    for (auto basis : inDimBases) {
+      if (!llvm::all_of(basis, [](int32_t b) { return b == 0; })) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool LinearLayout::sublayoutIsIdentity(ArrayRef<StringAttr> inDimNames,
+                                       ArrayRef<StringAttr> outDimNames) const {
+  LinearLayout sl =
+      sublayout(inDimNames, outDimNames).flattenIns().flattenOuts();
+  if (sl.getNumInDims() == 0 || sl.getNumOutDims() == 0) {
+    return true;
+  }
+  int b = 0;
+  const auto &inDimBases = sl.bases.begin()->second;
+  for (auto basis : inDimBases) {
+    if (basis[0] != (1 << b)) {
+      return false;
+    }
+    b++;
+  }
+  return true;
 }
 
 SmallVector<std::pair<StringAttr, int32_t>>
@@ -829,14 +916,26 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
 }
 
 bool operator==(LinearLayout lhs, LinearLayout rhs) {
+  if (!lhs.equalIgnoringOutDimSizes(rhs))
+    return false;
+
+  for (const auto &[lhsOutDimAndSize, rhsOutDimAndSize] :
+       llvm::zip(lhs.outDims, rhs.outDims)) {
+    if (lhsOutDimAndSize.second != rhsOutDimAndSize.second)
+      return false;
+  }
+  return true;
+}
+
+bool LinearLayout::equalIgnoringOutDimSizes(const LinearLayout &other) const {
   // llvm::MapVector doesn't have an operator== :(.
-  if (llvm::to_vector(lhs.getOutDimNames()) !=
-      llvm::to_vector(rhs.getOutDimNames()))
+  if (llvm::to_vector(this->getOutDimNames()) !=
+      llvm::to_vector(other.getOutDimNames()))
     return false;
-  if (lhs.bases.size() != rhs.bases.size())
+  if (this->bases.size() != other.bases.size())
     return false;
-  for (auto it1 = lhs.bases.begin(), it2 = rhs.bases.begin();
-       it1 != lhs.bases.end(); ++it1, ++it2) {
+  for (auto it1 = this->bases.begin(), it2 = other.bases.begin();
+       it1 != this->bases.end(); ++it1, ++it2) {
     if (*it1 != *it2)
       return false;
   }

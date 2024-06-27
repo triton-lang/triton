@@ -63,6 +63,8 @@ class HIPBackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         args = {'arch': self.target.arch}
+        if not "enable_fp_fusion" in args:
+            args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 

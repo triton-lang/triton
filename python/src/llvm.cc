@@ -18,10 +18,12 @@
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include <csignal>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
@@ -149,6 +151,8 @@ using ret = py::return_value_policy;
 void init_triton_llvm(py::module &&m) {
 
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
+      .def(py::init<>());
+  py::class_<llvm::SourceMgr>(m, "source_mgr", py::module_local())
       .def(py::init<>());
 
   py::class_<llvm::Module::FunctionListType>(m, "function_list")
@@ -422,8 +426,13 @@ void init_triton_llvm(py::module &&m) {
   });
 }
 
+void triton_stacktrace_signal_handler(void *) {
+  llvm::sys::PrintStackTrace(llvm::errs());
+  raise(SIGABRT);
+}
+
 void init_triton_stacktrace_hook(pybind11::module &m) {
   if (!mlir::triton::tools::getBoolEnv("TRITON_DISABLE_PYTHON_STACKTRACE")) {
-    llvm::sys::PrintStackTraceOnErrorSignal("triton_python");
+    llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
   }
 }

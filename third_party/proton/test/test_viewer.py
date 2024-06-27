@@ -1,16 +1,34 @@
+import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames
 import numpy as np
 
 file_path = __file__
 cuda_example_file = file_path.replace("test_viewer.py", "example_cuda.json")
 hip_example_file = file_path.replace("test_viewer.py", "example_hip.json")
+frame_example_file = file_path.replace("test_viewer.py", "example_frame.json")
 
 
 def test_help():
     # Only check if the viewer can be invoked
     ret = subprocess.check_call(["proton-viewer", "-h"], stdout=subprocess.DEVNULL)
     assert ret == 0
+
+
+@pytest.mark.parametrize("option", ["full", "file_function_line", "function_line", "file_function"])
+def test_format_frames(option):
+    with open(frame_example_file, "r") as f:
+        gf, _, _ = get_raw_metrics(f)
+        gf = format_frames(gf, option)
+        if option == "full":
+            idx = gf.dataframe["name"] == "/home/user/projects/example.py/test.py:foo@1"
+        elif option == "file_function_line":
+            idx = gf.dataframe["name"] == "test.py:foo@1"
+        elif option == "function_line":
+            idx = gf.dataframe["name"] == "foo@1"
+        elif option == "file_function":
+            idx = gf.dataframe["name"] == "test.py:foo"
+        assert idx.sum() == 1
 
 
 def test_min_time_flops():

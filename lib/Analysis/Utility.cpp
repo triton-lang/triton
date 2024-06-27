@@ -482,58 +482,6 @@ bool supportMFMA(triton::DotOp op) {
   return true;
 }
 
-static bool supportWMMAGranularity(int m, int n, int k) {
-  return m % 16 == 0 && n % 16 == 0 && k % 16 == 0;
-}
-
-static bool supportWMMATypes(Type a, Type b, Type c, Type d) {
-  if (a != b || c != d)
-    return false;
-  auto aWidth = a.getIntOrFloatBitWidth();
-  auto cWidth = c.getIntOrFloatBitWidth();
-  if (a.isIntOrIndex()) {
-    if (!c.isIntOrIndex())
-      return false;
-    bool aValid = aWidth <= 8;
-    bool cValid = cWidth <= 32;
-    return aValid && cValid;
-  } else if (isa<FloatType>(a) && isa<FloatType>(c)) {
-    if (a.isBF16())
-      return c.isBF16() || c.isF32();
-    if (a.isF16())
-      return c.isF16() || c.isF32();
-    return aWidth <= cWidth && aWidth <= 16;
-  }
-  return false;
-}
-
-bool supportWMMA(triton::DotOp op) {
-  auto aTy = cast<RankedTensorType>(op.getA().getType());
-  auto bTy = cast<RankedTensorType>(op.getB().getType());
-  auto cTy = cast<RankedTensorType>(op.getC().getType());
-  auto dTy = cast<RankedTensorType>(op.getResult().getType());
-
-  auto aElemTy = aTy.getElementType();
-  auto bElemTy = bTy.getElementType();
-  auto cElemTy = cTy.getElementType();
-  auto dElemTy = dTy.getElementType();
-
-  if (!supportWMMATypes(aElemTy, bElemTy, cElemTy, dElemTy))
-    return false;
-
-  auto aShape = aTy.getShape();
-  auto bShape = bTy.getShape();
-
-  auto rank = aShape.size();
-  assert(bShape.size() == rank);
-  assert(aShape[rank - 1] == bShape[rank - 2]);
-  if (!supportWMMAGranularity(aShape[rank - 2], bShape[rank - 1],
-                              aShape[rank - 1]))
-    return false;
-
-  return true;
-}
-
 bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in

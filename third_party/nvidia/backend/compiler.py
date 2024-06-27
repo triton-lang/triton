@@ -110,6 +110,8 @@ class CUDABackend(BaseBackend):
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = self.capability >= 89
         args["allow_fp8e4b15"] = self.capability < 90
+        if not "enable_fp_fusion" in args:
+            args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 
@@ -156,6 +158,11 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
+        # Set up Diagnostic
+        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
+            srcMgr = llvm.source_mgr()
+            diag = ir.source_mgr_diag(srcMgr, mod.context)
+            mod.context.printOpOnDiagnostic(True)
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()

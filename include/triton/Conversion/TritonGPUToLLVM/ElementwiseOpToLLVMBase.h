@@ -88,6 +88,12 @@ public:
       // encoding not available
       return resultVals;
     Attribute baseEncoding = encoding;
+    if (isa<AMDMfmaEncodingAttr>(baseEncoding))
+      // TODO: this logic seems incorrect for mfma layout. Skip for now.
+      // We saw mismatches for some flash-attention tests on AMD backend.
+      // Note that this logic works for sliced layout whose parent is
+      // mfma layout. Therefore, this is not combined with the following check.
+      return resultVals;
     while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
       baseEncoding = sliced.getParent();
     if (isa<NvidiaMmaEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
