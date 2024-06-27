@@ -147,14 +147,13 @@ public:
       moveAfter(op, argOp);
     });
     SmallVector<Operation *> moveOps;
-    // Move local stores early if dependence distance greater than
-    // one iteration.
-    m.walk([&](triton::gpu::LocalStoreOp op) { moveOps.push_back(op); });
-    // Move global loads early (prefetch). These should be first in
-    // the block since they have the longest latency.
+    // Move global loads early to prefetch.
     m.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+    // Move local_stores early if dependence distance greater than
+    // one iteration. Best perf on GEMM when these precede global loads.
+    m.walk([&](triton::gpu::LocalStoreOp op) { moveOps.push_back(op); });
     for (auto op : moveOps) {
-      // 0. gather DFG
+      // 0. Gather use-def chain in block.
       Block *block = op->getBlock();
       SmallVector<Operation *> dfg{op};
       bool leadsToLoad = gatherDFG(op, block, dfg);
@@ -163,9 +162,12 @@ public:
         if (auto ld = dyn_cast<triton::LoadOp>(op))
           src = ld.getPtr();
         auto ip = findEarlyInsertionPoint(block, op, src);
-        // Remove ops that already precede the insertion point.
-        llvm::erase_if(
-            dfg, [&](Operation *op) { return !ip->isBeforeInBlock(op); });
+        // Remove ops that already precede the insertion point. This
+        // is done before moves happen to avoid N^2 complexity in
+        // `Operation::isBeforeInBlock`.
+        llvm::erase_if(dfg,
+                       [&](Operation *op) { return !ip->isBeforeInBlock(op); });
+        // Move ops to insertion point.
         for (auto *op : dfg)
           op->moveAfter(block, ip);
       }
