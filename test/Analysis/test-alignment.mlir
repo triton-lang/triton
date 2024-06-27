@@ -399,8 +399,10 @@ tt.func @select(%arg0 : i1, %arg1 : tensor<4xi1>) {
 
 // -----
 
-tt.func @shift() {
-  // CHECK: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
+tt.func @shift(%arg0: i32 {tt.divisibility = 4 : i32}) {
+  // CHECK: contiguity = [1], divisibility = [4], constancy = [128], constant_value = <none>
+  %s = tt.splat %arg0 : i32 -> tensor<128xi32>
+  // CHECK-NEXT: contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [8], constancy = [128], constant_value = 8
   %1 = arith.constant dense<8> : tensor<128xi32>
@@ -412,6 +414,10 @@ tt.func @shift() {
   %4 = arith.shrsi %0, %2 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [128], constancy = [128], constant_value = 128
   %5 = arith.shli %1, %2 : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [8], constancy = [128], constant_value = <none>
+  %6 = arith.shli %1, %s : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %7 = arith.shrsi %0, %s : tensor<128xi32>
   tt.return
 }
 
