@@ -1418,8 +1418,9 @@ def where(condition: tl.tensor, x: tl.tensor, y: tl.tensor, builder: ir.builder)
         condition, x = broadcast_impl_value(condition, x, builder)
         x, y = broadcast_impl_value(x, y, builder)
         condition, x = broadcast_impl_value(condition, x, builder)
-
-    x, y = binary_op_type_checking_impl(x, y, builder, True, True)
+    # Bypass arithmetic type check for FP8 types where they are not supported.
+    is_fp8 = x.type == y.type and x.type.is_fp8() and y.type.is_fp8()
+    x, y = binary_op_type_checking_impl(x, y, builder, True, True, not is_fp8)
     if not condition.type.is_block():
         condition, _ = broadcast_impl_value(condition, x, builder)
     ret_ty = x.type
