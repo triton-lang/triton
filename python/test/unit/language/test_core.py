@@ -5463,7 +5463,6 @@ def test_num_programs(device):
 # test extern functions
 # -----------------------
 
-from triton.language.extra import libdevice
 
 @pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
 def test_math_extern(dtype_str):
@@ -5482,15 +5481,15 @@ def test_math_extern(dtype_str):
         x = tl.load(x_ptr + offsets, mask=mask)
         y = GENERATE_TEST_HERE
         tl.store(y_ptr + offsets, y, mask=mask)
-        
+
     shape = (128, )
     rs = RandomState(17)
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'libdevice.tanh(x)'})
-    
+
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     y_ref = np.tanh(x)
     x_tri = to_triton(x, device='cuda')
     y_tri = to_triton(numpy_random(shape, dtype_str=dtype_str, rs=rs), device='cuda')
-    kernel[(1,)](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
+    kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)

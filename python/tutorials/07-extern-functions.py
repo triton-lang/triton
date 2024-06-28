@@ -65,9 +65,9 @@ print(f'The maximum difference between torch and triton is '
 # This example uses the path from the `third_party/nvidia/backend/lib` directory (the default path).
 
 libdir = Path(__file__).parent.parent.parent / 'third_party/nvidia/backend/lib'
-extern_libs = {} 
+extern_libs = {}
 extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH", str(libdir / 'libdevice.10.bc'))
-        
+
 output_triton = torch.empty_like(x)
 asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024, extern_libs=extern_libs)
 print(output_torch)
