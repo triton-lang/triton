@@ -1,3 +1,5 @@
+import ast
+import textwrap
 import inspect
 from typing import Tuple
 
@@ -1094,30 +1096,94 @@ class GridExecutor:
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
 
 
-class InterpretedFunction:
+class ASTTransformer(ast.NodeTransformer):
 
-    def __init__(self, fn) -> None:
+    def __init__(self) -> None:
+        self.offset = 0
+
+    def visit_Assign(self, node):
+        names = []
+        for target in node.targets:
+            names += [self.visit(target)]
+        if len(names) > 1:
+            raise ValueError("Multiple assignments are not supported")
+        # Modify the assignment x = value to
+        # triton.core.language._to_tensor(value, interpreter_builder, False)
+        node.value = ast.Call(
+            func=ast.Attribute(
+                value=ast.Attribute(
+                    value=ast.Attribute(value=ast.Name(id='triton', ctx=ast.Load()), attr='language', ctx=ast.Load()),
+                    attr='core', ctx=ast.Load()), attr='_to_tensor', ctx=ast.Load()),
+            args=[node.value, ast.Name(id='interpreter_builder', ctx=ast.Load()),
+                  ast.Constant(value=False)], keywords=[])
+        return node
+
+    def generic_visit(self, node):
+        # Adjust the begin line number of the node
+        if hasattr(node, 'lineno') and node.lineno is not None:
+            node.lineno += self.offset
+        if hasattr(node, 'end_lineno') and node.end_lineno is not None:
+            node.end_lineno += self.offset
+        return super().generic_visit(node)
+
+
+class InterpretedFunction:
+    rewritted_fn = {}
+    ast_transformer = ASTTransformer()
+
+    def __init__(self, fn, **kwargs) -> None:
         self.fn = fn
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
-            return GridExecutor(self.fn, self.arg_names, grid)(*args, **kwargs)
+            fn = self._rewrite_ast()
+            return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
 
         self.run = run
+        self.kwargs = kwargs
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
+
+    def _rewrite_ast(self):
+        if self.fn in self.rewritted_fn:
+            return self.rewritted_fn[self.fn]
+        # If exception is raise, it means the function does not have source code available,
+        # e.g., dynamically generated functions, we cannot rewrite it so just return the original function
+        try:
+            lines, lineno = inspect.getsourcelines(self.fn)
+        except Exception:
+            self.rewritted_fn[self.fn] = self.fn
+            return self.fn
+        from .jit import get_jit_fn_file_line, JITFunction
+        filename, lineno = get_jit_fn_file_line(JITFunction(self.fn))
+        src = ''.join(lines)
+        src = textwrap.dedent(src)
+        parsed_ast = ast.parse(src)
+        self.ast_transformer.offset = lineno
+        transformed_ast = self.ast_transformer.visit(parsed_ast)
+        transformed_ast = ast.fix_missing_locations(transformed_ast)
+        compiled_code = compile(transformed_ast, filename=filename, mode='exec')
+        local_namespace = {**self.kwargs}
+        if self.fn.__name__ in local_namespace:
+            raise ValueError(f"Function name {self.fn.__name__} is reserved")
+        exec(compiled_code, globals(), local_namespace)
+        fn = local_namespace[self.fn.__name__].fn
+        self.rewritted_fn[self.fn] = fn
+        return fn
 
     @property
     def __name__(self):
         return self.fn.__name__
 
     def __getitem__(self, grid):
-        return GridExecutor(self.fn, self.arg_names, grid)
+        fn = self._rewrite_ast()
+        return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
         _patch_lang(self.fn)
+        fn = self._rewrite_ast()
         try:
-            return self.fn(*args, **kwargs)
+            return fn(*args, **kwargs)
         except Exception as e:
             raise InterpreterError(repr(e)) from e
