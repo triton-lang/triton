@@ -70,8 +70,6 @@ The interpreter has several known limitations:
     ptr = tl.load(ptr)
     x = tl.load(ptr)
 
-- Unlike the compilation mode, a scalar in interpreter mode is treated as a simple float or integer but not as a 0-d tensor. This means it lacks tensor attributes such as :code:`x.dtype`. A workaround is to explicitly convert the scalar to a tensor using :code:`tl.to_tensor(x)`, where :code:`x` is the scalar.
-
 ----------------------------
 Using Third-party Tools
 ----------------------------

@@ -118,9 +118,8 @@ def check_file_lines(file_lines, file_name, lineno, should_contain=True):
         should_contain: whether the file name and line number should be in the file_lines
     """
     for file, line in file_lines:
-        if lineno == -1:
-            if file_name in file:
-                return True
+        if lineno == -1 and file_name in file:
+            return True
         if file_name in file and str(lineno) in line:
             return should_contain
     return not should_contain
@@ -169,3 +168,35 @@ def test_line_info(func: str):
     elif func == "dot_combine":
         assert (check_file_lines(file_lines, "test_line_info.py", 65))
         assert (check_file_lines(file_lines, "test_line_info.py", 66, should_contain=False))
+
+
+def is_interpreter():
+    import os
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("func", func_types)
+def test_line_info_interpreter(func: str):
+    if not is_interpreter():
+        pytest.skip("interpreter is not enabled")
+
+    kernel = None
+    expected_offset = 0
+    if func == "single":
+        kernel = kernel_single
+        expected_offset = 12
+    elif func == "call":
+        kernel = kernel_call
+        expected_offset = 25
+    elif func == "call_noinline":
+        kernel = kernel_call_noinline
+        expected_offset = 41
+    elif func == "autotune":
+        kernel = kernel_autotune.fn
+        expected_offset = 52
+    elif func == "dot_combine":
+        kernel = kernel_dot_combine
+        expected_offset = 62
+    kernel._rewrite_ast()
+    assert kernel.ast_transformer.offset == expected_offset
