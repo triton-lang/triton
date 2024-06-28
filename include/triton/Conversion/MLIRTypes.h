@@ -33,6 +33,12 @@ inline bool isFloat(Type type) {
          type.isFloat8E5M2FNUZ();
 }
 
+inline bool isFloat8(Type type) {
+  return type.isFloat8E4M3B11FNUZ() || type.isFloat8E4M3FN() ||
+         type.isFloat8E4M3FNUZ() || type.isFloat8E5M2() ||
+         type.isFloat8E5M2FNUZ();
+}
+
 inline bool isInt(Type type) { return type.isIntOrFloat() && !isFloat(type); }
 
 } // namespace type
