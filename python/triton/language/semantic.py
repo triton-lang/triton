@@ -80,9 +80,12 @@ def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> t
         if a_ty.is_bf16() and b_ty.is_bf16():
             return tl.bfloat16
         return tl.float32
+    # 5) return fp16 if operands are different fp8
+    if a_ty.is_fp8() and b_ty.is_fp8():
+        return a_ty if a_ty == b_ty else tl.float16
     if not a_ty.is_int() or not b_ty.is_int():
         raise TypeError(f"unexpected type {a_ty} and {b_ty}")
-    # 5 ) both operands are integer and undergo
+    # 6 ) both operands are integer and undergo
     #    integer promotion
     if div_or_mod and a_ty.int_signedness != b_ty.int_signedness:
         raise TypeError("Cannot use /, #, or % with " + a_ty.__repr__() + " and " + b_ty.__repr__() +
@@ -1418,7 +1421,6 @@ def where(condition: tl.tensor, x: tl.tensor, y: tl.tensor, builder: ir.builder)
         condition, x = broadcast_impl_value(condition, x, builder)
         x, y = broadcast_impl_value(x, y, builder)
         condition, x = broadcast_impl_value(condition, x, builder)
-
     x, y = binary_op_type_checking_impl(x, y, builder, True, True)
     if not condition.type.is_block():
         condition, _ = broadcast_impl_value(condition, x, builder)

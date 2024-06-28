@@ -83,6 +83,10 @@ struct ArithConstantSplatOpConversion
                    << value.getType() << "\n";
       return failure();
     }
+    // Lower FP8 constant to int8 constant since FP8 types are not supported on
+    // LLVM IR.
+    if (type::isFloat8(elemType))
+      elemType = rewriter.getIntegerType(8);
     auto constOp = rewriter.create<LLVM::ConstantOp>(loc, elemType, val);
     auto typeConverter = getTypeConverter();
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
