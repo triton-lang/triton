@@ -196,7 +196,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
                                                     size_t *bufferSize,
                                                     size_t *maxNumRecords) {
-  *buffer = reinterpret_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
+  *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
   if (*buffer == nullptr) {
     throw std::runtime_error("aligned_alloc failed");
   }
@@ -240,9 +240,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
   CuptiProfiler &profiler = threadState.profiler;
   if (domain == CUPTI_CB_DOMAIN_RESOURCE) {
     auto *resourceData =
-        reinterpret_cast<CUpti_ResourceData *>(const_cast<void *>(cbData));
+        static_cast<CUpti_ResourceData *>(const_cast<void *>(cbData));
     auto *graphData =
-        reinterpret_cast<CUpti_GraphData *>(resourceData->resourceDescriptor);
+        static_cast<CUpti_GraphData *>(resourceData->resourceDescriptor);
     auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
     uint32_t graphId = 0;
     uint32_t graphExecId = 0;
@@ -267,7 +267,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     }
   } else {
     const CUpti_CallbackData *callbackData =
-        reinterpret_cast<const CUpti_CallbackData *>(cbData);
+        static_cast<const CUpti_CallbackData *>(cbData);
     if (callbackData->callbackSite == CUPTI_API_ENTER) {
       auto scopeId = Scope::getNewScopeId();
       threadState.record(scopeId);
@@ -276,7 +276,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
         auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
-        auto graphExec = reinterpret_cast<const cuGraphLaunch_params *>(
+        auto graphExec = static_cast<const cuGraphLaunch_params *>(
                              callbackData->functionParams)
                              ->hGraph;
         uint32_t graphExecId = 0;
