@@ -266,7 +266,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       case HIP_API_ID_hipStreamEndCapture: {
         hipGraph_t Graph = *(data->args.hipStreamEndCapture.pGraph);
         hipStream_t Stream = data->args.hipStreamEndCapture.stream;
-        // How many times did we capture a kernel launch for this steam
+        // How many times did we capture a kernel launch for this stream
         uint32_t StreamCaptureCount = pImpl->StreamToCaptureCount[Stream];
         pImpl->GraphToNumInstances[Graph] = StreamCaptureCount;
         pImpl->StreamToCapture.erase(Stream);

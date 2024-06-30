@@ -95,7 +95,6 @@ def test_cudagraph():
         proton.exit_scope()
         proton.finalize()
 
-
         data = json.load(f)
         # CUDA/HIP graph may also invoke additional kernels to reset outputs
         # {torch.ones, add, foo, test}
