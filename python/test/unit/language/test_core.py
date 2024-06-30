@@ -1702,6 +1702,27 @@ def test_store_constant(dtype_str, num_ctas, device):
     assert torch.all(output == ref)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_store_constant_default_dtype(num_ctas, device):
+    """Tests that boolean True is stored as 1"""
+
+    @triton.jit
+    def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        value = 1
+        output = tl.full([BLOCK_SIZE], value=value, dtype=value.dtype)
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    block_size = 128
+    ref = torch.ones([block_size], dtype=getattr(torch, 'int32'), device=device)
+    output = torch.zeros([block_size], dtype=getattr(torch, 'int32'), device=device)
+    kernel[(1, )](output, block_size, BLOCK_SIZE=block_size, num_ctas=num_ctas)
+
+    assert torch.all(output == ref)
+
+
 def test_load_store_same_ptr(device):
 
     @triton.jit()
@@ -5342,12 +5363,12 @@ def test_tl_range(device):
         torch.testing.assert_close(ref_out, c, rtol=1e-2, atol=1e-1)
     else:
         torch.testing.assert_close(ref_out, c, rtol=1e-3, atol=1e-3)
-    if device in ['cuda']:
-        capability = torch.cuda.get_device_capability()
-        if capability[0] >= 8:
-            ptx = pgm.asm['ptx']
-            # check that the loop got pipelined with the right number of stages.
-            assert 'cp.async.wait_group 0x6' in ptx
+        if device in ['cuda']:
+            capability = torch.cuda.get_device_capability()
+            if capability[0] >= 8:
+                ptx = pgm.asm['ptx']
+                # check that the loop got pipelined with the right number of stages.
+                assert 'cp.async.wait_group 0x6' in ptx
 
 
 @triton.jit(noinline=True)

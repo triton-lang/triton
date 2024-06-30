@@ -115,7 +115,7 @@ def to_tensor(x, _builder=None):
     return _to_tensor(x, _builder)
 
 
-def _to_tensor(x, builder):
+def _to_tensor(x, builder, check_type: bool = True):
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
     # Note: compile-time const integers are represented by unsigned values
@@ -129,7 +129,7 @@ def _to_tensor(x, builder):
         elif 2**63 <= x < 2**64:
             return tensor(builder.get_uint64(x), uint64)
         else:
-            raise RuntimeError(f'Nonrepresentable integer {x}.')
+            raise ValueError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
         min_float32 = 2**-126
         max_float32 = (2 - 2**-23) * 2**127
@@ -146,7 +146,9 @@ def _to_tensor(x, builder):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
-    assert False, f"cannot convert {x} of type {type(x)} to tensor"
+    if check_type:
+        raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+    return x
 
 
 # -----------------------
