@@ -239,14 +239,13 @@ public:
   }
 };
 
-class ClusterArriveOpPattern
-    : public OpRewritePattern<ttn::FenceAsyncSharedOp> {
+class ClusterArriveOpPattern : public OpRewritePattern<ttn::ClusterArriveOp> {
 public:
-  using OpRewritePattern<ttn::FenceAsyncSharedOp>::OpRewritePattern;
+  using OpRewritePattern<ttn::ClusterArriveOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ttn::FenceAsyncSharedOp op,
+  LogicalResult matchAndRewrite(ttn::ClusterArriveOp op,
                                 PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getBCluster()
+    std::string ptxAsm = op.getRelaxed()
                              ? "barrier.cluster.arrive.relaxed.aligned;"
                              : "barrier.cluster.arrive.aligned;";
     return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
