@@ -9,3 +9,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+//  CHECK-LABEL: bf16_to_f32
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func @bf16_to_f32(%arg0: tensor<8x8xbf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked2}>>) {
+    // CHECK-COUNT-8: llvm.bitcast
+    %0 = tt.fp_to_fp %arg0 : tensor<8x8xbf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked2}>>
+    tt.return
+  }
+}
