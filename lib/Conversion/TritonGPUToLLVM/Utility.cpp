@@ -231,12 +231,31 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
+  // Linear layout function is split in two parts below:
+  // L(r, t, w, b) = L(0, t, w, b) xor L(r, 0, 0, 0)
+  //     idxs      =    idxsBase   xor    idxsReg
+  //
+  // L(0, t, w, b) part is the same for all registers,
+  // so we hoist it out of the main register loop in the below.
+  //
+  // This approach produces code with lower register pressure and
+  // less computations, compared to fused L(r,t,w,b) method.
+  auto idxsBase = applyLinearLayout(loc, rewriter, *ll,
+                                    {{kRegister, i32_val(0)},
+                                     {kLane, laneId},
+                                     {kWarp, warpId},
+                                     {kBlock, blockId}});
   for (unsigned reg = 0; reg < ll->getInDimSize(str_attr("register")); reg++) {
-    auto idxs = applyLinearLayout(loc, rewriter, *ll,
-                                  {{kRegister, i32_val(reg)},
-                                   {kLane, laneId},
-                                   {kWarp, warpId},
-                                   {kBlock, blockId}});
+    auto idxsReg =
+        ll->apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    SmallVector<std::pair<StringAttr, Value>> idxs;
+    for (auto [idxBase, idxReg] : llvm::zip(idxsBase, idxsReg)) {
+      auto dimName = idxBase.first;
+      assert(dimName == idxReg.first &&
+             "dim names of block+warp+thread and register idx should be equal");
+      auto idx = xor_(idxBase.second, i32_val(idxReg.second));
+      idxs.emplace_back(dimName, idx);
+    }
     assert(idxs.size() == rank);
     for (unsigned k = 0; k < rank; ++k) {
       assert(idxs[k].first == str_attr("dim" + std::to_string(k)));

@@ -74,11 +74,6 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
-  // Whether to enable linear layout. This is a per-backend temporary escape
-  // hatch to disable linear layout while figuring out issues. Eventually we
-  // want to enable linear layout everywhere and delete this control.
-  virtual bool enableLinearLayout() const { return true; }
-
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton
