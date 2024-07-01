@@ -235,7 +235,8 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
   // L(r, t, w, b) = L(0, t, w, b) xor L(r, 0, 0, 0)
   //     idxs      =    idxsBase   xor    idxsReg
   //
-  // L(0, t, w, b) part is same for all registers, nested out of reg loop
+  // L(0, t, w, b) part is the same for all registers,
+  // so we hoist it out of the main register loop in the below.
   //
   // This approach produces code with lower register pressure and
   // less computations, compared to fused L(r,t,w,b) method.
