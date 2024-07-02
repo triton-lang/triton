@@ -1,4 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
+#include "TritonAMDGPUTransforms/Passes.h"
+#include "TritonAMDGPUTransforms/PointerCanonicalizer.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
@@ -13,6 +15,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
@@ -105,6 +108,14 @@ struct ConvertTritonAMDGPUToLLVM
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
 
+    auto canonicalizer = triton::AMD::PointerCanonicalizer(mod);
+    if (failed(canonicalizer.run()))
+      return signalPassFailure();
+    // Use buffer operations only if indices are 32 bits and we converted all
+    // operations
+    bool useBufferOps =
+        !canonicalizer.has64BitOffset() && !canonicalizer.hasUnknownOps();
+
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
@@ -179,8 +190,8 @@ struct ConvertTritonAMDGPUToLLVM
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           numWarps, axisInfoAnalysis,
-                                           AMDBenefit);
+                                           numWarps, useBufferOps,
+                                           axisInfoAnalysis, AMDBenefit);
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
                       commonBenefit);
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns,

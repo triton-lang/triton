@@ -1,7 +1,12 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -86,11 +91,162 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   }
   return mask;
 }
+
+static constexpr uint32_t maxVectorOpWidth = 128;
+
+// Emit a buffer operation.  `targetInfo` will be used to determine some fields
+// of the flag word in the buffer descriptor. Operations supported are:
+// - `type out = buffer.load %ptr, %pred`
+// - `buffer.store %ptr, %pred, %storeData`, where `storeData` is of type
+// `type`. Many implementation details of this function are courtesy of:
+// mlir/lib/Conversion/AMDGPUToROCDL/AMDGPUToROCDL.cpp
+template <typename BufferIntrin>
+Value bufferOp(ConversionPatternRewriter &rewriter, Location loc,
+               const AMD::TargetInfo &targetInfo, Type type, Value ptr,
+               Value pred, Value storeData = nullptr) {
+  VectorType vecTy = dyn_cast<VectorType>(type);
+  assert(vecTy && "BufferOperations only accept vector types!");
+
+  int64_t vec = vecTy.getNumElements();
+  Type elementType = vecTy.getElementType();
+
+  // Useful constants
+  const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
+  const int elementByteWidth = valueElemNBits / 8;
+  const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+  const size_t totalWidth = valueElemNBits * vec;
+
+  // For bf16, always convert to i16
+  Type bufferElementType = elementType;
+  if (vecTy.getElementType().isBF16())
+    bufferElementType = rewriter.getI16Type();
+
+  // If we are dealing with a subword type (e.g., i8 or f16) but we
+  // still need multiple words, then pack the subwords into 32bit integers
+  // and update the vector length and the type
+  int64_t bufferVec = vec;
+  if (valueElemNBits < 32) {
+    if (totalWidth > 32) {
+      bufferElementType = rewriter.getI32Type();
+      bufferVec = totalWidth / 32;
+    } else {
+      bufferElementType = rewriter.getIntegerType(totalWidth);
+      bufferVec = 1;
+    }
+  }
+  // This is the buffer type that the buffer operation will use. It
+  // will be bitcast-able to the original `vecTy`. So if the types
+  // ended up different, we simply have to emit a `bitcastOp` to convert
+  Type bufferType;
+  if (bufferVec == 1)
+    bufferType = bufferElementType;
+  else
+    bufferType = VectorType::get(bufferVec, bufferElementType);
+
+  SmallVector<Value, 6> args;
+  SmallVector<Type, 6> outTypes;
+  if (storeData) {
+    if (vecTy != bufferType)
+      storeData = bitcast(storeData, bufferType);
+    args.push_back(storeData);
+  } else {
+    outTypes.push_back(bufferType);
+  }
+
+  auto gepOp = dyn_cast<LLVM::GEPOp>(ptr.getDefiningOp());
+
+  // Flag word:
+  // bits 0-11: dst sel, ignored by these intrinsics
+  // bits 12-14: data format (ignored, must be nonzero, 7=float)
+  // bits 15-18: data format (ignored, must be nonzero, 4=32bit)
+  // bit 19: In nested heap (0 here)
+  // bit 20: Behavior on unmap (0 means  "return 0 / ignore")
+  // bits 21-22: Index stride for swizzles (N/A)
+  // bit 23: Add thread ID (0)
+  // bit 24: Reserved to 1 (RDNA) or 0 (CDNA)
+  // bits 25-26: Reserved (0)
+  // bit 27: Buffer is non-volatile (CDNA only)
+  // bits 28-29: Out of bounds select (0 = structured, 1 = check index, 2 =
+  //  none, 3 = either swizzles or testing against offset field) RDNA only
+  // bits 30-31: Type (must be 0)
+  // Type llvmI16 = typeConverter->convertType(rewriter.getI16Type());
+  uint32_t flags = (7 << 12) | (4 << 15);
+  if (targetInfo.getISAFamily() == AMD::ISAFamily::RDNA2 ||
+      targetInfo.getISAFamily() == AMD::ISAFamily::RDNA3) {
+    flags |= (1 << 24);
+    uint32_t oob = 3;
+    flags |= (oob << 28);
+  }
+  Value stride = int_val(16, 0);
+  Value flagsConst = int_val(32, flags);
+  Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
+  Value numRecordsByte = int_val(32, std::numeric_limits<int>::max() - 1);
+
+  Value base = gepOp.getBase();
+  Value resource = rewriter.createOrFold<ROCDL::MakeBufferRsrcOp>(
+      loc, rsrcType, base, stride, numRecordsByte, flagsConst);
+  args.push_back(resource);
+
+  Value vOffsetOutOfBunds = int_val(
+      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
+
+  // Please note: the index passed to GEP is not in bytes, but in number of
+  // elements In order to pass the index to the buffer operation, we need to
+  // convert in bytes (i.e., we need to multiply by `elementByteWidth`)
+  Value vRealOffset =
+      mul(int_val(32, elementByteWidth), gepOp.getDynamicIndices()[0]);
+  Value vOffset = select(pred, vRealOffset, vOffsetOutOfBunds);
+  args.push_back(vOffset);
+
+  Value sgprOffset = int_val(32, 0);
+  args.push_back(sgprOffset);
+
+  // bit 0: GLC = 0 (atomics drop value, less coherency)
+  // bits 1-2: SLC, DLC = 0 (similarly)
+  // bit 3: swizzled (0 for raw)
+  args.push_back(int_val(32, 0));
+
+  BufferIntrin bufferOp = rewriter.create<BufferIntrin>(
+      loc, outTypes, args, ArrayRef<NamedAttribute>());
+
+  // This needs to return something back to the caller
+  if (bufferOp->getNumResults() > 0) {
+    Value out = bufferOp->getResult(0);
+    if (vecTy != bufferType)
+      out = bitcast(out, vecTy);
+    return out;
+  }
+  return Value();
+}
+
+LogicalResult getGEPs(Value llPtr, SmallVector<Value> &out) {
+  auto currentOp = llPtr.getDefiningOp();
+  if (isa<LLVM::GEPOp>(currentOp)) {
+    out = SmallVector<Value>{llPtr};
+    return success();
+  } else if (!isa<LLVM::InsertValueOp>(currentOp)) {
+    return failure();
+  }
+
+  SmallVector<Value> ptrElems;
+  while (!isa<LLVM::UndefOp>(currentOp)) {
+    auto iv = dyn_cast<LLVM::InsertValueOp>(currentOp);
+    if (!isa<LLVM::GEPOp>(iv.getValue().getDefiningOp()))
+      return failure();
+    ptrElems.push_back(iv.getValue());
+    currentOp = iv.getContainer().getDefiningOp();
+  }
+  out = llvm::to_vector(llvm::reverse(ptrElems));
+  return success();
+}
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const AMD::TargetInfo &targetInfo,
+                                   bool useBufferOps,
                                    ModuleAxisInfoAnalysis &axisAnalysisPass)
-      : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
+      : targetInfo(targetInfo), useBufferOps(useBufferOps),
+        axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
@@ -116,6 +272,7 @@ struct LoadStoreConversionBase {
 protected:
   const AMD::TargetInfo &targetInfo;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
+  bool useBufferOps;
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
@@ -123,12 +280,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   using ConvertOpToLLVMPattern<triton::LoadOp>::ConvertOpToLLVMPattern;
 
   LoadOpConversion(LLVMTypeConverter &converter,
-                   const AMD::TargetInfo &targetInfo,
+                   const AMD::TargetInfo &targetInfo, bool useBufferOps,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
-
+        LoadStoreConversionBase(targetInfo, useBufferOps, axisAnalysisPass) {}
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -156,8 +312,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
+    // Emit buffer operations if we can use them and if the operations are
+    // masked (otherwise just emit normal global loads)
+    bool emitBufferOps = useBufferOps && llMask;
+
     // Get the LLVM values for pointers
-    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems;
+    if (!emitBufferOps || failed(getGEPs(llPtr, ptrElems))) {
+      emitBufferOps = false;
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    }
     assert(ptrElems.size() == numElems);
 
     // Get the LLVM values for mask
@@ -188,22 +352,23 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
+    LLVM_DEBUG(llvm::dbgs() << "Vector Length:" << vec << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "Number of elements:" << numElems << "\n");
+
+    const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+    const size_t totalWidth = valueElemNBits * vec;
+    const size_t width = std::min(totalWidth, maxWordWidth);
+    const size_t nWords = std::max<size_t>(1, totalWidth / width);
+    const size_t wordNElems = width / valueElemNBits;
+    assert(wordNElems * nWords * numVecs == numElems);
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
-      const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
-      const size_t totalWidth = valueElemNBits * vec;
-      const size_t width = std::min(totalWidth, maxWordWidth);
-      const size_t nWords = std::max<size_t>(1, totalWidth / width);
-      const size_t wordNElems = width / valueElemNBits;
-      const size_t movWidth = width < 16 ? 16 : width;
-      assert(wordNElems * nWords * numVecs == numElems);
-
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
-      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
 
       mlir::Attribute zeroAttr = rewriter.getZeroAttr(valueElemTy);
@@ -212,8 +377,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value zeroVal = rewriter.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
 
       Value falseVal = zeroVal;
+      bool hasOtherVal = otherElems.size() != 0;
       // If we need to mask the loaded value with other elements
-      if (otherElems.size() != 0) {
+      if (hasOtherVal) {
         Value v = undef(vecTy);
         for (size_t s = 0; s < vec; ++s) {
           Value otherElem = otherElems[vecStart + s];
@@ -224,10 +390,18 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         falseVal = v;
       }
 
-      auto loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal);
+      Value loadVal;
+      if (emitBufferOps) {
+        loadVal = bufferOp<ROCDL::RawPtrBufferLoadOp>(
+            rewriter, loc, targetInfo, vecTy, ptrElems[vecStart], pred);
+        if (hasOtherVal)
+          loadVal = select(pred, loadVal, falseVal);
+      } else {
+        loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal);
+      }
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
-            rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
+            rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
         Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
         loadedVals.push_back(loaded);
       }
@@ -246,11 +420,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   using ConvertOpToLLVMPattern<triton::StoreOp>::ConvertOpToLLVMPattern;
 
   StoreOpConversion(LLVMTypeConverter &converter,
-                    const AMD::TargetInfo &targetInfo,
+                    const AMD::TargetInfo &targetInfo, bool useBufferOps,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, useBufferOps, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -272,9 +446,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     unsigned vec = getVectorSize(ptr);
     unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
 
-    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    // Unpack elements to store
     auto valueElems = unpackLLElements(loc, llValue, rewriter);
-    assert(ptrElems.size() == valueElems.size());
 
     // Determine the vectorization size
     SmallVector<Value> maskElems;
@@ -288,47 +461,70 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     }
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
-    const size_t dtsize =
-        std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
-    const size_t valueElemNBits = dtsize * 8;
+    const int valueElemNBits =
+        std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+
+    SmallVector<Value> ptrElems;
+    bool emitBufferOps = useBufferOps && mask;
+
+    if (!emitBufferOps || failed(getGEPs(llPtr, ptrElems))) {
+      emitBufferOps = false;
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    }
+    assert(ptrElems.size() == valueElems.size());
 
     const int numVecs = elemsPerThread / vec;
-    for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      // TODO: optimization when ptr is AddPtr with constant offset
-      size_t in_off = 0;
-
-      const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
-      const size_t totalWidth = valueElemNBits * vec;
-      const size_t width = std::min(totalWidth, maxWordWidth);
-      const size_t nWords = std::max<size_t>(1, totalWidth / width);
-      const size_t wordNElems = width / valueElemNBits;
-      assert(wordNElems * nWords * numVecs == elemsPerThread);
-
-      // TODO(Superjomn) Add cache policy fields to StoreOp.
-      // TODO(Superjomn) Deal with cache policy here.
-
-      Type valArgTy = IntegerType::get(ctx, width);
-      auto wordTy = vec_ty(valueElemTy, wordNElems);
-
-      SmallVector<std::pair<Value, std::string>> asmArgs;
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        // llWord is a width-len composition
-        Value llWord = undef(wordTy);
-        // Insert each value element to the composition
-        for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
-          const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
-          assert(elemOffset < valueElems.size());
-          Value elem = valueElems[elemOffset];
-          if (elem.getType().isInteger(1))
-            elem = sext(i8_ty, elem);
-          elem = bitcast(elem, valueElemTy);
-
-          llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
-        }
-        llWord = bitcast(llWord, valArgTy);
+    const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+    const size_t totalWidth = valueElemNBits * vec;
+    const size_t width = std::min(totalWidth, maxWordWidth);
+    const size_t nWords = std::max<size_t>(1, totalWidth / width);
+    const size_t wordNElems = width / valueElemNBits;
+    assert(wordNElems * nWords * numVecs == elemsPerThread);
+    if (emitBufferOps) {
+      for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
         Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
-        auto address = ptrElems[vecStart + wordIdx * wordNElems];
-        llStore(rewriter, loc, address, llWord, maskVal);
+        Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+        Value vecData = undef(vecTy);
+        for (size_t elemIdx = 0; elemIdx < vec; elemIdx++) {
+          vecData = insert_element(
+              vecTy, vecData, valueElems[vecStart + elemIdx], i32_val(elemIdx));
+        }
+
+        bufferOp<ROCDL::RawPtrBufferStoreOp>(rewriter, loc, targetInfo, vecTy,
+                                             ptrElems[vecStart], maskVal,
+                                             vecData);
+      }
+    } else {
+      for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
+        // TODO: optimization when ptr is AddPtr with constant offset
+        size_t in_off = 0;
+
+        // TODO(Superjomn) Add cache policy fields to StoreOp.
+        // TODO(Superjomn) Deal with cache policy here.
+
+        Type valArgTy = IntegerType::get(ctx, width);
+        auto wordTy = vec_ty(valueElemTy, wordNElems);
+
+        SmallVector<std::pair<Value, std::string>> asmArgs;
+        for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+          // llWord is a width-len composition
+          Value llWord = undef(wordTy);
+          // Insert each value element to the composition
+          for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
+            const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
+            assert(elemOffset < valueElems.size());
+            Value elem = valueElems[elemOffset];
+            if (elem.getType().isInteger(1))
+              elem = sext(i8_ty, elem);
+            elem = bitcast(elem, valueElemTy);
+
+            llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
+          }
+          llWord = bitcast(llWord, valArgTy);
+          Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
+          auto address = ptrElems[vecStart + wordIdx * wordNElems];
+          llStore(rewriter, loc, address, llWord, maskVal);
+        }
       }
     }
     rewriter.eraseOp(op);
@@ -357,11 +553,11 @@ struct AtomicCASOpConversion
   using ConvertOpToLLVMPattern<triton::AtomicCASOp>::ConvertOpToLLVMPattern;
 
   AtomicCASOpConversion(LLVMTypeConverter &converter,
-                        const AMD::TargetInfo &targetInfo,
+                        const AMD::TargetInfo &targetInfo, bool useBufferOps,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicCASOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, useBufferOps, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -493,11 +689,11 @@ struct AtomicRMWOpConversion
   using ConvertOpToLLVMPattern<triton::AtomicRMWOp>::ConvertOpToLLVMPattern;
 
   AtomicRMWOpConversion(LLVMTypeConverter &converter,
-                        const AMD::TargetInfo &targetInfo,
+                        const AMD::TargetInfo &targetInfo, bool useBufferOps,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, useBufferOps, axisAnalysisPass) {}
 
   /// Try to match the mlir::triton::RMWOp to LLVM::AtomicBinOp.
   static std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
@@ -655,11 +851,11 @@ namespace mlir::triton::AMD {
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
-                                       int numWarps,
+                                       int numWarps, bool useBufferOps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-               StoreOpConversion>(typeConverter, targetInfo, axisInfoAnalysis,
-                                  benefit);
+               StoreOpConversion>(typeConverter, targetInfo, useBufferOps,
+                                  axisInfoAnalysis, benefit);
 }
 } // namespace mlir::triton::AMD
