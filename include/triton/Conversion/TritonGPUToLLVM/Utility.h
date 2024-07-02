@@ -1211,7 +1211,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             bool allowLL = true) {
   // Eventually the LinearLayout path will be the only one.  For now we allow
   // both paths so we can test that they produce the same results.
-  if (allowLL && target.enableLinearLayout()) {
+  if (allowLL) {
     std::optional<SmallVector<SmallVector<Value>>> llOffsets =
         emitIndicesUsingLinearLayouts(loc, rewriter, target, layout, type,
                                       withCTAOffset);
