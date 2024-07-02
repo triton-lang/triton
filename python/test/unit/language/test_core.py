@@ -3094,7 +3094,11 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1),
       (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1)] if "gfx9" in get_arch() else []) +
     [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
-     for float8_type in ["float8e5", "float8e4nv"]])
+     for float8_type in ["float8e5", "float8e4nv"]] +
+    [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1)
+     for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4)]
+     for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
+     for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
     if is_interpreter():
@@ -3284,6 +3288,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
+    is_fma = K < 16 or N < 16 or M < 16
+    if is_fma:
+        return
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
         # XXX: skip small sizes because they are not vectorized
         assert 'ld.global.v4' in ptx
@@ -3327,7 +3334,14 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
                                                               ('float16', 'float32'), ('float32', 'float32')]] +
                          # Large block sizes
-                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')])
+                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')] +
+                         # Small block sizes
+                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
+                          for B in [1, 2, 8]
+                          for num_warps in [1, 2, 4]
+                          for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8)]
+                          for M, N, K in [(32, 32, 32)]
+                          for in_dtype_str, out_dtype_str in [('float16', 'float16'), ('float32', 'float32')]])
 def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
@@ -3398,6 +3412,8 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
     if in_dtype_str == 'int8':
         out = numpy_random((B, M, N), dtype_str='int32', rs=rs)
     else:
+        x *= 0.1
+        y *= 0.1
         out = numpy_random((B, M, N), dtype_str=out_dtype_str, rs=rs)
 
     x_tri = to_triton(x, device=device)

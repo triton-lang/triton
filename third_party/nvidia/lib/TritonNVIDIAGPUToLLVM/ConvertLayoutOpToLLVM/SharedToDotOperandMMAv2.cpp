@@ -743,23 +743,6 @@ MemDescType getExpandedDesc(MemDescType descTy) {
   return expandedDesc;
 }
 
-SharedMemoryObject
-getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
-                              SharedMemoryObject smemObj,
-                              ArrayRef<int64_t> shape) {
-  auto strides = smemObj.getStrides();
-  auto offsets = smemObj.getOffsets();
-  auto rank = strides.size();
-  if (rank == 3)
-    return smemObj;
-  auto expandedStrides = insertValue(strides, 0, i32_val(shape[0] * shape[1]));
-  auto expandedOffsets = insertValue(offsets, 0, i32_val(0));
-  auto expandedSmemObj =
-      SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(),
-                         expandedStrides, expandedOffsets);
-  return expandedSmemObj;
-}
-
 namespace SharedToDotOperandMMAv2 {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,

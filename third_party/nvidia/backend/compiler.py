@@ -15,7 +15,16 @@ from pathlib import Path
 
 
 def min_dot_size(target: GPUTarget):
-    return lambda lhsType, rhsType: (16, 32, 16) if lhsType.is_int8() else (16, 16, 16)
+
+    def fma_supported(lhsType, rhsType):
+        return lhsType == rhsType and (lhsType.is_fp16() or lhsType.is_fp32())
+
+    def limits(lhsType, rhsType):
+        if fma_supported(lhsType.scalar, rhsType.scalar):
+            return (1, 1, 1)
+        return (16, 16, 16)
+
+    return limits
 
 
 @functools.lru_cache()
