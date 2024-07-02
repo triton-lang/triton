@@ -16,6 +16,7 @@ from numpy.random import RandomState
 import triton
 import triton.language as tl
 from triton.runtime.jit import TensorWrapper, reinterpret
+from triton.language.extra import libdevice
 
 
 def is_interpreter():
@@ -5466,6 +5467,8 @@ def test_num_programs(device):
 
 @pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
 def test_math_extern(dtype_str):
+    if is_hip():
+        pytest.skip('math_extern only works on CUDA')
 
     @triton.jit
     def kernel(
@@ -5479,12 +5482,11 @@ def test_math_extern(dtype_str):
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
         x = tl.load(x_ptr + offsets, mask=mask)
-        y = GENERATE_TEST_HERE
+        y = libdevice.tanh(x)
         tl.store(y_ptr + offsets, y, mask=mask)
 
     shape = (128, )
     rs = RandomState(17)
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'libdevice.tanh(x)'})
 
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     y_ref = np.tanh(x)
