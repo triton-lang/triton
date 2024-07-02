@@ -5467,8 +5467,8 @@ def test_num_programs(device):
 
 @pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
 def test_math_extern(dtype_str):
-    if not is_cuda():
-        pytest.skip('math_extern test only works on CUDA')
+    if is_interpreter():
+        pytest.skip('math_extern does not work in the interpreter mode')
 
     @triton.jit
     def kernel(

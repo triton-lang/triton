@@ -13,7 +13,6 @@ Triton automatically selects the correct underlying device function to invoke ba
 #  asin Kernel
 # ------------
 
-import os
 import torch
 
 import triton
@@ -58,15 +57,31 @@ print(output_triton)
 print(f'The maximum difference between torch and triton is '
       f'{torch.max(torch.abs(output_torch - output_triton))}')
 
+
 # %%
 #  Customize the libdevice library path
 # -------------------------------------
 # We can also customize the libdevice library path by passing the path to the `libdevice` library to the `asin` kernel.
-# This example uses the path from the `third_party/nvidia/backend/lib` directory (the default path).
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
-libdir = Path(__file__).parent.parent.parent / 'third_party/nvidia/backend/lib'
-extern_libs = {}
-extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH", str(libdir / 'libdevice.10.bc'))
+
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+if is_cuda():
+    libdir = Path(__file__).parent.parent.parent / 'third_party/nvidia/backend/lib'
+    extern_libs = {}
+    extern_libs['libdevice'] = str(libdir / 'libdevice.10.bc')
+elif is_hip():
+    libdir = Path(__file__).parent.parent.parent / 'third_party/amd/backend/lib'
+    extern_libs = {}
+    libs = ["ocml", "ockl"]
+    for lib in libs:
+        extern_libs[lib] = str(libdir / f'{lib}.bc')
+else:
+    raise RuntimeError('unknown backend')
 
 output_triton = torch.empty_like(x)
 asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024, extern_libs=extern_libs)
