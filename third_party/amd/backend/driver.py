@@ -30,7 +30,11 @@ def _get_path_to_hip_runtime_dylib():
     # First search the HIP runtime dynamic library packaged with PyTorch. It's very likely
     # that we run Triton together with PyTorch. This makes sure we use the same dynamic
     # library to avoid version mismatch.
-    for path in site.getsitepackages():
+    site_packages = site.getsitepackages()
+    user_site = site.getusersitepackages()
+    if site.ENABLE_USER_SITE:  # ENABLE_USER_SITE is initialized in getusersitepackages()
+        site_packages += [user_site]
+    for path in site_packages:
         path = os.path.join(path, "torch", "lib", lib_name)
         if os.path.exists(path):
             return path
