@@ -3225,6 +3225,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     assert "Unsupported float8 dtype"
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack",
@@ -3255,6 +3256,18 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_interpreter():
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
+    elif is_cpu():
+        if input_precision != "ieee":
+            pytest.skip(f"{input_precision} not supported on CPU")
+        if in_dtype == 'float8e4nv' or in_dtype == 'float8e5':
+            pytest.skip("float8e4nv and float8e5 not supported on CPU")
+        # This test kernel runs in a single thread and can take a long time
+        # for bigger sizes with the current codegen on CPU. Limit input sizes
+        # by default to get more reasonable tests execution time.
+        if os.environ.get('TRITON_CPU_TEST_DOT_FULL_SIZE', '0') != '1':
+            M = min(M, 64)
+            N = min(N, 64)
+            K = min(K, 32)
     else:
         if is_cuda():
             capability = torch.cuda.get_device_capability()

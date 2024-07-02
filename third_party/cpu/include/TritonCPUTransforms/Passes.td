@@ -10,7 +10,16 @@ def ConvertUnsupportedOps : Pass<"triton-cpu-add-casts-for-unsupported-ops", "ml
         by the target natively. Operations are converted to a supported data type
         with casts added for inputs and the result.
     }];
-    // TODO: add options to specify which operations to convert.
+
+    let options = [
+        Option<"promoteBf16ToFp32", "promote-bf16-to-fp32",
+               "bool", /*default*/"false",
+               "Convert BF16 operations to FP32.">,
+        Option<"convertMixedPrecisionMatmul", "convert-mixed-precision-matmul",
+               "bool", /*default*/"false",
+               "Convert inputs of a mixed-precision matmul to a destination type.">,
+    ];
+
     let constructor = "mlir::triton::cpu::createConvertUnsupportedOps()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",

@@ -93,8 +93,11 @@ class CPUBackend(BaseBackend):
         # TTCIR -> Target TTCIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        if self.cpu_arch == "x86_64" and "avx512bf16" not in self.cpu_features:
-            cpu.passes.ttcpuir.add_convert_unsupported_ops(pm)
+        promote_bf16_to_fp32 = self.cpu_arch == "x86_64" and "avx512bf16" not in self.cpu_features
+        # We don't have any lowering for mixed precision matmuls, so always use casts for now
+        convert_mixed_precision_matmul = True
+        cpu.passes.ttcpuir.add_convert_unsupported_ops(pm, promote_bf16_to_fp32, convert_mixed_precision_matmul)
+        if promote_bf16_to_fp32:
             cpu.passes.ttcpuir.add_decompose_fp_conversions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)

@@ -19,6 +19,9 @@ namespace cpu {
 #include "cpu/include/TritonCPUTransforms/Passes.h.inc"
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertUnsupportedOps();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertUnsupportedOps(bool promoteBf16ToFp32,
+                            bool convertMixedPrecisionMatmul);
 std::unique_ptr<OperationPass<ModuleOp>> createDecomposeFpConversions();
 
 #define GEN_PASS_REGISTRATION

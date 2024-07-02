@@ -35,9 +35,12 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   m.def("add_triton_cpu_to_llvmir_pipeline", [](mlir::PassManager &pm) {
     mlir::triton::cpu::tritonCPUToLLVMPipelineBuilder(pm);
   });
-  m.def("add_convert_unsupported_ops", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::cpu::createConvertUnsupportedOps());
-  });
+  m.def("add_convert_unsupported_ops",
+        [](mlir::PassManager &pm, bool promote_bf16_to_fp32,
+           bool convert_mixed_precision_matmul) {
+          pm.addPass(mlir::triton::cpu::createConvertUnsupportedOps(
+              promote_bf16_to_fp32, convert_mixed_precision_matmul));
+        });
   m.def("add_decompose_fp_conversions", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createDecomposeFpConversions());
   });
