@@ -218,6 +218,6 @@ def test_pcsampling():
         x.zero_()
         proton.finalize()
         data = json.load(f)
-        assert "foo@210" in data[0]["children"][0]["children"][0]["children"]["frame"]["name"]
+        assert "foo@210" in data[0]["children"][0]["children"][0]["children"][0]["frame"]["name"]
         assert data[0]["children"][0]["children"][0]["children"][0]["metrics"]["NumSamples"] > 0
         assert data[0]["children"][0]["children"][0]["children"][0]["metrics"]["StalledLongScoreboard"] > 0
