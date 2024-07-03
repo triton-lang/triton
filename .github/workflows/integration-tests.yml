@@ -383,7 +383,7 @@ jobs:
           cd python/test/unit
           ## test_subprocess.py is flaky on the AMD CI.
           ## TODO (lixun) find a solution and re-enable it.
-          pytest --capture=tee-sys -rfs -n 32 language \
+          pytest --capture=tee-sys -rfs -n 16 language \
                 hopper/test_mixed_io.py \
                 hopper/test_gemm.py \
                 hopper/test_tma_store_gemm.py \
