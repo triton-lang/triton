@@ -8,6 +8,8 @@ namespace proton {
 
 namespace cupti {
 
+template <bool CheckSuccess> CUptiResult getVersion(uint32_t *version);
+
 template <bool CheckSuccess>
 CUptiResult getContextId(CUcontext context, uint32_t *pCtxId);
 
