@@ -21,14 +21,14 @@ template <typename T> T atomicMin(std::atomic<T> &target, T value) {
 }
 
 template <typename Condition, typename Function>
-void doubleCheckedLock(Condition condition, std::mutex &lock,
+void doubleCheckedLock(Condition enterCondition, std::mutex &lock,
                        Function function) {
-  if (condition())
+  if (!enterCondition())
     return;
 
   std::unique_lock<std::mutex> guard(lock);
 
-  if (condition())
+  if (!enterCondition())
     return;
 
   function();

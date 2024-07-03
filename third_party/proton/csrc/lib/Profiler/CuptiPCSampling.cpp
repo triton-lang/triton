@@ -300,7 +300,7 @@ CubinData *CuptiPCSampling::getCubinData(uint64_t cubinCrc) {
 void CuptiPCSampling::initialize(CUcontext context) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
-  doubleCheckedLock([&]() { return contextInitialized.contain(contextId); },
+  doubleCheckedLock([&]() { return !contextInitialized.contain(contextId); },
                     contextMutex,
                     [&]() {
                       enablePCSampling(context);
