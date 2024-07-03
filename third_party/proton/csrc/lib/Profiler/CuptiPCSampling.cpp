@@ -119,17 +119,16 @@ size_t matchStallReasonsToIndices(
 
 CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
                                          size_t numValidStallReasons) {
-  // Check cuda api version >= 12.4
+  // Check cuda api version < 12.4
   // If so, we subtract 4 bytes from the size of CUpti_PCSamplingPCData
   // because it introduces a new field at the end of the struct, which is not
   // compatible with the previous versions.
-  uint32_t cuptiVersion = 0;
-  cupti::getVersion<true>(&cuptiVersion);
-#if CUDA_VERSION >= 12040
-  size_t pcDataSize = sizeof(CUpti_PCSamplingPCData) - sizeof(uint32_t);
-#else
+  uint32_t version = 0;
+  cupti::getVersion<true>(&version);
   size_t pcDataSize = sizeof(CUpti_PCSamplingPCData);
-#endif
+  // 22: CUDA 12.4
+  if (version < 22)
+    pcDataSize -= sizeof(uint32_t);
   CUpti_PCSamplingData pcSamplingData{
       .size = sizeof(CUpti_PCSamplingData),
       .collectNumPcs = collectNumPCs,
