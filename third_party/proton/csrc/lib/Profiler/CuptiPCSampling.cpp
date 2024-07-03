@@ -390,8 +390,8 @@ void CuptiPCSampling::stop(CUcontext context, uint64_t externId, bool isAPI) {
                     pcSamplingMutex,
                     [&]() {
                       auto *configureData = getConfigureData(contextId);
-                      processPCSamplingData(configureData, externId, isAPI);
                       stopPCSampling(context);
+                      processPCSamplingData(configureData, externId, isAPI);
                       pcSamplingStarted = false;
                     });
 }
