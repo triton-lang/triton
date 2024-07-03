@@ -143,7 +143,7 @@ We can also customize the libdevice library path by passing the path to the `lib
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.232 seconds)
+   **Total running time of the script:** (0 minutes 0.239 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_07-extern-functions.py:
