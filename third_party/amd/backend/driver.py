@@ -33,7 +33,7 @@ def _get_path_to_hip_runtime_dylib():
     site_packages = site.getsitepackages()
     user_site = site.getusersitepackages()
     if site.ENABLE_USER_SITE:  # ENABLE_USER_SITE is initialized in getusersitepackages()
-        site_packages += [user_site]
+        site_packages = [user_site] + site_packages
     for path in site_packages:
         path = os.path.join(path, "torch", "lib", lib_name)
         if os.path.exists(path):
