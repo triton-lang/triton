@@ -175,6 +175,21 @@ void setResourceCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
 #undef CALLBACK_ENABLE
 }
 
+bool isDriverAPILaunch(CUpti_CallbackId cbId) {
+  return cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunch ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz;
+}
+
 } // namespace
 
 struct CuptiProfiler::CuptiProfilerPimpl
@@ -322,10 +337,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                     << std::endl;
       }
       profiler.correlation.correlate(callbackData->correlationId, numInstances);
-      if (profiler.isPCSamplingEnabled())
+      if (profiler.isPCSamplingEnabled() && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
+      }
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.isPCSamplingEnabled() && isDriverAPILaunch(cbId)) {
         // XXX: Conservatively stop every GPU kernel for now
         auto scopeId = profiler.correlation.externIdQueue.back();
         pImpl->pcSampling.stop(callbackData->context, scopeId,

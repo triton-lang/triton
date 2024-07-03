@@ -398,6 +398,8 @@ void CuptiPCSampling::stop(CUcontext context, uint64_t externId, bool isAPI) {
 void CuptiPCSampling::finalize(CUcontext context) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
+  if (!contextInitialized.contain(contextId))
+    return;
   auto *configureData = getConfigureData(contextId);
   contextIdToConfigureData.erase(contextId);
   contextInitialized.erase(contextId);
