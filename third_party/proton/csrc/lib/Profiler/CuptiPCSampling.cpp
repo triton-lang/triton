@@ -47,7 +47,8 @@ getSassToSourceCorrelation(const char *functionName, uint64_t pcOffset,
       .fileName = NULL,
       .dirName = NULL,
   };
-  // Get source can fail if the line mapping is not available so we don't check
+  // Get source can fail if the line mapping is not available in the cubin so we
+  // don't check the return value
   cupti::getSassToSourceCorrelation<false>(&sassToSourceParams);
   return std::make_tuple(sassToSourceParams.lineNumber,
                          sassToSourceParams.dirName,
@@ -229,14 +230,14 @@ CUpti_PCSamplingConfigurationInfo ConfigureData::configureSamplingPeriod() {
 }
 
 CUpti_PCSamplingConfigurationInfo ConfigureData::configureSamplingBuffer() {
-  CUpti_PCSamplingConfigurationInfo sampleBufferInfo{};
-  sampleBufferInfo.attributeType =
+  CUpti_PCSamplingConfigurationInfo samplingBufferInfo{};
+  samplingBufferInfo.attributeType =
       CUPTI_PC_SAMPLING_CONFIGURATION_ATTR_TYPE_SAMPLING_DATA_BUFFER;
   this->pcSamplingData =
       allocPCSamplingData(DataBufferPCCount, numValidStallReasons);
-  sampleBufferInfo.attributeData.samplingDataBufferData.samplingDataBuffer =
+  samplingBufferInfo.attributeData.samplingDataBufferData.samplingDataBuffer =
       &this->pcSamplingData;
-  return sampleBufferInfo;
+  return samplingBufferInfo;
 }
 
 CUpti_PCSamplingConfigurationInfo ConfigureData::configureScratchBuffer() {
@@ -288,9 +289,7 @@ void ConfigureData::initialize(CUcontext context) {
   setConfigurationAttribute(context, configurationInfos);
 }
 
-ConfigureData *CuptiPCSampling::getConfigureData(CUcontext context) {
-  uint32_t contextId;
-  cupti::getContextId<true>(context, &contextId);
+ConfigureData *CuptiPCSampling::getConfigureData(uint32_t contextId) {
   return &contextIdToConfigureData[contextId];
 }
 
@@ -301,31 +300,28 @@ CubinData *CuptiPCSampling::getCubinData(uint64_t cubinCrc) {
 void CuptiPCSampling::initialize(CUcontext context) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
-  if (contextInitialized.contain(contextId))
-    return;
-  std::unique_lock<std::mutex> lock(contextMutex);
-  if (contextInitialized.contain(contextId))
-    return;
-  enablePCSampling(context);
-  getConfigureData(context)->initialize(context);
-  contextInitialized.insert(contextId);
+  doubleCheckedLock([&]() { return contextInitialized.contain(contextId); },
+                    contextMutex,
+                    [&]() {
+                      enablePCSampling(context);
+                      getConfigureData(contextId)->initialize(context);
+                      contextInitialized.insert(contextId);
+                    });
 }
 
 void CuptiPCSampling::start(CUcontext context) {
-  if (pcSamplingStarted)
-    return;
-  std::unique_lock<std::mutex> lock(pcSamplingMutex);
-  if (pcSamplingStarted)
-    return;
-  initialize(context);
-  // Ensure all previous operations are completed
-  cuda::ctxSynchronize<true>();
-  // Clean up previous records
-  auto *configureData = getConfigureData(context);
-  configureData->pcSamplingData.totalNumPcs = 0;
-  configureData->pcSamplingData.remainingNumPcs = 0;
-  startPCSampling(context);
-  pcSamplingStarted = true;
+  uint32_t contextId = 0;
+  cupti::getContextId<true>(context, &contextId);
+  doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },
+                    pcSamplingMutex,
+                    [&]() {
+                      initialize(context);
+                      // Ensure all previous operations are completed
+                      cuda::ctxSynchronize<true>();
+                      auto *configureData = getConfigureData(contextId);
+                      startPCSampling(context);
+                      pcSamplingStarted = true;
+                    });
 }
 
 void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
@@ -388,20 +384,21 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
 }
 
 void CuptiPCSampling::stop(CUcontext context, uint64_t externId, bool isAPI) {
-  if (!pcSamplingStarted)
-    return;
-  std::unique_lock<std::mutex> lock(pcSamplingMutex);
-  if (!pcSamplingStarted)
-    return;
-  stopPCSampling(context);
-  auto *configureData = getConfigureData(context);
-  processPCSamplingData(configureData, externId, isAPI);
-  pcSamplingStarted = false;
+  uint32_t contextId = 0;
+  cupti::getContextId<true>(context, &contextId);
+  doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },
+                    pcSamplingMutex,
+                    [&]() {
+                      auto *configureData = getConfigureData(contextId);
+                      processPCSamplingData(configureData, externId, isAPI);
+                      pcSamplingStarted = false;
+                    });
 }
 
 void CuptiPCSampling::finalize(CUcontext context) {
-  auto *configureData = getConfigureData(context);
-  auto contextId = configureData->contextId;
+  uint32_t contextId = 0;
+  cupti::getContextId<true>(context, &contextId);
+  auto *configureData = getConfigureData(contextId);
   contextIdToConfigureData.erase(contextId);
   contextInitialized.erase(contextId);
   disablePCSampling(context);

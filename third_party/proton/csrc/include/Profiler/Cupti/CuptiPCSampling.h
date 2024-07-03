@@ -111,7 +111,7 @@ public:
   void unloadModule(CUpti_ResourceData *resourceData);
 
 private:
-  ConfigureData *getConfigureData(CUcontext context);
+  ConfigureData *getConfigureData(uint32_t contextId);
 
   CubinData *getCubinData(uint64_t cubinCrc);
 

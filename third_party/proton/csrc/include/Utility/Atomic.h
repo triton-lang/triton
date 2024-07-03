@@ -2,6 +2,7 @@
 #define PROTON_UTILITY_ATOMIC_H_
 
 #include <atomic>
+#include <mutex>
 
 namespace proton {
 
@@ -17,6 +18,20 @@ template <typename T> T atomicMin(std::atomic<T> &target, T value) {
   while (current > value && !target.compare_exchange_weak(current, value))
     ;
   return current;
+}
+
+template <typename Condition, typename Function>
+void doubleCheckedLock(Condition condition, std::mutex &lock,
+                       Function function) {
+  if (condition())
+    return;
+
+  std::unique_lock<std::mutex> guard(lock);
+
+  if (condition())
+    return;
+
+  function();
 }
 
 } // namespace proton
