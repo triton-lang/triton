@@ -391,6 +391,7 @@ void CuptiPCSampling::stop(CUcontext context, uint64_t externId, bool isAPI) {
                     [&]() {
                       auto *configureData = getConfigureData(contextId);
                       processPCSamplingData(configureData, externId, isAPI);
+                      stopPCSampling(context);
                       pcSamplingStarted = false;
                     });
 }
