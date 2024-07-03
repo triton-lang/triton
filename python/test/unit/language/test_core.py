@@ -5156,9 +5156,12 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
-        ## TODO: Figure out why float8e5 input fails on MI300
-        if in_type_str != 'float8e5' or is_hip_mi300():
+        if in_type_str != 'float8e5':
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
+
+        ## TODO: Figure out why block size (128, 256, 128) fails on MI300
+        if is_hip_mi300() and BLOCK_M == 128:
+            pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
