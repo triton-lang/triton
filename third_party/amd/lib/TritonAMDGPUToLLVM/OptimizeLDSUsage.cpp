@@ -180,8 +180,7 @@ class OptimizeAMDLDSUsage
           totalLDSConsumption, allocation->getAllocatedInterval(buf).end());
     }
     int64_t freeRequired = totalLDSConsumption - LDSLimit;
-    auto targetScratchSize = std::max(0l, scratchBufferSize - freeRequired);
-    return targetScratchSize;
+    return std::max(static_cast<int64_t>(0), scratchBufferSize - freeRequired);
   }
 
   SmallVector<LDSBottleneckOperation>
