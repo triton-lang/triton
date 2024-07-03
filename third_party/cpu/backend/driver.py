@@ -128,8 +128,8 @@ def make_launcher(constants, signature, ids):
     arg_ptrs_list = ', '.join(f"&arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     kernel_fn_args = [i for i in signature.keys() if i not in constants]
     kernel_fn_args_list = ', '.join(f"arg{i}" for i in kernel_fn_args) if len(kernel_fn_args) > 0 else ''
-    kernel_fn_arg_types = (', '.join(f"{ty_to_cpp(signature[i])}" for i in kernel_fn_args) +
-                           ", " if len(signature) > 0 else '') + "uint32_t, uint32_t, uint32_t"
+    kernel_fn_arg_types = (', '.join(f"{ty_to_cpp(signature[i])}" for i in kernel_fn_args) + ", "
+                           if len(signature) > 0 else '') + "uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t"
 
     # generate glue code
     src = f"""
@@ -236,7 +236,7 @@ static void run_omp_kernels(uint32_t gridX, uint32_t gridY, uint32_t gridZ, kern
 
     for (size_t i = 0; i < N; ++i) {{
       const auto [x, y, z] = all_grids[i];
-      (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} x, y, z);
+      (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} x, y, z, gridX, gridY, gridZ);
     }}
     return;
   }}
@@ -254,7 +254,7 @@ static void run_omp_kernels(uint32_t gridX, uint32_t gridY, uint32_t gridZ, kern
 #pragma omp parallel for schedule(static) num_threads(max_threads.value())
   for (size_t i = 0; i < N; ++i) {{
     const auto [x, y, z] = all_grids[i];
-    (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} x, y, z);
+    (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} x, y, z, gridX, gridY, gridZ);
   }}
 }}
 

@@ -79,6 +79,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     amendedInputTy.push_back(i32_ty);
     amendedInputTy.push_back(i32_ty);
     amendedInputTy.push_back(i32_ty);
+    amendedInputTy.push_back(ui32_ty);
+    amendedInputTy.push_back(ui32_ty);
+    amendedInputTy.push_back(ui32_ty);
     auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
                                            funcTy.getResults());
     // 2. Modify the argument attributes to add new arguments.
@@ -87,6 +90,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     SmallVector<Attribute> amendedArgAttrs;
     if (funcOp.getAllArgAttrs())
       amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
+    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
@@ -99,6 +105,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     region.addArgument(i32_ty, loc);
     region.addArgument(i32_ty, loc);
     region.addArgument(i32_ty, loc);
+    region.addArgument(ui32_ty, loc);
+    region.addArgument(ui32_ty, loc);
+    region.addArgument(ui32_ty, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;
