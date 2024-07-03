@@ -312,7 +312,7 @@ void CuptiPCSampling::initialize(CUcontext context) {
 void CuptiPCSampling::start(CUcontext context) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
-  doubleCheckedLock([&]() -> bool { return pcSamplingStarted; },
+  doubleCheckedLock([&]() -> bool { return !pcSamplingStarted; },
                     pcSamplingMutex,
                     [&]() {
                       initialize(context);
