@@ -128,7 +128,7 @@ def test_pipeline_matmul(device):
                                       output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
                                       NUM_STAGES=NUM_STAGES)
     ref_out = torch.matmul(a, b)
-    atol = 1e-2 if is_hip() else None
+    atol = 1e-2 if is_hip_mi200() else None
     # Bigger tolerance for AMD MI200 devices.
     # MI200 devices use reduced precision fp16 and bf16 and flush input and
     # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
