@@ -17,6 +17,8 @@ import torch
 
 import triton
 import triton.language as tl
+import inspect
+import os
 from triton.language.extra import libdevice
 
 from pathlib import Path
@@ -70,12 +72,14 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+current_file = inspect.getfile(inspect.currentframe())
+current_dir = Path(os.path.dirname(os.path.abspath(current_file)))
+
 if is_cuda():
-    libdir = Path(__file__).parent.parent.parent / 'third_party/nvidia/backend/lib'
-    extern_libs = {}
-    extern_libs['libdevice'] = str(libdir / 'libdevice.10.bc')
+    libdir = current_dir.parent.parent / 'third_party/nvidia/backend/lib'
+    extern_libs = {'libdevice': str(libdir / 'libdevice.10.bc')}
 elif is_hip():
-    libdir = Path(__file__).parent.parent.parent / 'third_party/amd/backend/lib'
+    libdir = current_dir.parent.parent / 'third_party/amd/backend/lib'
     extern_libs = {}
     libs = ["ocml", "ockl"]
     for lib in libs:
