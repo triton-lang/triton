@@ -35,7 +35,7 @@ jobs:
         run: |
           cd docs
           export PATH=$(python3 -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
-          # Limit the number of threads to reduce CPU memory usage.
+          # Limit the number of threads to reduce CPU memory usage
           # This CI node has 24 cores
           MAX_JOBS=24 sudo python3 -m sphinx . _build/html/main
 
