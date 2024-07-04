@@ -34,7 +34,7 @@ size_t getNumStallReasons(CUcontext context) {
   return numStallReasons;
 }
 
-std::tuple<uint32_t, char *, char *>
+std::tuple<uint32_t, std::string, std::string>
 getSassToSourceCorrelation(const char *functionName, uint64_t pcOffset,
                            const char *cubin, size_t cubinSize) {
   CUpti_GetSassToSourceCorrelationParams sassToSourceParams = {
@@ -50,9 +50,18 @@ getSassToSourceCorrelation(const char *functionName, uint64_t pcOffset,
   // Get source can fail if the line mapping is not available in the cubin so we
   // don't check the return value
   cupti::getSassToSourceCorrelation<false>(&sassToSourceParams);
-  return std::make_tuple(sassToSourceParams.lineNumber,
-                         sassToSourceParams.dirName,
-                         sassToSourceParams.fileName);
+  auto fileNameStr = sassToSourceParams.fileName
+                         ? std::string(sassToSourceParams.fileName)
+                         : "";
+  auto dirNameStr =
+      sassToSourceParams.dirName ? std::string(sassToSourceParams.dirName) : "";
+  // It's user's responsibility to free the memory
+  if (sassToSourceParams.fileName)
+    std::free(sassToSourceParams.fileName);
+  if (sassToSourceParams.dirName)
+    std::free(sassToSourceParams.dirName);
+  return std::make_tuple(sassToSourceParams.lineNumber, fileNameStr,
+                         dirNameStr);
 }
 
 std::pair<char **, uint32_t *>
@@ -344,11 +353,9 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         auto [lineNumber, fileName, dirName] =
             getSassToSourceCorrelation(pcData->functionName, pcData->pcOffset,
                                        cubinData->cubin, cubinData->cubinSize);
-        cubinData->lineInfo.try_emplace(
-            key, lineNumber,
-            pcData->functionName ? std::string(pcData->functionName) : "",
-            fileName ? std::string(fileName) : "",
-            dirName ? std::string(dirName) : "");
+        cubinData->lineInfo.try_emplace(key, lineNumber,
+                                        std::string(pcData->functionName),
+                                        fileName, dirName);
       }
       auto &lineInfo = cubinData->lineInfo[key];
       for (size_t j = 0; j < pcData->stallReasonCount; ++j) {
