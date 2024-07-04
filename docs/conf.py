@@ -93,12 +93,13 @@ Triton MLIR Dialects and Ops
 
 def setup(app):
     """Customize function args retrieving to get args under decorator."""
-    import os
+    import subprocess
 
     import sphinx
 
     app.connect("autodoc-process-signature", process_sig)
-    os.system("pip install -e ../python")
+    subprocess.run("pip install -e ../python", shell=True, env=os.environ)
+
     setup_generated_mlir_docs()
 
     def forward_jit_fn(func):
