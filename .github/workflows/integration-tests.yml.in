@@ -115,7 +115,7 @@ jobs:
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["a100-runner-set"], ["h100-runner-set"]]'
-            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
+            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"], ["self-hosted", "gfx942"]]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
@@ -387,7 +387,7 @@ jobs:
           cd python/test/unit
           ## test_subprocess.py is flaky on the AMD CI.
           ## TODO (lixun) find a solution and re-enable it.
-          pytest --capture=tee-sys -rfs -n 32 language \
+          pytest --capture=tee-sys -rfs -n 16 language \
                  hopper/test_mixed_io.py \
                  hopper/test_gemm.py \
                  hopper/test_tma_store_gemm.py \
