@@ -57,6 +57,12 @@ struct ConfigureData {
     }
     if (stallReasonIndices)
       std::free(stallReasonIndices);
+    if (pcSamplingData.pPcData) {
+      for (size_t i = 0; i < numValidStallReasons; ++i) {
+        std::free(pcSamplingData.pPcData[i].stallReason);
+      }
+      std::free(pcSamplingData.pPcData);
+    }
   }
 
   void initialize(CUcontext context);
