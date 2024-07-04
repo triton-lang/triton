@@ -344,8 +344,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       if (profiler.isPCSamplingEnabled() && isDriverAPILaunch(cbId)) {
         // XXX: Conservatively stop every GPU kernel for now
         auto scopeId = profiler.correlation.externIdQueue.back();
-        pImpl->pcSampling.stop(callbackData->context, scopeId,
-                               !profiler.isOpInProgress());
+        pImpl->pcSampling.stop(
+            callbackData->context, scopeId,
+            profiler.correlation.apiExternIds.contain(scopeId));
       }
       threadState.exitOp();
       profiler.correlation.submit(callbackData->correlationId);
