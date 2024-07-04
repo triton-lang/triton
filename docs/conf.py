@@ -98,7 +98,7 @@ def setup(app):
     import sphinx
 
     app.connect("autodoc-process-signature", process_sig)
-    subprocess.run("pip install -e ../python", shell=True, env=os.environ)
+    subprocess.run("pip install -e ../python", shell=True, env=os.environ.copy())
 
     setup_generated_mlir_docs()
 
