@@ -2515,3 +2515,43 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:75", "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<1.000000e+00> : tensor<1024xf64, #blocked>
+    %cst_0 = arith.constant dense<1> : tensor<1024xi32, #blocked1>
+    %cst_1 = arith.constant dense<2> : tensor<1024xi32, #blocked1>
+    %c1024_i32 = arith.constant 1024 : i32
+    %cst_2 = arith.constant dense<10000> : tensor<1024xi32, #blocked1>
+    %cst_3 = arith.constant dense<10000> : tensor<1024xi32, #blocked>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1>
+    %4 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %5 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked1>
+    %6 = arith.addi %4, %2 : tensor<1024xi32, #blocked>
+    %7 = arith.addi %5, %3 : tensor<1024xi32, #blocked1>
+    %8 = arith.cmpi slt, %6, %cst_3 : tensor<1024xi32, #blocked>
+    %9 = arith.cmpi slt, %7, %cst_2 : tensor<1024xi32, #blocked1>
+    %10 = tt.splat %arg0 : !tt.ptr<f64> -> tensor<1024x!tt.ptr<f64>, #blocked>
+    %11 = tt.addptr %10, %6 : tensor<1024x!tt.ptr<f64>, #blocked>, tensor<1024xi32, #blocked>
+    %12 = tt.load %11, %8 : tensor<1024x!tt.ptr<f64>, #blocked>
+    %13 = arith.muli %7, %cst_1 : tensor<1024xi32, #blocked1>
+    %14 = tt.splat %arg1 : !tt.ptr<f64> -> tensor<1024x!tt.ptr<f64>, #blocked1>
+    %15 = tt.addptr %14, %13 : tensor<1024x!tt.ptr<f64>, #blocked1>, tensor<1024xi32, #blocked1>
+    // CHECK-NOT: triton_gpu.convert_layout
+    %16 = triton_gpu.convert_layout %12 : tensor<1024xf64, #blocked> -> tensor<1024xf64, #blocked1>
+    %17 = tt.atomic_rmw fadd, acq_rel, gpu, %15, %16, %9 : (tensor<1024x!tt.ptr<f64>, #blocked1>, tensor<1024xf64, #blocked1>, tensor<1024xi1, #blocked1>) -> tensor<1024xf64, #blocked1>
+    %18 = tt.addptr %15, %cst_0 : tensor<1024x!tt.ptr<f64>, #blocked1>, tensor<1024xi32, #blocked1>
+    %19 = arith.addf %12, %cst : tensor<1024xf64, #blocked>
+    // CHECK-NOT: triton_gpu.convert_layout
+    %20 = triton_gpu.convert_layout %19 : tensor<1024xf64, #blocked> -> tensor<1024xf64, #blocked1>
+    %21 = tt.atomic_rmw fadd, acq_rel, gpu, %18, %20, %9 : (tensor<1024x!tt.ptr<f64>, #blocked1>, tensor<1024xf64, #blocked1>, tensor<1024xi1, #blocked1>) -> tensor<1024xf64, #blocked1>
+    tt.return
+  }
+}
