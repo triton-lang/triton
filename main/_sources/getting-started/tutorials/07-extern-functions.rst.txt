@@ -25,15 +25,14 @@ In this example, we will use the `libdevice` library to apply `asin` on a tensor
 Please refer to https://docs.nvidia.com/cuda/libdevice-users-guide/index.html (CUDA) and/or https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src (HIP) regarding the semantics of all available libdevice functions.
 In `libdevice.py`, we try to aggregate functions with the same computation but different data types together.
 For example, both `__nv_asin` and `__nv_asinf` calculate the principal value of the arc sine of the input, but `__nv_asin` operates on `double` and `__nv_asinf` operates on `float`.
-Using triton, you can simply call `tl.math.asin`.
 Triton automatically selects the correct underlying device function to invoke based on input and output types.
 
-.. GENERATED FROM PYTHON SOURCE LINES 14-16
+.. GENERATED FROM PYTHON SOURCE LINES 13-15
 
 asin Kernel
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 16-40
+.. GENERATED FROM PYTHON SOURCE LINES 15-43
 
 .. code-block:: Python
 
@@ -42,7 +41,11 @@ asin Kernel
 
     import triton
     import triton.language as tl
+    import inspect
+    import os
     from triton.language.extra import libdevice
+
+    from pathlib import Path
 
 
     @triton.jit
@@ -68,13 +71,13 @@ asin Kernel
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 41-44
+.. GENERATED FROM PYTHON SOURCE LINES 44-47
 
 Using the default libdevice library path
 -----------------------------------------
 We can use the default libdevice library path encoded in `triton/language/math.py`
 
-.. GENERATED FROM PYTHON SOURCE LINES 44-59
+.. GENERATED FROM PYTHON SOURCE LINES 47-63
 
 .. code-block:: Python
 
@@ -97,6 +100,7 @@ We can use the default libdevice library path encoded in `triton/language/math.p
 
 
 
+
 .. rst-class:: sphx-glr-script-out
 
  .. code-block:: none
@@ -108,19 +112,41 @@ We can use the default libdevice library path encoded in `triton/language/math.p
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 60-63
+.. GENERATED FROM PYTHON SOURCE LINES 64-67
 
 Customize the libdevice library path
 -------------------------------------
 We can also customize the libdevice library path by passing the path to the `libdevice` library to the `asin` kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 63-70
+.. GENERATED FROM PYTHON SOURCE LINES 67-96
 
 .. code-block:: Python
 
+    def is_cuda():
+        return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+    def is_hip():
+        return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+    current_file = inspect.getfile(inspect.currentframe())
+    current_dir = Path(os.path.dirname(os.path.abspath(current_file)))
+
+    if is_cuda():
+        libdir = current_dir.parent.parent / 'third_party/nvidia/backend/lib'
+        extern_libs = {'libdevice': str(libdir / 'libdevice.10.bc')}
+    elif is_hip():
+        libdir = current_dir.parent.parent / 'third_party/amd/backend/lib'
+        extern_libs = {}
+        libs = ["ocml", "ockl"]
+        for lib in libs:
+            extern_libs[lib] = str(libdir / f'{lib}.bc')
+    else:
+        raise RuntimeError('unknown backend')
 
     output_triton = torch.empty_like(x)
-    asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
+    asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024, extern_libs=extern_libs)
     print(output_torch)
     print(output_triton)
     print(f'The maximum difference between torch and triton is '
@@ -143,7 +169,7 @@ We can also customize the libdevice library path by passing the path to the `lib
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.239 seconds)
+   **Total running time of the script:** (0 minutes 0.223 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_07-extern-functions.py:
