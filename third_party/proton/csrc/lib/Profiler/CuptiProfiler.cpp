@@ -272,9 +272,15 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         static_cast<CUpti_ResourceData *>(const_cast<void *>(cbData));
     auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
     if (cbId == CUPTI_CBID_RESOURCE_MODULE_LOADED) {
-      pImpl->pcSampling.loadModule(resourceData);
+      auto *moduleResource = static_cast<CUpti_ModuleResourceData *>(
+          resourceData->resourceDescriptor);
+      pImpl->pcSampling.loadModule(moduleResource->pCubin,
+                                   moduleResource->cubinSize);
     } else if (cbId == CUPTI_CBID_RESOURCE_MODULE_UNLOAD_STARTING) {
-      pImpl->pcSampling.unloadModule(resourceData);
+      auto *moduleResource = static_cast<CUpti_ModuleResourceData *>(
+          resourceData->resourceDescriptor);
+      pImpl->pcSampling.unloadModule(moduleResource->pCubin,
+                                     moduleResource->cubinSize);
     } else if (cbId == CUPTI_CBID_RESOURCE_CONTEXT_CREATED) {
       pImpl->pcSampling.initialize(resourceData->context);
     } else if (cbId == CUPTI_CBID_RESOURCE_CONTEXT_DESTROY_STARTING) {

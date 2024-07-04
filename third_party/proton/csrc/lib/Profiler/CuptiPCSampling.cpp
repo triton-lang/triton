@@ -307,7 +307,7 @@ ConfigureData *CuptiPCSampling::getConfigureData(uint32_t contextId) {
 }
 
 CubinData *CuptiPCSampling::getCubinData(uint64_t cubinCrc) {
-  return &cubinCrcToCubinData[cubinCrc];
+  return &(cubinCrcToCubinData[cubinCrc].first);
 }
 
 void CuptiPCSampling::initialize(CUcontext context) {
@@ -417,21 +417,23 @@ void CuptiPCSampling::finalize(CUcontext context) {
   disablePCSampling(context);
 }
 
-void CuptiPCSampling::loadModule(CUpti_ResourceData *resourceData) {
-  auto *cubinResource =
-      static_cast<CUpti_ModuleResourceData *>(resourceData->resourceDescriptor);
-  auto cubinCrc = getCubinCrc(cubinResource->pCubin, cubinResource->cubinSize);
+void CuptiPCSampling::loadModule(const char *cubin, size_t cubinSize) {
+  auto cubinCrc = getCubinCrc(cubin, cubinSize);
   auto *cubinData = getCubinData(cubinCrc);
   cubinData->cubinCrc = cubinCrc;
-  cubinData->cubinSize = cubinResource->cubinSize;
-  cubinData->cubin = cubinResource->pCubin;
+  cubinData->cubinSize = cubinSize;
+  cubinData->cubin = cubin;
 }
 
-void CuptiPCSampling::unloadModule(CUpti_ResourceData *resourceData) {
-  auto *cubinResource =
-      static_cast<CUpti_ModuleResourceData *>(resourceData->resourceDescriptor);
-  auto cubinCrc = getCubinCrc(cubinResource->pCubin, cubinResource->cubinSize);
-  cubinCrcToCubinData.erase(cubinCrc);
+void CuptiPCSampling::unloadModule(const char *cubin, size_t cubinSize) {
+  // XXX: Unload module is supposed to be called in a thread safe manner
+  // i.e., no two threads will be calling unload module the same time
+  auto cubinCrc = getCubinCrc(cubin, cubinSize);
+  auto count = cubinCrcToCubinData[cubinCrc].second;
+  if (count > 1)
+    cubinCrcToCubinData[cubinCrc].second = count - 1;
+  else
+    cubinCrcToCubinData.erase(cubinCrc);
 }
 
 } // namespace proton

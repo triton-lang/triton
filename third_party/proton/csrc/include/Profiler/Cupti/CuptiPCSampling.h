@@ -112,9 +112,9 @@ public:
 
   void finalize(CUcontext context);
 
-  void loadModule(CUpti_ResourceData *resourceData);
+  void loadModule(const char *cubin, size_t cubinSize);
 
-  void unloadModule(CUpti_ResourceData *resourceData);
+  void unloadModule(const char *cubin, size_t cubinSize);
 
 private:
   ConfigureData *getConfigureData(uint32_t contextId);
@@ -125,7 +125,10 @@ private:
                              bool isAPI);
 
   ThreadSafeMap<uint32_t, ConfigureData> contextIdToConfigureData;
-  ThreadSafeMap<size_t, CubinData> cubinCrcToCubinData;
+  // In case the same cubin is loaded multiple times, we need to keep track of
+  // all of them
+  ThreadSafeMap<size_t, std::pair<CubinData, /*count=*/size_t>>
+      cubinCrcToCubinData;
   ThreadSafeSet<uint32_t> contextInitialized;
 
   std::atomic<bool> pcSamplingStarted{false};
