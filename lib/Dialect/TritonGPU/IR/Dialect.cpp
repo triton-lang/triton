@@ -1033,11 +1033,11 @@ LogicalResult DotOperandEncodingAttr::verify(
     return success();
   }
 
-  if (mlir::isa<AMDWmmaEncodingAttr>(parent)) {
-    // TODO: remove this condition if new values are supported
-    if (kWidth != 16)
-      return emitError() << "triton_gpu.dot_op kWidth parameter supports "
-                            "only 16 for WMMA parent";
+  if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
+    if (kWidth != 16 && parentAttr.getVersion() == 1 ||
+        kWidth != 8 && parentAttr.getVersion() == 2)
+      return emitError() << "triton_gpu.dot_op kWidth parameter must be 16 for "
+                            "gfx11 and 8 for gfx12";
     return success();
   }
 
