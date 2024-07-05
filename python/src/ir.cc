@@ -1650,7 +1650,8 @@ void init_triton_ir(py::module &&m) {
                           });
 
           ::llvm::DebugFlag = true;
-          ::llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+          using namespace llvm;
+          setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
         }
 
         bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");
