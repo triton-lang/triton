@@ -98,7 +98,7 @@ struct DecomposeUnsupportedAMDConversions
       }
 
       auto currLDSUsage = mlir::triton::AMD::getCvtOpLDSUsage(cvtOp);
-      if (currLDSUsage <= LDSSize) {
+      if (currLDSUsage <= sharedMemoryLimit) {
         return;
       }
 
@@ -106,9 +106,9 @@ struct DecomposeUnsupportedAMDConversions
 
       // Find all possible shapes of WarpsPerCTA by finding all possible
       // factorizations of numWarps. Pick shape for which both conversions in
-      // decomposition use LDS less than LDSSize and for which sum of LDS usage
-      // is minimal. If no such shape exists, do not decompose.
-      unsigned minLDSUsage = 2 * LDSSize;
+      // decomposition use LDS less than sharedMemoryLimit and for which sum of
+      // LDS usage is minimal. If no such shape exists, do not decompose.
+      unsigned minLDSUsage = 2 * sharedMemoryLimit;
       int minIdx = -1;
       int rank = dstBlocked.getWarpsPerCTA().size();
       auto factorizedNumWarps =
@@ -124,13 +124,13 @@ struct DecomposeUnsupportedAMDConversions
       for (int i = 0; i < tmpLayouts.size(); i++) {
         auto resources = mlir::triton::AMD::estimateResourcesForReplacement(
             builder, cvtOp, tmpLayouts[i]);
-        if (resources.LDS <= LDSSize && resources.LDS < minLDSUsage) {
+        if (resources.LDS <= sharedMemoryLimit && resources.LDS < minLDSUsage) {
           minLDSUsage = resources.LDS;
           minIdx = i;
         }
       }
 
-      if (minIdx == -1 || minLDSUsage > LDSSize) {
+      if (minIdx == -1 || minLDSUsage > sharedMemoryLimit) {
         return;
       }
 
