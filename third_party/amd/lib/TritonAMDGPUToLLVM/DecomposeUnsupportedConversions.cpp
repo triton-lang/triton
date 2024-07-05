@@ -1,4 +1,3 @@
-#include "OptimizeLDSUtility.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
@@ -6,6 +5,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <numeric>
@@ -97,48 +97,52 @@ struct DecomposeUnsupportedAMDConversions
         return;
       }
 
-      auto currLDSUsage = mlir::triton::AMD::getCvtOpLDSUsage(cvtOp);
+      auto currLDSUsage = getCvtOpLDSUsage(cvtOp);
       if (currLDSUsage <= sharedMemoryLimit) {
         return;
       }
 
       unsigned numWarps = triton::gpu::getNumWarpsPerCTA(srcEnc);
 
+      triton::gpu::ConvertLayoutOp tmpCvt;
+      triton::gpu::ConvertLayoutOp newEpilogueCvt;
+
       // Find all possible shapes of WarpsPerCTA by finding all possible
       // factorizations of numWarps. Pick shape for which both conversions in
-      // decomposition use LDS less than sharedMemoryLimit and for which sum of
-      // LDS usage is minimal. If no such shape exists, do not decompose.
+      // decomposition use LDS less than limit and for which sum of LDS usage
+      // is minimal. If no such shape exists, do not decompose.
       unsigned minLDSUsage = 2 * sharedMemoryLimit;
       int minIdx = -1;
-      int rank = dstBlocked.getWarpsPerCTA().size();
-      auto factorizedNumWarps =
-          mlir::triton::AMD::factorizePowerOf2(numWarps, rank);
+      auto factorizedNumWarps = factorizePowerOf2(numWarps);
 
-      SmallVector<Attribute> tmpLayouts;
       for (int i = 0; i < factorizedNumWarps.size(); i++) {
-        auto warpsPerCTA = factorizedNumWarps[i];
-        tmpLayouts.push_back(
-            mlir::triton::AMD::createTmpLayout(srcEnc, warpsPerCTA));
-      }
+        auto warpsPerCTAPair = factorizedNumWarps[i];
+        std::tie(tmpCvt, newEpilogueCvt) =
+            createNewConvertOps(mod, builder, cvtOp, warpsPerCTAPair);
 
-      for (int i = 0; i < tmpLayouts.size(); i++) {
-        auto resources = mlir::triton::AMD::estimateResourcesForReplacement(
-            builder, cvtOp, tmpLayouts[i]);
-        if (resources.LDS <= sharedMemoryLimit && resources.LDS < minLDSUsage) {
-          minLDSUsage = resources.LDS;
-          minIdx = i;
+        int tmpCvtLDS = getCvtOpLDSUsage(tmpCvt);
+        int newCvtLDS = getCvtOpLDSUsage(newEpilogueCvt);
+        if (tmpCvtLDS <= sharedMemoryLimit && newCvtLDS <= sharedMemoryLimit) {
+          int LDSUsage = tmpCvtLDS + newCvtLDS;
+          if (LDSUsage < minLDSUsage) {
+            minLDSUsage = LDSUsage;
+            minIdx = i;
+          }
         }
+        newEpilogueCvt.erase();
+        tmpCvt.erase();
       }
 
-      if (minIdx == -1 || minLDSUsage > sharedMemoryLimit) {
+      if (minIdx == -1) {
         return;
       }
 
-      assert(minIdx >= 0 && minIdx < tmpLayouts.size());
-      auto replacementCvts = mlir::triton::AMD::createNewConvertOps(
-          builder, cvtOp, tmpLayouts[minIdx]);
+      assert(minIdx >= 0 && minIdx < factorizedNumWarps.size());
+      auto warpsPerCTAPair = factorizedNumWarps[minIdx];
+      std::tie(tmpCvt, newEpilogueCvt) =
+          createNewConvertOps(mod, builder, cvtOp, warpsPerCTAPair);
 
-      cvtOp.replaceAllUsesWith(replacementCvts.second.getResult());
+      cvtOp.replaceAllUsesWith(newEpilogueCvt.getResult());
       cvtOp.erase();
     });
 
