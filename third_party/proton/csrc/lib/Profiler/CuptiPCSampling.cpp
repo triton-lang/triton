@@ -330,11 +330,7 @@ void CuptiPCSampling::start(CUcontext context) {
                     [&]() {
                       initialize(context);
                       // Ensure all previous operations are completed
-                      // and clean up the data
                       cuda::ctxSynchronize<true>();
-                      auto *configureData = getConfigureData(contextId);
-                      configureData->pcSamplingData.remainingNumPcs = 0;
-                      configureData->pcSamplingData.totalNumPcs = 0;
                       startPCSampling(context);
                       pcSamplingStarted = true;
                     });
@@ -345,8 +341,11 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
   auto dataSet = profiler.getDataSet();
-  while ((pcSamplingData->totalNumPcs > 0 ||
-          pcSamplingData->remainingNumPcs > 0)) {
+  // In the first round, we need to call getPCSamplingData to get the unsynced
+  // data from the hardware buffer
+  bool firstRound = true;
+  while (pcSamplingData->totalNumPcs > 0 ||
+         pcSamplingData->remainingNumPcs > 0 || firstRound) {
     // Handle data
     for (size_t i = 0; i < pcSamplingData->totalNumPcs; ++i) {
       auto *pcData = pcSamplingData->pPcData;
@@ -391,9 +390,10 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         }
       }
     }
-    if (pcSamplingData->remainingNumPcs > 0)
+    if (pcSamplingData->remainingNumPcs > 0 || firstRound) {
       getPCSamplingData(configureData->context, pcSamplingData);
-    else
+      firstRound = false;
+    } else
       break;
   }
 }
