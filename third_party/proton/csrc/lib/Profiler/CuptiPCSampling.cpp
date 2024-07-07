@@ -331,6 +331,9 @@ void CuptiPCSampling::start(CUcontext context) {
                       initialize(context);
                       // Ensure all previous operations are completed
                       cuda::ctxSynchronize<true>();
+                      auto *configureData = getConfigureData(contextId);
+                      configureData->pcSamplingData.remainingNumPcs = 0;
+                      configureData->pcSamplingData.totalNumPcs = 0;
                       startPCSampling(context);
                       pcSamplingStarted = true;
                     });
@@ -341,7 +344,6 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
   auto dataSet = profiler.getDataSet();
-  getPCSamplingData(configureData->context, pcSamplingData);
   while ((pcSamplingData->totalNumPcs > 0 ||
           pcSamplingData->remainingNumPcs > 0)) {
     // Handle data
