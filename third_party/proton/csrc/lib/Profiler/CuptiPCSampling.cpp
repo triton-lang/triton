@@ -355,7 +355,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
                                        cubinData->cubin, cubinData->cubinSize);
         cubinData->lineInfo.try_emplace(key, lineNumber,
                                         std::string(pcData->functionName),
-                                        fileName, dirName);
+                                        dirName, fileName);
       }
       auto &lineInfo = cubinData->lineInfo[key];
       for (size_t j = 0; j < pcData->stallReasonCount; ++j) {
@@ -369,7 +369,8 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
             scopeId = data->addScope(externId, lineInfo.functionName);
           if (lineInfo.fileName.size())
             scopeId = data->addScope(
-                scopeId, lineInfo.fileName + ":" + lineInfo.functionName + "@" +
+                scopeId, lineInfo.dirName + "/" + lineInfo.fileName + ":" +
+                             lineInfo.functionName + "@" +
                              std::to_string(lineInfo.lineNumber));
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
