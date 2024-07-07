@@ -341,6 +341,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
   auto *pcSamplingData = &configureData->pcSamplingData;
   auto &profiler = CuptiProfiler::instance();
   auto dataSet = profiler.getDataSet();
+  getPCSamplingData(configureData->context, pcSamplingData);
   while ((pcSamplingData->totalNumPcs > 0 ||
           pcSamplingData->remainingNumPcs > 0)) {
     // Handle data
