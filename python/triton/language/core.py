@@ -1233,8 +1233,8 @@ def full(shape, value, dtype, _builder=None):
     :type shape: tuple of ints
     :param value: A scalar value to fill the array with
     :type value: scalar
-    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
-    :type dtype: DType
+    :param dtype: Data type of the new array, e.g., :code:`tl.float16`
+    :type dtype: tl.dtype
     """
     shape = _shape_check_impl(shape)
     value = _constexpr_to_value(value)
@@ -1446,7 +1446,7 @@ def reshape(input, *shape, can_reorder=False, _builder=None):
     :type input: Block
     :param shape: The new shape.
 
-    :code:`shape ` can be passed as a tuple or as individual parameters: ::
+    :code:`shape` can be passed as a tuple or as individual parameters: ::
 
         # These are equivalent
         reshape(x, (32, 32))
@@ -1500,13 +1500,16 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
     Casts a tensor to the given :code:`dtype`.
 
     :param dtype: The target data type.
+    :type dtype: tl.dtype
     :param fp_downcast_rounding: The rounding mode for downcasting
-        floating-point values.  This parameter is only used when self is a
+        floating-point values. This parameter is only used when self is a
         floating-point tensor and dtype is a floating-point type with a
         smaller bitwidth. Supported values are :code:`"rtne"` (round to
         nearest, ties to even) and :code:`"rtz"` (round towards zero).
+    :type fp_downcast_rounding: str, optional
     :param bitcast: If true, the tensor is bitcasted to the given
         :code:`dtype`, instead of being numerically casted.
+    :type bitcast: bool, optional
     """
     input = _to_tensor(input, _builder)
     if isinstance(bitcast, constexpr):
