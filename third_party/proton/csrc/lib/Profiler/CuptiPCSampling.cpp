@@ -330,6 +330,7 @@ void CuptiPCSampling::start(CUcontext context) {
                     [&]() {
                       initialize(context);
                       // Ensure all previous operations are completed
+                      // and clean up the data
                       cuda::ctxSynchronize<true>();
                       auto *configureData = getConfigureData(contextId);
                       configureData->pcSamplingData.remainingNumPcs = 0;
