@@ -383,6 +383,8 @@ public:
         !isa<ttg::BlockedEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
+    return failure();
+
     if (!supportMFMA(dotOp))
       return failure();
 
