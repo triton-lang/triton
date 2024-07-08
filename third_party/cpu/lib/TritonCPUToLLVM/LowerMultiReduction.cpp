@@ -35,7 +35,9 @@ struct LowerMultiReduction
     MLIRContext *context = op->getContext();
 
     RewritePatternSet loweringPatterns(context);
-    vector::VectorMultiReductionLowering options;
+    // The default lowering option is InnerParallel
+    vector::VectorMultiReductionLowering options =
+        vector::VectorMultiReductionLowering::InnerReduction;
     vector::populateVectorMultiReductionLoweringPatterns(loweringPatterns,
                                                          options);
 
