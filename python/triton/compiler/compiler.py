@@ -244,8 +244,8 @@ def compile(src, target=None, options=None):
     # core changes to make it easier to track kernels by hash.
     enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
     enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
-    fn_override_manager = get_override_manager(src.hash()) if enable_override else None
-    fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
+    fn_override_manager = get_override_manager(hash) if enable_override else None
+    fn_dump_manager = get_dump_manager(hash) if enable_ir_dump else None
     # Pre-truncate the file name here to avoid hitting the 255 character limit on common platforms.
     # The final file name in the cache will have a format of f"{filename}.{ext}.tmp.pid_{pid}_{uuid}".
     # A PID string can be 5-character long. A UUID string has typically 36 characters. Let's truncate
