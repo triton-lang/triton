@@ -52,12 +52,12 @@ class FileCacheManager(CacheManager):
         self.key = key
         self.lock_path = None
         if dump:
-            self.cache_dir = default_dump_dir()
+            self.cache_dir = os.getenv("TRITON_DUMP_DIR", "").strip() or default_dump_dir()
             self.cache_dir = os.path.join(self.cache_dir, self.key)
             self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
         elif override:
-            self.cache_dir = default_override_dir()
+            self.cache_dir = os.getenv("TRITON_OVERRIDE_DIR", "").strip() or default_override_dir()
             self.cache_dir = os.path.join(self.cache_dir, self.key)
         else:
             # create cache directory if it doesn't exist
