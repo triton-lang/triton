@@ -27,37 +27,6 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
     op->setAttr(attr.getName(), attr.getValue());
 }
 
-static void promoteReduceOpResult(OpBuilder &builder, triton::ReduceOp op,
-                                  Value result, Type promotedType) {
-  // save original type
-  auto originalType = result.getType();
-  auto elemType = isa<RankedTensorType>(originalType)
-                      ? cast<RankedTensorType>(originalType).getElementType()
-                      : originalType;
-
-  // promote result type
-  result.setType(promotedType);
-
-  // set insertion point after reduce op
-  builder.setInsertionPointAfter(op);
-
-  // truncate result back to original type
-  mlir::Operation *truncResult = nullptr;
-  if (elemType.isInteger(16) || elemType.isInteger(8)) {
-    truncResult = builder.create<mlir::arith::TruncIOp>(result.getLoc(),
-                                                        originalType, result);
-  } else if (elemType.isF16()) {
-    truncResult = builder.create<mlir::arith::TruncFOp>(result.getLoc(),
-                                                        originalType, result);
-  }
-
-  // replace all uses except for the truncOp above
-  if (truncResult != nullptr) {
-    result.replaceAllUsesWith(truncResult->getResult(0));
-    truncResult->setOperand(0, result);
-  }
-}
-
 static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
   unsigned inVec = 0;
   unsigned outVec = 0;
@@ -255,93 +224,6 @@ struct DecomposeUnsupportedAMDConversions
     });
 
     triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
-
-    // promote reduce ops
-    mod.walk([&](triton::ReduceOp op) -> void {
-      OpBuilder builder(op);
-
-      // promote operands
-      SmallVector<Value> newOperands;
-      for (OpOperand &operand : op->getOpOperands()) {
-        auto val = operand.get();
-        auto oldType = cast<RankedTensorType>(val.getType());
-        auto elemType = oldType.getElementType();
-        if (elemType.isInteger(16) || elemType.isInteger(8)) {
-          auto newType =
-              oldType.cloneWith(std::nullopt, builder.getIntegerType(32));
-          auto promotedVal =
-              builder.create<mlir::arith::ExtSIOp>(op->getLoc(), newType, val);
-          newOperands.push_back(promotedVal);
-        } else if (elemType.isF16()) {
-          auto newType = oldType.cloneWith(std::nullopt, builder.getF32Type());
-          auto promotedVal =
-              builder.create<mlir::arith::ExtFOp>(op->getLoc(), newType, val);
-          newOperands.push_back(promotedVal);
-        } else {
-          newOperands.push_back(val);
-        }
-      }
-      op->setOperands(newOperands);
-
-      // promote results
-      for (Value result : op.getResults()) {
-        auto type = result.getType();
-        if (type.isInteger(16) || type.isInteger(8)) {
-          promoteReduceOpResult(builder, op, result,
-                                builder.getIntegerType(32));
-        } else if (type.isF16()) {
-          promoteReduceOpResult(builder, op, result, builder.getF32Type());
-        } else if (isa<RankedTensorType>(type)) {
-          auto oldType = cast<RankedTensorType>(type);
-          auto elemType = oldType.getElementType();
-          if (elemType.isInteger(16) || elemType.isInteger(8)) {
-            promoteReduceOpResult(
-                builder, op, result,
-                oldType.cloneWith(std::nullopt, builder.getIntegerType(32)));
-          } else if (elemType.isF16()) {
-            promoteReduceOpResult(
-                builder, op, result,
-                oldType.cloneWith(std::nullopt, builder.getF32Type()));
-          }
-        }
-      }
-
-      // promote combine op
-      for (Block &oldBlock : op.getCombineOp().getBlocks()) {
-        // update block args
-        for (auto arg : oldBlock.getArguments()) {
-          auto type = arg.getType();
-          if (type.isInteger(16) || type.isInteger(8)) {
-            arg.setType(builder.getIntegerType(32));
-          } else if (type.isF16()) {
-            arg.setType(builder.getF32Type());
-          }
-        }
-
-        for (Operation &oldOp : oldBlock.getOperations()) {
-          // update operands
-          for (OpOperand &operand : oldOp.getOpOperands()) {
-            auto val = operand.get();
-            auto type = val.getType();
-            if (type.isInteger(16) || type.isInteger(8)) {
-              val.setType(builder.getIntegerType(32));
-            } else if (type.isF16()) {
-              val.setType(builder.getF32Type());
-            }
-          }
-
-          // update results
-          for (Value result : oldOp.getResults()) {
-            auto type = result.getType();
-            if (type.isInteger(16) || type.isInteger(8)) {
-              result.setType(builder.getIntegerType(32));
-            } else if (type.isF16()) {
-              result.setType(builder.getF32Type());
-            }
-          }
-        }
-      }
-    });
   }
 };
 
