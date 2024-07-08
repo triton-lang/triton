@@ -22,6 +22,7 @@ class CPUOptions:
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     allow_fp8e4nv: bool = False
     enable_fp_fusion: bool = True
+    enable_fast_math: bool = False
 
     # TODO: We may introduce CPU-specific options like # of cores.
 
@@ -49,6 +50,8 @@ class CPUBackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts}
+        if not "enable_fast_math" in args:
+            args["enable_fast_math"] = os.getenv("TRITON_CPU_FAST_MATH", "0") == "1"
         return CPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -124,7 +127,7 @@ class CPUBackend(BaseBackend):
         cpu.passes.ttcpuir.add_triton_cpu_to_llvmir_pipeline(pm)
         passes.convert.add_math_to_llvmir(pm)
         cpu.passes.ttcpuir.add_math_to_libm(pm)
-        cpu.passes.ttcpuir.add_vector_to_llvmir(pm)
+        cpu.passes.ttcpuir.add_vector_to_llvmir(pm, options.enable_fast_math)
         cpu.passes.ttcpuir.add_memref_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         cpu.passes.ttcpuir.add_func_to_llvmir(pm)
@@ -158,7 +161,7 @@ class CPUBackend(BaseBackend):
 
     @staticmethod
     def make_asm(src, metadata, options):
-        return llvm.translate_to_host_asm(src, options.enable_fp_fusion)
+        return llvm.translate_to_host_asm(src, options.enable_fp_fusion, options.enable_fast_math)
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)

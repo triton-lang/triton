@@ -56,9 +56,17 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::triton::cpu::createLowerMultiReductionPass());
   });
-  m.def("add_vector_to_llvmir", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::createConvertVectorToLLVMPass());
-  });
+  m.def("add_vector_to_llvmir",
+        [](mlir::PassManager &pm, bool reassoc_fp_reduction) {
+          mlir::ConvertVectorToLLVMPassOptions opts;
+          opts.reassociateFPReductions = reassoc_fp_reduction;
+          // opts.force32BitVectorIndices = true;
+          // opts.amx = false;
+          // opts.armNeon = false;
+          // opts.armSVE = false;
+          // opts.x86Vector = false;
+          pm.addPass(mlir::createConvertVectorToLLVMPass(opts));
+        });
   m.def("add_lower_affine", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createLowerAffinePass());
   });
