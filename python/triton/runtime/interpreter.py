@@ -1155,7 +1155,9 @@ class InterpretedFunction:
             self.rewritted_fn[self.fn] = self.fn
             return self.fn
         from .jit import get_jit_fn_file_line, JITFunction
-        filename, lineno = get_jit_fn_file_line(JITFunction(self.fn))
+        filename, lineno, relative_lineno = get_jit_fn_file_line(JITFunction(self.fn))
+        # truncate lines before @triton.jit
+        lines = lines[relative_lineno - 1:]
         src = ''.join(lines)
         src = textwrap.dedent(src)
         parsed_ast = ast.parse(src)

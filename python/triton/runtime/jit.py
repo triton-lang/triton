@@ -949,8 +949,10 @@ def get_jit_fn_file_line(fn):
     # @triton.heuristics(...)
     # @triton.jit
     # def foo(...): <- this line is the first line
+    relative_begin_line = 0
     for idx, line in enumerate(lines):
         if line.strip().startswith("def "):
             begin_line += idx
+            relative_begin_line = idx
             break
-    return file_name, begin_line
+    return file_name, begin_line, relative_begin_line
