@@ -51,10 +51,29 @@ bool isCrossCTAConversion(const LinearLayout &layout);
 // Chooses a good shared layout for use when converting between the two given
 // register layouts.
 //
-// src and dst must have input dimensions [register, lane, warp, block] and
-// output dimensions [dimi..] and [dimj..] (the output dimensions are allowed to
-// be in a different order, but they must otherwise be the same).  The result
-// has input dimensions [offset, block] and output dimensions matching src's.
+// src and dst must have the following dimensions.
+//   input: [register, lane, warp, block]
+//   output: [dimi..] and [dimj..] where i and j are permutations over 0..N.
+//
+// The result has the following dimensions.
+//   input: [offset, block, iteration]
+//   output: matches src's output dims, so [dimi..].
+//
+// Note that a regular shared memory layout only has [offset, block] input dims.
+// The `iteration` dimension represents the fact that we can do a shmem transfer
+// in multiple stages to reduce the total amount of shmem needed.
+//
+// For example, imagine we have eight 32-bit registers per thread in src and
+// dst.  We could write all eight at once to shmem and then read them all back
+// in, but that requires a lot of shmem.  At the other extreme, we could write
+// one register to shmem and read it back in before writing the next one.  That
+// requires 8x less shmem but may prevent us from doing vectorized memory
+// accesses.
+//
+// As a compromise, this function splits the transfer so that we do one
+// vectorized load/store per iteration.  (In the example, we'd try to do two
+// stages of size 4 32-bit values each, assuming the src/dst layouts allow us to
+// vectorize the stores or loads as 4xi32.)
 LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
                                                    const LinearLayout &dst);
 

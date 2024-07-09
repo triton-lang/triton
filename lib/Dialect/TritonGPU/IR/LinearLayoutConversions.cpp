@@ -815,14 +815,20 @@ bool isCrossCTAConversion(const LinearLayout &layout) {
 }
 
 LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
-                                                   const LinearLayout &dst) {
+                                                   const LinearLayout &dst,
+                                                   int maxVecElems) {
   assertIsRegisterLayout(src);
   assertIsRegisterLayout(dst);
   MLIRContext *ctx = src.getInDimNames().begin()->getContext();
 
+  StringAttr kRegister = S("register");
   StringAttr kBlock = S("block");
   StringAttr kOffset = S("offset");
+  StringAttr kIteration = S("iteration");
 
+  // The overall algorithm is, first we choose a layout ignoring the `iteration`
+  // dimension, and then we split up into one or more iterations.
+  //
   // Choose a shared layout that matches the src layout, with duplicate
   // elements within a block removed.  Specifically, the shared layout is:
   //
@@ -838,9 +844,9 @@ LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
   //             offset += 1
   //             seen.add(out)
   //
-  // This is simpler than it may seem.  There are some bits in the inputs that
-  // don't affect the output; these are the "free variables".  Our layout simply
-  // sets these to 0, and then everything works as we want.
+  // Doing this is simpler than it may seem.  There are some bits in the inputs
+  // that don't affect the output; these are the "free variables".  Our layout
+  // simply sets these to 0, and then everything works as we want.
   //
   // TODO(jlebar): Currently we ignore dst entirely; we're just choosing
   // something which is good for src.
@@ -878,7 +884,25 @@ LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
   // The `block` bases match the input layout exactly.  This is so there's no
   // cross-CTA transfers.
   bases[kBlock] = src.getBases().lookup(kBlock);
-  return LinearLayout(std::move(bases), to_vector(src.getOutDimNames()));
+  LinearLayout singleIter(std::move(bases), to_vector(src.getOutDimNames()));
+
+  // Now split up the layout into one or more iterations.  We split it up so we
+  // do one vectorized access per iteration.
+  LinearLayout storeLayout = src.invertAndCompose(singleIter);
+  int vec = std::min(maxVecElems, storeLayout.getNumConsecutiveInOut());
+  int numIters = storeLayout.getInDimSize(kRegister) / vec;
+
+  // Put the first `vec` elements into the first iteration, and so on.
+  LinearLayout ret =
+      singleIter
+          .reshapeIns({
+              {kOffset, singleIter.getInDimSize(kOffset) / numIters},
+              {kIteration, numIters},
+              {kBlock, singleIter.getInDimSize(kBlock)},
+          })
+          .transposeIns({kOffset, kBlock, kIteration});
+
+  return ret;
 }
 
 } // namespace mlir::triton::gpu

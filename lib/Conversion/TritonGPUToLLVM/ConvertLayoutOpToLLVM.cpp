@@ -498,19 +498,23 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kBlock = str_attr("block");
     StringAttr kOffset = str_attr("offset");
     StringAttr kDim = str_attr("dim");
+    StringAttr kIteration = str_attr("iteration");
 
     Value threadId = getThreadId(rewriter, loc);
     Value threadsPerWarp = i32_val(srcLayout.getInDimSize(kLane));
     Value laneId = urem(threadId, threadsPerWarp);
     Value warpId = udiv(threadId, threadsPerWarp);
 
-    // llvm::errs() << "XXX srcLayout: " << srcLayout << "\n";
-    // llvm::errs() << "XXX dstLayout: " << dstLayout << "\n";
+    llvm::errs() << "XXX srcLayout: " << srcLayout << "\n";
+    llvm::errs() << "XXX dstLayout: " << dstLayout << "\n";
 
+    // Input dims: [offset, block, iteration]
+    // Output dims: same as `src`'s output dims.
     LinearLayout sharedLayout =
         chooseShemLayoutForRegToRegConversion(srcLayout, dstLayout);
-    // llvm::errs() << "XXX sharedLayout: " << sharedLayout << "\n";
+    llvm::errs() << "XXX sharedLayout: " << sharedLayout << "\n";
     const int shmemAllocatedNumElems = product(getRepShapeForCvtLayout(op));
+    const int numIterations = sharedLayout.getInDimSize(kIteration);
 
     // Layout for the store from registers to shared memory.
     //
@@ -518,39 +522,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // hardware resolves that without a stall or a bank conflict.  Therefore we
     // don't need to avoid duplicate writes.
     LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
-    // llvm::errs() << "XXX shmemStoreLayout: " << shmemStoreLayout << "\n";
-    int storeVec = shmemStoreLayout.getNumConsecutiveInOut();
     assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+    llvm::errs() << "XXX shmemStoreLayout: " << shmemStoreLayout << "\n";
 
     // Layout for the load from shmem to registers.
     //
     // TODO(jlebar): A rearrangement of the registers (which is free!) might
     // lead to better vectorization.  Same for stores.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
-    int loadVec = shmemLoadLayout.getNumConsecutiveInOut();
 
     Type elemTy = inVals[0].getType();
     int bitwidth = elemTy.getIntOrFloatBitWidth();
-
-    // Suppose we have 8 registers per thread in the input and output layouts.
-    // The naive approach would be to write all 8 registers to shared memory,
-    // and then read them all in the new layout.  This works, but it requires
-    // enough shared memory for all 8 values across all warps in the block.
-    //
-    // At the other extreme, we could write one register, then read it in, and
-    // repeat that 8 times.  This uses 8x less shared memory, but potentially it
-    // robs us of the opportunity to do vectoried loads/stores to shmem.
-    //
-    // We compromise by writing one vector's worth of registers per stage.
-    int maxVecElems = std::min(
-        std::max(loadVec, storeVec),
-        std::max(1, targetInfo.getMaxSharedAccessBitwidth() / bitwidth));
-    if (shmemStoreLayout.getInDimSize(kRegister) > maxVecElems &&
-        shmemLoadLayout.getInDimSize(kRegister) > maxVecElems) {
-      // By construction, the first N input registers are adjacent in shared
-      // memory.
-      // XXX XXX
-    }
 
     bool isCrossCTA = isCrossCTAConversion(conversion);
 
@@ -563,76 +545,117 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
 
-    if (isCrossCTA) {
-      rewriter.create<nvidia_gpu::ClusterArriveOp>(loc, /*relaxed=*/false);
-      rewriter.create<nvidia_gpu::ClusterWaitOp>(loc);
-    } else {
-      barrier();
-    }
-
-    // XXX: CSE applyLinearLayout.
-    for (int i = 0; i < inVals.size(); i += storeVec) {
-      auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
-          applyLinearLayout(loc, rewriter, shmemStoreLayout,
-                            {{kRegister, i32_val(i)},
-                             {kLane, laneId},
-                             {kWarp, warpId},
-                             {kBlock, ctaId.value_or(i32_val(0))}})));
-      assert(offsetAndBlock.size() == 2);
-      Value offset = offsetAndBlock[0];
-      std::optional<Value> block =
-          isCrossCTA ? std::make_optional(offsetAndBlock[1]) : std::nullopt;
-
-      auto vecAddr = gep(sharedPtrTy, elemTy, smemBase, offset);
-      vecAddr.setInbounds(true);
-
-      Value valsVec =
-          packLLVector(loc, ArrayRef(inVals).slice(i, storeVec), rewriter);
-      targetInfo.storeDShared(rewriter, loc, vecAddr, block, valsVec,
-                              /*pred=*/true_val());
-    }
-
     // XXX: Move into TargetInfo.
-    if (isCrossCTA) {
-      rewriter.create<nvidia_gpu::ClusterArriveOp>(loc, /*relaxed=*/false);
-      rewriter.create<nvidia_gpu::ClusterWaitOp>(loc);
-    } else {
-      barrier();
-    }
-
-    SmallVector<Value> outVals;
-    for (int i = 0; i < dstLayout.getInDimSize(kRegister); i += loadVec) {
-      auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
-          applyLinearLayout(loc, rewriter, shmemLoadLayout,
-                            {{kRegister, i32_val(i)},
-                             {kLane, laneId},
-                             {kWarp, warpId},
-                             {kBlock, ctaId.value_or(i32_val(0))}})));
-      assert(offsetAndBlock.size() == 2);
-      Value offset = offsetAndBlock[0];
-      std::optional<Value> block =
-          isCrossCTA ? std::make_optional(offsetAndBlock[1]) : std::nullopt;
-
-      auto vecAddr = gep(sharedPtrTy, elemTy, smemBase, offset);
-      vecAddr.setInbounds(true);
-      Value valsVec = targetInfo.loadDShared(rewriter, loc, vecAddr, block,
-                                             vec_ty(elemTy, loadVec),
-                                             /*pred=*/true_val());
-
-      for (Value v : unpackLLVector(loc, valsVec, rewriter)) {
-        outVals.push_back(v);
+    auto do_barrier = [&] {
+      if (isCrossCTA) {
+        rewriter.create<nvidia_gpu::ClusterArriveOp>(loc, /*relaxed=*/false);
+        rewriter.create<nvidia_gpu::ClusterWaitOp>(loc);
+      } else {
+        barrier();
       }
+    };
+
+    // Each iteration will write some registers to shmem and read from shmem
+    // into some registers.  Map each iteration to the list of registers
+    // involved.
+    std::vector<SmallVector<int>> inRegsForIter =
+        collectRegsForIter(ctx, shmemStoreLayout);
+    std::vector<SmallVector<int>> outRegsForIter =
+        collectRegsForIter(ctx, shmemLoadLayout);
+
+    // Check that the `register` fully determines the `iteration`.  That is,
+    // each thread does exactly the same reads and writes to shmem on each
+    // iteration, just with different input/output registers.
+    assert(
+        shmemStoreLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kRegister}));
+    assert(
+        shmemLoadLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kRegister}));
+
+    // Map src/dst registers to each iteration.
+    for (int reg = 0; reg < shmemStoreLayout.getInDimSize(kRegister); reg++) {
     }
 
-    // XXX: Move to TargetInfo
-    if (isCrossCTA) {
-      rewriter.create<nvidia_gpu::ClusterArriveOp>(loc, /*relaxed=*/false);
-      rewriter.create<nvidia_gpu::ClusterWaitOp>(loc);
-    } else {
-      barrier();
+    int storeVec = shmemStoreLayout.getNumConsecutiveInOut();
+    int loadVec = shmemLoadLayout.getNumConsecutiveInOut();
+
+    for (int i = 0; i < sharedLayout.getInDimSize(kIteration); i++) {
+      do_barrier();
+
+      // XXX: CSE applyLinearLayout.
+      for (int i = 0; i < inVals.size(); i += storeVec) {
+        auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
+            applyLinearLayout(loc, rewriter, shmemStoreLayout,
+                              {{kRegister, i32_val(i)},
+                               {kLane, laneId},
+                               {kWarp, warpId},
+                               {kBlock, ctaId.value_or(i32_val(0))}})));
+        assert(offsetAndBlock.size() == 2);
+        Value offset = offsetAndBlock[0];
+        std::optional<Value> block =
+            isCrossCTA ? std::make_optional(offsetAndBlock[1]) : std::nullopt;
+
+        auto vecAddr = gep(sharedPtrTy, elemTy, smemBase, offset);
+        vecAddr.setInbounds(true);
+
+        Value valsVec =
+            packLLVector(loc, ArrayRef(inVals).slice(i, storeVec), rewriter);
+        targetInfo.storeDShared(rewriter, loc, vecAddr, block, valsVec,
+                                /*pred=*/true_val());
+      }
+
+      do_barrier();
+
+      SmallVector<Value> outVals;
+      for (int i = 0; i < dstLayout.getInDimSize(kRegister); i += loadVec) {
+        auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
+            applyLinearLayout(loc, rewriter, shmemLoadLayout,
+                              {{kRegister, i32_val(i)},
+                               {kLane, laneId},
+                               {kWarp, warpId},
+                               {kBlock, ctaId.value_or(i32_val(0))}})));
+        assert(offsetAndBlock.size() == 2);
+        Value offset = offsetAndBlock[0];
+        std::optional<Value> block =
+            isCrossCTA ? std::make_optional(offsetAndBlock[1]) : std::nullopt;
+
+        auto vecAddr = gep(sharedPtrTy, elemTy, smemBase, offset);
+        vecAddr.setInbounds(true);
+        Value valsVec = targetInfo.loadDShared(rewriter, loc, vecAddr, block,
+                                               vec_ty(elemTy, loadVec),
+                                               /*pred=*/true_val());
+
+        for (Value v : unpackLLVector(loc, valsVec, rewriter)) {
+          outVals.push_back(v);
+        }
+      }
+
+      do_barrier();
     }
 
     return outVals;
+  }
+
+  // Determine which registers are read/written in which iteration of the shmem
+  // transfer specified by `layout`.
+  std::vector<SmallVector<int> /*registers*/>
+  collectRegsForIter(MLIRContext *ctx, const LinearLayout &layout) {
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    StringAttr kIteration = str_attr("iteration");
+
+    // The choice of iteration should be determined only by the register.  That
+    // is, it should be correct to split the register dimension into iterations.
+    assert(layout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
+
+    LinearLayout sublayout = layout.sublayout({kRegister}, {kIteration});
+    std::vector<SmallVector<int>> ret(sublayout.getOutDimSize(kIteration));
+    for (int reg = 0; reg < sublayout.getInDimSize(kRegister); reg++) {
+      auto idx = sublayout.apply({{kRegister, reg}, {kIteration, 0}});
+      ret[idx.begin()->second].push_back(reg);
+    }
+    return ret;
   }
 };
 
