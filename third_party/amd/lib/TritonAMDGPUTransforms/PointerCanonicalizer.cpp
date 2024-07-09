@@ -1,6 +1,7 @@
 #include "TritonAMDGPUTransforms/PointerCanonicalizer.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -8,6 +9,38 @@
 
 using namespace mlir;
 using namespace mlir::triton::AMD;
+
+namespace {
+
+// Extract the element type of a (scalar or tensor) type
+static Type getElementType(Value val) {
+  Type elementType = val.getType();
+  if (auto tensorType = dyn_cast<RankedTensorType>(elementType))
+    elementType = tensorType.getElementType();
+  return elementType;
+}
+
+// Extend a 32bit `offset` into a 64bit `offset` using a arith.extsi operation
+static LogicalResult extend32bitOffsetTo64Bits(IRRewriter &rewriter,
+                                               Location loc, Value &offset) {
+  Type elementType = getElementType(offset);
+
+  // Cannot extend anything other than 32 bits
+  if (!elementType.isInteger(32))
+    return failure();
+
+  if (auto tensorType = dyn_cast<RankedTensorType>(offset.getType())) {
+    auto shape = tensorType.getShape();
+    auto newTensorType = RankedTensorType::get(shape, rewriter.getI64Type(),
+                                               tensorType.getEncoding());
+    offset = rewriter.create<arith::ExtSIOp>(loc, newTensorType, offset);
+  } else {
+    offset =
+        rewriter.create<arith::ExtSIOp>(loc, rewriter.getI64Type(), offset);
+  }
+  return success();
+}
+} // namespace
 
 // Rewrite a memory operation
 LogicalResult PointerCanonicalizer::materializeFatPointer(Operation *op,
@@ -81,24 +114,34 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
     } else if (auto addPtr = dyn_cast<triton::AddPtrOp>(curOp)) {
       nextPtr = addPtr.getResult();
       auto fatPtr = pointers[addPtr.getPtr()];
-      Type offsetType = addPtr.getOffset().getType();
       Value fatPtrOffset = fatPtr.offset;
-      if (offsetType.isInteger(64)) {
+      Value offset = addPtr.getOffset();
+
+      Type fatPtrOffsetType = getElementType(fatPtrOffset);
+      Type offsetType = getElementType(offset);
+
+      // We are dealing with 64 bit offsets and we need to flag this
+      if (offsetType.isInteger(64))
         offset64 = true;
-        fatPtrOffset = rewriter.create<arith::ExtSIOp>(
-            curLoc, rewriter.getI64Type(), fatPtrOffset);
-      } else if (auto offsetTensorType =
-                     dyn_cast<RankedTensorType>(offsetType)) {
-        if (offsetTensorType.isInteger(64)) {
-          auto destType = RankedTensorType::get(offsetTensorType.getShape(),
-                                                rewriter.getI64Type());
-          fatPtrOffset =
-              rewriter.create<arith::ExtSIOp>(curLoc, destType, fatPtrOffset);
-        }
+
+      Value newOffset = offset;
+      Value newFatPtrOffset = fatPtrOffset;
+      // If the bitness is different (32 vs 64) we need to extend the 32-bit
+      // offset into a 64-bit offset
+      if (offsetType.getIntOrFloatBitWidth() >
+          fatPtrOffsetType.getIntOrFloatBitWidth()) {
+        if (failed(
+                extend32bitOffsetTo64Bits(rewriter, curLoc, newFatPtrOffset)))
+          return failure();
+      } else if (offsetType.getIntOrFloatBitWidth() <
+                 fatPtrOffsetType.getIntOrFloatBitWidth()) {
+        if (failed(extend32bitOffsetTo64Bits(rewriter, curLoc, newOffset)))
+          return failure();
       }
-      Value offset = rewriter.create<arith::AddIOp>(curLoc, fatPtrOffset,
-                                                    addPtr.getOffset());
-      pointers[nextPtr] = FatPtr{fatPtr.basePtr, offset};
+
+      Value addOffset =
+          rewriter.create<arith::AddIOp>(curLoc, newFatPtrOffset, newOffset);
+      pointers[nextPtr] = FatPtr{fatPtr.basePtr, addOffset};
       opToDelete.insert(addPtr);
     } else if (auto loadOp = dyn_cast<triton::LoadOp>(curOp)) {
       if (failed(materializeFatPointer(curOp, curLoc, loadOp.getPtr())))
