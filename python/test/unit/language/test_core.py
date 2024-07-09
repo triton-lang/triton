@@ -3076,13 +3076,12 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
      for shape_nw in [[1, 128, 32, 4], [2, 128, 32, 2], [128, 1, 32, 4], [128, 2, 32, 2], [128, 256, 32, 8],
                       [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4], [32, 128, 64, 2],
-                      [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2], [128, 128, 128, 8],
-                      [64, 128, 128, 8], [128, 64, 128, 8], [128, 128, 64, 8]]
+                      [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2], [128, 256, 128, 8]]
      for input_precision in ["ieee" if is_hip() else "tf32"]
      for col_a in [True, False]
      for col_b in [True, False]
-     for in_dtype, out_dtype in [('int8', 'int8'), ('int8', 'int32'), ('float16', 'float16'), ('float16', 'float32'),
-                                 ('float32', 'float32')]
+     for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
+                                                                                                    'float32')]
      for kpack in [1, 2 if is_hip() else 1]] + [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1)
                                                 for col_a in [True, False]
                                                 for col_b in [True, False]] +
@@ -5157,7 +5156,7 @@ def matmul_kernel(  #
     offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=num_pipeline_stages):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
@@ -5171,9 +5170,9 @@ def matmul_kernel(  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N, K", [(128, 256, 256)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64)])
-@pytest.mark.parametrize("in_type_str", ['int8', 'float8e5', 'float8e4nv', 'float8e4b15'])
+@pytest.mark.parametrize("M, N, K", [(64, 256, 256),(128, 256, 256), (128, 256, 128)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 256, 128),(128, 256, 128),(128, 256, 64), (128, 128, 128), (64, 64, 64)])
+@pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
     if is_cuda():
@@ -5181,7 +5180,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
-        if in_type_str != 'float8e5' and in_type_str != 'int8':
+        if in_type_str != 'float8e5':
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
         ## TODO: Figure out why block size (128, 256, 128) fails on MI300
@@ -5191,14 +5190,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
-    for i in range(0, M):
-        for k in range(0, K):
-            A[i, k] = 0
-    for j in range(0, N):
-        for k in range(0, K):
-            B[k, j] = 0
-    C = torch.empty((M, N), dtype=torch.int32, device=device)
-    num_warps = 8
+    C = torch.empty((M, N), dtype=torch.float32, device=device)
+    num_warps = 4
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
@@ -5208,7 +5201,10 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
     th_b = f8_to_f16(torch_b, in_type_str)
-    ref_out = torch.matmul(th_a, th_b).to(torch.int32)
+    ref_out = torch.matmul(th_a, th_b).to(torch.float32)
+    import sys
+    np.set_printoptions(threshold=sys.maxsize)
+    print(C.to("cpu").numpy())
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
     else:

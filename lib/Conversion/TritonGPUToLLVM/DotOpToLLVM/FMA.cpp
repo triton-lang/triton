@@ -8,7 +8,7 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
-using ValueTableFMA = std::map<std::pair<int, int>, Value>;
+using ValueTableFMA = std::map<std::pair<int, int, int>, Value>;
 
 static ValueTableFMA
 getValueTableFromStructFMA(Value val, int K, int n0, int shapePerCTATile,
@@ -56,44 +56,53 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto sizePerThread = getSizePerThread(dLayout);
   auto shapePerCTATile = getShapePerCTATile(dLayout);
 
-  int K = aShapePerCTA[1];
-  int M = aShapePerCTA[0];
-  int N = bShapePerCTA[1];
+  int Batch = aShapePerCTA[0];
+  int K = aShapePerCTA[2];
+  int M = aShapePerCTA[1];
+  int N = bShapePerCTA[2];
 
-  int mShapePerCTATile =
-      order[0] == 1 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-  int mSizePerThread =
-      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-  int nShapePerCTATile =
-      order[0] == 0 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-  int nSizePerThread =
-      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+  int bShapePerCTATile = shapePerCTATile[0];
+  int bSizePerThread = sizePerThread[0];
+  int mShapePerCTATile = shapePerCTATile[1];
+  int mSizePerThread = sizePerThread[1];
+  int nShapePerCTATile = shapePerCTATile[2];
+  int nSizePerThread = sizePerThread[2];
 
-  auto has =
-      getValueTableFromStructFMA(llA, K, M, mShapePerCTATile, mSizePerThread,
-                                 rewriter, loc, typeConverter, aTensorTy);
+  auto has = getValueTableFromStructFMA(llA, Batch, K, M, mShapePerCTATile,
+                                        mSizePerThread, rewriter, loc,
+                                        typeConverter, aTensorTy);
   auto hbs =
       getValueTableFromStructFMA(llB, K, N, nShapePerCTATile, nSizePerThread,
                                  rewriter, loc, typeConverter, bTensorTy);
 
   SmallVector<Value> ret = cc;
-  bool isCRow = order[0] == 1;
+  // Number of elements stored over given dimension in ret array
+  // i.e. each dot produces 3d matrix of shape [Batch, M, N],
+  // Each thread holds part of this matrix, which is 3d as well
+  int retDimSize[] = {Batch / bShapePerCTATile * bSizePerThread,
+                      M / mShapePerCTATile * mSizePerThread,
+                      N / nShapePerCTATile * nSizePerThread};
 
-  for (unsigned k = 0; k < K; k++) {
-    for (unsigned m = 0; m < M; m += mShapePerCTATile)
-      for (unsigned n = 0; n < N; n += nShapePerCTATile)
-        for (unsigned mm = 0; mm < mSizePerThread; ++mm)
-          for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
-            int mIdx = m / mShapePerCTATile * mSizePerThread + mm;
-            int nIdx = n / nShapePerCTATile * nSizePerThread + nn;
+  for (unsigned k = 0; k < K; ++k)
+    for (unsigned b = 0; b < Batch; b += bShapePerCTATile)
+      for (unsigned m = 0; m < M; m += mShapePerCTATile)
+        for (unsigned n = 0; n < N; n += nShapePerCTATile)
+          for (unsigned bb = 0; bb < bSizePerThread; ++bb)
+            for (unsigned mm = 0; mm < mSizePerThread; ++mm)
+              for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
+                int bIdx = b / bShapePerCTATile * bSizePerThread + bb;
+                int mIdx = m / mShapePerCTATile * mSizePerThread + mm;
+                int nIdx = n / nShapePerCTATile * nSizePerThread + nn;
+                int idx[] = {bIdx, mIdx, nIdx};
 
-            int z = isCRow
-                        ? mIdx * N / nShapePerCTATile * mSizePerThread + nIdx
-                        : nIdx * M / mShapePerCTATile * nSizePerThread + mIdx;
-            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
-                                                      hbs[{n + nn, k}], ret[z]);
-          }
-  }
+                int z = 0;
+                for (int i = 0; i < order.size(); i++) {
+                  int dim = order[i];
+                  z = z * retDimSize[dim] + idx[dim];
+                }
+                ret[z] = rewriter.create<LLVM::FMulAddOp>(
+                    loc, has[{m + mm, k}], hbs[{n + nn, k}], ret[z]);
+              }
 
   auto res = packLLElements(loc, typeConverter, ret, rewriter, dTensorTy);
   rewriter.replaceOp(op, res);
