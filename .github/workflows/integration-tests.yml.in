@@ -238,6 +238,7 @@ jobs:
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -sh ~/.triton/**
 
       - name: Update PATH
         run: |
@@ -354,9 +355,9 @@ jobs:
         with:
           submodules: 'true'
 
+      - *inspect-cache-directory-step
       - *compute-cache-keys-step
       - *cache-build-dependencies-step
-      - *restore-build-artifacts-step
       - *inspect-cache-directory-step
 
       - name: Update PATH
