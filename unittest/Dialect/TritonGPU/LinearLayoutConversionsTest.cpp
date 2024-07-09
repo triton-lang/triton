@@ -3,6 +3,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Signals.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -367,6 +368,7 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_64x16) {
   SmallVector<SmallVector<unsigned>, 4> instrShapes = {
       {16, 16, 8}, {16, 16, 8}, {16, 8, 8}};
   for (auto instrShape : instrShapes) {
+    SCOPED_TRACE(triton::join(instrShape, ","));
     EXPECT_EQ(toLinearLayout({64, 16}, mma(3, 0, instrShape, {4, 1}, {1, 1},
                                            {1, 1}, {1, 0})),
               LinearLayout(
