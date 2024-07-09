@@ -758,6 +758,27 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+LogicalResult BroadcastOp::verify() {
+  auto src = getSrc();
+  auto srcTensorType = cast<RankedTensorType>(src.getType());
+  auto srcShape = srcTensorType.getShape();
+  auto result = getResult();
+  auto resultTensorType = cast<RankedTensorType>(result.getType());
+  auto resultShape = resultTensorType.getShape();
+  if (srcShape.size() > resultShape.size()) {
+    return emitError("number of dimensions of source must not be more than the "
+                     "number of dimensions of result");
+  }
+  for (int i = 0; i < srcShape.size(); i++) {
+    if (srcShape[i] != 1 && srcShape[i] != resultShape[i]) {
+      return emitError("Different dimensions at index ")
+             << i << " between source and result.  "
+             << "Broadcast requires the source dimension to be 1.";
+    }
+  }
+  return success();
+}
+
 //-- MakeTensorPtrOp --
 void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
                             Value base, ValueRange shape, ValueRange strides,
