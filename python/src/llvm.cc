@@ -66,9 +66,9 @@ createTargetMachine(llvm::Module *module, std::string proc,
     opt.UnsafeFPMath = false;
     opt.NoInfsFPMath = false;
     opt.NoNaNsFPMath = true;
-    opt.TrapUnreachable = true;
   }
 
+  opt.TrapUnreachable = true;
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
