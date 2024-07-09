@@ -63,7 +63,7 @@ jobs:
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           export CIBW_BEFORE_BUILD="pip install cmake;"
-          export CIBW_SKIP="cp{35,36}-*"
+          export CIBW_SKIP="cp{35,36,37}-*"
           export CIBW_BUILD="cp3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
 
