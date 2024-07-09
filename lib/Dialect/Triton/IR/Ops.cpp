@@ -765,9 +765,8 @@ LogicalResult BroadcastOp::verify() {
   auto result = getResult();
   auto resultTensorType = cast<RankedTensorType>(result.getType());
   auto resultShape = resultTensorType.getShape();
-  if (srcShape.size() > resultShape.size()) {
-    return emitError("number of dimensions of source must not be more than the "
-                     "number of dimensions of result");
+  if (srcShape.size() != resultShape.size()) {
+    return emitError("rank of source must be same as rank of result");
   }
   for (int i = 0; i < srcShape.size(); i++) {
     if (srcShape[i] != 1 && srcShape[i] != resultShape[i]) {

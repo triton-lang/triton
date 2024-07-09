@@ -1,6 +1,15 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
 tt.func @fn(%v: i32) {
+  %b = tt.splat %v : i32 -> tensor<128xi32>
+  // expected-error @+1 {{rank of source must be same as rank of result}}
+  %c = tt.broadcast %b : tensor<128xi32> -> tensor<128x32xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @fn(%v: i32) {
   %b = tt.splat %v : i32 -> tensor<2x32xi32>
   // expected-error @+1 {{Different dimensions at index 0 between source and result.  Broadcast requires the source dimension to be 1.}}
   %c = tt.broadcast %b : tensor<2x32xi32> -> tensor<128x32xi32>
