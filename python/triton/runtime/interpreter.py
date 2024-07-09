@@ -1155,9 +1155,18 @@ class InterpretedFunction:
             self.rewritted_fn[self.fn] = self.fn
             return self.fn
         from .jit import get_jit_fn_file_line, JITFunction
-        filename, lineno, relative_lineno = get_jit_fn_file_line(JITFunction(self.fn))
-        # truncate lines before @triton.jit
-        lines = lines[relative_lineno - 1:]
+        filename, lineno = get_jit_fn_file_line(JITFunction(self.fn))
+        # truncate lines before @triton.jit, which is the last decorator
+        # @triton.autotune(...)
+        # ...
+        # @triton.jit <- this line is the last decorator, which must be a triton.jit
+        #
+        # def foo(...):
+        last_decorator_line = 0
+        for i, line in enumerate(lines):
+            if line.strip().startswith("@"):
+                last_decorator_line = i
+        lines = lines[last_decorator_line:]
         src = ''.join(lines)
         src = textwrap.dedent(src)
         parsed_ast = ast.parse(src)
