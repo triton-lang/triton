@@ -105,9 +105,9 @@ jobs:
         if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
-            echo '::set-output name=matrix-CUDA::[["a100-runner-set"], ["h100-runner-set"]]'
+            echo '::set-output name=matrix-CUDA::[[""]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"], ["self-hosted", "gfx942"]]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
+            echo '::set-output name=matrix-MACOS::[[""]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
             echo '::set-output name=matrix-HIP::["ubuntu-latest"]'
@@ -209,6 +209,7 @@ jobs:
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -sh ~/.triton/**
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -325,33 +326,11 @@ jobs:
             ~/.triton/pybind11
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
-      - # Cache ~/.triton/cache because the vast majority of unit test time is
-        # spent compiling.  Triton won't (well, should not) use these cached files
-        # if something internal to Triton changes, because Triton's internal
-        # source code is part of the cache key.
-        #
-        # Similarly, cache ~/.cache/ccache to speed up compilation.
-        #
-        # On branch `main` we always start from an empty cache, i.e. we skip the
-        # "restore" step.  This is to prevent the caches from accumulating stale
-        # files over time.
-        name: Restore cache of ccache and Triton compilation artifacts
-        if: github.event_name != 'push'
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.triton/cache
-            ~/.cache/ccache
-          # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
-          # We expect this cache key never to hit and for us to fall back
-          # unconditionally to the restore-key, so it doesn't actually matter
-          # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directory
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -sh ~/.triton/**
       - name: Update PATH
         run: |
           echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
@@ -491,6 +470,7 @@ jobs:
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -sh ~/.triton/**
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
