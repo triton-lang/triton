@@ -39,7 +39,7 @@ Motivations
 Custom GPU kernels for elementwise additions are educationally valuable but won't get you very far in practice.
 Let us consider instead the case of a simple (numerically stabilized) softmax operation:
 
-.. GENERATED FROM PYTHON SOURCE LINES 23-51
+.. GENERATED FROM PYTHON SOURCE LINES 23-60
 
 .. code-block:: Python
 
@@ -49,6 +49,15 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
     import triton
     import triton.language as tl
     from triton.runtime import driver
+
+
+    def is_hip():
+        return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+    def is_cdna():
+        return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942',
+                                                                                       'gfx90a', 'gfx908')
 
 
     def naive_softmax(x):
@@ -78,7 +87,7 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 52-60
+.. GENERATED FROM PYTHON SOURCE LINES 61-69
 
 When implemented naively in PyTorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}`
 requires reading :math:`5MN + 2M` elements from DRAM and writing back :math:`3MN + 2M` elements.
@@ -89,7 +98,7 @@ expect a theoretical speed-up of ~4x (i.e., :math:`(8MN + 4M) / 2MN`).
 The `torch.jit.script` flags aims to perform this kind of "kernel fusion" automatically
 but, as we will see later, it is still far from ideal.
 
-.. GENERATED FROM PYTHON SOURCE LINES 62-71
+.. GENERATED FROM PYTHON SOURCE LINES 71-80
 
 Compute Kernel
 --------------
@@ -101,7 +110,7 @@ Note that one important limitation of Triton is that each block must have a
 power-of-two number of elements, so we need to internally "pad" each row and guard the
 memory operations properly if we want to handle any possible input shapes:
 
-.. GENERATED FROM PYTHON SOURCE LINES 71-101
+.. GENERATED FROM PYTHON SOURCE LINES 80-110
 
 .. code-block:: Python
 
@@ -142,11 +151,11 @@ memory operations properly if we want to handle any possible input shapes:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 102-103
+.. GENERATED FROM PYTHON SOURCE LINES 111-112
 
 We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-.. GENERATED FROM PYTHON SOURCE LINES 103-159
+.. GENERATED FROM PYTHON SOURCE LINES 112-186
 
 .. code-block:: Python
 
@@ -187,7 +196,25 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
             kernel._init_handles()
             n_regs = kernel.n_regs
             size_smem = kernel.metadata.shared
-            occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
+            if is_hip():
+                # NUM_REGS represents the number of regular purpose registers. On CDNA architectures this is half of all registers available.
+                # However, this is not always the case. In most cases all registers can be used as regular purpose registers.
+                # ISA SECTION (3.6.4 for CDNA3)
+                # VGPRs are allocated out of two pools: regular VGPRs and accumulation VGPRs. Accumulation VGPRs are used
+                # with matrix VALU instructions, and can also be loaded directly from memory. A wave may have up to 512 total
+                # VGPRs, 256 of each type. When a wave has fewer than 512 total VGPRs, the number of each type is flexible - it is
+                # not required to be equal numbers of both types.
+                if is_cdna():
+                    NUM_GPRS = NUM_REGS * 2
+
+                # MAX_NUM_THREADS represents maximum number of resident threads per multi-processor.
+                # When we divide this number with WARP_SIZE we get maximum number of waves that can
+                # execute on a CU (multi-processor)  in parallel.
+                MAX_NUM_THREADS = properties["max_threads_per_sm"]
+                max_num_waves = MAX_NUM_THREADS // WARP_SIZE
+                occupancy = min(NUM_GPRS // WARP_SIZE // n_regs, max_num_waves) // num_warps
+            else:
+                occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
             occupancy = min(occupancy, SIZE_SMEM // size_smem)
             num_programs = NUM_SM * occupancy
             kernels[BLOCK_SIZE] = (kernel, num_programs)
@@ -213,17 +240,17 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 160-162
+.. GENERATED FROM PYTHON SOURCE LINES 187-189
 
 Unit Test
 ---------
 
-.. GENERATED FROM PYTHON SOURCE LINES 164-166
+.. GENERATED FROM PYTHON SOURCE LINES 191-193
 
 We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.
 
-.. GENERATED FROM PYTHON SOURCE LINES 166-173
+.. GENERATED FROM PYTHON SOURCE LINES 193-200
 
 .. code-block:: Python
 
@@ -241,11 +268,11 @@ This will allow us to verify that our padding mechanism works.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 174-175
+.. GENERATED FROM PYTHON SOURCE LINES 201-202
 
 As expected, the results are identical.
 
-.. GENERATED FROM PYTHON SOURCE LINES 177-182
+.. GENERATED FROM PYTHON SOURCE LINES 204-209
 
 Benchmark
 ---------
@@ -253,7 +280,7 @@ Benchmark
 Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
 We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
-.. GENERATED FROM PYTHON SOURCE LINES 182-213
+.. GENERATED FROM PYTHON SOURCE LINES 209-240
 
 .. code-block:: Python
 
@@ -303,109 +330,109 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
 
     softmax-performance:
               N       Triton        Torch
-    0     256.0   469.016648   693.280009
-    1     384.0   611.681386   825.293341
-    2     512.0   751.096475   935.024283
-    3     640.0   796.183965   959.055513
-    4     768.0   877.659196  1017.483251
-    5     896.0   936.982431  1072.504577
-    6    1024.0   984.109636  1112.085580
-    7    1152.0  1099.518309   616.362751
-    8    1280.0  1148.906530   669.938774
-    9    1408.0  1163.157098   726.033601
-    10   1536.0  1193.626577   780.627467
-    11   1664.0  1219.599585   813.404076
-    12   1792.0  1238.710317   855.388629
-    13   1920.0  1255.715340   908.629411
-    14   2048.0  1268.471595   955.207543
-    15   2176.0  1259.930664   977.350756
-    16   2304.0  1263.645241  1009.669955
-    17   2432.0  1300.068354  1058.797763
-    18   2560.0  1301.042020  1085.033111
-    19   2688.0  1311.993575  1100.790150
-    20   2816.0  1321.010518  1126.669012
-    21   2944.0  1321.010923  1163.696569
-    22   3072.0  1347.311995  1182.683602
-    23   3200.0  1350.793261  1191.266511
-    24   3328.0  1354.175450  1223.719118
-    25   3456.0  1377.005786  1251.246747
-    26   3584.0  1382.527046  1259.145770
-    27   3712.0  1380.499299  1267.232120
-    28   3840.0  1387.654577  1300.469566
-    29   3968.0  1387.886936  1312.609851
-    30   4096.0  1396.150272  1322.441007
-    31   4224.0  1334.634857  1162.440047
-    32   4352.0  1337.825469  1172.195779
-    33   4480.0  1353.381999  1182.810460
-    34   4608.0  1360.077526  1196.888564
-    35   4736.0  1360.989955  1197.248542
-    36   4864.0  1376.478820  1218.440043
-    37   4992.0  1368.297363  1238.463401
-    38   5120.0  1374.767965  1252.141989
-    39   5248.0  1379.232733  1255.686295
-    40   5376.0  1376.568750  1287.332226
-    41   5504.0  1382.332958  1297.907550
-    42   5632.0  1387.726723  1313.036772
-    43   5760.0  1397.354146  1324.546571
-    44   5888.0  1390.034804  1340.406846
-    45   6016.0  1399.295145  1352.066862
-    46   6144.0  1408.542360  1377.044054
-    47   6272.0  1413.408552  1377.868945
-    48   6400.0  1419.147993  1387.773417
-    49   6528.0  1413.956713  1392.178707
-    50   6656.0  1420.074997  1404.604302
-    51   6784.0  1409.340648  1416.372187
-    52   6912.0  1426.523050  1425.436617
-    53   7040.0  1419.793820  1430.705132
-    54   7168.0  1425.440690  1433.195565
-    55   7296.0  1431.656915  1444.147048
-    56   7424.0  1428.460937  1447.308111
-    57   7552.0  1422.934430  1455.015673
-    58   7680.0  1436.093767  1459.183435
-    59   7808.0  1428.783209  1467.103305
-    60   7936.0  1434.144698  1468.451945
-    61   8064.0  1438.428033  1472.978297
-    62   8192.0  1434.872877  1483.356213
-    63   8320.0  1389.335326  1401.263113
-    64   8448.0  1381.127703  1405.620520
-    65   8576.0  1394.338134  1399.600417
-    66   8704.0  1389.128779  1398.840414
-    67   8832.0  1380.791152  1402.701347
-    68   8960.0  1395.018211  1410.511862
-    69   9088.0  1405.997996  1414.936824
-    70   9216.0  1404.885894  1422.225186
-    71   9344.0  1400.665599  1424.432067
-    72   9472.0  1397.009732  1433.707637
-    73   9600.0  1393.746459  1434.934230
-    74   9728.0  1400.131964  1444.796735
-    75   9856.0  1414.363400  1442.867936
-    76   9984.0  1396.822694  1450.399497
-    77  10112.0  1413.006250  1456.896072
-    78  10240.0  1417.988081  1462.984858
-    79  10368.0  1410.903798  1467.322621
-    80  10496.0  1415.199036  1463.840663
-    81  10624.0  1407.265100  1467.654735
-    82  10752.0  1407.851877  1471.726199
-    83  10880.0  1401.409003  1481.406794
-    84  11008.0  1418.766257  1479.126448
-    85  11136.0  1420.494538  1486.098383
-    86  11264.0  1428.427964  1484.704627
-    87  11392.0  1414.712313  1493.172758
-    88  11520.0  1421.412596  1496.946861
-    89  11648.0  1428.270959  1497.908997
-    90  11776.0  1430.520076  1500.918834
-    91  11904.0  1447.942656  1504.866096
-    92  12032.0  1420.868906  1509.699764
-    93  12160.0  1419.914673  1511.145739
-    94  12288.0  1433.190831  1391.837770
-    95  12416.0  1447.828710  1391.496191
-    96  12544.0  1442.447705  1392.943280
-    97  12672.0  1446.482961  1392.643807
+    0     256.0   475.015199   674.407109
+    1     384.0   600.714736   811.895134
+    2     512.0   753.536596   910.138126
+    3     640.0   793.735046   960.050919
+    4     768.0   870.731020  1032.739411
+    5     896.0   929.822081  1070.924823
+    6    1024.0   986.148490  1107.829136
+    7    1152.0  1097.763378   615.586311
+    8    1280.0  1150.836579   670.457714
+    9    1408.0  1163.397367   725.911299
+    10   1536.0  1194.895355   784.124847
+    11   1664.0  1209.866404   817.192584
+    12   1792.0  1233.590604   856.666232
+    13   1920.0  1256.282798   905.387281
+    14   2048.0  1282.159488   955.908135
+    15   2176.0  1264.136673   978.084124
+    16   2304.0  1272.021465  1007.697645
+    17   2432.0  1300.839390  1054.654342
+    18   2560.0  1301.751725  1084.054221
+    19   2688.0  1307.636613  1104.697604
+    20   2816.0  1320.224044  1134.129667
+    21   2944.0  1327.201933  1165.102464
+    22   3072.0  1353.348913  1185.466122
+    23   3200.0  1349.813957  1196.946638
+    24   3328.0  1354.082994  1223.613952
+    25   3456.0  1371.609406  1246.608858
+    26   3584.0  1372.885667  1257.599198
+    27   3712.0  1385.398522  1267.978567
+    28   3840.0  1391.372821  1297.983336
+    29   3968.0  1387.926011  1318.435361
+    30   4096.0  1398.148089  1325.738106
+    31   4224.0  1339.725061  1161.077820
+    32   4352.0  1334.470038  1172.582413
+    33   4480.0  1352.124006  1187.108296
+    34   4608.0  1364.103530  1196.097543
+    35   4736.0  1361.738606  1200.487147
+    36   4864.0  1373.229972  1218.773806
+    37   4992.0  1368.794959  1235.589039
+    38   5120.0  1371.739826  1248.640659
+    39   5248.0  1378.233317  1261.050572
+    40   5376.0  1377.870574  1290.858464
+    41   5504.0  1381.181736  1301.438403
+    42   5632.0  1390.421693  1312.660464
+    43   5760.0  1392.926521  1326.407992
+    44   5888.0  1393.442278  1345.856794
+    45   6016.0  1403.249182  1354.901980
+    46   6144.0  1410.594566  1376.323169
+    47   6272.0  1416.823215  1377.164256
+    48   6400.0  1420.519375  1388.548800
+    49   6528.0  1409.641227  1395.135442
+    50   6656.0  1422.896634  1401.204732
+    51   6784.0  1414.353920  1413.604478
+    52   6912.0  1424.746635  1423.179956
+    53   7040.0  1419.822207  1430.291931
+    54   7168.0  1423.456896  1435.764041
+    55   7296.0  1433.088130  1441.300052
+    56   7424.0  1428.617815  1445.237873
+    57   7552.0  1427.242952  1453.116020
+    58   7680.0  1436.287226  1459.023085
+    59   7808.0  1435.236830  1465.783346
+    60   7936.0  1438.255268  1467.413146
+    61   8064.0  1436.908019  1472.288553
+    62   8192.0  1440.814269  1483.499624
+    63   8320.0  1387.536106  1402.839611
+    64   8448.0  1377.615876  1406.409895
+    65   8576.0  1394.903097  1394.711115
+    66   8704.0  1388.799184  1397.463885
+    67   8832.0  1390.429975  1406.322689
+    68   8960.0  1394.547536  1412.132357
+    69   9088.0  1410.574105  1417.411052
+    70   9216.0  1403.225138  1425.502825
+    71   9344.0  1401.230870  1423.345601
+    72   9472.0  1398.859421  1436.360047
+    73   9600.0  1395.274413  1432.790874
+    74   9728.0  1405.337883  1443.221856
+    75   9856.0  1415.612923  1444.730839
+    76   9984.0  1399.318933  1448.987004
+    77  10112.0  1410.928459  1454.953997
+    78  10240.0  1416.833754  1470.429473
+    79  10368.0  1416.521943  1462.373674
+    80  10496.0  1416.254627  1467.368514
+    81  10624.0  1411.694840  1467.387220
+    82  10752.0  1402.419501  1470.056336
+    83  10880.0  1401.809206  1481.356805
+    84  11008.0  1416.789947  1474.392809
+    85  11136.0  1421.696102  1484.673829
+    86  11264.0  1423.995009  1487.046795
+    87  11392.0  1414.997587  1489.228575
+    88  11520.0  1425.130746  1493.185078
+    89  11648.0  1426.495726  1497.473941
+    90  11776.0  1431.999833  1501.073351
+    91  11904.0  1442.979869  1504.815402
+    92  12032.0  1424.781162  1508.788590
+    93  12160.0  1417.536531  1513.759855
+    94  12288.0  1433.016474  1392.847771
+    95  12416.0  1450.066639  1389.958843
+    96  12544.0  1442.230504  1392.793473
+    97  12672.0  1444.010899  1392.062338
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 214-218
+.. GENERATED FROM PYTHON SOURCE LINES 241-245
 
 In the above plot, we can see that:
  - Triton is 4x faster than the Torch JIT. This confirms our suspicions that the Torch JIT does not do any fusion here.
@@ -415,7 +442,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 31.588 seconds)
+   **Total running time of the script:** (0 minutes 23.474 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:
