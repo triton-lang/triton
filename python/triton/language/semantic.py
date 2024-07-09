@@ -1322,12 +1322,16 @@ def _str_to_dot_input_precision(input_precision, builder):
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optional[str], max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
+    # Test for supporting reduction axis `k == 8`
     def support_m16n16k8():
         if not hasattr(builder.options, "arch"):
             return False
         archStr = str(builder.options.arch)
+        # CDNA 3.0 supports k==8 in all mfma variants except for int8
+        # (where the smallest `k` supported is 16)
         if "gfx94" in archStr:
             return not (lhs.dtype.is_int8 or rhs.dtype.is_int8)
+        # CDNA 2.0 always supports `k==8`
         return "gfx9" in archStr
 
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
@@ -1381,7 +1385,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
     if support_m16n16k8():
         assert lhs.shape[-2].value >= 16 and lhs.shape[-1].value >= 8 \
             and rhs.shape[-1].value >= 16, \
-            f"The first input shape MxN = {lhs.shape} and the second input shape NxK = {rhs.shape} must have M>=16, N>=16, K>=8 for arch gfx9x"
+            "Input shapes should have M/N >= 16 and K >= 8"
     else:
         assert lhs.shape[-2].value >= 16 and lhs.shape[-1].value >= 16 \
             and rhs.shape[-1].value >= 16, \

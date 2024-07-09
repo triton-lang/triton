@@ -23,19 +23,25 @@ def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 
+def get_current_target():
+    if is_interpreter():
+        return None
+    return triton.runtime.driver.active.get_current_target()
+
+
 def is_cuda():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "cuda"
+    target = get_current_target()
+    return False if target is None else target.backend == "cuda"
 
 
 def is_hip():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "hip"
+    target = get_current_target()
+    return False if target is None else target.backend == "hip"
+
 
 def get_arch():
-    if is_interpreter():
-        return ""
-    return str(triton.runtime.driver.active.get_current_target().arch)
+    target = get_current_target()
+    return "" if target is None else str(target.arch)
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -3056,7 +3062,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack",
     [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1)
-     for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)] + ([(16, 16, 8)] if "gfx9" in get_arch() else [])
+     for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
      for input_precision in ['tf32', 'tf32x3', 'ieee']
      for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
@@ -3073,6 +3079,8 @@ def convert_fp8_to_fp32(x, device, dtype_str):
                                                 for col_a in [True, False]
                                                 for col_b in [True, False]] +
     [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1)] +
+    ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1),
+      (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1)] if "gfx9" in get_arch() else []) +
     [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
