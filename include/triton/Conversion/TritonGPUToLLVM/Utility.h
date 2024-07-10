@@ -1010,8 +1010,7 @@ emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
 }
 
 inline SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type,
-                    bool allowLLs = true);
+emitOffsetForLayout(Attribute layout, RankedTensorType type);
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
@@ -1167,34 +1166,15 @@ std::optional<SmallVector<SmallVector<unsigned>>>
 emitOffsetForLayoutUsingLinearLayouts(Attribute layout, RankedTensorType type);
 
 inline SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type,
-                    bool allowLLs /*= true*/) {
-  if (allowLLs) {
-    std::optional<SmallVector<SmallVector<unsigned>>> llOffsets =
-        emitOffsetForLayoutUsingLinearLayouts(layout, type);
-    if (llOffsets.has_value())
-      return *llOffsets;
-  }
+emitOffsetForLayout(Attribute layout, RankedTensorType type) {
+  std::optional<SmallVector<SmallVector<unsigned>>> llOffsets =
+      emitOffsetForLayoutUsingLinearLayouts(layout, type);
+  if (llOffsets.has_value())
+    return *llOffsets;
 
-  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
-    return emitOffsetForBlockedLayout(blockedLayout, type);
-  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-    if (mmaLayout.isVolta())
-      return emitOffsetForMmaLayoutV1(mmaLayout, type);
-    if (mmaLayout.isAmpere())
-      return emitOffsetForMmaLayoutV2(mmaLayout, type);
-    if (mmaLayout.isHopper())
-      return emitOffsetForMmaLayoutV3(mmaLayout, type);
-  }
-  if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
-    return emitOffsetForMfmaLayout(mfmaLayout, type);
-  }
-  if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
-    return emitOffsetForWmmaLayout(wmmaLayout, type);
-  }
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout))
-    return emitOffsetForSliceLayout(sliceLayout, type);
-  llvm_unreachable("unsupported emitOffsetForLayout");
+  llvm::errs() << "Failed to emit offset for layout: " << layout
+               << " and type: " << type << "\n";
+  llvm::report_fatal_error("Failed to emit offset");
 }
 
 // Eventually this will become the only emitIndices function.
@@ -1431,64 +1411,17 @@ inline SmallVector<Value>
 loadSharedToDistributed(RankedTensorType dstTy, MemDescType srcTy,
                         Type elemLlvmTy, SharedMemoryObject smemObj,
                         Location loc, RewriterBase &rewriter,
-                        const TargetInfoBase &target, bool allowLLs = true) {
-  if (allowLLs) {
-    std::optional<SmallVector<Value>> llVals =
-        loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemLlvmTy,
-                                                smemObj, loc, rewriter, target);
-    if (llVals.has_value()) {
-      return *std::move(llVals);
-    }
-  }
+                        const TargetInfoBase &target) {
+  std::optional<SmallVector<Value>> llVals =
+      loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemLlvmTy, smemObj,
+                                              loc, rewriter, target);
+  if (llVals.has_value())
+    return *std::move(llVals);
 
-  auto dstShape = dstTy.getShape();
-  assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
-  auto dstDistributedLayout = dstTy.getEncoding();
-  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstDistributedLayout)) {
-    assert((!mmaLayout.isVolta()) &&
-           "ConvertLayout Shared->MMAv1 is not supported yet");
-  }
-  auto srcSharedLayout =
-      cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
-  auto srcElemTy = srcTy.getElementType();
-  auto dstElemTy = dstTy.getElementType();
-  LDBG("loadSharedToDistributed srcElemTy " << srcElemTy << " dstElemTy "
-                                            << dstElemTy);
-  auto inOrd = triton::gpu::getOrder(srcSharedLayout);
-  auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
-  unsigned outVec = inOrd == outOrd
-                        ? triton::gpu::getUniqueContigPerThread(
-                              dstDistributedLayout, dstShape)[outOrd[0]]
-                        : 1;
-
-  // If the shmem layout is not swizzled, we can trivially vectorize loads
-  // across the whole width of the most-minor dimension of the shape, because
-  // Triton requires all the dims are powers of 2.
-  unsigned inVec = srcSharedLayout.getMaxPhase() == 1
-                       ? srcTy.getShape()[inOrd[0]]
-                       : srcSharedLayout.getVec();
-  unsigned minVec = std::min(outVec, inVec);
-  unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
-  SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
-
-  DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
-      loc, target, outVec, dstTy, srcSharedLayout, elemLlvmTy, smemObj,
-      rewriter, offsetVals, smemObj.strides);
-  assert(outElems % minVec == 0 && "Unexpected number of elements");
-  unsigned numVecs = outElems / minVec;
-  auto wordTy = vec_ty(elemLlvmTy, minVec);
-  SmallVector<Value> outVals(outElems);
-  for (unsigned i = 0; i < numVecs; ++i) {
-    Value smemAddr = sharedPtrs[i * minVec];
-    smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
-    auto valVec = load(wordTy, smemAddr);
-    valVec.setAlignment(minVec * elemLlvmTy.getIntOrFloatBitWidth() / 8);
-    for (unsigned v = 0; v < minVec; ++v) {
-      Value currVal = extract_element(elemLlvmTy, valVec, i32_val(v));
-      outVals[i * minVec + v] = currVal;
-    }
-  }
-  return outVals;
+  llvm::errs() << "Failed to load shared memory to registers using linear "
+                  "layout for dstTy: "
+               << dstTy << " and srcTy: " << srcTy << "\n";
+  llvm::report_fatal_error("Unsupported loadSharedToDistributed conversion");
 }
 
 [[nodiscard]] bool storeDistributedToSharedUsingLinearLayouts(
@@ -1500,62 +1433,16 @@ inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                                      Type elemLlvmTy, ArrayRef<Value> srcVals,
                                      Value smemBase, ArrayRef<Value> dstStrides,
                                      Location loc, RewriterBase &rewriter,
-                                     const TargetInfoBase &target,
-                                     bool allowLLs = true) {
-  if (allowLLs && storeDistributedToSharedUsingLinearLayouts(
-                      dstTy, srcTy, elemLlvmTy, srcVals, smemBase, dstStrides,
-                      loc, rewriter, target)) {
+                                     const TargetInfoBase &target) {
+  if (storeDistributedToSharedUsingLinearLayouts(dstTy, srcTy, elemLlvmTy,
+                                                 srcVals, smemBase, dstStrides,
+                                                 loc, rewriter, target))
     return;
-  }
 
-  auto srcShape = srcTy.getShape();
-  auto rank = srcShape.size();
-  assert(rank <= 3 && "Unexpected rank of storeDistributedToShared");
-  auto srcDistributedLayout = srcTy.getEncoding();
-  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
-    assert((!mmaLayout.isVolta()) &&
-           "ConvertLayout MMAv1->Shared is not supported yet");
-  }
-  auto dstSharedLayout =
-      cast<triton::gpu::SharedEncodingAttr>(dstTy.getEncoding());
-  auto dstElemTy = dstTy.getElementType();
-  auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
-  auto outOrd = dstSharedLayout.getOrder();
-  unsigned inVec = inOrd == outOrd
-                       ? triton::gpu::getUniqueContigPerThread(
-                             srcDistributedLayout, srcShape)[inOrd[0]]
-                       : 1;
-  // If the shmem layout is not swizzled, we can trivially vectorize stores
-  // across the whole width of the most-minor dimension of the shape, because
-  // Triton requires all the dims are powers of 2.
-  unsigned outVec = dstSharedLayout.getMaxPhase() == 1
-                        ? dstTy.getShape()[inOrd[0]]
-                        : dstSharedLayout.getVec();
-  unsigned minVec = std::min(outVec, inVec);
-  unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-  auto wordTy = vec_ty(elemLlvmTy, minVec);
-  Value word;
-
-  SmallVector<Value, 3> srcStrides(dstStrides);
-  SmallVector<Value, 3> offsetVals(rank, i32_val(0));
-  SharedMemoryObject smemObj(smemBase, elemLlvmTy, srcStrides, offsetVals);
-
-  DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
-      loc, target, inVec, srcTy, dstSharedLayout, elemLlvmTy, smemObj, rewriter,
-      offsetVals, srcStrides);
-  LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
-                                               << minVec << " " << wordTy);
-  for (unsigned i = 0; i < numElems; ++i) {
-    if (i % minVec == 0)
-      word = undef(wordTy);
-    word = insert_element(wordTy, word, srcVals[i], i32_val(i % minVec));
-    if (i % minVec == minVec - 1) {
-      Value smemAddr = sharedPtrs[i / minVec * minVec];
-      smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
-      store(word, smemAddr)
-          .setAlignment(minVec * elemLlvmTy.getIntOrFloatBitWidth() / 8);
-    }
-  }
+  llvm::errs() << "Failed to store distributed to shared memory using linear "
+                  "layout for dstTy: "
+               << dstTy << " and srcTy: " << srcTy << "\n";
+  llvm::report_fatal_error("Unsupported storeDistributedToShared conversion");
 }
 
 inline Value getStructFromSharedMemoryObject(Location loc,
