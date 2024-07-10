@@ -358,6 +358,7 @@ jobs:
       - *inspect-cache-directory-step
       - *compute-cache-keys-step
       - *cache-build-dependencies-step
+      - *restore-build-artifacts-step
       - *inspect-cache-directory-step
 
       - name: Update PATH
@@ -411,6 +412,12 @@ jobs:
 
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
+
+      - name: Clean up caches
+        run: |
+          rm -rf ~/.triton
+          rm -rf ~/.cache
+ 
       - *inspect-cache-directories-step
 
   Build-Tests:
