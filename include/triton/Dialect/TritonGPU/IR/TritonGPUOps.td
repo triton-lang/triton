@@ -153,6 +153,7 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
   let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 
   let results = (outs TT_MemDescType:$result);
+  let hasFolder = 1;
 }
 
 // Deallocate shared memory
