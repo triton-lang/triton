@@ -492,6 +492,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 // cat is not `pure` because it may reorder elements

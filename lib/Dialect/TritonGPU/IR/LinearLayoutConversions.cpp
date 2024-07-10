@@ -387,7 +387,7 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   int n = mma.getInstrShape()[1];
   int k = mma.getInstrShape()[2];
   assert(m == 16);
-  assert(n == 16 || n == 32 || n == 64 || n == 128 || n == 256);
+  assert(n == 8 || n == 16 || n == 32 || n == 64 || n == 128 || n == 256);
   assert(k == 8 || k == 16 || k == 32);
 
   MLIRContext *ctx = mma.getContext();
