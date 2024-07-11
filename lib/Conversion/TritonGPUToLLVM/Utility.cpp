@@ -423,6 +423,35 @@ void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
     llvm::report_fatal_error("Failed to emit transfer from register to shared");
 }
 
+SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
+                                                       RankedTensorType type) {
+  MLIRContext *ctx = layout.getContext();
+  auto shape = type.getShape();
+  unsigned rank = shape.size();
+
+  auto ll = triton::gpu::toLinearLayout(shape, layout);
+  if (!ll.has_value())
+    llvm::report_fatal_error("Unsupported layout");
+
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  SmallVector<SmallVector<unsigned>> offsets;
+  for (int i = 0; i < ll->getInDimSize(str_attr("register")); i++) {
+    auto idxs =
+        ll->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    assert(idxs.size() == rank);
+    for (unsigned k = 0; k < rank; ++k) {
+      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
+    }
+    offsets.push_back(
+        llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
+  }
+  return offsets;
+}
+
 namespace LLVM {
 using namespace mlir::triton;
 using mlir::triton::gpu::getOrder;
@@ -807,35 +836,6 @@ SmallVector<Value> getWrappedMultiDimOffset(
       multiDimOffsetWrapped[d] = multiDimOffset[d];
   }
   return multiDimOffsetWrapped;
-}
-
-SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
-                                                       RankedTensorType type) {
-  MLIRContext *ctx = layout.getContext();
-  auto shape = type.getShape();
-  unsigned rank = shape.size();
-
-  auto ll = triton::gpu::toLinearLayout(shape, layout);
-  if (!ll.has_value())
-    llvm::report_fatal_error("Unsupported layout");
-
-  StringAttr kRegister = str_attr("register");
-  StringAttr kLane = str_attr("lane");
-  StringAttr kWarp = str_attr("warp");
-  StringAttr kBlock = str_attr("block");
-
-  SmallVector<SmallVector<unsigned>> offsets;
-  for (int i = 0; i < ll->getInDimSize(str_attr("register")); i++) {
-    auto idxs =
-        ll->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-    assert(idxs.size() == rank);
-    for (unsigned k = 0; k < rank; ++k) {
-      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
-    }
-    offsets.push_back(
-        llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
-  }
-  return offsets;
 }
 
 } // namespace LLVM

@@ -1162,9 +1162,6 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
-SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
-                                                       RankedTensorType type);
-
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
 SmallVector<SmallVector<Value>>
