@@ -154,6 +154,7 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 
   let results = (outs TT_MemDescType:$result);
   let hasFolder = 1;
+  let hasVerifier = 1;
 }
 
 // Deallocate shared memory

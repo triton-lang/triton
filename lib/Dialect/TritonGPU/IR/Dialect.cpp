@@ -2898,6 +2898,21 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
+LogicalResult LocalAllocOp::verify() {
+  if (!getSrc()) {
+    if (!getType().getMutableMemory())
+      return emitError("uninitialized alloc must have a mutable memdesc type");
+    return success();
+  }
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitError("result element type must match desc element type");
+  }
+  return success();
+}
+
 // LocalLoadOp
 void LocalLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
