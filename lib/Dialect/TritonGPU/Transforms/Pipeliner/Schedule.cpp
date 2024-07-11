@@ -15,9 +15,15 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-void tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
-                                        tt::CoarseSchedule::Cluster cluster,
-                                        bool includeArg) {
+void tt::CoarseSchedule::insertDepsOfOp(
+    Operation *op, int stage, tt::CoarseSchedule::Cluster cluster,
+    bool includeArg, DenseMap<Operation *, Operation *> *additionalDep) {
+  // Look in additionalDep.
+  if (additionalDep && additionalDep->find(op) != additionalDep->end()) {
+    Operation *wait = (*additionalDep)[op];
+    if (insertIfAbsent(wait, stage, cluster))
+      insertDepsOfOp(wait, stage, cluster, includeArg, additionalDep);
+  }
   for (Value operand : op->getOperands()) {
     Value v = operand;
     llvm::SmallDenseSet<Value> seen;
@@ -36,7 +42,7 @@ void tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
     Operation *defOp = v.getDefiningOp();
     if (defOp && defOp->getBlock() == op->getBlock()) {
       if (insertIfAbsent(defOp, stage, cluster)) {
-        insertDepsOfOp(defOp, stage, cluster, includeArg);
+        insertDepsOfOp(defOp, stage, cluster, includeArg, additionalDep);
       }
     }
   }
