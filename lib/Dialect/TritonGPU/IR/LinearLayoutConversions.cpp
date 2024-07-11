@@ -561,7 +561,8 @@ LinearLayout sliceToLinearLayout(ArrayRef<int64_t> shape,
   std::optional<LinearLayout> parentLL =
       triton::gpu::toLinearLayout(parentShape, slice.getParent());
   if (!parentLL.has_value())
-    llvm::report_fatal_error("Failed to compute parent layout for slice layout.");
+    llvm::report_fatal_error(
+        "Failed to compute parent layout for slice layout.");
 
   // Remove dimension slice.getDim() from the parent layout.
   //
