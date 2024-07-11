@@ -210,7 +210,9 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
 
-  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
+  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
+  if (!ll.has_value())
+    llvm::report_fatal_error("Failed to convert layout to linear layout");
 
   // TODO(jlebar): We could add strong typing if we wanted; for now this is
   // "stringly typed".
@@ -220,7 +222,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kBlock = str_attr("block");
 
   Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(ll.getInDimSize(kLane));
+  Value threadsPerWarp = i32_val(ll->getInDimSize(kLane));
   Value laneId = urem(threadId, threadsPerWarp);
   Value warpId = udiv(threadId, threadsPerWarp);
   Value blockId =
@@ -236,14 +238,14 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   //
   // This approach produces code with lower register pressure and
   // less computations, compared to fused L(r,t,w,b) method.
-  auto idxsBase = applyLinearLayout(loc, rewriter, ll,
+  auto idxsBase = applyLinearLayout(loc, rewriter, *ll,
                                     {{kRegister, i32_val(0)},
                                      {kLane, laneId},
                                      {kWarp, warpId},
                                      {kBlock, blockId}});
-  for (unsigned reg = 0; reg < ll.getInDimSize(str_attr("register")); reg++) {
+  for (unsigned reg = 0; reg < ll->getInDimSize(str_attr("register")); reg++) {
     auto idxsReg =
-        ll.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+        ll->apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     SmallVector<std::pair<StringAttr, Value>> idxs;
     for (auto [idxBase, idxReg] : llvm::zip(idxsBase, idxsReg)) {
       auto dimName = idxBase.first;

@@ -558,8 +558,10 @@ LinearLayout sliceToLinearLayout(ArrayRef<int64_t> shape,
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + slice.getDim(), 1);
-  LinearLayout parentLL =
+  std::optional<LinearLayout> parentLL =
       triton::gpu::toLinearLayout(parentShape, slice.getParent());
+  if (!parentLL.has_value())
+    llvm::report_fatal_error("Failed to compute parent layout for slice layout.");
 
   // Remove dimension slice.getDim() from the parent layout.
   //
@@ -570,19 +572,19 @@ LinearLayout sliceToLinearLayout(ArrayRef<int64_t> shape,
   //  3. Fix up duplicate registers introduced by slicing.
   auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
   LinearLayout transform = LinearLayout::empty();
-  for (auto [idx, outDim] : llvm::enumerate(parentLL.getOutDimNames())) {
+  for (auto [idx, outDim] : llvm::enumerate(parentLL->getOutDimNames())) {
     if (idx == slice.getDim()) {
       // Because we're multiplying by all zeros, we could replace outDimNames[0]
       // with any other valid out-dim; the layout will be the same.
-      transform *= LinearLayout::zeros1D(parentLL.getOutDimSize(outDim), outDim,
-                                         outDimNames[0]);
+      transform *= LinearLayout::zeros1D(parentLL->getOutDimSize(outDim),
+                                         outDim, outDimNames[0]);
     } else {
       transform *= LinearLayout::identity1D(
-          parentLL.getOutDimSize(outDim), outDim,
+          parentLL->getOutDimSize(outDim), outDim,
           outDimNames[idx - (idx < slice.getDim() ? 0 : 1)]);
     }
   }
-  LinearLayout sliceLL = parentLL.compose(transform);
+  LinearLayout sliceLL = parentLL->compose(transform);
 
   // Step 3: Along the "register" dim, remove any all-zero bases.
   auto bases = sliceLL.getBases();
@@ -736,7 +738,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 
 } // anonymous namespace
 
-LinearLayout
+std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
@@ -768,7 +770,8 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     }
   }
 
-  llvm_unreachable("Unsupported layout");
+  // TODO(jlebar): Other layouts
+  return std::nullopt;
 }
 
 } // namespace mlir::triton::gpu

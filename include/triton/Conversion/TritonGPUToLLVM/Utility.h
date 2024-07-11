@@ -1016,6 +1016,8 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   unsigned rank = shape.size();
 
   auto ll = triton::gpu::toLinearLayout(shape, layout);
+  if (!ll.has_value())
+    llvm::report_fatal_error("Unsupported layout");
 
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
@@ -1023,8 +1025,8 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   StringAttr kBlock = str_attr("block");
 
   SmallVector<SmallVector<unsigned>> offsets;
-  for (int i = 0; i < ll.getInDimSize(str_attr("register")); i++) {
-    auto idxs = ll.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+  for (int i = 0; i < ll->getInDimSize(str_attr("register")); i++) {
+    auto idxs = ll->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     assert(idxs.size() == rank);
     for (unsigned k = 0; k < rank; ++k) {
       assert(idxs[k].first == str_attr("dim" + std::to_string(k)));

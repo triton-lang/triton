@@ -37,8 +37,12 @@ namespace mlir::triton::gpu {
 // to compute the linear layout for MMAv3 (i.e. Hopper) shared layouts (i.e.
 // shared layouts with hasLeadingOffset == true) but is otherwise unused.
 //
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                            std::optional<int32_t> elemBitWidth = std::nullopt);
+// Returns std::nullopt if the given layout can't be converted to an LL.
+// TODO(jlebar): Remove the std::optional once all layouts are supported.
+//
+std::optional<LinearLayout>
+toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+               std::optional<int32_t> elemBitWidth = std::nullopt);
 
 } // namespace mlir::triton::gpu
 
