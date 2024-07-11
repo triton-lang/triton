@@ -26,7 +26,7 @@ namespace mlir::triton::gpu {
 //
 // All layouts have the following output dimensions.
 //
-//  "dimi" for i in 0..n-1: the location in the n'th logical dimension of the
+//  "dim[i]" for i in 0..n-1: the location in the n'th logical dimension of the
 //  output tensor.  These also are not reordered according to the layout's
 //  `order`.
 //
@@ -37,12 +37,8 @@ namespace mlir::triton::gpu {
 // to compute the linear layout for MMAv3 (i.e. Hopper) shared layouts (i.e.
 // shared layouts with hasLeadingOffset == true) but is otherwise unused.
 //
-// Returns std::nullopt if the given layout can't be converted to an LL.
-// TODO(jlebar): Remove the std::optional once all layouts are supported.
-//
-std::optional<LinearLayout>
-toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth = std::nullopt);
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                            std::optional<int32_t> elemBitWidth = std::nullopt);
 
 } // namespace mlir::triton::gpu
 

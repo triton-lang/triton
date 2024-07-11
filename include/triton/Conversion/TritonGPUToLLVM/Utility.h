@@ -1010,7 +1010,30 @@ emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
 }
 
 inline SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type);
+emitOffsetForLayout(Attribute layout, RankedTensorType type) {
+  MLIRContext *ctx = layout.getContext();
+  auto shape = type.getShape();
+  unsigned rank = shape.size();
+
+  auto ll = triton::gpu::toLinearLayout(shape, layout);
+
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  SmallVector<SmallVector<unsigned>> offsets;
+  for (int i = 0; i < ll.getInDimSize(str_attr("register")); i++) {
+    auto idxs = ll.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    assert(idxs.size() == rank);
+    for (unsigned k = 0; k < rank; ++k) {
+      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
+    }
+    offsets.push_back(
+        llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
+  }
+  return offsets;
+}
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
@@ -1162,62 +1185,14 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
-std::optional<SmallVector<SmallVector<unsigned>>>
-emitOffsetForLayoutUsingLinearLayouts(Attribute layout, RankedTensorType type);
-
-inline SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  std::optional<SmallVector<SmallVector<unsigned>>> llOffsets =
-      emitOffsetForLayoutUsingLinearLayouts(layout, type);
-  if (llOffsets.has_value())
-    return *llOffsets;
-
-  llvm::errs() << "Failed to emit offset for layout: " << layout
-               << " and type: " << type << "\n";
-  llvm::report_fatal_error("Failed to emit offset");
-}
-
-// Eventually this will become the only emitIndices function.
-std::optional<SmallVector<SmallVector<Value>>>
-emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
-                              const TargetInfoBase &target, Attribute layout,
-                              RankedTensorType type, bool withCTAOffset);
+SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
+                                                       RankedTensorType type);
 
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
-inline SmallVector<SmallVector<Value>>
+SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset,
-            bool allowLL = true) {
-  // Eventually the LinearLayout path will be the only one.  For now we allow
-  // both paths so we can test that they produce the same results.
-  if (allowLL) {
-    std::optional<SmallVector<SmallVector<Value>>> llOffsets =
-        emitIndicesUsingLinearLayouts(loc, rewriter, target, layout, type,
-                                      withCTAOffset);
-    if (llOffsets.has_value())
-      return *llOffsets;
-  }
-
-  // step 1, delinearize threadId to get the base index
-  auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, target, layout,
-                                             type, withCTAOffset);
-  // step 2, get offset of each element
-  auto offset = emitOffsetForLayout(layout, type);
-  // step 3, add offset to base, and reorder the sequence
-  // of indices to guarantee that elems in the same
-  // sizePerThread are adjacent in order
-  auto shape = type.getShape();
-  unsigned rank = shape.size();
-  unsigned elemsPerThread = offset.size();
-  SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
-                                              SmallVector<Value>(rank));
-  for (unsigned n = 0; n < elemsPerThread; ++n)
-    for (unsigned k = 0; k < rank; ++k)
-      multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
-
-  return multiDimIdx;
-}
+            Attribute layout, RankedTensorType type, bool withCTAOffset);
 
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.
@@ -1402,48 +1377,17 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   return ret;
 }
 
-std::optional<SmallVector<Value>> loadSharedToRegistersUsingLinearLayouts(
-    RankedTensorType dstTy, MemDescType srcTy, Type elemLlvmTy,
-    SharedMemoryObject smemObj, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target);
+SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
+                                           MemDescType srcTy, Type elemLlvmTy,
+                                           SharedMemoryObject smemObj,
+                                           Location loc, RewriterBase &rewriter,
+                                           const TargetInfoBase &target);
 
-inline SmallVector<Value>
-loadSharedToDistributed(RankedTensorType dstTy, MemDescType srcTy,
-                        Type elemLlvmTy, SharedMemoryObject smemObj,
-                        Location loc, RewriterBase &rewriter,
-                        const TargetInfoBase &target) {
-  std::optional<SmallVector<Value>> llVals =
-      loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemLlvmTy, smemObj,
-                                              loc, rewriter, target);
-  if (llVals.has_value())
-    return *std::move(llVals);
-
-  llvm::errs() << "Failed to load shared memory to registers using linear "
-                  "layout for dstTy: "
-               << dstTy << " and srcTy: " << srcTy << "\n";
-  llvm::report_fatal_error("Unsupported loadSharedToDistributed conversion");
-}
-
-[[nodiscard]] bool storeDistributedToSharedUsingLinearLayouts(
-    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
-    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target);
-
-inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
-                                     Type elemLlvmTy, ArrayRef<Value> srcVals,
-                                     Value smemBase, ArrayRef<Value> dstStrides,
-                                     Location loc, RewriterBase &rewriter,
-                                     const TargetInfoBase &target) {
-  if (storeDistributedToSharedUsingLinearLayouts(dstTy, srcTy, elemLlvmTy,
-                                                 srcVals, smemBase, dstStrides,
-                                                 loc, rewriter, target))
-    return;
-
-  llvm::errs() << "Failed to store distributed to shared memory using linear "
-                  "layout for dstTy: "
-               << dstTy << " and srcTy: " << srcTy << "\n";
-  llvm::report_fatal_error("Unsupported storeDistributedToShared conversion");
-}
+void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
+                              Type elemLlvmTy, ArrayRef<Value> srcVals,
+                              Value smemBase, ArrayRef<Value> dstStrides,
+                              Location loc, RewriterBase &rewriter,
+                              const TargetInfoBase &target);
 
 inline Value getStructFromSharedMemoryObject(Location loc,
                                              const SharedMemoryObject &smemObj,

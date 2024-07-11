@@ -551,18 +551,15 @@ LinearLayout wmmaToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, wmma.getCTALayout(), shape);
 }
 
-std::optional<LinearLayout> sliceToLinearLayout(ArrayRef<int64_t> shape,
-                                                SliceEncodingAttr slice) {
+LinearLayout sliceToLinearLayout(ArrayRef<int64_t> shape,
+                                 SliceEncodingAttr slice) {
   MLIRContext *ctx = slice.getContext();
 
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + slice.getDim(), 1);
-  std::optional<LinearLayout> parentLL =
+  LinearLayout parentLL =
       triton::gpu::toLinearLayout(parentShape, slice.getParent());
-  if (!parentLL) {
-    return std::nullopt;
-  }
 
   // Remove dimension slice.getDim() from the parent layout.
   //
@@ -573,19 +570,19 @@ std::optional<LinearLayout> sliceToLinearLayout(ArrayRef<int64_t> shape,
   //  3. Fix up duplicate registers introduced by slicing.
   auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
   LinearLayout transform = LinearLayout::empty();
-  for (auto [idx, outDim] : llvm::enumerate(parentLL->getOutDimNames())) {
+  for (auto [idx, outDim] : llvm::enumerate(parentLL.getOutDimNames())) {
     if (idx == slice.getDim()) {
       // Because we're multiplying by all zeros, we could replace outDimNames[0]
       // with any other valid out-dim; the layout will be the same.
-      transform *= LinearLayout::zeros1D(parentLL->getOutDimSize(outDim),
-                                         outDim, outDimNames[0]);
+      transform *= LinearLayout::zeros1D(parentLL.getOutDimSize(outDim), outDim,
+                                         outDimNames[0]);
     } else {
       transform *= LinearLayout::identity1D(
-          parentLL->getOutDimSize(outDim), outDim,
+          parentLL.getOutDimSize(outDim), outDim,
           outDimNames[idx - (idx < slice.getDim() ? 0 : 1)]);
     }
   }
-  LinearLayout sliceLL = parentLL->compose(transform);
+  LinearLayout sliceLL = parentLL.compose(transform);
 
   // Step 3: Along the "register" dim, remove any all-zero bases.
   auto bases = sliceLL.getBases();
@@ -739,7 +736,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 
 } // anonymous namespace
 
-std::optional<LinearLayout>
+LinearLayout
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
@@ -771,8 +768,7 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     }
   }
 
-  // TODO(jlebar): Other layouts
-  return std::nullopt;
+  llvm_unreachable("Unsupported layout");
 }
 
 } // namespace mlir::triton::gpu
