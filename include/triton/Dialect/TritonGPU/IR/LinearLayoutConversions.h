@@ -26,7 +26,7 @@ namespace mlir::triton::gpu {
 //
 // All layouts have the following output dimensions.
 //
-//  "dim[i]" for i in 0..n-1: the location in the n'th logical dimension of the
+//  "dimi" for i in 0..n-1: the location in the n'th logical dimension of the
 //  output tensor.  These also are not reordered according to the layout's
 //  `order`.
 //
