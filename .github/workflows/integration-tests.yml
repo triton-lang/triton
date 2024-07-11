@@ -209,7 +209,6 @@ jobs:
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
-          du -sh ~/.triton/**
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -306,11 +305,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: 'true'
-      - name: Inspect cache directory
-        run: |
-          mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
       - name: Compute cache keys
         id: cache-key
         run: |
@@ -358,7 +352,6 @@ jobs:
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
-          du -sh ~/.triton/**
       - name: Update PATH
         run: |
           echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
@@ -425,10 +418,6 @@ jobs:
         with:
           path: ~/.triton/cache ~/.cache/ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Clean up caches
-        run: |
-          rm -rf ~/.triton
-          rm -rf ~/.cache
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -438,6 +427,10 @@ jobs:
           mkdir -p ~/.cache/ccache
           ls -alh ~/.cache/ccache
           du -sh ~/.cache/ccache
+      - name: Clean up caches
+        run: |
+          rm -rf ~/.triton
+          rm -rf ~/.cache
   Build-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
@@ -502,7 +495,6 @@ jobs:
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
-          du -sh ~/.triton/**
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
