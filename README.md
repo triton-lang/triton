@@ -143,7 +143,7 @@ $ python3 -m pytest python/test/unit
 $ cd python/build/cmake<...>
 
 # Run C++ unit tests.
-$ ninja test
+$ ctest -j32
 
 # Run lit tests.
 $ lit test
