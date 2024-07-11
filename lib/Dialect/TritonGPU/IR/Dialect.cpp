@@ -2885,8 +2885,6 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   auto src = getSrc();
   if (!src)
     return {};
-  if (isa<BlockArgument>(src))
-    return {};
   auto localLoadOp = src.getDefiningOp<LocalLoadOp>();
   if (!localLoadOp)
     return {};
