@@ -57,3 +57,58 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
     tt.return %2 : tensor<512xi32, #blocked2>
 }
 }  // end module
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: local_alloc_nofold1
+  tt.func @local_alloc_nofold1(%arg0: tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory> {
+    // CHECK: %[[ARG:.+]] = triton_gpu.local_alloc
+    // CHECK-NEXT: %[[ARG2:.+]] = triton_gpu.local_load %[[ARG]]
+    // CHECK-NEXT: %[[ARG3:.+]] = triton_gpu.local_alloc %[[ARG2]]
+    // CHECK-NEXT: tt.return %[[ARG3]]
+    %0 = triton_gpu.local_alloc %arg0 : (tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory, mutable>
+    %1 = triton_gpu.local_load %0 : !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<16x16xf16, #blocked>
+    %2 = triton_gpu.local_alloc %1 : (tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory>
+    tt.return %2 : !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory>
+  }
+}  // end module
+
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared1 = #triton_gpu.shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: local_alloc_nofold2
+  tt.func @local_alloc_nofold2(%arg0: tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared1, #triton_gpu.shared_memory> {
+    // CHECK: %[[ARG:.+]] = triton_gpu.local_alloc
+    // CHECK-NEXT: %[[ARG2:.+]] = triton_gpu.local_load %[[ARG]]
+    // CHECK-NEXT: %[[ARG3:.+]] = triton_gpu.local_alloc %[[ARG2]]
+    // CHECK-NEXT: tt.return %[[ARG3]]
+    %0 = triton_gpu.local_alloc %arg0 : (tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory>
+    %1 = triton_gpu.local_load %0 : !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory> -> tensor<16x16xf16, #blocked>
+    %2 = triton_gpu.local_alloc %1 : (tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared1, #triton_gpu.shared_memory>
+    tt.return %2 : !tt.memdesc<16x16xf16, #shared1, #triton_gpu.shared_memory>
+  }
+}  // end module
+
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  tt.func @local_alloc_fold(%arg0: tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory> {
+    // CHECK-LABEL: local_alloc_fold
+    // CHECK-NEXT: %[[ARG:.+]] = triton_gpu.local_alloc
+    // CHECK-NEXT: tt.return %[[ARG]]
+    %0 = triton_gpu.local_alloc %arg0 : (tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory>
+    %1 = triton_gpu.local_load %0 : !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory> -> tensor<16x16xf16, #blocked>
+    %2 = triton_gpu.local_alloc %1 : (tensor<16x16xf16, #blocked>) -> !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory>
+    tt.return %2 : !tt.memdesc<16x16xf16, #shared, #triton_gpu.shared_memory>
+  }
+}  // end module
