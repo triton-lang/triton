@@ -425,6 +425,10 @@ class CMakeBuild(build_ext):
         else:
             cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
 
+        cmake_args_append = os.getenv("TRITON_APPEND_CMAKE_ARGS")
+        if cmake_args_append is not None:
+            cmake_args += cmake_args_append.split(" ")
+
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
