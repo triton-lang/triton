@@ -2887,12 +2887,11 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
     return {};
   if (isa<BlockArgument>(src))
     return {};
-  auto localLoadOp = dyn_cast<LocalLoadOp>(src.getDefiningOp());
+  auto localLoadOp = src.getDefiningOp<LocalLoadOp>();
   if (!localLoadOp)
     return {};
   auto loadSrc = localLoadOp.getSrc();
-  if (!isa<MemDescType>(loadSrc.getType()) ||
-      dyn_cast<MemDescType>(loadSrc.getType()).getMutableMemory())
+  if (loadSrc.getType() != getType())
     return {};
   return loadSrc;
 }
