@@ -69,5 +69,3 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
                   mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
                   mlir::ROCDL::ROCDLDialect>();
 }
-
-control flow dialect + math dialct + arith dialect + scf

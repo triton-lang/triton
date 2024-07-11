@@ -3395,6 +3395,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     out_tri = to_triton(out, device=device)
 
     BLOCK_B = B
+    BLOCK_M, BLOCK_N = min(32, M), min(32, N)
     BLOCK_K = K
 
     grid = (
@@ -3427,6 +3428,12 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
         out_ref = np.matmul(x.astype(np.float32), y.astype(np.float32)).astype(np.int32)
     else:
         out_ref = np.matmul(x, y)
+
+    import sys
+    np.set_printoptions(threshold=sys.maxsize)
+    print("M: {}, N: {}, K: {}".format(M, N, K))
+    print("shapes: {} x {} -> {}".format(x_tri.shape, y_tri.shape, out_tri.shape))
+
     np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
 
 
@@ -5170,8 +5177,9 @@ def matmul_kernel(  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N, K", [(64, 256, 256),(128, 256, 256), (128, 256, 128)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 256, 128),(128, 256, 128),(128, 256, 64), (128, 128, 128), (64, 64, 64)])
+@pytest.mark.parametrize("M, N, K", [(64, 256, 256), (128, 256, 256), (128, 256, 128)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 256, 128), (128, 256, 128), (128, 256, 64), (128, 128, 128),
+                                                       (64, 64, 64)])
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
