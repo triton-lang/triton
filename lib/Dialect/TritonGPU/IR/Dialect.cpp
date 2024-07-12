@@ -2879,6 +2879,21 @@ void LocalAllocOp::getEffects(
                          mlir::triton::gpu::SharedMemory::get());
 }
 
+OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
+  if (getType().getMutableMemory())
+    return {};
+  auto src = getSrc();
+  if (!src)
+    return {};
+  auto localLoadOp = src.getDefiningOp<LocalLoadOp>();
+  if (!localLoadOp)
+    return {};
+  auto loadSrc = localLoadOp.getSrc();
+  if (loadSrc.getType() != getType())
+    return {};
+  return loadSrc;
+}
+
 // LocalLoadOp
 void LocalLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
