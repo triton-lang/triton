@@ -11,6 +11,16 @@ import functools
 from pathlib import Path
 
 
+def min_dot_size(target: GPUTarget):
+    arch_str = target.arch
+    # CDNA 3.0 supports k==8 in all mfma variants except for int8
+    # (where the smallest `k` supported is 16)
+    if "gfx94" in arch_str:
+        return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.is_int8() or rhsType.is_int8()) else (16, 16, 8)
+    # CDNA 2.0 always supports `k==8`
+    return lambda lhsType, rhsType: (16, 16, 8)
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -79,7 +89,7 @@ class HIPBackend(BaseBackend):
         )
 
     def get_codegen_implementation(self):
-        codegen_fns = dict()
+        codegen_fns = {"min_dot_size": min_dot_size(self.target)}
         return codegen_fns
 
     def load_dialects(self, ctx):

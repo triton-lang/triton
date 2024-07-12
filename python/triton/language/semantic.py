@@ -1322,18 +1322,6 @@ def _str_to_dot_input_precision(input_precision, builder):
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optional[str], max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
-    # Test for supporting reduction axis `k == 8`
-    def support_m16n16k8():
-        if not hasattr(builder.options, "arch"):
-            return False
-        arch_str = str(builder.options.arch)
-        # CDNA 3.0 supports k==8 in all mfma variants except for int8
-        # (where the smallest `k` supported is 16)
-        if "gfx94" in arch_str:
-            return not (lhs.dtype.is_int8() or rhs.dtype.is_int8())
-        # CDNA 2.0 always supports `k==8`
-        return "gfx9" in arch_str
-
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
         if not options.allow_fp8e4nv:
             assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(
@@ -1382,17 +1370,13 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
     assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
     assert lhs.shape[-1].value == rhs.shape[
         -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
-    if support_m16n16k8():
-        assert lhs.shape[-2].value >= 16 and lhs.shape[-1].value >= 8 \
-            and rhs.shape[-1].value >= 16, \
-            "Input shapes should have M/N >= 16 and K >= 8"
-    else:
-        assert lhs.shape[-2].value >= 16 and lhs.shape[-1].value >= 16 \
-            and rhs.shape[-1].value >= 16, \
-            f"All non-batch values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
+    assert builder.codegen_fns.get("min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+    min_dot_size = builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+        and rhs.shape[-1].value >= min_dot_size[1], \
+            f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
-        assert builder.options.backend_name != "cuda" or lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     elif out_dtype.is_bf16():
