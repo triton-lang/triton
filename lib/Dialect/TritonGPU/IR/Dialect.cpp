@@ -2802,8 +2802,12 @@ struct CanonicalizeConvertFromConvert
     if (auto sharedLoad = dyn_cast<LocalLoadOp>(arg)) {
       // Shared_load can load to any layout so we can always fold convert into
       // it.
+      // We insert at the point of the original op as there could be ops with
+      // memory side-effects between the LocalLoad op and the ConvertLayout op
+      rewriter.setInsertionPoint(arg);
       rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op->getResult(0).getType(),
                                                sharedLoad.getSrc());
+
       return success();
     }
 
