@@ -1326,13 +1326,13 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
     def support_m16n16k8():
         if not hasattr(builder.options, "arch"):
             return False
-        archStr = str(builder.options.arch)
+        arch_str = str(builder.options.arch)
         # CDNA 3.0 supports k==8 in all mfma variants except for int8
         # (where the smallest `k` supported is 16)
-        if "gfx94" in archStr:
-            return not (lhs.dtype.is_int8 or rhs.dtype.is_int8)
+        if "gfx94" in arch_str:
+            return not (lhs.dtype.is_int8() or rhs.dtype.is_int8())
         # CDNA 2.0 always supports `k==8`
-        return "gfx9" in archStr
+        return "gfx9" in arch_str
 
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
         if not options.allow_fp8e4nv:
@@ -1392,7 +1392,6 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
             f"All non-batch values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
-        # TODO: This is CUDA specific, check if ROCm has the same limitation
         assert builder.options.backend_name != "cuda" or lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
