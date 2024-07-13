@@ -412,6 +412,11 @@ jobs:
       - *save-build-artifacts-step
       - *inspect-cache-directories-step
 
+      - name: Clean up caches
+        run: |
+          rm -rf ~/.triton
+          rm -rf ~/.cache
+
   Build-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''

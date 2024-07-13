@@ -427,6 +427,10 @@ jobs:
           mkdir -p ~/.cache/ccache
           ls -alh ~/.cache/ccache
           du -sh ~/.cache/ccache
+      - name: Clean up caches
+        run: |
+          rm -rf ~/.triton
+          rm -rf ~/.cache
   Build-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
