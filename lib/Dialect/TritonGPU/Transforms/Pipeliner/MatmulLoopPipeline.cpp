@@ -757,7 +757,11 @@ scheduleRemainingToLastStage(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     for (auto user : op->getUsers()) {
       if (opToCluster.count(user)) {
         tt::CoarseSchedule::Cluster userCluster = opToCluster[user];
-        tt::CoarseSchedule::Cluster opCluster = schedule[op].second;
+        tt::CoarseSchedule::Cluster opCluster;
+        if (schedule.count(op))
+          opCluster = schedule[op].second;
+        else
+          opCluster = opToCluster[op];
         if (*userCluster < *opCluster) {
           opToCluster[user] = opCluster;
           queue.push_back(user);

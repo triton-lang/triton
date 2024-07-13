@@ -41,6 +41,7 @@ makeContextSource(const std::string &contextSourceName) {
 
 void Session::activate() {
   profiler->start();
+  profiler->flush();
   profiler->registerData(data.get());
 }
 

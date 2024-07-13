@@ -54,9 +54,10 @@ class CustomPhilox4x:
 
     def _into_pieces(self, n, pad=4):
         res = []
+        bits = np.dtype(self._dtype).itemsize * 8
         while len(res) < pad:
-            res.append(np.array(n, dtype=self._dtype))
-            n >>= (np.dtype(self._dtype).itemsize * 8)
+            res.append(np.array((n & ((1 << bits) - 1)), dtype=self._dtype))
+            n >>= bits
         assert n == 0
         return tuple(res)
 

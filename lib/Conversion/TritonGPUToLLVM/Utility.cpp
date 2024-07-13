@@ -204,17 +204,15 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
-std::optional<SmallVector<SmallVector<Value>>>
-emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
-                              const TargetInfoBase &target, Attribute layout,
-                              RankedTensorType type, bool withCTAOffset) {
+SmallVector<SmallVector<Value>>
+emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+            Attribute layout, RankedTensorType type, bool withCTAOffset) {
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
 
   std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
-  if (!ll.has_value()) {
-    return std::nullopt;
-  }
+  if (!ll.has_value())
+    llvm::report_fatal_error("Failed to convert layout to linear layout");
 
   // TODO(jlebar): We could add strong typing if we wanted; for now this is
   // "stringly typed".
@@ -231,12 +229,31 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
+  // Linear layout function is split in two parts below:
+  // L(r, t, w, b) = L(0, t, w, b) xor L(r, 0, 0, 0)
+  //     idxs      =    idxsBase   xor    idxsReg
+  //
+  // L(0, t, w, b) part is the same for all registers,
+  // so we hoist it out of the main register loop in the below.
+  //
+  // This approach produces code with lower register pressure and
+  // less computations, compared to fused L(r,t,w,b) method.
+  auto idxsBase = applyLinearLayout(loc, rewriter, *ll,
+                                    {{kRegister, i32_val(0)},
+                                     {kLane, laneId},
+                                     {kWarp, warpId},
+                                     {kBlock, blockId}});
   for (unsigned reg = 0; reg < ll->getInDimSize(str_attr("register")); reg++) {
-    auto idxs = applyLinearLayout(loc, rewriter, *ll,
-                                  {{kRegister, i32_val(reg)},
-                                   {kLane, laneId},
-                                   {kWarp, warpId},
-                                   {kBlock, blockId}});
+    auto idxsReg =
+        ll->apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    SmallVector<std::pair<StringAttr, Value>> idxs;
+    for (auto [idxBase, idxReg] : llvm::zip(idxsBase, idxsReg)) {
+      auto dimName = idxBase.first;
+      assert(dimName == idxReg.first &&
+             "dim names of block+warp+thread and register idx should be equal");
+      auto idx = xor_(idxBase.second, i32_val(idxReg.second));
+      idxs.emplace_back(dimName, idx);
+    }
     assert(idxs.size() == rank);
     for (unsigned k = 0; k < rank; ++k) {
       assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
@@ -245,36 +262,6 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
   }
 
   return ret;
-}
-
-std::optional<SmallVector<SmallVector<unsigned>>>
-emitOffsetForLayoutUsingLinearLayouts(Attribute layout, RankedTensorType type) {
-  MLIRContext *ctx = layout.getContext();
-  auto shape = type.getShape();
-  unsigned rank = shape.size();
-
-  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
-  if (!ll.has_value()) {
-    return std::nullopt;
-  }
-
-  StringAttr kRegister = str_attr("register");
-  StringAttr kLane = str_attr("lane");
-  StringAttr kWarp = str_attr("warp");
-  StringAttr kBlock = str_attr("block");
-
-  SmallVector<SmallVector<unsigned>> offsets;
-  for (int i = 0; i < ll->getInDimSize(str_attr("register")); i++) {
-    auto idxs =
-        ll->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-    assert(idxs.size() == rank);
-    for (unsigned k = 0; k < rank; ++k) {
-      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
-    }
-    offsets.push_back(
-        llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
-  }
-  return offsets;
 }
 
 bool emitTransferBetweenRegistersAndShared(
@@ -389,10 +376,11 @@ bool emitTransferBetweenRegistersAndShared(
   return true;
 }
 
-std::optional<SmallVector<Value>> loadSharedToRegistersUsingLinearLayouts(
-    RankedTensorType dstTy, MemDescType srcTy, Type elemLlvmTy,
-    SharedMemoryObject smemObj, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target) {
+SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
+                                           MemDescType srcTy, Type elemLlvmTy,
+                                           SharedMemoryObject smemObj,
+                                           Location loc, RewriterBase &rewriter,
+                                           const TargetInfoBase &target) {
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj.getBase(),
@@ -406,17 +394,17 @@ std::optional<SmallVector<Value>> loadSharedToRegistersUsingLinearLayouts(
           ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
         }
       });
-  if (!success) {
-    return std::nullopt;
-  }
+  if (!success)
+    llvm::report_fatal_error("Failed to emit transfer from shared to register");
 
   return ret;
 }
 
-bool storeDistributedToSharedUsingLinearLayouts(
-    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
-    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target) {
+void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
+                              Type elemLlvmTy, ArrayRef<Value> srcVals,
+                              Value smemBase, ArrayRef<Value> dstStrides,
+                              Location loc, RewriterBase &rewriter,
+                              const TargetInfoBase &target) {
   bool success = emitTransferBetweenRegistersAndShared(
       srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
       dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
@@ -431,9 +419,37 @@ bool storeDistributedToSharedUsingLinearLayouts(
             .setAlignment(vecTy.getNumElements() *
                           elemLlvmTy.getIntOrFloatBitWidth() / 8);
       });
+  if (!success)
+    llvm::report_fatal_error("Failed to emit transfer from register to shared");
+}
 
-  assert(!success || srcVals.empty());
-  return success;
+SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
+                                                       RankedTensorType type) {
+  MLIRContext *ctx = layout.getContext();
+  auto shape = type.getShape();
+  unsigned rank = shape.size();
+
+  auto ll = triton::gpu::toLinearLayout(shape, layout);
+  if (!ll.has_value())
+    llvm::report_fatal_error("Unsupported layout");
+
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  SmallVector<SmallVector<unsigned>> offsets;
+  for (int i = 0; i < ll->getInDimSize(str_attr("register")); i++) {
+    auto idxs =
+        ll->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    assert(idxs.size() == rank);
+    for (unsigned k = 0; k < rank; ++k) {
+      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
+    }
+    offsets.push_back(
+        llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
+  }
+  return offsets;
 }
 
 namespace LLVM {

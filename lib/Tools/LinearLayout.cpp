@@ -822,7 +822,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   // or 1.
   //
   // We want to choose C such that C(x) != 0 where possible.  For example,
-  // suppose we are transfering from registers to registers and we have the
+  // suppose we are transferring from registers to registers and we have the
   // following layouts.
   //
   //   A(thread=1, block=0) = 1

@@ -23,10 +23,10 @@ namespace mlir::triton {
 // location" to a "logical tensor index".
 //
 // For example, suppose we have a 2D tensor T stored in GPU registers.  T's
-// layout is the function that, given a "hardware location" tuple of (thread-id,
-// warp-id), returns an index (x,y) into T.  In other words, if L(t,w) = (x,y)
-// is our linear layout func, then a register in thread t in warp w contains the
-// value T[x,y].
+// layout (i.e., L) is the function that, given a "hardware location" tuple of
+// (thread-id, warp-id), returns an index (x,y) into T.  In other words, if
+// L(t,w) = (x,y) is our linear layout func, then a register in thread t in warp
+// w contains the value T[x,y].
 //
 // The key fact about LLs is, the mapping from (t,w) to (x,y) is not arbitrary.
 // We only need to specify the value of L(t,w) at certain special points
@@ -37,11 +37,11 @@ namespace mlir::triton {
 // tensor T has shape 4x4.  We define the function L by choosing the values of
 // L(0,1), L(0,2), L(1,0), and L(2,0).  Our choices are shown below.
 //
-//               t/w   0     1     2    3
-//               0      ? (0,1) (0,2)   ?
-//    L(t,w) =   1  (1,1)     ?     ?   ?
-//               2  (2,2)     ?     ?   ?
-//               3      ?     ?     ?   ?
+//               t/w    0     1     2    3
+//               0      ? (0,1) (0,2)    ?
+//    L(t,w) =   1  (1,1)     ?     ?    ?
+//               2  (2,2)     ?     ?    ?
+//               3      ?     ?     ?    ?
 //
 // You only need to specify these four values to define the whole linear layout.
 // These special values are called the "basis vectors" or "bases" of the layout.
@@ -158,13 +158,13 @@ namespace mlir::triton {
 // ## Surjectivity and injectivity
 //
 // Most LLs are surjective, i.e. all output values are covered by some input
-// value.  But occasionally you might create a nonsurjective layout, usually via
-// invertAndCompose.  We aggressively assert that LLs are surjective unless you
-// explicitly create one that's not.
+// value.  But occasionally you might create a non-surjective layout, usually
+// via invertAndCompose.  We aggressively assert that LLs are surjective unless
+// you explicitly create one that's not.
 //
 // LLs are not, in general, injective.  There might exist multiple input values
 // that map to the same output value.  This represents the idea that the same
-// logical tensor element can be stored in multiple places in the hardware.
+// logical tensor elements can be stored in multiple places in the hardware.
 //
 // ## Why map hardware loc -> tensor index and not the other way around?
 //
@@ -276,7 +276,7 @@ namespace mlir::triton {
 //
 // That's all we need in order to define linear layouts mathematically!
 //
-// # Comaprison to Nvidia CuTe
+// # Comparison to Nvidia CuTe
 //
 // (Note, I'm not an expert on CuTe; this is my best understanding.)
 //
@@ -290,7 +290,7 @@ namespace mlir::triton {
 // subsume all of these special cases.  The CUTLASS folks say this simplified
 // CUTLASS, in the same way that we hope LLs will simplify Triton.
 //
-// Like CuTe layouts, LLs are also programmable and composible.  But there are
+// Like CuTe layouts, LLs are also programmable and composable.  But there are
 // also some differences.
 //
 //  - Dimensions in LLs are named; CuTe dimensions are numbered.
