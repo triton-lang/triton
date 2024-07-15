@@ -1122,7 +1122,6 @@ class FunctionRewriter:
     def __init__(self, fn, **kwargs):
         self.fn = fn
         self.kwargs = kwargs
-        self.rewritted_fn = {}
         self.filename: str = ""
         # Absolute line number in the file
         self.def_file_lineno: int = 0
@@ -1131,15 +1130,11 @@ class FunctionRewriter:
         self.def_lineno: int = 0
 
     def rewrite_ast(self):
-        if self.fn in self.rewritted_fn:
-            return self.rewritted_fn[self.fn]
-
         # If exception is raise, it means the function does not have source code available,
         # e.g., dynamically generated functions, we cannot rewrite it so just return the original function
         try:
             lines, _ = inspect.getsourcelines(self.fn)
         except Exception:
-            self.rewritted_fn[self.fn] = self.fn
             return self.fn
 
         # truncate lines before @triton.jit, which is the last decorator
@@ -1152,9 +1147,7 @@ class FunctionRewriter:
         self.last_decorator_lineno, self.def_lineno = self._find_decorator_and_def(lines)
         src = self._prepare_source(lines)
         transformed_ast = self._transform_ast(src)
-        fn = self._compile_and_exec(transformed_ast)
-        self.rewritted_fn[self.fn] = fn
-        return fn
+        return self._compile_and_exec(transformed_ast)
 
     def _get_jit_fn_file_line(self):
         from .jit import get_jit_fn_file_line, JITFunction
@@ -1197,6 +1190,8 @@ class FunctionRewriter:
 
 
 class InterpretedFunction:
+    # Cache all rewritten functions
+    rewritten_fn = {}
 
     def __init__(self, fn, **kwargs) -> None:
         self.fn = fn
@@ -1204,25 +1199,30 @@ class InterpretedFunction:
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
-            fn = self.rewriter.rewrite_ast()
+            fn = self.rewrite()
             return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
 
         self.run = run
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
 
+    def rewrite(self):
+        if self.fn not in self.rewritten_fn:
+            self.rewritten_fn[self.fn] = self.rewriter.rewrite_ast()
+        return self.rewritten_fn[self.fn]
+
     @property
     def __name__(self):
         return self.fn.__name__
 
     def __getitem__(self, grid):
-        fn = self.rewriter.rewrite_ast()
+        fn = self.rewrite()
         return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
         _patch_lang(self.fn)
-        fn = self.rewriter.rewrite_ast()
+        fn = self.rewrite()
         try:
             return fn(*args, **kwargs)
         except Exception as e:
