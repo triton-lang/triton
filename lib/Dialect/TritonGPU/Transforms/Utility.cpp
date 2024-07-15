@@ -676,13 +676,21 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
                         Attribute rootEncoding,
                         DenseMap<Value, Attribute> &layout,
                         std::function<bool(Operation *)> stopPropagation) {
-  DenseSet<Value> visited;
-  SmallVector<std::pair<Value, Attribute>> queue = {{root, rootEncoding}};
+  DenseSet<std::pair<Value, Attribute>> seen;
+  SmallVector<std::pair<Value, Attribute>> queue;
+
+  auto enqueue = [&](Value operand, Attribute encoding) {
+    auto x = std::make_pair(operand, encoding);
+    if (!seen.insert(x).second) {
+      return; // Already enqueued, skip
+    }
+    queue.push_back(x);
+  };
+  enqueue(root, rootEncoding);
+
   while (!queue.empty()) {
     auto [currentValue, encoding] = queue.back();
     queue.pop_back();
-    if (!visited.insert(currentValue).second)
-      continue;
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
     // Skip propagating through for op results for now.
@@ -703,8 +711,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
 
-      queue.push_back({thenValue, encoding});
-      queue.push_back({elseValue, encoding});
+      enqueue(thenValue, encoding);
+      enqueue(elseValue, encoding);
 
       continue;
     }
@@ -713,12 +721,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       for (Value result : definingOp->getResults()) {
         if (result == currentValue || !isa<RankedTensorType>(result.getType()))
           continue;
-        if (layout.find(result) != layout.end()) {
-          if (layout[result] != encoding)
-            return failure();
-          continue;
-        }
-        layout[result] = encoding;
+        enqueue(result, encoding);
       }
       if (!isFreeConvert(definingOp) &&
           canFoldIntoConversion(definingOp, encoding))
@@ -731,8 +734,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
-        if (slice.count(operand) == 0)
-          queue.push_back({operand, *srcEncoding});
+        enqueue(operand, *srcEncoding);
       }
       continue;
     }
@@ -743,8 +745,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand->get(), encoding});
-      queue.push_back({yieldOperand, encoding});
+      enqueue(initOperand->get(), encoding);
+      enqueue(yieldOperand, encoding);
       continue;
     }
     // TODO: add support for WhileOp and other region types.
