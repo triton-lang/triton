@@ -87,6 +87,7 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
                 Value thread, Location loc,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, const int dotOpNo) {
+  auto ctx = dotOp.getContext();
   const int bDim = 0;
   const int kDim = dotOpNo == 0 ? 2 : 1;
   const int nonKDim = dotOpNo == 0 ? 1 : 2;
@@ -119,29 +120,38 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
       mul(threadIds[nonKDim], i32_val(sizePerThread[nonKDim]));
 
   auto elemTy = typeConverter->convertType(opTensorTy.getElementType());
-  Type ptrTy = ptr_ty(rewriter.getContext(), 3);
+  Type ptrTy = ptr_ty(ctx, 3);
 
-  SmallVector<Value> vas;
+  unsigned vectorSize = order[0] == kDim ? K : sizePerThread[order[0]];
+  if (opLayout.getMaxPhase() > 0)
+    vectorSize = std::min(vectorSize, opLayout.getVec());
+  auto vecTy = vec_ty(elemTy, vectorSize);
+  ;
+
+  unsigned dimStep[3] = {1, 1, 1};
+  dimStep[order[0]] = vectorSize;
 
   int shapePerCTABTile = shapePerCTATile[bDim];
   int shapePerCTANonKTile = shapePerCTATile[nonKDim];
   int sizeBPerThread = sizePerThread[bDim];
-
   int sizeNonKPerThread = sizePerThread[nonKDim];
   int numBTiles = std::max(1, B / shapePerCTABTile);
-  int numTiles = std::max(1, NonK / shapePerCTANonKTile);
+  int numNonKTiles = std::max(1, NonK / shapePerCTANonKTile);
+
+  SmallVector<Value> opValues(numBTiles * sizeBPerThread * K * numNonKTiles *
+                              sizeNonKPerThread);
 
   for (unsigned bTile = 0; bTile < numBTiles; ++bTile)
-    for (unsigned b = 0; b < sizeBPerThread; ++b)
-      for (unsigned k = 0; k < K; ++k)
-        for (unsigned nonKTile = 0; nonKTile < numTiles; ++nonKTile)
-          for (unsigned elem = 0; elem < sizeNonKPerThread; ++elem) {
-            // offsets along named axes in terms of coordinates
+    for (unsigned b = 0; b < sizeBPerThread; b += dimStep[bDim])
+      for (unsigned k = 0; k < K; k += dimStep[kDim])
+        for (unsigned nonKTile = 0; nonKTile < numNonKTiles; ++nonKTile)
+          for (unsigned nonK = 0; nonK < sizeNonKPerThread;
+               nonK += dimStep[nonKDim]) {
             SmallVector<Value> rawIndices(3);
             rawIndices[bDim] =
                 add(bTileOffset, i32_val(bTile * shapePerCTABTile + b));
             rawIndices[nonKDim] = add(
-                nonKTileOffset, i32_val(nonKTile * shapePerCTANonKTile + elem));
+                nonKTileOffset, i32_val(nonKTile * shapePerCTANonKTile + nonK));
             rawIndices[kDim] = i32_val(k);
 
             SmallVector<Value> swizzledIndices =
@@ -153,12 +163,24 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
                                             i32_val(opShapePerCTA[dim])),
                                        strides[dim]));
 
-            Value pa = gep(ptrTy, elemTy, smem.base, offset);
-            Value va = load(elemTy, pa);
-            vas.emplace_back(va);
+            Value elemAddr = gep(ptrTy, elemTy, smem.base, offset);
+            Value vecAddr = bitcast(elemAddr, ptr_ty(ctx, 3));
+            Value vec = load(vecTy, elemAddr);
+            for (int elem = 0; elem < vectorSize; ++elem) {
+              int outIdx[3] = {};
+              outIdx[bDim] = bTile * sizeBPerThread + b;
+              outIdx[kDim] = k;
+              outIdx[nonKDim] = nonKTile * sizeNonKPerThread + nonK;
+              outIdx[order[0]] += elem;
+              int idx = (outIdx[bDim] * K + outIdx[kDim]) * numNonKTiles *
+                            sizeNonKPerThread +
+                        outIdx[nonKDim];
+              opValues[idx] = extract_element(elemTy, vec, i32_val(elem));
+            }
           }
 
-  return getStructFromValueTable(vas, rewriter, loc, typeConverter, elemTy);
+  return getStructFromValueTable(opValues, rewriter, loc, typeConverter,
+                                 elemTy);
 }
 
 namespace SharedToDotOperandFMA {
