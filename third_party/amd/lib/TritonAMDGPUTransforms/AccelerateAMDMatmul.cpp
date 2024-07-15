@@ -309,10 +309,8 @@ public:
 
   /// @brief Choose MFMA instruction parameters
   /// @param dot target dot operation
-  /// @return pair {mDim, nDim, kDim, kBase} sizes of one MFMA instruction
-  /// arguments
-  std::tuple<unsigned, unsigned, unsigned, unsigned>
-  chooseMfmaDimensions(tt::DotOp dot) const {
+  /// @return MfmaInsn or failure
+  FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotOp dot) const {
     // number of matrix elements along k dim per one MFMA intruction
     unsigned kDim = 0;
     auto opType = cast<RankedTensorType>(dot.getA().getType());
@@ -364,13 +362,10 @@ public:
       llvm::report_fatal_error("No match found in MFMA database\n");
 
     kDim = maybeMfmaInsn->getKDim();
-    unsigned kBase = maybeMfmaInsn->getKBase();
-
     assert(kDim != 0);
-
     assert(M % mDim == 0 && N % nDim == 0);
     assert(opType.getShape()[rank - 1] % kDim == 0);
-    return {mDim, nDim, kDim, kBase};
+    return maybeMfmaInsn;
   }
 
   mlir::LogicalResult
@@ -402,7 +397,11 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc;
 
-    auto [mDim, nDim, kDim, kBase] = chooseMfmaDimensions(dotOp);
+    auto mfmaInstr = chooseMfmaInstruction(dotOp);
+    auto mDim = mfmaInstr.value().getMDim();
+    auto nDim = mfmaInstr.value().getNDim();
+    auto kDim = mfmaInstr.value().getKDim();
+    auto kBase = mfmaInstr.value().getKBase();
 
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
@@ -463,14 +462,14 @@ public:
     if (!isSecondDot(dotOp))
       kWidth *= kPack;
 
-    auto newAType = RankedTensorType::get(
-        oldAType.getShape(), oldAType.getElementType(),
-        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));
-    auto newBType = RankedTensorType::get(
-        oldBType.getShape(), oldBType.getElementType(),
-        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth));
-    a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
-    b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
+    auto newAEncoding =
+        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
+    auto newBEncoding =
+        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
+    a = convertAndCastTensor(rewriter, a, newAEncoding,
+                             mfmaInstr.value().getElementTypeA());
+    b = convertAndCastTensor(rewriter, b, newBEncoding,
+                             mfmaInstr.value().getElementTypeB());
     auto newDot = rewriter.create<tt::DotOp>(
         dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
         dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
