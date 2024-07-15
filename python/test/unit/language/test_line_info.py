@@ -216,7 +216,7 @@ def test_line_info_interpreter(func: str):
     elif func == "cdiv":
         kernel = kernel_cdiv
         expected_def_lineno = 72
-    kernel.rewriter.rewrite_ast()
+    kernel.rewrite()
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
     if func == "autotune":
         assert kernel.rewriter.last_decorator_lineno == 7
