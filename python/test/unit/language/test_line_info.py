@@ -187,7 +187,7 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "test_line_info.py", 65))
         assert (check_file_lines(file_lines, "test_line_info.py", 66, should_contain=False))
     elif func == "cdiv":
-        assert (check_file_lines(file_lines, "test_line_info.py", 73))
+        assert (check_file_lines(file_lines, "test_line_info.py", 75))
 
 
 @pytest.mark.interpreter
