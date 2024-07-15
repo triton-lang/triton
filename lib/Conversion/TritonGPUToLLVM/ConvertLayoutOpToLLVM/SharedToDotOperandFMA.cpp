@@ -50,9 +50,37 @@ Value getStructFromValueTable(ArrayRef<Value> vals,
   return packLLElements(loc, typeConverter, elems, rewriter, structTy);
 }
 
-SharedMemoryObject expandSmemWithBatch(SharedMemoryObject smem) {
-  // TODO
-  return smem;
+SmallVector<Value> swizzleIndices(ConversionPatternRewriter &rewriter,
+                                  Location loc, SmallVector<Value> rawIndices,
+                                  SharedEncodingAttr layout) {
+  const auto &order = layout.getOrder();
+  auto rank = order.size();
+
+  if (layout.getMaxPhase() == 1)
+    return rawIndices;
+
+  auto vec = i32_val(layout.getVec());
+  auto perPhase = i32_val(layout.getPerPhase());
+  auto maxPhase = i32_val(layout.getMaxPhase());
+
+  auto fastIdx = rawIndices[order[0]];
+  auto secondIdx = rawIndices[order[1]];
+  // Original algorithm taken from getSwizzledSharedPtrs function
+  // (TritonGPUToLLVMBase.h)
+  //
+  // phase = (secondIdx // perPhase) % maxPhase
+  // swizzledGroup = ((fastIdx // vec) ^ phase) * vec
+  // groupRemainder = fastIdx % vec
+  // colOff = swizzledGroup + groupRemainder
+  auto phase = urem(udiv(secondIdx, perPhase), maxPhase);
+  auto swizzledGroup = mul(xor_(udiv(fastIdx, vec), phase), vec);
+  auto groupRemainder = urem(fastIdx, vec);
+  auto colOff = add(swizzledGroup, groupRemainder);
+
+  SmallVector<Value> swizzledIndices = rawIndices;
+  swizzledIndices[order[0]] = colOff;
+
+  return swizzledIndices;
 }
 
 Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
@@ -73,9 +101,7 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
       rewriter);
   auto smem = getExpandedSharedMemoryObject(rewriter, loc, origSmem,
                                             opTensorTy.getShape());
-  Value strideB = smem.strides[bDim];
-  Value strideNonK = smem.strides[nonKDim];
-  Value strideK = smem.strides[kDim];
+  auto strides = smem.strides;
   int B = opShapePerCTA[bDim];
   int K = opShapePerCTA[kDim];
   int NonK = opShapePerCTA[nonKDim];
@@ -111,18 +137,22 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
         for (unsigned nonKTile = 0; nonKTile < numTiles; ++nonKTile)
           for (unsigned elem = 0; elem < sizeNonKPerThread; ++elem) {
             // offsets along named axes in terms of coordinates
-            Value rawBOffset =
+            SmallVector<Value> rawIndices(3);
+            rawIndices[bDim] =
                 add(bTileOffset, i32_val(bTile * shapePerCTABTile + b));
-            Value rawNonKOffset = add(
+            rawIndices[nonKDim] = add(
                 nonKTileOffset, i32_val(nonKTile * shapePerCTANonKTile + elem));
-            Value rawKOffset = i32_val(k);
+            rawIndices[kDim] = i32_val(k);
 
-            // offsets in terms of elements in flat array
-            Value offB = mul(urem(rawBOffset, i32_val(B)), strideB);
-            Value offNonK = mul(urem(rawNonKOffset, i32_val(NonK)), strideNonK);
-            Value offK = mul(urem(rawKOffset, i32_val(K)), strideK);
+            SmallVector<Value> swizzledIndices =
+                swizzleIndices(rewriter, loc, rawIndices, opLayout);
 
-            Value offset = add(offB, add(offNonK, offK));
+            Value offset = i32_val(0);
+            for (int dim = 0; dim < order.size(); ++dim)
+              offset = add(offset, mul(urem(swizzledIndices[dim],
+                                            i32_val(opShapePerCTA[dim])),
+                                       strides[dim]));
+
             Value pa = gep(ptrTy, elemTy, smem.base, offset);
             Value va = load(elemTy, pa);
             vas.emplace_back(va);

@@ -3429,10 +3429,10 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     else:
         out_ref = np.matmul(x, y)
 
-    import sys
-    np.set_printoptions(threshold=sys.maxsize)
-    print("M: {}, N: {}, K: {}".format(M, N, K))
-    print("shapes: {} x {} -> {}".format(x_tri.shape, y_tri.shape, out_tri.shape))
+    # import sys
+    # np.set_printoptions(threshold=sys.maxsize)
+    # print("M: {}, N: {}, K: {}".format(M, N, K))
+    # print("shapes: {} x {} -> {}".format(x_tri.shape, y_tri.shape, out_tri.shape))
 
     np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
 
@@ -5210,9 +5210,9 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     torch_b = torch.from_numpy(B).to(device=device)
     th_b = f8_to_f16(torch_b, in_type_str)
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
-    import sys
-    np.set_printoptions(threshold=sys.maxsize)
-    print(C.to("cpu").numpy())
+    # import sys
+    # np.set_printoptions(threshold=sys.maxsize)
+    # print(C.to("cpu").numpy())
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
     else:
