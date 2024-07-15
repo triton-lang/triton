@@ -18,7 +18,10 @@ def min_dot_size(target: GPUTarget):
     if "gfx94" in arch_str:
         return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.is_int8() or rhsType.is_int8()) else (16, 16, 8)
     # CDNA 2.0 always supports `k==8`
-    return lambda lhsType, rhsType: (16, 16, 8)
+    if "gfx9" in arch_str:
+        return lambda lhsType, rhsType: (16, 16, 8)
+    # Other architectures will only support 16,16,16
+    return lambda lhsType, rhsType: (16, 16, 16)
 
 
 @dataclass(frozen=True)
