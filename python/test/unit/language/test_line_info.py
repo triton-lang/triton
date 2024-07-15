@@ -67,6 +67,14 @@ def kernel_dot_combine(x):
     tl.device_print("", d)
 
 
+# Call another jit function (cdiv) not in this file
+@triton.jit
+def kernel_cdiv(x):
+    c = tl.full((32, 32), 4, dtype=tl.int8)
+    d = tl.cdiv(c, 4)
+    tl.device_print("", d)
+
+
 def get_disassembler_command_and_debug_line_format():
     """Gets backend specific disassembler information.
 
@@ -125,11 +133,19 @@ def check_file_lines(file_lines, file_name, lineno, should_contain=True):
     return not should_contain
 
 
-func_types = ["single", "call", "call_noinline", "autotune", "dot_combine"]
+func_types = ["single", "call", "call_noinline", "autotune", "dot_combine", "cdiv"]
+
+
+def is_interpreter():
+    import os
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
+    if is_interpreter():
+        pytest.skip("interpreter does not support warmup compilation")
+
     try:
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:
@@ -147,6 +163,8 @@ def test_line_info(func: str):
         kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1,))[0]
     elif func == "dot_combine":
         kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
+    elif func == "cdiv":
+        kernel_info = kernel_cdiv.warmup(20, grid=(1,))
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
@@ -168,11 +186,8 @@ def test_line_info(func: str):
     elif func == "dot_combine":
         assert (check_file_lines(file_lines, "test_line_info.py", 65))
         assert (check_file_lines(file_lines, "test_line_info.py", 66, should_contain=False))
-
-
-def is_interpreter():
-    import os
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+    elif func == "cdiv":
+        assert (check_file_lines(file_lines, "test_line_info.py", 73))
 
 
 @pytest.mark.interpreter
@@ -182,21 +197,30 @@ def test_line_info_interpreter(func: str):
         pytest.skip("interpreter is not enabled")
 
     kernel = None
-    expected_offset = 0
+    expected_def_lineno = 0
     if func == "single":
         kernel = kernel_single
-        expected_offset = 12
+        expected_def_lineno = 12
     elif func == "call":
         kernel = kernel_call
-        expected_offset = 25
+        expected_def_lineno = 25
     elif func == "call_noinline":
         kernel = kernel_call_noinline
-        expected_offset = 41
+        expected_def_lineno = 41
     elif func == "autotune":
         kernel = kernel_autotune.fn
-        expected_offset = 52
+        expected_def_lineno = 52
     elif func == "dot_combine":
         kernel = kernel_dot_combine
-        expected_offset = 62
-    kernel._rewrite_ast()
-    assert kernel.ast_transformer.offset == expected_offset
+        expected_def_lineno = 62
+    elif func == "cdiv":
+        kernel = kernel_cdiv
+        expected_def_lineno = 72
+    kernel.rewriter.rewrite_ast()
+    assert kernel.rewriter.def_file_lineno == expected_def_lineno
+    if func == "autotune":
+        assert kernel.rewriter.last_decorator_lineno == 7
+        assert kernel.rewriter.def_lineno == 8
+    else:
+        assert kernel.rewriter.last_decorator_lineno == 1
+        assert kernel.rewriter.def_lineno == 2
