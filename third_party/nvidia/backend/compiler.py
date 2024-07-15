@@ -13,6 +13,10 @@ import subprocess
 from pathlib import Path
 
 
+def min_dot_size(target: GPUTarget):
+    return lambda lhsType, rhsType: (16, 32, 16) if lhsType.is_int8() else (16, 16, 16)
+
+
 @functools.lru_cache()
 def _path_to_binary(binary: str):
     paths = [
@@ -129,7 +133,8 @@ class CUDABackend(BaseBackend):
         import triton.language.extra.cuda as cuda
         codegen_fns = {
             "convert_custom_types":
-            cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70
+            cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70,
+            "min_dot_size": min_dot_size(self.target)
         }
         return codegen_fns
 
