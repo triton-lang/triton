@@ -177,7 +177,7 @@ defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
                         cuOccupancyMaxActiveClusters);
 
 defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
-                        cuTensorMapEncodeTiled_t);
+                        cuTensorMapEncodeTiled);
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
