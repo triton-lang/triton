@@ -204,6 +204,7 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
+        amd.attach_target_triple(llvm_mod)
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -227,7 +228,7 @@ class HIPBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, amd.TARGET_TRIPLE)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
