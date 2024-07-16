@@ -37,8 +37,8 @@ def is_interpreter():
     ("device_print_hex", "int64"),
     ("device_print_pointer", "int32"),
 ])
-def test_print(func_type: str, data_type: str):
-    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE,
+def test_print(func_type: str, data_type: str, device: str):
+    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type, device], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, shell=False)
     outs, err = proc.communicate()
     assert proc.returncode == 0
