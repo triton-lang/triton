@@ -350,31 +350,31 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // CHECK:  %{{.*}}:9 = scf.for %[[ARG6:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}-1_i32, %[[ARG11:.*]] = %{{.*}}, %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %{{.*}}, %[[ARG14:.*]] = %{{.*}}, %[[ARG15:.*]] = %{{.*}})
 
 // CHECK:  %[[SUBI_25:.*]] = arith.subi %{{.*}}, %{{.*}}
-// CHECK:  %[[CMPI_26:.*]] = arith.cmpi slt, %[[ARG6]], %[[SUBI_25]]
-// CHECK:  %[[SPLAT_27:.*]] = tt.splat %[[CMPI_26]]
-// CHECK:  %[[ADDPTR_28:.*]] = tt.addptr %[[ARG8]], %{{.*}}
-// CHECK:  %[[LOAD_29:.*]] = tt.load %[[ADDPTR_28]], %[[SPLAT_27]]
-// CHECK:  %[[ADDPTR_30:.*]] = tt.addptr %[[ARG9]], %{{.*}}
-// CHECK:  %[[LOAD_31:.*]] = tt.load %[[ADDPTR_30]], %[[CMPI_26]]
-// CHECK:  %[[MULI_32:.*]] = arith.muli %{{.*}}, %[[LOAD_31]]
-// CHECK:  %[[SPLAT_33:.*]] = tt.splat %[[MULI_32]]
-// CHECK:  %[[SPLAT_34:.*]] = tt.splat %[[CMPI_26]]
-// CHECK:  %[[ADDPTR_35:.*]] = tt.addptr %{{.*}}, %[[SPLAT_33]]
-// CHECK:  %[[LOAD_36:.*]] = tt.load %[[ADDPTR_35]], %[[SPLAT_34]]
-// CHECK:  %[[ADDI_37:.*]] = arith.addi %[[ARG11]], %{{.*}}
-// CHECK:  %[[CMPI_38:.*]] = arith.cmpi slt, %[[ADDI_37]], %{{.*}}
-// CHECK:  %[[SELECT_39:.*]] = arith.select %[[CMPI_38]], %[[ADDI_37]], %{{.*}}
-// CHECK:  %[[MEMDESC_SUBVIEW_40:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_39]], %{{.*}}, %{{.*}}]
-// CHECK:  triton_gpu.local_store %[[ARG14]], %[[MEMDESC_SUBVIEW_40]]
-// CHECK:  %[[MEMDESC_SUBVIEW_41:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_39]], %{{.*}}, %{{.*}}]
-// CHECK:  triton_gpu.local_store %[[ARG15]], %[[MEMDESC_SUBVIEW_41]]
+// CHECK:  %[[ADDI_26:.*]] = arith.addi %[[ARG11]], %{{.*}}
+// CHECK:  %[[CMPI_27:.*]] = arith.cmpi slt, %[[ADDI_26]], %{{.*}}
+// CHECK:  %[[SELECT_28:.*]] = arith.select %[[CMPI_27]], %[[ADDI_26]], %{{.*}}
+// CHECK:  %[[MEMDESC_SUBVIEW_29:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_28]], %{{.*}}, %{{.*}}]
+// CHECK:  triton_gpu.local_store %[[ARG14]], %[[MEMDESC_SUBVIEW_29]]
+// CHECK:  %[[MEMDESC_SUBVIEW_30:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_28]], %{{.*}}, %{{.*}}]
+// CHECK:  triton_gpu.local_store %[[ARG15]], %[[MEMDESC_SUBVIEW_30]]
+// CHECK:  %[[CMPI_31:.*]] = arith.cmpi slt, %[[ARG6]], %[[SUBI_25]]
+// CHECK:  %[[SPLAT_32:.*]] = tt.splat %[[CMPI_31]]
+// CHECK:  %[[ADDPTR_33:.*]] = tt.addptr %[[ARG8]], %{{.*}}
+// CHECK:  %[[LOAD_34:.*]] = tt.load %[[ADDPTR_33]], %[[SPLAT_32]]
+// CHECK:  %[[ADDPTR_35:.*]] = tt.addptr %[[ARG9]], %{{.*}}
+// CHECK:  %[[LOAD_36:.*]] = tt.load %[[ADDPTR_35]], %[[CMPI_31]]
+// CHECK:  %[[MULI_37:.*]] = arith.muli %{{.*}}, %[[LOAD_36]]
+// CHECK:  %[[SPLAT_38:.*]] = tt.splat %[[MULI_37]]
+// CHECK:  %[[SPLAT_39:.*]] = tt.splat %[[CMPI_31]]
+// CHECK:  %[[ADDPTR_40:.*]] = tt.addptr %{{.*}}, %[[SPLAT_38]]
+// CHECK:  %[[LOAD_41:.*]] = tt.load %[[ADDPTR_40]], %[[SPLAT_39]]
 // CHECK:  %[[ADDI_42:.*]] = arith.addi %[[ARG10]], %{{.*}}
 // CHECK:  %[[CMPI_43:.*]] = arith.cmpi slt, %[[ADDI_42]], %{{.*}}
 // CHECK:  %[[SELECT_44:.*]] = arith.select %[[CMPI_43]], %[[ADDI_42]], %{{.*}}
 // CHECK:  %[[LOCAL_LOAD_45:.*]] = triton_gpu.local_load %[[ARG12]]
 // CHECK:  %[[LOCAL_LOAD_46:.*]] = triton_gpu.local_load %[[ARG13]]
 // CHECK:  %[[DOT_47:.*]] = tt.dot %[[LOCAL_LOAD_45]], %[[LOCAL_LOAD_46]], %[[ARG7]]
-// CHECK:  scf.yield %[[DOT_47]], %[[ADDPTR_28]], %[[ADDPTR_30]], %[[SELECT_44]], %[[SELECT_39]], %[[MEMDESC_SUBVIEW_40]], %[[MEMDESC_SUBVIEW_41]], %[[LOAD_29]], %[[LOAD_36]]
+// CHECK:  scf.yield %[[DOT_47]], %[[ADDPTR_33]], %[[ADDPTR_35]], %[[SELECT_44]], %[[SELECT_28]], %[[MEMDESC_SUBVIEW_29]], %[[MEMDESC_SUBVIEW_30]], %[[LOAD_34]], %[[LOAD_41]]
 // CHECK:  }
 
   tt.func @indirect_bmm_scalar(%arg0: i64 {tt.divisibility = 16 : i32}, %arg1: index, %arg2: tensor<16x16x!tt.ptr<f16>, #blocked1> {tt.contiguity = 2 : i32, tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i64>, %arg4: tensor<16x16xi32, #blocked1> {tt.constancy = 16 : i32, tt.divisibility = 16 : i32}, %arg5: tensor<16x16x!tt.ptr<f16>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}) -> tensor<16x16xf32, #mma> {

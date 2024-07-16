@@ -24,7 +24,7 @@
 // Software pipeliners are usually separated into two pieces, one that create a
 // modulo schedule and an expander that rewrites the loop and emits a prologue
 // and epilogue. This pass first calls a helper that will pre-process the IR
-// to create async operations and create a modulo schedule. Then we call the
+// to create stream operations and create a modulo schedule. Then we call the
 // expander to generate the prologue and new loop.
 //===----------------------------------------------------------------------===//
 
@@ -40,9 +40,6 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-
-// TODO: We can extra some helpers into common utilities once we add more
-// schedules.
 
 namespace {
 
@@ -69,12 +66,12 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   yieldOp->erase();
 }
 
-static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                            Value insertIdx, Value extractIdx,
-                            tt::CoarseSchedule &schedule,
-                            tt::CoarseSchedule::Cluster prefetchCluster,
-                            llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-                            int numStages) {
+static void createStreamCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+                             Value insertIdx, Value extractIdx,
+                             tt::CoarseSchedule &schedule,
+                             tt::CoarseSchedule::Cluster prefetchCluster,
+                             llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
+                             int numStages) {
   OpBuilder builder(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   // Replace the load with insert/extract slice.
@@ -140,8 +137,7 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
         builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
     auto result = sharedLoad->getResults();
 
-    // Create a select for non-zero other values as they are not handled by
-    // AsyncCopyGlobalToLocalOp for now.
+    // Create a select for non-zero other values.
     Value other = loadOp.getOther();
     if (other && !isZeroConst(other)) {
       auto select = builder.create<arith::SelectOp>(
@@ -235,7 +231,7 @@ loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
       [&](Operation *op, int distance, Operation *use) {
         if (!seen.insert(op).second)
           return;
-        if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
+        if (isa<tt::LoadOp>(op)) {
           // TODO: What if there are multiple uses at different distances?
           loadOpToIndLevelAndUse.push_back(std::make_tuple(op, distance, use));
           use = op;
@@ -261,7 +257,7 @@ loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
   // that are not directly used by dot ops.
   if (forOp->hasAttr(tt::kNumStagesAttrName)) {
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op))
+      if (!isa<tt::LoadOp>(op))
         dfs(&op, 0, &op);
     }
   }
@@ -281,32 +277,28 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       continue;
     LoadInfo loadInfo;
 
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      assert(!isLoadFromTensorPtr(loadOp) &&
-             "Block ptr should have been lowered before this pass.");
-      auto ptr = loadOp.getPtr();
-      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
-      if (auto mask = loadOp.getMask())
-        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+    auto loadOp = dyn_cast<tt::LoadOp>(op);
+    assert(!isLoadFromTensorPtr(loadOp) &&
+           "Block ptr should have been lowered before this pass.");
+    auto ptr = loadOp.getPtr();
+    unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+    if (auto mask = loadOp.getMask())
+      vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
-      auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-      if (!tensorTy)
-        continue;
-      auto ty =
-          cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
-      unsigned width = vec * ty.getIntOrFloatBitWidth();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+    if (!tensorTy)
+      continue;
 
-      // We do not pipeline all loads for the following reasons:
-      // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8, or 16.
-      // 2. It's likely that pipling small loads won't offer much performance
-      //    improvement and may even hurt performance by increasing register
-      //    pressure.
-      LDBG("Load " << *loadOp << " has width " << width);
-      if (width < 32)
-        continue;
-    }
+    auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
+    unsigned width = vec * ty.getIntOrFloatBitWidth();
+
+    // Limit shared memory sharing to width >= 32 elements.
+    LDBG("Load " << *loadOp << " has width " << width);
+    if (width < 32)
+      continue;
 
     if (use->hasTrait<OpTrait::DotLike>()) {
+      // Only use shared memory when feeding a dot op
       loadInfo.usedByDot = true;
       loadInfo.sharedEncoding =
           getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
@@ -327,9 +319,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
     // encoding.
     if (!loadInfo.sharedEncoding) {
       // Also pipeline in-register buffers.
-      if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-        loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
-      }
+      loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
 
     loadToInfo[op] = loadInfo;
@@ -410,66 +400,6 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   }
 
   return loadToInfo;
-}
-
-// Schedule the prologue and epilogue `if` ops in the loop, pushing them as
-// close to the loop boundaries as possible. Return the cluster after the
-// prologue (or the beginning of the loop if there is no prologue).
-static tt::CoarseSchedule::Cluster
-schedulePrologueAndEpilogue(scf::ForOp forOp, tt::CoarseSchedule &schedule,
-                            DenseSet<Operation *> &rootUsers, int numStages) {
-  tt::CoarseSchedule::Cluster afterPrologue = schedule.clusters.begin();
-
-  // Look for the IfOp that is in the backward slice any of the currently
-  // scheduled ops and put it at the beginning of the loop.
-  DenseMap<scf::IfOp, int> ifsToStage;
-  // Go stage by stage.
-  for (int stage = 0; stage < numStages; stage++) {
-    for (auto [op, stage_, cluster] : schedule.getOpsInOrder(forOp)) {
-      if (stage_ != stage)
-        continue;
-      SetVector<Operation *> backwardSlice;
-      BackwardSliceOptions opt;
-      opt.omitBlockArguments = true;
-      getBackwardSlice((Operation *)op, &backwardSlice, opt);
-
-      for (auto op : backwardSlice) {
-        if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-          ifsToStage.insert({ifOp, stage});
-        }
-      }
-    }
-  }
-  tt::CoarseSchedule::Cluster prologueCluster = schedule.clusters.newAtFront();
-  for (auto [ifOp, stage] : ifsToStage) {
-    schedule.insert(ifOp, stage, prologueCluster);
-  }
-
-  // Look for the IfOp that is in the forward slice of the root users and put it
-  // at the end of the loop.
-  tt::CoarseSchedule::Cluster epilogueCluster = schedule.clusters.newAtBack();
-  for (auto rootUser : rootUsers) {
-    SetVector<Operation *> forwardSlice;
-    getForwardSlice(rootUser, &forwardSlice);
-
-    int stage = schedule[rootUser].first;
-    for (auto op : forwardSlice) {
-      scf::IfOp ifOp = dyn_cast<scf::IfOp>(op);
-      if (ifOp == nullptr) {
-        // check if the op is in the body of an if op that's part of the loop
-        auto parentOp = op->getParentOp();
-        if (parentOp != nullptr &&
-            parentOp->getParentOp() == forOp.getOperation()) {
-          ifOp = dyn_cast<scf::IfOp>(parentOp);
-        }
-      }
-      if (ifOp) {
-        schedule.insertIfAbsent(ifOp, stage,
-                                epilogueCluster); // after prefetch extracts
-      }
-    }
-  }
-  return afterPrologue;
 }
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
@@ -600,9 +530,9 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the required number of buffers.
 static SmallVector<Value>
-createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
-               llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-               int numStages) {
+createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
+                llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
+                int numStages) {
   // Calculate the number of buffers needed for each load.
   // TODO pawel: we could do more fine-grained allocation here and
   // allocate only the number of buffers that specific loads need.
@@ -677,8 +607,8 @@ createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
 
   for (auto &pair : asyncLoads) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(pair.first)) {
-      createAsyncCopy(forOp, loadOp, pair.second, insertIdx, extractIdx,
-                      schedule, prefetchCluster, loadToInfo, numStages);
+      createStreamCopy(forOp, loadOp, pair.second, insertIdx, extractIdx,
+                       schedule, prefetchCluster, loadToInfo, numStages);
     }
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
@@ -709,19 +639,14 @@ preProcessLoopAndGetSchedule2(scf::ForOp &forOp, int numStages,
 
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
-      createAsyncOps(forOp, coarseSchedule, loadToInfo, numStages);
+      createStreamOps(forOp, coarseSchedule, loadToInfo, numStages);
 
   LLVM_DEBUG({
-    LDBG("Coarse schedule with async loads:");
+    LDBG("Coarse schedule with stream loads:");
     coarseSchedule.dump();
   });
 
-  tt::CoarseSchedule::Cluster afterPrologue =
-      schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
-  LLVM_DEBUG({
-    LDBG("Coarse schedule with prologue and epilogue:");
-    coarseSchedule.dump();
-  });
+  tt::CoarseSchedule::Cluster afterPrologue = coarseSchedule.clusters.begin();
 
   scheduleDependencies(forOp, coarseSchedule, numStages);
   LLVM_DEBUG({
@@ -768,7 +693,7 @@ preProcessLoopAndGetSchedule2(scf::ForOp &forOp, int numStages,
 }
 
 // Return true if the preconditions for pipelining the loop are met.
-static bool preCondition(scf::ForOp forOp) {
+static bool preConditionInner(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
@@ -791,22 +716,9 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void tryAndPipelineOuterLoop(scf::ForOp forOp) {
-  mlir::triton::PipeliningOption options;
-  bool foundSchedule = false;
-  // Limit 2 stages to not require extra shared memory.
-  foundSchedule = getOuterLoopSchedule(forOp, /*numStage=*/2, options);
-  if (!foundSchedule)
-    return;
-  IRRewriter rewriter(forOp->getContext());
-  rewriter.setInsertionPoint(forOp);
-  FailureOr<scf::ForOp> newForOp =
-      mlir::triton::pipelineForLoop(rewriter, forOp, options);
-}
-
 static bool pipelineLoop(scf::ForOp forOp, int numStages) {
   mlir::triton::PipeliningOption options;
-  if (!preCondition(forOp))
+  if (!preConditionInner(forOp))
     return false;
 
   bool foundSchedule = false;
@@ -851,29 +763,24 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
     if (loops.empty())
       return;
 
-    llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
+    bool pipelined = false;
     for (scf::ForOp forOp : loops) {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
-      bool pipelined = pipelineLoop(forOp, loopNumStages);
-      if (pipelined && outerLoop && getNumStagesOrDefault(outerLoop) > 1)
-        outerLoops.insert(outerLoop);
+      pipelined |= pipelineLoop(forOp, loopNumStages);
     }
 
-    // Clean up arithmetic before applying the next level of pipelining to
-    // simplify the IR.
-    auto arithDialect =
-        getOperation().getContext()->getLoadedDialect<arith::ArithDialect>();
-    RewritePatternSet patterns(getOperation().getContext());
-    arithDialect->getCanonicalizationPatterns(patterns);
-    if (applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))
-            .failed())
-      return signalPassFailure();
-
-    // Try to pipeline the outer loop to overlap the prologue and epilogue of
-    // the inner loop.
-    for (scf::ForOp outerLoop : outerLoops)
-      tryAndPipelineOuterLoop(outerLoop);
+    if (pipelined) {
+      // Clean up arithmetic before applying the next level of pipelining to
+      // simplify the IR.
+      auto arithDialect =
+          getOperation().getContext()->getLoadedDialect<arith::ArithDialect>();
+      RewritePatternSet patterns(getOperation().getContext());
+      arithDialect->getCanonicalizationPatterns(patterns);
+      if (applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))
+              .failed())
+        signalPassFailure();
+    }
   }
 };
 } // anonymous namespace

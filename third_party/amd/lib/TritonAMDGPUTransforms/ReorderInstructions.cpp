@@ -96,6 +96,8 @@ findEarlyInsertionPoint(Block *block, Operation *move, Value src) {
     op->walk([&](Operation *wop) {
       if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
         loc = bi;
+      if (isa<scf::ForOp, scf::WhileOp>(wop))
+        loc = bi;
     });
   }
   return loc;
@@ -152,8 +154,9 @@ public:
     // Move local_stores early if dependence distance greater than
     // one iteration. Best perf on GEMM when these precede global loads.
     m.walk([&](triton::gpu::LocalStoreOp op) { moveOps.push_back(op); });
+
     for (auto op : moveOps) {
-      // 0. Gather use-def chain in block.
+      // Gather use-def chain in block.
       Block *block = op->getBlock();
       SmallVector<Operation *> dfg{op};
       bool leadsToLoad = gatherDFG(op, block, dfg);
