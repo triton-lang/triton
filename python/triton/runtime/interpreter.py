@@ -990,7 +990,7 @@ def _patch_lang_core(lang):
 
 def _patch_lang(fn):
     lang = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
-    assert len(lang) == 1, "triton.language must be visible from within jit'd function"
+    assert len(lang) >= 1, "triton.language must be visible from within jit'd function"
     _patch_builtin(lang[0], interpreter_builder)
     _patch_builtin(lang[0].tensor, interpreter_builder)
     if lang[0] == tl:
@@ -1099,9 +1099,6 @@ class GridExecutor:
 
 class ASTTransformer(ast.NodeTransformer):
 
-    def __init__(self) -> None:
-        self.offset = 0
-
     def visit_Assign(self, node):
         names = []
         for target in node.targets:
@@ -1119,82 +1116,114 @@ class ASTTransformer(ast.NodeTransformer):
                   ast.Constant(value=False)], keywords=[])
         return node
 
-    def generic_visit(self, node):
-        # Adjust the begin line number of the node
-        if hasattr(node, 'lineno') and node.lineno is not None:
-            node.lineno += self.offset
-        if hasattr(node, 'end_lineno') and node.end_lineno is not None:
-            node.end_lineno += self.offset
-        return super().generic_visit(node)
 
-
-class InterpretedFunction:
-    rewritted_fn = {}
+class FunctionRewriter:
     ast_transformer = ASTTransformer()
 
-    def __init__(self, fn, **kwargs) -> None:
+    def __init__(self, fn, **kwargs):
         self.fn = fn
-
-        def run(*args, **kwargs):
-            grid = kwargs["grid"]
-            fn = self._rewrite_ast()
-            return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
-
-        self.run = run
         self.kwargs = kwargs
-        signature = inspect.signature(fn)
-        self.arg_names = [v.name for v in signature.parameters.values()]
+        self.filename: str = ""
+        # Absolute line number in the file
+        self.def_file_lineno: int = 0
+        # Relative line numbers from the beginning of the function
+        self.last_decorator_lineno: int = 0
+        self.def_lineno: int = 0
 
-    def _rewrite_ast(self):
-        if self.fn in self.rewritted_fn:
-            return self.rewritted_fn[self.fn]
+    def rewrite_ast(self):
         # If exception is raise, it means the function does not have source code available,
         # e.g., dynamically generated functions, we cannot rewrite it so just return the original function
         try:
-            lines, lineno = inspect.getsourcelines(self.fn)
+            lines, _ = inspect.getsourcelines(self.fn)
         except Exception:
-            self.rewritted_fn[self.fn] = self.fn
             return self.fn
-        from .jit import get_jit_fn_file_line, JITFunction
-        filename, lineno = get_jit_fn_file_line(JITFunction(self.fn))
+
         # truncate lines before @triton.jit, which is the last decorator
         # @triton.autotune(...)
         # ...
         # @triton.jit <- this line is the last decorator, which must be a triton.jit
         #
-        # def foo(...):
-        last_decorator_line = 0
+        # def foo(...): <- this line is the function definition
+        self.filename, self.def_file_lineno = self._get_jit_fn_file_line()
+        self.last_decorator_lineno, self.def_lineno = self._find_decorator_and_def(lines)
+        src = self._prepare_source(lines)
+        transformed_ast = self._transform_ast(src)
+        return self._compile_and_exec(transformed_ast)
+
+    def _get_jit_fn_file_line(self):
+        from .jit import get_jit_fn_file_line, JITFunction
+        return get_jit_fn_file_line(JITFunction(self.fn))
+
+    def _find_decorator_and_def(self, lines):
+        last_decorator_lineno = 0
+        def_lineno = 0
+        # Line numbers start from 1
         for i, line in enumerate(lines):
             if line.strip().startswith("@"):
-                last_decorator_line = i
-        lines = lines[last_decorator_line:]
+                last_decorator_lineno = i + 1
+            if line.strip().startswith("def "):
+                def_lineno = i + 1
+        return last_decorator_lineno, def_lineno
+
+    def _prepare_source(self, lines):
+        lines = lines[self.last_decorator_lineno - 1:]
         src = ''.join(lines)
-        src = textwrap.dedent(src)
+        return textwrap.dedent(src)
+
+    def _transform_ast(self, src):
         parsed_ast = ast.parse(src)
-        self.ast_transformer.offset = lineno
         transformed_ast = self.ast_transformer.visit(parsed_ast)
-        transformed_ast = ast.fix_missing_locations(transformed_ast)
-        compiled_code = compile(transformed_ast, filename=filename, mode='exec')
+        ast.fix_missing_locations(transformed_ast)
+        # Default line numbers start from 1, so the difference should -1
+        inc_lineno = (self.def_file_lineno - 1) - (self.def_lineno - self.last_decorator_lineno)
+        ast.increment_lineno(transformed_ast, inc_lineno)
+        return transformed_ast
+
+    def _compile_and_exec(self, transformed_ast):
+        compiled_code = compile(transformed_ast, filename=self.filename, mode='exec')
         local_namespace = {**self.kwargs}
-        if self.fn.__name__ in local_namespace:
-            raise ValueError(f"Function name {self.fn.__name__} is reserved")
-        exec(compiled_code, globals(), local_namespace)
-        fn = local_namespace[self.fn.__name__].fn
-        self.rewritted_fn[self.fn] = fn
-        return fn
+        # Overwrite globals using the current global namespace
+        fn_globals = self.fn.__globals__
+        for key, value in globals().items():
+            fn_globals[key] = value
+        exec(compiled_code, fn_globals, local_namespace)
+        return local_namespace[self.fn.__name__].fn
+
+
+class InterpretedFunction:
+    # Cache all rewritten functions
+    rewritten_fn = {}
+
+    def __init__(self, fn, **kwargs) -> None:
+        self.fn = fn
+        self.rewriter = FunctionRewriter(fn, **kwargs)
+
+        def run(*args, **kwargs):
+            grid = kwargs["grid"]
+            fn = self.rewrite()
+            return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
+
+        self.run = run
+        signature = inspect.signature(fn)
+        self.arg_names = [v.name for v in signature.parameters.values()]
+
+    def rewrite(self):
+        if self.fn not in self.rewritten_fn:
+            self.rewritten_fn[self.fn] = self.rewriter.rewrite_ast()
+        return self.rewritten_fn[self.fn]
 
     @property
     def __name__(self):
         return self.fn.__name__
 
     def __getitem__(self, grid):
-        fn = self._rewrite_ast()
+        fn = self.rewrite()
         return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
         _patch_lang(self.fn)
-        fn = self._rewrite_ast()
+        fn = self.rewrite()
         try:
             return fn(*args, **kwargs)
         except Exception as e:
