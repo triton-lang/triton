@@ -122,4 +122,5 @@ def test_print(func: str, data_type: str, device: str):
 
 
 if __name__ == "__main__":
-    test_print(sys.argv[1], sys.argv[2], sys.argv[3])
+    fn = globals()[sys.argv[1]]
+    fn(*sys.argv[2:])
