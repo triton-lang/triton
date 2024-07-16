@@ -1,4 +1,4 @@
-name: AMD Perf Kernel Tests
+name: AMD Perf Kernel Integration Tests
 
 on:
   workflow_dispatch:
@@ -7,8 +7,6 @@ on:
     merge_group:
       branches: [main_perf]
       types: [checks_requested]
-  push:
-    branches: [main_perf]
 
 concurrency:
   group: ${{ github.ref }}
@@ -36,8 +34,8 @@ jobs:
           changed_files=$(git diff --name-only origin/${{ github.base_ref }} ${{ github.sha }})
           echo "Changed files:"
           echo "$changed_files"
-          if echo "$changed_files" | grep -v "^python/perf-kernels/"; then
-            echo "Changes detected outside of the python/perf-kernels directory. Failing the workflow."
+          if echo "$changed_files" | grep -vE "^python/perf-kernels/|^\.github/workflows/amd_"; then
+            echo "Changes detected outside of the python/perf-kernels directory or .github/workflows/amd_ files. Failing the workflow."
             exit 1
           fi
 

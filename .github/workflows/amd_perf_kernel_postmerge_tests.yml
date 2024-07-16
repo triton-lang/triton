@@ -1,0 +1,92 @@
+name: AMD Perf Kernel Post-Merge Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main_perf, micmelesse/post_merge_ci]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main_perf' }}
+
+permissions: read-all
+
+env:
+  TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+  TRITON_DISABLE_LINE_INFO: 1
+
+jobs:
+  Runner-Preparation-AMD:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      matrix-HIP: ${{ steps.set-matrix.outputs.matrix-HIP }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"ROCm/triton" ]; then
+            echo '::set-output name=matrix-HIP::[["self-hosted", "rocm.gfx90a"]]'
+          else
+            echo '::set-output name=matrix-HIP::[["ubuntu-latest"]]'
+          fi
+
+  PostMerge-Tests-AMD:
+    needs: Runner-Preparation-AMD
+    if: needs.Runner-Preparation-AMD.outputs.matrix-HIP != ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation-AMD.outputs.matrix-HIP)}}
+    container:
+      image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Ensure the entire history is fetched for rebase
+      - name: Add upstream remote
+        run: |
+          git config --global --add safe.directory /__w/triton/triton
+          if [ $(git remote | grep -c upstream) -eq 0 ]; then
+            git remote add upstream https://github.com/triton-lang/triton.git
+          fi
+          git fetch upstream
+      - name: Rebase onto upstream/main
+        run: |
+          git config --global user.email "ci@amd.com"
+          git config --global user.name "Github Actions Post-Merge CI Script"
+          git rebase upstream/main || { echo "Rebase failed"; exit 1; }
+      - name: Show Git Log
+        run: |
+          echo "Git log after rebase from upstream/main to HEAD:"
+          git log $(git rev-parse upstream/main~2)..HEAD --oneline --graph --decorate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+      - name: Update PATH
+        run: |
+          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
+      - name: Install pip dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install lit matplotlib pandas
+      - name: Install Triton
+        run: |
+          echo "PATH is '$PATH'"
+          pip uninstall -y triton
+          cd python
+          pip install -v -e .
+      - name: Run Perf Kernels Unit Tests
+        run: |
+          pytest -vvv ./python/perf-kernels/flash-attention.py
+      - name: Run Perf Kernels Benchmark
+        run: |
+          python ./python/perf-kernels/flash-attention.py
