@@ -32,6 +32,8 @@
 namespace py = pybind11;
 
 namespace {
+const char *const amdTargetTriple = "amdgcn-amd-amdhsa";
+
 void init_triton_amd_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   m.def("add_to_llvmir",
@@ -81,7 +83,7 @@ void init_triton_amd(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_amd_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
-  m.attr("TARGET_TRIPLE") = "amdgcn-amd-amdhsa";
+  m.attr("TARGET_TRIPLE") = amdTargetTriple;
   m.attr("CALLING_CONV_AMDGPU_KERNEL") =
       (unsigned)llvm::CallingConv::AMDGPU_KERNEL;
 
@@ -92,6 +94,9 @@ void init_triton_amd(py::module &&m) {
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
+
+  m.def("attach_target_triple",
+        [](llvm::Module *module) { module->setTargetTriple(amdTargetTriple); });
 
   // Set target architecture ISA version
   m.def("set_isa_version", [](llvm::Module *module, const std::string &arch) {
@@ -144,8 +149,7 @@ void init_triton_amd(py::module &&m) {
          const std::string &features) {
         std::string error;
 
-        const char *targetTriple = "amdgcn-amd-amdhsa";
-        llvm::Triple triple(targetTriple);
+        llvm::Triple triple(amdTargetTriple);
         const llvm::Target *target =
             llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
         if (!target)
@@ -157,11 +161,11 @@ void init_triton_amd(py::module &&m) {
 
         const llvm::MCTargetOptions mcOptions;
         std::unique_ptr<llvm::MCRegisterInfo> mri(
-            target->createMCRegInfo(targetTriple));
+            target->createMCRegInfo(amdTargetTriple));
         std::unique_ptr<llvm::MCAsmInfo> mai(
-            target->createMCAsmInfo(*mri, targetTriple, mcOptions));
+            target->createMCAsmInfo(*mri, amdTargetTriple, mcOptions));
         std::unique_ptr<llvm::MCSubtargetInfo> sti(
-            target->createMCSubtargetInfo(targetTriple, arch, features));
+            target->createMCSubtargetInfo(amdTargetTriple, arch, features));
 
         llvm::MCContext ctx(triple, mai.get(), mri.get(), sti.get(), &srcMgr,
                             &mcOptions);
