@@ -585,6 +585,8 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 
       if (AElType == DElType)
         return;
+      if (AElType.isF16() && DElType.isF32())
+        return;
       promoteType = DElType;
     }
     Location loc = dotOp.getLoc();
