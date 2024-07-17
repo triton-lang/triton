@@ -93,6 +93,17 @@ class Autotuner(KernelInterface):
         import torch
         self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
 
+        # Hooks that will be called prior to executing "run"
+        self.pre_run_hooks = []
+
+    def add_pre_run_hook(self, hook):
+        '''
+        Add a hook that will be executed prior to the execution of run
+        function with (self, *args, **kwargs) passed into the kernel
+        '''
+        assert callable(hook)
+        self.pre_run_hooks.append(hook)
+
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
@@ -135,6 +146,11 @@ class Autotuner(KernelInterface):
             return float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
+        for hook in self.pre_run_hooks:
+            result = hook(self, *args, **kwargs)
+            if result:
+                return
+
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:

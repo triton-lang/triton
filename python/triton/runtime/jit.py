@@ -562,7 +562,7 @@ class JITFunction(KernelInterface[T]):
     def add_pre_run_hook(self, hook):
         '''
         Add a hook that will be executed prior to the execution of run
-        function with args and kwargs passed into the kernel
+        function with (self, *args, **kwargs) passed into the kernel
         '''
         assert callable(hook)
         self.pre_run_hooks.append(hook)
@@ -591,7 +591,9 @@ class JITFunction(KernelInterface[T]):
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
-            hook(*args, **kwargs)
+            result = hook(self, *args, grid=grid, warmup=warmup, **kwargs)
+            if result:
+                return
 
         if self.binder is None:
             self.create_binder()
