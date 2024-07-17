@@ -782,4 +782,6 @@ void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                       patterns, benefit);
+  mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
+      typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
 }
