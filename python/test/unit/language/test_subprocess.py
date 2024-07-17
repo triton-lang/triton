@@ -38,18 +38,19 @@ def is_interpreter():
     ("device_print_pointer", "int32"),
 ])
 def test_print(func_type: str, data_type: str, device: str):
-    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type, device], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, shell=False)
-    outs, err = proc.communicate()
+    proc = subprocess.run(
+        [sys.executable, print_path, "test_print", func_type, data_type, device],
+        capture_output=True,
+    )
     assert proc.returncode == 0
 
     if is_interpreter() and func_type != "static_assert":
         # Interpreter uses a different format for device_print
         # Only check if there's no error
-        assert err == b''
+        assert proc.stderr == b''
         return
 
-    outs = [line for line in outs.decode("UTF-8").split("\n") if line]
+    outs = [line for line in proc.stdout.decode("UTF-8").split("\n") if line]
     # The total number of elements in the 1-D tensor to print.
     N = 128
 
@@ -105,15 +106,16 @@ def test_print(func_type: str, data_type: str, device: str):
 
 
 @pytest.mark.parametrize("func_type", assert_types)
-def test_assert(func_type: str):
+def test_assert(func_type: str, device: str):
     # The total number of elements in the 1-D tensor to assert on.
     N = 128
 
-    os.environ["TRITON_DEBUG"] = "1"
-    proc = subprocess.Popen([sys.executable, assert_path, func_type], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            shell=False)
-    _, errs = proc.communicate()
-    errs = errs.splitlines()
+    proc = subprocess.run(
+        [sys.executable, assert_path, "test_assert", func_type, device],
+        capture_output=True,
+        env={**os.environ, "TRITON_DEBUG": "1"},
+    )
+    errs = proc.stderr.splitlines()
     num_errs = 0
     for err in errs:
         if "x != 0" in err.decode("utf-8", errors="ignore"):
@@ -122,7 +124,6 @@ def test_assert(func_type: str):
     # Check for segfaults.
     assert all("segmentation fault" not in line.decode("utf-8", errors="ignore").lower() for line in errs)
 
-    os.environ["TRITON_DEBUG"] = "0"
     if func_type == "static_assert" or func_type == "device_assert_passes":
         assert num_errs == 0
     else:
@@ -130,14 +131,15 @@ def test_assert(func_type: str):
 
 
 @pytest.mark.parametrize("caller_type, callee_type", nested_types)
-def test_assert_nested(caller_type, callee_type):
+def test_assert_nested(caller_type, callee_type, device):
     # The total number of elements in the 1-D tensor to assert on.
     N = 128
 
-    proc = subprocess.Popen([sys.executable, assert_path, caller_type, callee_type], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, shell=False)
-    _, errs = proc.communicate()
-    errs = errs.splitlines()
+    proc = subprocess.run(
+        [sys.executable, assert_path, "test_assert_nested", caller_type, callee_type, device],
+        capture_output=True,
+    )
+    errs = proc.stderr.splitlines()
     num_errs = 0
     for err in errs:
         if "x != 0" in err.decode("utf-8", errors="ignore"):
