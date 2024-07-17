@@ -272,9 +272,9 @@ jobs:
     - name: Upload LLVM Artifacts to Azure
       if: ${{ (github.repository == 'triton-lang/triton') }}
       run: |
-        az storage blob upload --account-name tritonlang --auth-mode login --container-name llvm-builds --file "${{ env.llvm_install_dir }}.tar.gz" --name "${{ env.llvm_install_dir }}.tar.gz" --overwrite
+        az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz" --overwrite
 
-        URL=$(az storage blob url --account-name tritonlang --auth-mode login --container-name llvm-builds --name "${{ env.llvm_install_dir }}.tar.gz")
+        URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name public --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz")
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
