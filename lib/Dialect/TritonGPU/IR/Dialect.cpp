@@ -2898,6 +2898,21 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
+LogicalResult LocalAllocOp::verify() {
+  if (!getSrc()) {
+    if (!getType().getMutableMemory())
+      return emitError("uninitialized alloc must have a mutable memdesc type");
+    return success();
+  }
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitError("result element type must match desc element type");
+  }
+  return success();
+}
+
 // LocalLoadOp
 void LocalLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
@@ -2907,6 +2922,12 @@ void LocalLoadOp::getEffects(
 }
 
 // LocalStoreOp
+LogicalResult LocalStoreOp::verify() {
+  if (!getDst().getType().getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+  return success();
+}
+
 void LocalStoreOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -2915,6 +2936,12 @@ void LocalStoreOp::getEffects(
 }
 
 // AsyncCopyGlobalToLocalOp
+LogicalResult AsyncCopyGlobalToLocalOp::verify() {
+  if (!getResult().getType().getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+  return success();
+}
+
 void AsyncCopyGlobalToLocalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {

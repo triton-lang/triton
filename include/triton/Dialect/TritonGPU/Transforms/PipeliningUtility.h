@@ -23,6 +23,12 @@ void addDep(Operation *op, DenseSet<Operation *> &deps, bool includeArg = true,
 void addOps(scf::ForOp forOp, int stage,
             std::vector<std::pair<Operation *, unsigned>> &schedule,
             std::function<bool(Operation *)> filter);
+
+/// Replace all uses of `oldUse` with `val` and propagate the type if needed.
+/// This is useful when we need to change a memory descriptor from immutable to
+/// mutable.
+void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
+                                 Value val);
 } // namespace triton
 } // namespace mlir
 

@@ -127,13 +127,13 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
-    alloc.replaceAllUsesWith(viewLoad.getResult());
+    replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
     SmallVector<ttg::LocalAllocOp> allocsToErase;
     for (Operation *user : loadOp->getUsers()) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-        alloc.replaceAllUsesWith(viewLoad.getResult());
+        replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
         allocsToErase.push_back(alloc);
       }
     }
@@ -203,13 +203,13 @@ static void createTMAAsyncCopy(
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
-    alloc.replaceAllUsesWith(viewLoad.getResult());
+    replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
     SmallVector<ttg::LocalAllocOp> allocsToErase;
     for (Operation *user : loadOp->getUsers()) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-        alloc.replaceAllUsesWith(viewLoad.getResult());
+        replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
         allocsToErase.push_back(alloc);
       }
     }
