@@ -1,5 +1,4 @@
 import multiprocessing
-import os
 import shutil
 
 import torch
@@ -8,15 +7,7 @@ import triton
 import triton.language as tl
 from triton.compiler import ASTSource
 
-tmpdir = ".tmp"
-
 target = triton.runtime.driver.active.get_current_target()
-
-
-def reset_tmp_dir():
-    os.environ["TRITON_CACHE_DIR"] = tmpdir
-    if os.path.exists(tmpdir):
-        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def compile_fn(attrs, capability):
@@ -60,8 +51,7 @@ def compile_fn_dot(attrs, capability):
     triton.compile(src=src, target=target)
 
 
-def test_compile_in_forked_subproc() -> None:
-    reset_tmp_dir()
+def test_compile_in_forked_subproc(fresh_triton_cache) -> None:
     major, minor = torch.cuda.get_device_capability(0)
     capability = major * 10 + minor
     config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
@@ -85,7 +75,7 @@ def compile_empty_kernel_with_gc(attrs):
     triton.compile(src=src, target=target)
 
 
-def test_compile_in_forked_subproc_with_forced_gc() -> None:
+def test_compile_in_forked_subproc_with_forced_gc(fresh_triton_cache) -> None:
     '''
     Tests that compilation artifacts can safely live in forked process.
 
@@ -98,7 +88,6 @@ def test_compile_in_forked_subproc_with_forced_gc() -> None:
     This is a regression test that ensures thread pool in MLIRContext is released
     safely after compilation.
     '''
-    reset_tmp_dir()
     import gc
     old_gc_state = gc.isenabled()
     # disable GC to manage resources manually in the manner described in comment above
@@ -109,7 +98,7 @@ def test_compile_in_forked_subproc_with_forced_gc() -> None:
     compile_empty_kernel_with_gc(config)
 
     # stage 2.p
-    reset_tmp_dir()
+    shutil.rmtree(fresh_triton_cache)
     assert multiprocessing.get_start_method() == 'fork'
     proc = multiprocessing.Process(target=compile_empty_kernel_with_gc, args=(config, ))
 

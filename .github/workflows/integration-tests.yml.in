@@ -274,10 +274,8 @@ jobs:
             echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
           fi
           cd python/test/unit
-          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           python3 -m pytest -s -n 8 language/test_subprocess.py
-          # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -s runtime/
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
@@ -390,7 +388,7 @@ jobs:
           cd python/test/unit
           ## test_subprocess.py is flaky on the AMD CI.
           ## TODO (lixun) find a solution and re-enable it.
-          pytest --capture=tee-sys -rfs -n 16 language \
+          pytest --capture=tee-sys -rfs -n 16 language runtime \
                  --ignore=language/test_line_info.py \
                  --ignore=language/test_subprocess.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
@@ -398,9 +396,6 @@ jobs:
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
-
-          # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -s runtime
 
       - name: Run Proton tests
         run: |
