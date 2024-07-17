@@ -21,7 +21,7 @@ class SharedEncodingAttr;
 }
 } // namespace triton
 
-// Returns a tuple of two or three entries representing the shape of the
+// Return a tuple of two or three entries representing the shape of the
 // instruction used to perform a matrix multiplication operation.
 // Version = 1: <m, n>
 // Version = 2: <1, m, n>
@@ -31,7 +31,7 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 RankedTensorType type,
                                                 int numWarps);
 
-// Returns true if the Load uses block pointer.
+// Return true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
 
 // Return an array of indices enumerating the elements of 'arr' in descending
