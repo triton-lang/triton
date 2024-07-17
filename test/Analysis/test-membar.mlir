@@ -76,14 +76,14 @@ tt.func @war_single_block_local_store(%A : !tt.ptr<f16>) {
   %cst2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
   %0 = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
   %1 = tt.load %0, %cst1, %cst2 : tensor<128x32x!tt.ptr<f16>, #AL>
-  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
   // CHECK: triton_gpu.local_alloc
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.local_load
-  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<128x32xf16, #AL>
+  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> tensor<128x32xf16, #AL>
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.local_store
-  triton_gpu.local_store %1, %2 : tensor<128x32xf16, #AL> -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+  triton_gpu.local_store %1, %2 : tensor<128x32xf16, #AL> -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
   tt.return
 }
 

@@ -2922,6 +2922,12 @@ void LocalLoadOp::getEffects(
 }
 
 // LocalStoreOp
+LogicalResult LocalStoreOp::verify() {
+  if (!getDst().getType().getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+  return success();
+}
+
 void LocalStoreOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -2930,6 +2936,12 @@ void LocalStoreOp::getEffects(
 }
 
 // AsyncCopyGlobalToLocalOp
+LogicalResult AsyncCopyGlobalToLocalOp::verify() {
+  if (!getResult().getType().getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+  return success();
+}
+
 void AsyncCopyGlobalToLocalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {

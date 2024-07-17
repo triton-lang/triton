@@ -155,6 +155,8 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
     return failure();
   if (getCoord().size() < 1 || getCoord().size() > 5)
     return emitOpError("TMA copies must have between 1 and 5 coordinates");
+  if (!getResult().getType().getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
   return success();
 }
 
