@@ -28,48 +28,53 @@ getValueTableFromStructFMA(Value val, int batch, int nonK, int K,
   return res;
 }
 
-struct DotOperation {
+struct DotIntrinsic {
   int vectorSize;
-  Type outElemType;
+  Type outElemTy;
   StringRef intrinsicName;
   SmallVector<Value> additionalArgs;
 };
 
-DotOperation chooseInstruction(ConversionPatternRewriter &rewriter,
-                               Location loc, triton::DotOp op) {
-  auto aOp = cast<RankedTensorType>(op.getA().getType());
-  auto aElemType = aOp.getElementType();
-  auto dOp = cast<RankedTensorType>(op.getD().getType());
-  auto dElemType = dOp.getElementType();
+DotIntrinsic chooseIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
+                             triton::DotOp op) {
+  auto aOpTy = cast<RankedTensorType>(op.getA().getType());
+  auto aElemTy = aOpTy.getElementType();
+  auto dOpTy = cast<RankedTensorType>(op.getD().getType());
+  auto dElemTy = dOpTy.getElementType();
   auto mod = op->getParentOfType<ModuleOp>();
   auto arch = getAMDArch(mod);
-  DotOperation chosenOp;
-  // following architectures support dot instructions
-  if (arch == "gfx908" || arch == "gfx90a" || arch.starts_with("gfx94") ||
-      arch.starts_with("gfx11")) {
-    if (aElemType.isF16() && dElemType.isF32()) {
+  DotIntrinsic chosenOp;
+  bool dotAvailable = arch == "gfx908" || arch == "gfx90a" ||
+                      arch.starts_with("gfx94") || arch.starts_with("gfx11") ||
+                      arch.starts_with("gfx103");
+  if (dotAvailable) {
+    if (aElemTy.isF16() && dElemTy.isF32()) {
       chosenOp.vectorSize = 2;
-      chosenOp.outElemType = f32_ty;
+      chosenOp.outElemTy = f32_ty;
       chosenOp.intrinsicName = "llvm.amdgcn.fdot2";
       chosenOp.additionalArgs = {false_val()};
+      return chosenOp;
     }
-    if (aElemType.isSignedInteger(8) && dElemType.isSignedInteger(32)) {
+    if (aElemTy.isInteger(8) && dElemTy.isInteger(32)) {
       chosenOp.vectorSize = 4;
-      chosenOp.outElemType = i32_ty;
-      chosenOp.intrinsicName = "llvm.amdgcn.sdot8";
+      chosenOp.outElemTy = i32_ty;
+      chosenOp.intrinsicName = "llvm.amdgcn.sdot4";
       chosenOp.additionalArgs = {false_val()};
+      return chosenOp;
     }
-  } else {
-    assert(aElemType.isIntOrFloat() && !aElemType.isIntOrIndex());
-    assert(aElemType == dElemType);
-    chosenOp.vectorSize = 1;
-    chosenOp.outElemType = aElemType;
-    if (aElemType.isF32())
-      chosenOp.intrinsicName = "llvm.fmuladd.f32";
-    if (aElemType.isF16())
-      chosenOp.intrinsicName = "llvm.fmuladd.f16";
-    chosenOp.additionalArgs = {};
   }
+  // choose one of FMA intrinsics
+  assert(aElemTy.isIntOrFloat() && !aElemTy.isIntOrIndex());
+  assert(aElemTy == dElemTy);
+  assert(cast<RankedTensorType>(op.getA().getType()).getElementType() ==
+         dElemTy);
+  chosenOp.vectorSize = 1;
+  chosenOp.outElemTy = aElemTy;
+  if (aElemTy.isF32())
+    chosenOp.intrinsicName = "llvm.fmuladd.f32";
+  if (aElemTy.isF16())
+    chosenOp.intrinsicName = "llvm.fmuladd.f16";
+  chosenOp.additionalArgs = {};
   return chosenOp;
 }
 
@@ -85,18 +90,22 @@ Value packOperand(ConversionPatternRewriter &rewriter, Location loc,
     vec = insert_element(vecTy, vec, scalarValues[{b, nonK, k + elem}],
                          i32_val(elem));
   }
+  if (elemTy.isInteger(8)) {
+    assert(vectorSize == 4);
+    vec = bitcast(vec, i32_ty);
+  }
   return vec;
 }
 
 Value generateDotOp(ConversionPatternRewriter &rewriter, Location loc,
-                    DotOperation op, Value a, Value b, Value c) {
+                    DotIntrinsic op, Value a, Value b, Value c) {
   SmallVector<Value> args{a, b, c};
   args.append(op.additionalArgs.begin(), op.additionalArgs.end());
   SmallVector<Type> argTypes;
   for (auto arg : args)
     argTypes.push_back(arg.getType());
-  auto funcType = LLVM::LLVMFunctionType::get(op.outElemType, argTypes);
-  auto d = call_intrinsic(op.outElemType, op.intrinsicName, args);
+  auto funcType = LLVM::LLVMFunctionType::get(op.outElemTy, argTypes);
+  auto d = call_intrinsic(op.outElemTy, op.intrinsicName, args);
   return d.getResult(0);
 }
 
@@ -145,7 +154,7 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
       getValueTableFromStructFMA(llB, retSize[0], retSize[2], K, rewriter, loc);
 
   SmallVector<Value> ret = cc;
-  auto selectedOp = chooseInstruction(rewriter, loc, op);
+  auto selectedOp = chooseIntrinsic(rewriter, loc, op);
 
   for (unsigned b = 0; b < retSize[0]; ++b)
     for (unsigned m = 0; m < retSize[1]; ++m)

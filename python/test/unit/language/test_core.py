@@ -3074,14 +3074,15 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
      if not (input_precision != 'ieee' and (in_dtype in ['float16']))] +
     [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
-     for shape_nw in [[1, 128, 32, 4], [2, 128, 32, 2], [128, 1, 32, 4], [128, 2, 32, 2], [128, 256, 32, 8],
-                      [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4], [32, 128, 64, 2],
-                      [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2], [128, 256, 128, 8]]
+     for shape_nw in [[4, 4, 16, 4], [1, 128, 32, 4], [2, 128, 32, 2], [128, 1, 32, 4], [128, 2, 32, 2],
+                      [128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
+                      [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2],
+                      [128, 256, 128, 8]]
      for input_precision in ["ieee" if is_hip() else "tf32"]
      for col_a in [True, False]
      for col_b in [True, False]
-     for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
-                                                                                                    'float32')]
+     for in_dtype, out_dtype in [('int8', 'int8'), ('int8', 'int32'), ('float16', 'float16'), ('float16', 'float32'),
+                                 ('float32', 'float32')]
      for kpack in [1, 2 if is_hip() else 1]] + [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1)
                                                 for col_a in [True, False]
                                                 for col_b in [True, False]] +
