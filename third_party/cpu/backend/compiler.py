@@ -17,6 +17,7 @@ import triton.backends.cpu.driver as cpu_driver
 class CPUOptions:
     # GPU-specific options are used in several places.
     # For now, we just provide dummy values.
+    backend_name: str = "cpu"
     num_warps: int = 0
     num_stages: int = 0
     num_ctas: int = 0

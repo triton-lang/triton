@@ -197,11 +197,23 @@ struct ConvertElementwiseOps
     patterns.add<OpTypeConversion<math::Exp2Op>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::LogOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::Log2Op>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::Log10Op>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::SinOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::SinhOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::CosOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::CoshOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::TanOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::TanhOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::AcosOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::AcoshOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::AsinOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::AsinhOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::AtanOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::AtanhOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::SqrtOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::RsqrtOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::ErfOp>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::CbrtOp>>(typeConverter, context);
 
     patterns.add<OpTypeConversion<triton::BitcastOp, arith::BitcastOp>>(
         typeConverter, context);

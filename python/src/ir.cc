@@ -1516,9 +1516,49 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::CosOp>(val);
            })
+      .def("create_cosh",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::CoshOp>(val);
+           })
       .def("create_sin",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::SinOp>(val);
+           })
+      .def("create_sinh",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::SinhOp>(val);
+           })
+      .def("create_tan",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::TanOp>(val);
+           })
+      .def("create_tanh",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::TanhOp>(val);
+           })
+      .def("create_acos",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AcosOp>(val);
+           })
+      .def("create_acosh",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AcoshOp>(val);
+           })
+      .def("create_asin",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AsinOp>(val);
+           })
+      .def("create_asinh",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AsinhOp>(val);
+           })
+      .def("create_atan",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AtanOp>(val);
+           })
+      .def("create_atanh",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AtanhOp>(val);
            })
       .def("create_log",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1527,6 +1567,10 @@ void init_triton_ir(py::module &&m) {
       .def("create_log2",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::Log2Op>(val);
+           })
+      .def("create_log10",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::Log10Op>(val);
            })
       .def("create_erf",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1547,6 +1591,10 @@ void init_triton_ir(py::module &&m) {
       .def("create_iabs",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::AbsIOp>(val);
+           })
+      .def("create_cbrt",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::CbrtOp>(val);
            })
       .def("create_reduce",
            [](TritonOpBuilder &self, std::vector<Value> operands, int axis)
