@@ -241,6 +241,7 @@ class InterpreterBuilder:
         self.options = InterpreterOptions()
         self.codegen_fns = {}
         self.codegen_fns["convert_custom_types"] = ExtraFunctions._convert_custom_types
+        self.codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (16, 16, 16)
 
     def set_grid_idx(self, x, y, z):
         if not x < self.grid_dim[0]:
