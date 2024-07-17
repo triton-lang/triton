@@ -36,7 +36,16 @@ def DecomposeFpConversions : Pass<"triton-cpu-decompose-fp-conversions", "mlir::
         intrinsics. This pass transforms such conversions into vector code
         instead.
     }];
-    // TODO: add options to specify which FP conversions to decompose.
+
+    let options = [
+        Option<"decomposeBf16Conversions", "decompose-bf16-conversions",
+               "bool", /*default*/"false",
+               "Lower BF16 conversions to arith operations.">,
+        Option<"decomposeFp8Conversions", "decompose-fp8-conversions",
+               "bool", /*default*/"false",
+               "Lower FP8 conversions to arith operations.">,
+    ];
+
     let constructor = "mlir::triton::cpu::createDecomposeFpConversions()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",

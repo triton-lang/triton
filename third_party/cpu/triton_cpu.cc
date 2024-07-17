@@ -41,9 +41,12 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
           pm.addPass(mlir::triton::cpu::createConvertUnsupportedOps(
               promote_bf16_to_fp32, convert_mixed_precision_matmul));
         });
-  m.def("add_decompose_fp_conversions", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::cpu::createDecomposeFpConversions());
-  });
+  m.def("add_decompose_fp_conversions",
+        [](mlir::PassManager &pm, bool decomposeBf16Conversions,
+           bool decomposeFp8Conversions) {
+          pm.addPass(mlir::triton::cpu::createDecomposeFpConversions(
+              decomposeBf16Conversions, decomposeFp8Conversions));
+        });
   m.def("add_vector_to_scf", [](mlir::PassManager &pm, bool full_unroll,
                                 unsigned target_rank, bool lower_tensors) {
     mlir::VectorTransferToSCFOptions opts;

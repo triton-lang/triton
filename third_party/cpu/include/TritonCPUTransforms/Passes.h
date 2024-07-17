@@ -23,6 +23,9 @@ std::unique_ptr<OperationPass<ModuleOp>>
 createConvertUnsupportedOps(bool promoteBf16ToFp32,
                             bool convertMixedPrecisionMatmul);
 std::unique_ptr<OperationPass<ModuleOp>> createDecomposeFpConversions();
+std::unique_ptr<OperationPass<ModuleOp>>
+createDecomposeFpConversions(bool decomposeBf16Conversions,
+                             bool decomposeFp8Conversions);
 
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonCPUTransforms/Passes.h.inc"

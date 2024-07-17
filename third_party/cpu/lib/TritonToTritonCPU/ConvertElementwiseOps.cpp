@@ -55,6 +55,7 @@ public:
     addIllegalOp<triton::PreciseSqrtOp>();
     addIllegalOp<triton::MulhiUIOp>();
     addIllegalOp<triton::ClampFOp>();
+    addIllegalOp<triton::FpToFpOp>();
   }
 };
 
@@ -131,6 +132,44 @@ struct ClampFOpConversion : public OpConversionPattern<triton::ClampFOp> {
     }
     rewriter.replaceOp(op, res);
     return success();
+  }
+};
+
+struct FpToFpOpConversion : public OpConversionPattern<triton::FpToFpOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto src = rewriter.getRemappedValue(op.getSrc());
+    auto srcTy = src.getType();
+    auto resTy = getTypeConverter()->convertType(op.getType());
+    auto srcElemTy = isa<VectorType>(srcTy)
+                         ? cast<VectorType>(srcTy).getElementType()
+                         : srcTy;
+    auto resElemTy = isa<VectorType>(resTy)
+                         ? cast<VectorType>(resTy).getElementType()
+                         : resTy;
+
+    if (srcElemTy.getIntOrFloatBitWidth() > resElemTy.getIntOrFloatBitWidth()) {
+      std::optional<RoundingMode> rounding = op.getRounding();
+      assert(rounding && "Rounding mode expected for truncate conversions");
+      auto roundingAttr = arith::RoundingModeAttr::get(
+          getContext(), *rounding == RoundingMode::RTZ
+                            ? arith::RoundingMode::toward_zero
+                            : arith::RoundingMode::to_nearest_even);
+      rewriter.replaceOpWithNewOp<arith::TruncFOp>(op, resTy, src, roundingAttr,
+                                                   nullptr);
+      return success();
+    }
+
+    if (srcElemTy.getIntOrFloatBitWidth() < resElemTy.getIntOrFloatBitWidth()) {
+      rewriter.replaceOpWithNewOp<arith::ExtFOp>(op, resTy, src);
+      return success();
+    }
+
+    return failure();
   }
 };
 
@@ -223,6 +262,7 @@ struct ConvertElementwiseOps
         typeConverter, context);
     patterns.add<MulhiUIOpConversion>(typeConverter, context);
     patterns.add<ClampFOpConversion>(typeConverter, context);
+    patterns.add<FpToFpOpConversion>(typeConverter, context);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
