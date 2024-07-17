@@ -1,12 +1,16 @@
 import functools
 import hashlib
 import os
+import tempfile
+from pathlib import Path
 
 from dataclasses import dataclass
 from typing import Any, Tuple
 
 from triton._C.libtriton import cpu, ir, llvm, passes
 from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.runtime.build import _build
+import triton.backends.cpu.driver as cpu_driver
 
 
 @dataclass(frozen=True)
@@ -43,7 +47,7 @@ class CPUBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        self.binary_ext = "asm"
+        self.binary_ext = "so"
         self.cpu_arch = llvm.get_cpu_tripple().split("-")[0]
         self.cpu_name = llvm.get_cpu_name()
         self.cpu_features = llvm.get_cpu_features()
@@ -163,12 +167,29 @@ class CPUBackend(BaseBackend):
     def make_asm(src, metadata, options):
         return llvm.translate_to_host_asm(src, options.enable_fp_fusion, options.enable_fast_math)
 
+    @staticmethod
+    def make_so(src, metadata, options):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            asm_path = os.path.join(tmpdir, "kernel.s")
+            Path(asm_path).write_text(src)
+            so = _build(
+                "kernel",
+                asm_path,
+                tmpdir,
+                cpu_driver.library_dir,
+                cpu_driver.include_dir,
+                ["gcc", "m"],
+            )
+            with open(so, "rb") as f:
+                return f.read()
+
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttcir"] = lambda src, metadata: self.make_ttcir(src, metadata, options)
         stages["tttcir"] = lambda src, metadata: self.make_tttcir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["asm"] = lambda src, metadata: self.make_asm(src, metadata, options)
+        stages["so"] = lambda src, metadata: self.make_so(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):
