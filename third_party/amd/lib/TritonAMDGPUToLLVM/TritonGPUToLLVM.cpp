@@ -173,8 +173,6 @@ struct ConvertTritonAMDGPUToLLVM
                                                axisInfoAnalysis, AMDBenefit);
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, commonBenefit);
-    mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
-        typeConverter, targetInfo, patterns, commonBenefit + 1);
     AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                      axisInfoAnalysis, AMDBenefit);
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
