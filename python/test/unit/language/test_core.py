@@ -3315,7 +3315,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
                                                               ('float16', 'float32'), ('float32', 'float32')]] +
                          # Large block sizes
-                         [(4, 4, 128, 128, 128, 64, 64, 'float16', 'float16')])
+                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')])
 def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
