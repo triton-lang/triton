@@ -173,6 +173,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       LLVM_DEBUG(llvm::dbgs() << " vec = " << vec << '\n');
     }
 
+    if (vec == 1 && numElems > 1)
+      op->emitRemark() << "Warning: vectorization fails due to vec is 1";
+
     // Get the LLVM values for pointers
     auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
     assert(ptrElems.size() == numElems);
@@ -388,6 +391,9 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
+    if (vec == 1 && elemsPerThread > 1)
+      op->emitRemark() << "Warning: vectorization fails due to vec is 1";
+
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
@@ -522,6 +528,9 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
+    if (vec == 1 && elemsPerThread > 1)
+      moduleOp->emitRemark() << "Warning: vectorization fails due to vec is 1";
+
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
@@ -645,6 +654,10 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
+
+    if (vec == 1 && numElems > 1)
+      moduleOp->emitRemark() << "Warning: vectorization fails due to vec is 1";
+
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
 
     auto vecTy = vec_ty(valueElemTy, vec);
