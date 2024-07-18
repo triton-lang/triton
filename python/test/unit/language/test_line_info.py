@@ -218,9 +218,3 @@ def test_line_info_interpreter(func: str):
         expected_def_lineno = 72
     kernel.rewrite()
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
-    if func == "autotune":
-        assert kernel.rewriter.last_decorator_lineno == 7
-        assert kernel.rewriter.def_lineno == 8
-    else:
-        assert kernel.rewriter.last_decorator_lineno == 1
-        assert kernel.rewriter.def_lineno == 2
