@@ -75,7 +75,7 @@ jobs:
           find wheelhouse -type f
           for i in $(find wheelhouse -type f); do
             echo "Patching $i"
-            python3 -mwheel unpack "$i"
+            python3 -mwheel unpack $i
             python3 -mwheel pack triton-3.0.0 --build-number 1 --dest-dir wheelhouse-1
             rm -rf triton-3.0.0
           done
