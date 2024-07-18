@@ -3,7 +3,7 @@ import triton.language as tl
 import os
 import pytest
 import torch
-
+import tempfile
 
 def is_perf_warning_enabled():
     return os.environ.get('MLIR_ENABLE_REMARK', '0') == '1'
@@ -47,64 +47,44 @@ def test_remark_mma(capfd):
     os.environ['MLIR_ENABLE_REMARK'] = '0'
 
 
-def test_remark_swp_1stage(capfd):
+def test_remark_vectorization(capfd):
     os.environ['MLIR_ENABLE_REMARK'] = '1'
 
     @triton.jit
-    def vecadd_kernel(a_ptr, b_ptr, output_ptr, n_elements, num_blocks):
-        pid = tl.program_id(axis=0)
-        block_start = pid * 128 * num_blocks
-        offsets = block_start + tl.arange(0, 128)
-        for _ in tl.range(0, num_blocks, num_stages=1):
-            mask = offsets < n_elements
-            x = tl.load(a_ptr + offsets, mask=mask)
-            y = tl.load(b_ptr + offsets, mask=mask)
-            output = x + y
-            tl.store(output_ptr + offsets, output, mask=mask)
-            offsets += 128
+    def ldst_vec(in_ptr0, in_ptr1, in_ptr2, in_ptr3, out_ptr0, xnumel, XBLOCK: tl.constexpr):
+        xnumel = 28311552
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)[:]
+        xmask = xindex < xnumel
+        x0 = xindex % 9
+        x2 = (xindex // 3456) % 512
+        x1 = (xindex // 9) % 384
+        x4 = xindex
+        tmp0 = tl.load(in_ptr0 + (x2 + (512*x0)), None, eviction_policy='evict_last')
+        tmp1 = tmp0 + 520
+        tmp2 = tmp0 < 0
+        tmp3 = tl.where(tmp2, tmp1, tmp0)
+        tmp9 = (-4) + tmp3
+        tmp12 = tl.full([1], 512, tl.int64)
+        tmp14 = tmp9 < tmp12
+        tmp16 = tl.load(in_ptr3 + (x1), tmp14, eviction_policy='evict_last', other=0.0)
+        tmp18 = tmp16.to(tl.float32)
+        tmp19 = tmp18.to(tl.float32)
+        tmp20 = tl.full(tmp19.shape, 0.0, tmp19.dtype)
+        tmp21 = tl.where(tmp14, tmp19, tmp20)
+        tmp22 = tmp21.to(tl.float32)
+        tl.store(out_ptr0 + (x4), tmp22, None)
 
+    XBLOCK = 1024
+    XSIZE = 2048
+    MAX_ELEM = 65536
     triton.compile(
         triton.compiler.ASTSource(
-            fn=vecadd_kernel, signature={
-                0: '*fp32', 1: '*fp32', 2: '*fp32', 3: 'i32', 4: 'i32'},
-            constants={}))
+            fn=ldst_vec, signature={0: '*i64', 1: '*i64', 2: '*fp16', 3: '*fp32', 4: '*fp16', 5: 'i32'},
+            constants={"XBLOCK": XBLOCK}), options={"num_warps": 1})
+
     _, err = capfd.readouterr()
-
-    assert "remark: Warning: SWP fails. There is no loop with num_stages greater than 1" in err, "expect SWP failure remark"
-    # assert "note: see current operation:" in captured.err
-    # assert "numstages in loop" in captured.err
-    os.environ['MLIR_ENABLE_REMARK'] = '0'
-
-
-def test_remark_swp_dep_distance(capfd):
-    os.environ['MLIR_ENABLE_REMARK'] = '1'
-
-    @triton.jit
-    def vecadd_kernel(a_ptr, b_ptr, output_ptr, n_elements, num_blocks):
-        pid = tl.program_id(axis=0)
-        block_start = pid * 128 * num_blocks
-        offsets = block_start + tl.arange(0, 128)
-        offsets_0 = block_start + tl.arange(2, 130)
-        for _ in tl.range(0, num_blocks):
-            mask = offsets < n_elements
-            x = tl.load(a_ptr + offsets, mask=mask)
-            x_0 = tl.load(a_ptr + offsets_0, mask=mask)
-            output = x + x_0
-            tl.store(output_ptr + offsets, output, mask=mask)
-            offsets += 128
-            offsets_0 += 128
-
-    triton.compile(
-        triton.compiler.ASTSource(
-            fn=vecadd_kernel, signature={
-                0: '*fp32', 1: '*fp32', 2: '*fp32', 3: 'i32', 4: 'i32'},
-            constants={}))
-    stdout, stderr = capfd.readouterr()
-
-    # TODO: to fix this kernel
-    # assert "remark: Warning: SWP fails due to loop distance is greater than" in stdout, "expect SWP failure remark"
-    # assert "note: see current operation:" in captured.err
-    # assert "numstages in loop" in captured.err
+    assert "remark: Warning: vectorization fails" in err, "expect vectorization failure remark"
     os.environ['MLIR_ENABLE_REMARK'] = '0'
 
 
@@ -147,9 +127,9 @@ def test_remark_swp_outerloop(capfd):
                 block_start += 128
 
     triton.compile(
-        triton.compiler.ASTSource(
-            fn=binary_elemwise_kernel_2d, signature={
-                0: '*fp32', 1: '*fp32', 2: '*fp32', 3: 'i32', 4: 'i32', 5: 'i32', 6: 'i32'}, constants={}))
+        triton.compiler.ASTSource(fn=binary_elemwise_kernel_2d, signature={
+            0: '*fp32', 1: '*fp32', 2: '*fp32', 3: 'i32', 4: 'i32', 5: 'i32', 6: 'i32'}, constants={}))
+
     _, err = capfd.readouterr()
 
     assert "remark: Warning: SWP fails on the outer loop" in err, "expect SWP failure remark"

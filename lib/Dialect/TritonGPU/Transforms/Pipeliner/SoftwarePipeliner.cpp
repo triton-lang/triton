@@ -127,6 +127,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       return;
     }
 
+
     llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
     for (scf::ForOp forOp : loops) {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
