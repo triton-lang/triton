@@ -67,7 +67,19 @@ jobs:
           export CIBW_BUILD="cp3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
 
+      - name: Append build number
+        shell: bash
+        run: |
+          set -ex
+          mkdir -p wheelhouse-1
+          find wheelhouse -type f
+          for i in $(find wheelhouse -type f); do
+            echo "Patching $i"
+            python3 -mwheel unpack "$i"
+            python3 -mwheel pack triton-3.0.0 --build-number 1 --dest-dir wheelhouse-1
+            rm -rf triton-3.0.0
+          done
 
       - name: Upload wheels to PyPI
         run: |
-          python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
+          python3 -m twine upload wheelhouse-1/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
