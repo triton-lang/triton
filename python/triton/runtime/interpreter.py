@@ -990,14 +990,15 @@ def _patch_lang_core(lang):
 
 
 def _patch_lang(fn):
-    lang = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
-    assert len(lang) >= 1, "triton.language must be visible from within jit'd function"
-    _patch_builtin(lang[0], interpreter_builder)
-    _patch_builtin(lang[0].tensor, interpreter_builder)
-    if lang[0] == tl:
-        _patch_builtin(lang[0].math, interpreter_builder)
-    _patch_lang_tensor(lang[0].tensor)
-    _patch_lang_core(lang[0])
+    langs = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
+    assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
+    for lang in langs:
+        _patch_builtin(lang, interpreter_builder)
+        _patch_builtin(lang.tensor, interpreter_builder)
+        if lang == tl:
+            _patch_builtin(lang.math, interpreter_builder)
+        _patch_lang_tensor(lang.tensor)
+        _patch_lang_core(lang)
 
 
 # TODO: wrap everything in triton tensors
@@ -1127,9 +1128,6 @@ class FunctionRewriter:
         self.filename: str = ""
         # Absolute line number in the file
         self.def_file_lineno: int = 0
-        # Relative line numbers from the beginning of the function
-        self.last_decorator_lineno: int = 0
-        self.def_lineno: int = 0
 
     def rewrite_ast(self):
         # If exception is raise, it means the function does not have source code available,
@@ -1169,20 +1167,23 @@ class FunctionRewriter:
         return textwrap.dedent(src)
 
     def _transform_ast(self, src):
+        # src is like:
+        # 1: def foo(...):
+        # 2:  ...
         parsed_ast = ast.parse(src)
         transformed_ast = self.ast_transformer.visit(parsed_ast)
         ast.fix_missing_locations(transformed_ast)
-        inc_lineno = self.def_file_lineno - self.def_lineno
+        inc_lineno = self.def_file_lineno - 1
         ast.increment_lineno(transformed_ast, inc_lineno)
         return transformed_ast
 
     def _compile_and_exec(self, transformed_ast):
         compiled_code = compile(transformed_ast, filename=self.filename, mode='exec')
         local_namespace = {**self.kwargs}
-        # Overwrite globals using the current global namespace
         fn_globals = self.fn.__globals__
         for key, value in globals().items():
-            fn_globals[key] = value
+            if key not in fn_globals:
+                fn_globals[key] = value
         exec(compiled_code, fn_globals, local_namespace)
         return local_namespace[self.fn.__name__]
 
