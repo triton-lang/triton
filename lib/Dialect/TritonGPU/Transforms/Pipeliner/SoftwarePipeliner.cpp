@@ -25,6 +25,10 @@
 // to create async operations and create a modulo schedule. Then we call the
 // expander to generate the prologue and new loop.
 //===----------------------------------------------------------------------===//
+static llvm::cl::opt<bool>
+    DumpSWPFailure("dump-swp-failure", llvm::cl::Hidden,
+                       llvm::cl::init(false),
+                       llvm::cl::desc("dump warning if SWP fails"));
 
 namespace mlir {
 namespace triton {
@@ -123,6 +127,9 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
       bool pipelined = pipelineLoop(forOp, loopNumStages);
+      if (DumpSWPFailure && !pipelined) {
+        forOp->emitRemark("SWP failes in inner most loop");
+      }
       if (pipelined && outerLoop && getNumStagesOrDefault(outerLoop) > 1)
         outerLoops.insert(outerLoop);
     }
