@@ -1139,14 +1139,14 @@ class FunctionRewriter:
         except Exception:
             return self.fn
 
-        # truncate lines before @triton.jit, which is the last decorator
+        # truncate lines before def
         # @triton.autotune(...)
         # ...
-        # @triton.jit <- this line is the last decorator, which must be a triton.jit
-        #
+        # @triton.jit
+        # ...
         # def foo(...): <- this line is the function definition
         self.filename, self.def_file_lineno = self._get_jit_fn_file_line()
-        self.last_decorator_lineno, self.def_lineno = self._find_decorator_and_def(lines)
+        self.def_lineno = self._find_def(lines)
         src = self._prepare_source(lines)
         transformed_ast = self._transform_ast(src)
         return self._compile_and_exec(transformed_ast)
@@ -1155,19 +1155,16 @@ class FunctionRewriter:
         from .jit import get_jit_fn_file_line, JITFunction
         return get_jit_fn_file_line(JITFunction(self.fn))
 
-    def _find_decorator_and_def(self, lines):
-        last_decorator_lineno = 0
+    def _find_def(self, lines):
         def_lineno = 0
         # Line numbers start from 1
         for i, line in enumerate(lines):
-            if line.strip().startswith("@"):
-                last_decorator_lineno = i + 1
             if line.strip().startswith("def "):
                 def_lineno = i + 1
-        return last_decorator_lineno, def_lineno
+        return def_lineno
 
     def _prepare_source(self, lines):
-        lines = lines[self.last_decorator_lineno - 1:]
+        lines = lines[self.def_lineno - 1:]
         src = ''.join(lines)
         return textwrap.dedent(src)
 
@@ -1175,8 +1172,7 @@ class FunctionRewriter:
         parsed_ast = ast.parse(src)
         transformed_ast = self.ast_transformer.visit(parsed_ast)
         ast.fix_missing_locations(transformed_ast)
-        # Default line numbers start from 1, so the difference should -1
-        inc_lineno = (self.def_file_lineno - 1) - (self.def_lineno - self.last_decorator_lineno)
+        inc_lineno = self.def_file_lineno - self.def_lineno
         ast.increment_lineno(transformed_ast, inc_lineno)
         return transformed_ast
 
@@ -1188,7 +1184,7 @@ class FunctionRewriter:
         for key, value in globals().items():
             fn_globals[key] = value
         exec(compiled_code, fn_globals, local_namespace)
-        return local_namespace[self.fn.__name__].fn
+        return local_namespace[self.fn.__name__]
 
 
 class InterpretedFunction:
