@@ -18,6 +18,83 @@ namespace triton {
 } // namespace triton
 } // namespace mlir
 
+namespace {
+
+constexpr int kPtrBitWidth = 64;
+
+static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
+  for (const NamedAttribute attr : attrs)
+    op->setAttr(attr.getName(), attr.getValue());
+}
+
+static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
+  unsigned inVec = 0;
+  unsigned outVec = 0;
+  auto smemShape = triton::getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
+  unsigned elems = getNumElements<unsigned>(smemShape);
+  auto srcType = cvtOp.getSrc().getType();
+  auto bytes =
+      isa<triton::PointerType>(srcType.getElementType())
+          ? elems * kPtrBitWidth / 8
+          : elems * std::max<int>(8, srcType.getElementTypeBitWidth()) / 8;
+
+  return bytes;
+}
+
+bool isPowerOfTwo(unsigned x) { return x && (x & (x - 1)) == 0; }
+
+static std::vector<std::pair<int, int>> factorizePowerOf2(int n) {
+  assert(isPowerOfTwo(n));
+  int x = log2(n);
+  std::vector<std::pair<int, int>> pairs;
+
+  for (int i = 0; i <= x / 2; ++i) {
+    int j = x - i;
+    pairs.push_back({pow(2, i), pow(2, j)});
+    pairs.push_back({pow(2, j), pow(2, i)});
+  }
+
+  return pairs;
+}
+
+static std::pair<triton::gpu::ConvertLayoutOp, triton::gpu::ConvertLayoutOp>
+createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
+                    triton::gpu::ConvertLayoutOp &cvtOp,
+                    std::pair<unsigned, unsigned> warpsPerCta) {
+  unsigned warpsPerCtaX = warpsPerCta.first;
+  unsigned warpsPerCtaY = warpsPerCta.second;
+  auto srcType = cvtOp.getSrc().getType();
+  auto dstType = cvtOp.getType();
+
+  auto newDstType = RankedTensorType::get(
+      dstType.getShape(), dstType.getElementType(), dstType.getEncoding());
+  RankedTensorType newSrcType;
+  if (auto srcMfma =
+          dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcType.getEncoding())) {
+    auto newMfmaEnc = triton::gpu::AMDMfmaEncodingAttr::get(
+        mod.getContext(), srcMfma.getVersionMajor(), srcMfma.getVersionMinor(),
+        {warpsPerCtaX, warpsPerCtaY}, srcMfma.getMDim(), srcMfma.getNDim(),
+        srcMfma.getIsTransposed(), srcMfma.getCTALayout());
+
+    newSrcType = RankedTensorType::get(srcType.getShape(),
+                                       srcType.getElementType(), newMfmaEnc);
+  } else if (auto srcWmma = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(
+                 srcType.getEncoding())) {
+    auto newWmmaEnc = triton::gpu::AMDWmmaEncodingAttr::get(
+        mod.getContext(), {warpsPerCtaX, warpsPerCtaY}, srcWmma.getCTALayout());
+
+    newSrcType = RankedTensorType::get(srcType.getShape(),
+                                       srcType.getElementType(), newWmmaEnc);
+  }
+
+  auto tmpCvt = builder.create<triton::gpu::ConvertLayoutOp>(
+      cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
+  auto newEpilogueCvt = builder.create<triton::gpu::ConvertLayoutOp>(
+      cvtOp.getLoc(), newDstType, tmpCvt);
+
+  return std::make_pair(tmpCvt, newEpilogueCvt);
+}
+
 struct DecomposeUnsupportedAMDConversions
     : public mlir::triton::impl::DecomposeUnsupportedAMDConversionsBase<
           DecomposeUnsupportedAMDConversions> {
