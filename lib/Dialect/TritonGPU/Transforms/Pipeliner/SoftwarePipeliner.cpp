@@ -41,11 +41,8 @@ static bool preCondition(scf::ForOp forOp) {
                    [](Value operand) {
                      Operation *def = operand.getDefiningOp();
                      return !def;
-                   })) {
-    forOp->emitRemark() << "Warning: SWP fails due to loop distance is greater than 1";
+                   }))
     return false;
-  }
-
   // Don't pipeline outer loops.
   if (forOp
           ->walk([&](Operation *op) {
@@ -55,7 +52,7 @@ static bool preCondition(scf::ForOp forOp) {
               return WalkResult::interrupt();
             return WalkResult::advance();
           })
-      .wasInterrupted()) {
+          .wasInterrupted()) {
     forOp->emitRemark() << "Warning: SWP fails on the outer loop";
     return false;
   }
@@ -107,10 +104,9 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     // global control.
     if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
       return numStages;
-
     return mlir::cast<IntegerAttr>(
-                         forOp->getAttr(mlir::triton::kNumStagesAttrName))
-                         .getInt();
+               forOp->getAttr(mlir::triton::kNumStagesAttrName))
+        .getInt();
   }
 
   void runOnOperation() override {
@@ -121,12 +117,8 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
         loops.push_back(forOp);
     });
 
-    if (loops.empty()) {
-      auto op = getOperation();
-      op->emitRemark() << "Warning: SWP fails. There is no loop with num_stages greater than 1";
+    if (loops.empty())
       return;
-    }
-
 
     llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
     for (scf::ForOp forOp : loops) {

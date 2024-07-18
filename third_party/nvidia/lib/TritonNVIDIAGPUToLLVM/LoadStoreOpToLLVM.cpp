@@ -173,9 +173,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       LLVM_DEBUG(llvm::dbgs() << " vec = " << vec << '\n');
     }
 
-    if (vec == 1 && numElems > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = "
-                       << vec << " numElems = " << numElems << "\n";
+    if (vec == 1 && numElems > 1) {
+      auto maskStr = !llMask ? "no mask" : std::to_string(getMaskAlignment(mask));
+      op->emitRemark() << "Warning: vectorization fails vec = " << vec
+                       << " numElems = " << numElems
+                       << " mask is " << maskStr << "\n";
+    }
 
     // Get the LLVM values for pointers
     auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -392,9 +395,12 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    if (vec == 1 && elemsPerThread > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = "
-                       << vec << " elemsPerThread = " << elemsPerThread;
+    if (vec == 1 && elemsPerThread > 1) {
+      auto maskStr = !llMask ? "no mask" : std::to_string(getMaskAlignment(op.getMask()));
+      op->emitRemark() << "Warning: vectorization fails vec = " << vec
+                       << " elemsPerThread = " << elemsPerThread
+                       << " mask is " << maskStr << "\n";
+    }
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     const size_t dtsize =
@@ -531,8 +537,8 @@ struct AtomicCASOpConversion
     }
 
     if (vec == 1 && elemsPerThread > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = "
-                       << vec << " elemsPerThread = " << elemsPerThread;
+      op->emitRemark() << "Warning: vectorization fails vec = " << vec
+                       << " elemsPerThread = " << elemsPerThread << "\n";
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
