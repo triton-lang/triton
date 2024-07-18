@@ -95,7 +95,7 @@ jobs:
     needs: Runner-Preparation-AMD
     if: needs.Runner-Preparation-AMD.outputs.matrix-HIP != ''
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation-AMD.outputs.matrix-HIP)}}
