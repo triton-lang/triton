@@ -166,6 +166,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getTotalElemsPerThread(ptr.getType());
+    unsigned vecOrig = vec;
     if (llMask) {
       LLVM_DEBUG(DBGS() << "vec = " << vec
                         << " mask_alignment = " << getMaskAlignment(mask));
@@ -174,12 +175,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     }
 
     if (vec == 1 && numElems > 1) {
-      auto maskStr = !llMask ? "no mask" : std::to_string(getMaskAlignment(mask));
+      int maskValue = !llMask ? -1 : getMaskAlignment(mask);
       op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " numElems = " << numElems
-                       << " mask is " << maskStr << "\n";
+                       << " origin vec = " << vecOrig
+                       << " numElems = " << numElems << " mask is " << maskValue
+                       << "\n";
     }
-
     // Get the LLVM values for pointers
     auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
     assert(ptrElems.size() == numElems);
@@ -385,6 +386,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     assert(ptrElems.size() == valueElems.size());
 
     // Determine the vectorization size
+    unsigned vecOrig = vec;
     SmallVector<Value> maskElems;
     if (llMask) {
       Value mask = op.getMask();
@@ -396,10 +398,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     }
 
     if (vec == 1 && elemsPerThread > 1) {
-      auto maskStr = !llMask ? "no mask" : std::to_string(getMaskAlignment(op.getMask()));
+      int mask = !llMask ? -1 : getMaskAlignment(op.getMask());
       op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " elemsPerThread = " << elemsPerThread
-                       << " mask is " << maskStr << "\n";
+                       << " origin vec = " << vecOrig
+                       << " elemsPerThread = " << elemsPerThread << " mask is "
+                       << mask << "\n";
     }
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
@@ -530,6 +533,7 @@ struct AtomicCASOpConversion
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     // vec = 1 for scalar
     auto vec = getVectorSize(op.getPtr());
+    auto vecOrig = vec;
     // tensor
     if (tensorTy) {
       auto valTy = cast<RankedTensorType>(op.getVal().getType());
@@ -538,6 +542,7 @@ struct AtomicCASOpConversion
 
     if (vec == 1 && elemsPerThread > 1)
       op->emitRemark() << "Warning: vectorization fails vec = " << vec
+                       << " origin vec = " << vecOrig
                        << " elemsPerThread = " << elemsPerThread << "\n";
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
@@ -657,6 +662,7 @@ struct AtomicRMWOpConversion
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
     auto vec = getVectorSize(ptr);
+    auto vecOrig = vec;
     int numElems = 1;
     // tensor
     if (tensorTy) {
@@ -667,8 +673,9 @@ struct AtomicRMWOpConversion
     }
 
     if (vec == 1 && numElems > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = "
-                       << vec  << " numElems = " << numElems;
+      op->emitRemark() << "Warning: vectorization fails vec = " << vec
+                       << " origin vec = " << vecOrig
+                       << " numElems = " << numElems;
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
 

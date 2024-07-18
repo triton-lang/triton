@@ -52,10 +52,9 @@ static bool preCondition(scf::ForOp forOp) {
               return WalkResult::interrupt();
             return WalkResult::advance();
           })
-          .wasInterrupted()) {
-    forOp->emitRemark() << "Warning: SWP fails on the outer loop";
+          .wasInterrupted())
     return false;
-  }
+
   return true;
 }
 
