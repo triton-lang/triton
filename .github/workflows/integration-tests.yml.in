@@ -286,13 +286,14 @@ jobs:
           python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
       - name: Run interpreter tests
-        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
+        if: ${{ matrix.runner[0] == 'h100-runner-set' }}
         env:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
           python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py language/test_subprocess.py runtime/test_autotuner::test_kwargs[False]\
+           language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
+           runtime/test_autotuner.py::test_kwargs[False]\
            ../../tutorials/06-fused-attention.py::test_op --device cpu
 
       - &run-cpp-unittests-step

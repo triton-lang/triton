@@ -2879,7 +2879,8 @@ void LocalAllocOp::getEffects(
   effects.emplace_back(MemoryEffects::Allocate::get(),
                        mlir::triton::gpu::SharedMemory::get());
   if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(), getResult(),
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         getOperation()->getOpResult(0),
                          mlir::triton::gpu::SharedMemory::get());
 }
 
@@ -2898,29 +2899,56 @@ OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
   return loadSrc;
 }
 
+LogicalResult LocalAllocOp::verify() {
+  if (!getSrc()) {
+    if (!getType().getMutableMemory())
+      return emitError("uninitialized alloc must have a mutable memdesc type");
+    return success();
+  }
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitError("result element type must match desc element type");
+  }
+  return success();
+}
+
 // LocalLoadOp
 void LocalLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::gpu::SharedMemory::get());
 }
 
 // LocalStoreOp
+LogicalResult LocalStoreOp::verify() {
+  if (!getDst().getType().getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+  return success();
+}
+
 void LocalStoreOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), getDst(),
+  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
                        mlir::triton::gpu::SharedMemory::get());
 }
 
 // AsyncCopyGlobalToLocalOp
+LogicalResult AsyncCopyGlobalToLocalOp::verify() {
+  if (!getResult().getType().getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+  return success();
+}
+
 void AsyncCopyGlobalToLocalOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), getSrc(),
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), getResult(),
+  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
                        mlir::triton::gpu::SharedMemory::get());
 }
 
