@@ -292,16 +292,15 @@ class CUDABackend(BaseBackend):
             fsrc.flush()
             fbin = fsrc.name + '.o'
 
-            line_info = '' if os.environ.get('TRITON_DISABLE_LINE_INFO') else ' -lineinfo'
-            fmad = '' if opt.enable_fp_fusion else ' --fmad=false'
-            suffix = 'a ' if capability == 90 else ' '
-            if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1":
-                cmd = f'{ptxas}{line_info}{fmad} -v --opt-level 0 --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
-            else:
-                cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
-
+            line_info = [] if os.environ.get('TRITON_DISABLE_LINE_INFO') else ['-lineinfo']
+            fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
+            suffix = 'a' if capability == 90 else ''
+            opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
+            ptxas_cmd = [
+                ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name=sm_{capability}{suffix}', fsrc.name, '-o', fbin
+            ]
             try:
-                subprocess.run(cmd, shell=True, check=True)
+                subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
             except subprocess.CalledProcessError as e:
                 with open(flog.name) as log_file:
                     log = log_file.read()
