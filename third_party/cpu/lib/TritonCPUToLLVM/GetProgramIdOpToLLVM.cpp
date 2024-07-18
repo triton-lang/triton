@@ -1,4 +1,5 @@
 #include "TypeConverter.h"
+#include "Utility.h"
 
 #include "cpu/include/TritonCPUToLLVM/Passes.h"
 
@@ -43,39 +44,30 @@ public:
 };
 
 // TODO: use enums to access struct fields.
-struct GetProgramIdOpConversion : public OpConversionPattern<GetProgramIdOp> {
+struct GetProgramIdOpConversion
+    : public OpConversionPattern<triton::GetProgramIdOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(GetProgramIdOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
     assert(funcOp && "expected LLVM::FuncOp as a parent of GetProgramIdOp");
-    auto args = funcOp.getArguments();
-    // First three of last six args are x, y, z program ids.
-    auto argIdx = args.size() - 6 + op.getAxisAsInt();
-    assert(argIdx < args.size() && "out-of-bounds arg index");
-    assert(args[argIdx].getType().isInteger(32) && "unexpected arg type");
-    rewriter.replaceOp(op, args[argIdx]);
+    rewriter.replaceOp(op, getProgramId(funcOp, op.getAxisAsInt()));
     return success();
   }
 };
 
 struct GetNumProgramsOpConversion
-    : public OpConversionPattern<GetNumProgramsOp> {
+    : public OpConversionPattern<triton::GetNumProgramsOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(GetNumProgramsOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
     assert(funcOp && "expected LLVM::FuncOp as a parent of GetNumProgramsOp");
-    auto args = funcOp.getArguments();
-    // Last three of args are gridX, gridY, gridZ (bounds) of grid.
-    auto argIdx = args.size() - 3 + op.getAxisAsInt();
-    assert(argIdx < args.size() && "out-of-bounds arg index");
-    assert(args[argIdx].getType().isInteger(32) && "unexpected arg type");
-    rewriter.replaceOp(op, args[argIdx]);
+    rewriter.replaceOp(op, getNumPrograms(funcOp, op.getAxisAsInt()));
     return success();
   }
 };

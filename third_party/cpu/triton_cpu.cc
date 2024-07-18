@@ -26,9 +26,6 @@ namespace py = pybind11;
 
 void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   using namespace mlir::triton;
-  // m.def("add_to_llvmir", [](mlir::PassManager &pm) {
-  //   pm.addPass(mlir::triton::createConvertTritonCPUToLLVMPass());
-  // });
   m.def("add_triton_to_triton_cpu_pipeline", [](mlir::PassManager &pm) {
     mlir::triton::cpu::tritonToTritonCPUPipelineBuilder(pm);
   });
@@ -99,7 +96,9 @@ void init_triton_cpu(py::module &&m) {
   m.def("find_kernel_names", [](mlir::ModuleOp &mod) {
     std::vector<std::string> res;
     mod.walk([&](mlir::FunctionOpInterface funcOp) {
-      if (funcOp.getVisibility() == mlir::SymbolTable::Visibility::Public)
+      // Kernel functions are public and have a body.
+      if (!funcOp.getFunctionBody().empty() &&
+          funcOp.getVisibility() == mlir::SymbolTable::Visibility::Public)
         res.push_back(funcOp.getName().str());
     });
     return res;

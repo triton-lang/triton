@@ -154,6 +154,8 @@ class CPUBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
+        if llvm_mod is None:
+            raise RuntimeError("Failed to convert to LLVM IR")
         llvm.set_host_target(llvm_mod)
         #if options.extern_libs:
         #    paths = [path for (name, path) in options.extern_libs]

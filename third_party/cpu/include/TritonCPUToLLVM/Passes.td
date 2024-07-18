@@ -57,4 +57,13 @@ def AtomicOpsToLLVM : Pass<"triton-cpu-atomic-ops-to-llvm", "mlir::ModuleOp"> {
                              "mlir::triton::TritonDialect"];
 }
 
+def DebugOpsToLLVM : Pass<"triton-cpu-debug-ops-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Convert Triton debug operations (prints and asserts) to LLVM.";
+    let description = [{}];
+    let constructor = "mlir::triton::cpu::createDebugOpsToLLVMPass()";
+
+    let dependentDialects = ["mlir::triton::cpu::TritonCPUDialect",
+                             "mlir::triton::TritonDialect"];
+}
+
 #endif
