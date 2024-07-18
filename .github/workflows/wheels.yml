@@ -11,19 +11,16 @@ jobs:
   Build-Wheels:
     timeout-minutes: 60
 
-    runs-on: [self-hosted, CPU]
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-14]
     permissions:
       id-token: write
       contents: read
 
     steps:
-
-      - name: Prune stale docker containers
-        run: |
-          # If cibuildwheel crashes (or, say, is OOM-killed), it leaves behind a
-          # docker container.  Eventually these consume all the disk space on
-          # this machine.
-          docker container prune -f
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,12 +37,12 @@ jobs:
             echo "new_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Patch setup.py
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        run: |
-          echo "" >> python/setup.cfg
-          echo "[build_ext]" >> python/setup.cfg
-          echo "base-dir=/project" >> python/setup.cfg
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.*' 
+
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel==2.19.2
 
       - name: Build wheels
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
@@ -62,41 +59,11 @@ jobs:
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_x86_64:latest"
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
           # With this install, it gets clang 16.0.6.
-          export CIBW_BEFORE_ALL="dnf install clang lld -y";
-          export CIBW_SKIP="cp{35,36,37}-*"
-          export CIBW_BUILD="cp3*-manylinux_x86_64"
+          #export CIBW_BEFORE_ALL="dnf install clang lld -y";
+          export CIBW_BUILD="cp3*-macosx_arm64"
           python3 -m cibuildwheel python --output-dir wheelhouse
 
-      - name: Install Azure CLI
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-      - name: Azure login
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        uses: azure/login@v2
+      - uses: actions/upload-artifact@v4
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - id: generate-token
-        name: Generate token
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        run: |
-          AZ_TOKEN=$(az account get-access-token --query accessToken)
-          echo "::add-mask::$AZ_TOKEN"
-          echo "access_token=$AZ_TOKEN" >> "$GITHUB_OUTPUT"
-
-      - name: Publish wheels to Azure DevOps
-        if: ${{ steps.check-version.outputs.new_commit == 'true' }}
-        run: |
-          python3 -m pip install twine
-          python3 -m twine upload -r Triton-Nightly -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
-
-      - name: Azure Logout
-        if: ${{ steps.check-version.outputs.new_commit == 'true' && (success() || failure()) }}
-        run: |
-          az logout
-          az cache purge
-          az account clear
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl

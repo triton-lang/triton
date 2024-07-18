@@ -64,3 +64,6 @@ docs/sg_execution_times.rst
 
 # Vim
 *.swp
+
+# local wheel packages
+wheelhouse/*
