@@ -250,7 +250,7 @@ jobs:
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
           python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
       - name: Run interpreter tests
-        if: ${{ matrix.runner == "h100-runner-set" }}
+        if: ${{ matrix.runner[0] == 'h100-runner-set' }}
         env:
           TRITON_INTERPRET: "1"
         run: |
