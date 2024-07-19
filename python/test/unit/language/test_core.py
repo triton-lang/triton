@@ -3771,14 +3771,15 @@ def test_load_cache_modifier(cache, device):
 
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
-    if is_hip():
-        amdgcn = pgm.asm['amdgcn']
-        cache_modifier_str = 'nt' if 'gfx94' in get_arch() else 'glc'
-        global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
-        if cache == '':
-            assert cache_modifier_str not in global_load_line[0]
-        if cache == '.cg':
-            assert cache_modifier_str in global_load_line[0]
+    if not is_cuda():
+        if is_hip():
+            amdgcn = pgm.asm['amdgcn']
+            cache_modifier_str = 'nt' if 'gfx94' in get_arch() else 'glc'
+            global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
+            if cache == '':
+                assert cache_modifier_str not in global_load_line[0]
+            if cache == '.cg':
+                assert cache_modifier_str in global_load_line[0]
         return
 
     ptx = pgm.asm['ptx']
