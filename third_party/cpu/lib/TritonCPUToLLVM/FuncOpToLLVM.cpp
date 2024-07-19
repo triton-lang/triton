@@ -88,16 +88,18 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     SmallVector<NamedAttribute> amendedAttrs;
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
     SmallVector<Attribute> amendedArgAttrs;
-    if (funcOp.getAllArgAttrs())
+    if (funcOp.getAllArgAttrs()) {
       amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedAttrs.push_back(rewriter.getNamedAttr(
-        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      amendedAttrs.push_back(
+          rewriter.getNamedAttr(funcOp.getArgAttrsAttrName(),
+                                rewriter.getArrayAttr(amendedArgAttrs)));
+    }
     // 3. Add a new arguments to the region
     auto amendedFuncOp = rewriter.create<triton::FuncOp>(
         funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
