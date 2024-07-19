@@ -156,10 +156,13 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal) {
+             Value pred, Value falseVal, bool nt) {
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Load, funcType);
+  auto funcNameRaw = nt ? mlir::LLVM::AMD::Predicated_Load_NT
+                        : mlir::LLVM::AMD::Predicated_Load;
+  auto funcName = mangleFunc(funcNameRaw, funcType);
+
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
   auto loadVal =
