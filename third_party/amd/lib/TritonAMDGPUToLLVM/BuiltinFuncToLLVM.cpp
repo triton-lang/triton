@@ -26,9 +26,9 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     auto callOp = cast<LLVM::CallOp>(op);
     if (isPredicatedLoadNT(callOp)) {
-      return convertPredicatedLoadNT(callOp, rewriter);
+      return convertPredicatedLoad(callOp, rewriter, /*nt=*/true);
     } else if (isPredicatedLoad(callOp)) {
-      return convertPredicatedLoad(callOp, rewriter);
+      return convertPredicatedLoad(callOp, rewriter, /*nt=*/false);
     } else if (isPredicatedStore(callOp)) {
       return convertPredicatedStore(callOp, rewriter);
     } else if (isWrappedLLVMIntrinsic(callOp)) {
@@ -87,38 +87,8 @@ private:
   }
 
   LogicalResult convertPredicatedLoad(LLVM::CallOp callOp,
-                                      mlir::PatternRewriter &rewriter) const {
-    auto operands = callOp.getOperands();
-    auto result = callOp.getResult();
-
-    auto loc = callOp.getLoc();
-    auto elemTy = result.getType();
-    auto ptr = operands[0];
-    auto pred = operands[1];
-    auto falseVal = operands[2];
-
-    Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterLoad =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-    afterLoad->addArgument({elemTy}, {loc});
-    Block *trueBlock = rewriter.createBlock(afterLoad);
-    Block *falseBlock =
-        rewriter.splitBlock(trueBlock, rewriter.getInsertionPoint());
-    rewriter.setInsertionPointToEnd(currentBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
-    rewriter.setInsertionPointToStart(trueBlock);
-    auto loadOp = rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr);
-    rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
-    rewriter.setInsertionPointToStart(falseBlock);
-    rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
-    rewriter.setInsertionPointToStart(afterLoad);
-    Value loadVal = afterLoad->getArgument(0);
-    rewriter.replaceOp(callOp, loadVal);
-    return mlir::success();
-  }
-
-  LogicalResult convertPredicatedLoadNT(LLVM::CallOp callOp,
-                                        mlir::PatternRewriter &rewriter) const {
+                                      mlir::PatternRewriter &rewriter,
+                                      bool nt) const {
     auto operands = callOp.getOperands();
     auto result = callOp.getResult();
 
@@ -139,7 +109,8 @@ private:
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
     rewriter.setInsertionPointToStart(trueBlock);
     auto loadOp =
-        rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, 0, false, true);
+        nt ? rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, 0, false, true)
+           : rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr);
     rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
     rewriter.setInsertionPointToStart(falseBlock);
     rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);

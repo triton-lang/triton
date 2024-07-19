@@ -156,7 +156,6 @@ void init_triton_ir(py::module &&m) {
       .value("WB", CacheModifier::WB)
       .value("CS", CacheModifier::CS)
       .value("WT", CacheModifier::WT)
-      .value("NT", CacheModifier::NT)
       .export_values();
 
   py::enum_<MemSemantic>(m, "MEM_SEMANTIC", py::module_local())

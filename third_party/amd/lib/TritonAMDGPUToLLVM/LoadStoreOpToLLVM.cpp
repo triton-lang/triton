@@ -224,7 +224,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         falseVal = v;
       }
 
-      bool nt = op.getCache() == triton::CacheModifier::NT;
+      bool nt = op.getCache() == triton::CacheModifier::CG;
       auto loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal, nt);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(

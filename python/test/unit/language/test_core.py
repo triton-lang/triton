@@ -3758,7 +3758,7 @@ def test_masked_load_shared_memory(dtype, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("cache", ["", ".ca", ".cg", ".nt"])
+@pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
 def test_load_cache_modifier(cache, device):
     src = torch.empty(128, device=device)
     dst = torch.empty(128, device=device)
@@ -3771,13 +3771,14 @@ def test_load_cache_modifier(cache, device):
 
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
-    if not is_cuda():
+    if is_hip():
         amdgcn = pgm.asm['amdgcn']
+        cache_modifier_str = 'nt' if 'gfx942' in get_arch() else 'glc'
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
         if cache == '':
-            assert 'nt' not in global_load_line[0]
-        if cache == '.nt':
-            assert 'nt' in global_load_line[0]
+            assert cache_modifier_str not in global_load_line[0]
+        if cache == '.cg':
+            assert cache_modifier_str in global_load_line[0]
         return
 
     ptx = pgm.asm['ptx']
