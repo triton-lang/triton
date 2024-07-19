@@ -28,10 +28,8 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
 }
 
 static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
-  unsigned inVec = 0;
-  unsigned outVec = 0;
-  auto smemShape = triton::getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
-  unsigned elems = getNumElements<unsigned>(smemShape);
+  auto scratchConfig = triton::getScratchConfigForCvtLayout(cvtOp);
+  unsigned elems = getTotalSize<unsigned>(scratchConfig.paddedRepShape);
   auto srcType = cvtOp.getSrc().getType();
   auto bytes =
       isa<triton::PointerType>(srcType.getElementType())
@@ -41,10 +39,8 @@ static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
   return bytes;
 }
 
-bool isPowerOfTwo(unsigned x) { return x && (x & (x - 1)) == 0; }
-
 static std::vector<std::pair<int, int>> factorizePowerOf2(int n) {
-  assert(isPowerOfTwo(n));
+  assert(llvm::isPowerOf2_32(n) && "n must be a power of 2");
   int x = log2(n);
   std::vector<std::pair<int, int>> pairs;
 

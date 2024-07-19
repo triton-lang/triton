@@ -488,10 +488,11 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    unsigned inVec = 0;
-    unsigned outVec = 0;
-    auto origRepShape = getRepShapeForCvtLayout(op);
-    auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
+    auto scratchConfig = getScratchConfigForCvtLayout(op);
+    unsigned inVec = scratchConfig.inVec;
+    unsigned outVec = scratchConfig.outVec;
+    auto origRepShape = scratchConfig.repShape;
+    auto paddedRepShape = scratchConfig.paddedRepShape;
 
     unsigned outElems = getTotalElemsPerThread(dstTy);
     auto outOrd = getOrder(dstLayout);

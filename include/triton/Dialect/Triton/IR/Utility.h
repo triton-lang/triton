@@ -25,7 +25,7 @@ template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
 template <typename VecT> auto product(const VecT &vec) {
   return product(llvm::ArrayRef(vec));
 }
-template <typename Int> Int getNumElements(ArrayRef<Int> shape) {
+template <typename Int> Int getTotalSize(ArrayRef<Int> shape) {
   if (shape.empty()) {
     return 0;
   }

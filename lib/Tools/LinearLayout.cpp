@@ -839,7 +839,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   // that choice.
   //
   // Let A' be A with the last line changed to "=4", and similarly for B'.
-  // When transfering from A' to B', we can't cross blocks even if we wanted
+  // When transferring from A' to B', we can't cross blocks even if we wanted
   // to, because the two blocks now have different data.  But also, any
   // mapping of thread+block from A' to B' is also valid for mapping from A
   // to B.

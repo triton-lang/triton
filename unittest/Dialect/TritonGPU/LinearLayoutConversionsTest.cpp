@@ -1005,7 +1005,9 @@ TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout) {
                                   {S("warp"), {{16}, {32}, {0}}},
                                   {S("block"), {{128}, {0}, {64}, {2}}}},
                                  {S("dim0")});
-  EXPECT_EQ(chooseShemLayoutForRegToRegConversion(ll, ll),
+  MLIRContext ctx;
+  EXPECT_EQ(chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{256},
+                                                  /*repShape=*/{256}),
             LinearLayout({{S("offset"), {{1}, {2}, {8}, {4}, {16}, {32}}},
                           {S("block"), {{128}, {0}, {64}, {2}}}},
                          {S("dim0")}));
@@ -1017,7 +1019,9 @@ TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout_Empty) {
                                   {S("warp"), {{0}}},
                                   {S("block"), {}}},
                                  {S("dim0")});
-  EXPECT_EQ(chooseShemLayoutForRegToRegConversion(ll, ll),
+  MLIRContext ctx;
+  EXPECT_EQ(chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{},
+                                                  /*repShape=*/{}),
             LinearLayout({{S("offset"), {}}, {S("block"), {}}}, {S("dim0")}));
 }
 
@@ -1037,7 +1041,9 @@ TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout_Multidim) {
        {S("block"), {}}},
       {S("dim0"), S("dim1"), S("dim2"), S("dim3")});
 
-  EXPECT_EQ(chooseShemLayoutForRegToRegConversion(src, dst),
+  MLIRContext ctx;
+  EXPECT_EQ(chooseShemLayoutForRegToRegConversion(
+                &ctx, /*tensorShape=*/{4, 4, 4, 4}, /*repShape=*/{4, 4, 4, 4}),
             LinearLayout({{S("offset"),
                            {{0, 0, 1, 0},
                             {0, 0, 2, 0},

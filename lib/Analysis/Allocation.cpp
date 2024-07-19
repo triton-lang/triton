@@ -57,7 +57,8 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   return {inOrd, outOrd};
 }
 
-SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
+static SmallVector<unsigned>
+getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
   Attribute srcLayout = srcTy.getEncoding();
@@ -76,8 +77,6 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
 
   auto srcShapePerCTA = getShapePerCTA(srcTy);
   auto dstShapePerCTA = getShapePerCTA(dstTy);
-  auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
-  auto dstShapePerCTATile = getShapePerCTATile(dstLayout, dstTy.getShape());
 
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> repShape(rank);
@@ -93,13 +92,14 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   return repShape;
 }
 
-SmallVector<unsigned>
-getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
-                             unsigned &outVec) {
-  auto repShape = getRepShapeForCvtLayout(op);
-  if (repShape.empty())
-    return repShape;
-  auto rank = repShape.size();
+ScratchConfig getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op) {
+  // Initialize vector sizes and stride
+  ScratchConfig scratchConfig;
+  scratchConfig.repShape = getRepShapeForCvtLayout(op);
+  scratchConfig.paddedRepShape = scratchConfig.repShape;
+  if (scratchConfig.repShape.empty())
+    return scratchConfig;
+  auto rank = scratchConfig.repShape.size();
   auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
   Attribute srcLayout = srcTy.getEncoding();
@@ -115,34 +115,38 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
   //       that we cannot do vectorization.
   unsigned innerDim = rank - 1;
-  inVec = outOrd[0] != innerDim  ? 1
-          : inOrd[0] != innerDim ? 1
-                                 : srcContigPerThread;
-  outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
+  scratchConfig.inVec = outOrd[0] != innerDim  ? 1
+                        : inOrd[0] != innerDim ? 1
+                                               : srcContigPerThread;
+  scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
 
   // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
   // codegen.
   if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
     if (mma.getVersionMajor() == 1) {
-      inVec = srcContigPerThread;
+      scratchConfig.inVec = srcContigPerThread;
     } else if (mlir::isa<BlockedEncodingAttr>(dstLayout)) {
       // when storing from mma layout and loading in blocked layout vectorizing
       // the load back gives better performance even if there is a
       // transposition.
-      outVec = dstContigPerThread;
+      scratchConfig.outVec = dstContigPerThread;
     }
   }
 
   if (rank <= 1)
-    return repShape;
+    return scratchConfig;
   // pad the last dimension
-  unsigned paddedDim = rank - 1;
+  scratchConfig.paddedDim = rank - 1;
   if (auto dstBlockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(dstLayout)) {
-    paddedDim = dstBlockedLayout.getOrder()[0];
+    scratchConfig.paddedDim = dstBlockedLayout.getOrder()[0];
   }
-  unsigned pad = std::max(inVec, outVec);
-  repShape[paddedDim] += pad;
-  return repShape;
+  scratchConfig.paddedStride =
+      scratchConfig.paddedRepShape[scratchConfig.paddedDim];
+  scratchConfig.paddedSize =
+      std::max(scratchConfig.inVec, scratchConfig.outVec);
+  scratchConfig.paddedRepShape[scratchConfig.paddedDim] +=
+      scratchConfig.paddedSize;
+  return scratchConfig;
 }
 
 // TODO: extend beyond scalars
@@ -271,10 +275,8 @@ private:
       // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
       //       also possible to realize it with other approaches in restricted
       //       conditions, such as warp-shuffle
-      unsigned inVec = 0;
-      unsigned outVec = 0;
-      auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
-      auto elems = getNumElements<unsigned>(smemShape);
+      auto scratchConfig = getScratchConfigForCvtLayout(cvtLayout);
+      auto elems = getTotalSize<unsigned>(scratchConfig.paddedRepShape);
       auto bytes =
           isa<triton::PointerType>(srcTy.getElementType())
               ? elems * kPtrBitWidth / 8
@@ -289,7 +291,7 @@ private:
         // nothing to do
       } else {
         auto smemShape = getScratchConfigForAtomicRMW(atomicRMWOp);
-        auto elems = getNumElements<unsigned>(smemShape);
+        auto elems = getTotalSize<unsigned>(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();
         auto bytes =
@@ -307,7 +309,7 @@ private:
         // nothing to do
       } else {
         auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
-        auto elems = getNumElements<unsigned>(smemShape);
+        auto elems = getTotalSize<unsigned>(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();
         auto bytes = isa<triton::PointerType>(elemTy)

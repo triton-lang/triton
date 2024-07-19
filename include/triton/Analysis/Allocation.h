@@ -18,10 +18,38 @@ namespace mlir {
 namespace triton {
 class AllocationAnalysis;
 
-SmallVector<unsigned>
-getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
-                             unsigned &outVec);
-SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op);
+struct ScratchConfig {
+  SmallVector<unsigned> repShape;
+  SmallVector<unsigned> paddedRepShape;
+  unsigned inVec{1};
+  unsigned outVec{1};
+  unsigned paddedDim;
+  unsigned paddedSize{0};
+  unsigned paddedStride;
+
+  ScratchConfig() = default;
+  ScratchConfig(SmallVector<unsigned> repShape,
+                SmallVector<unsigned> paddedRepShape, unsigned inVec,
+                unsigned outVec, unsigned paddedDim, unsigned paddedSize,
+                unsigned paddedStride)
+      : repShape(repShape), paddedRepShape(paddedRepShape), inVec(inVec),
+        outVec(outVec), paddedDim(paddedDim), paddedSize(paddedSize),
+        paddedStride(paddedStride) {}
+
+  void print(llvm::raw_ostream &os) const {
+    os << "repShape: [";
+    llvm::interleaveComma(repShape, os);
+    os << "]";
+    os << ", paddedRepShape: [";
+    llvm::interleaveComma(paddedRepShape, os);
+    os << "]";
+    os << ", inVec: " << inVec << ", outVec: " << outVec
+       << ", paddedDim: " << paddedDim << ", paddedSize: " << paddedSize
+       << ", paddedStride: " << paddedStride;
+  }
+};
+
+ScratchConfig getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op);
 
 } // namespace triton
 

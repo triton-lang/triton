@@ -321,6 +321,7 @@ bool emitTransferBetweenRegistersAndShared(
                       [&](auto offset) { return offset == 0; })) {
       return false;
     }
+    // Check if there's any cross CTA load.
     int32_t outBlock = idx.back();
     if (outBlock != inBlock) {
       return false;

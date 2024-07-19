@@ -74,9 +74,26 @@ bool isCrossCTAConversion(const LinearLayout &layout);
 // vectorized load/store per iteration.  (In the example, we'd try to do two
 // stages of size 4 32-bit values each, assuming the src/dst layouts allow us to
 // vectorize the stores or loads as 4xi32.)
-LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
-                                                   const LinearLayout &dst);
+LinearLayout chooseShemLayoutForRegToRegConversion(LinearLayout &src,
+                                                   LinearLayout &dst,
+                                                   int maxVecElems);
 
+// The legacy version of the linear layout conversion function.  We determined
+// the shared memory needed for a register-to-register conversion using a legacy
+// heuristic (i.e., repShape).  Then, we use the tensor shape to
+// construct a intermediate linear layout for the shared memory being used.  The
+// intermediate layout is simply a mapping of contiguous sequence of integers to
+// the tensor shape.
+// The pesudo code of the conversion is as follows:
+// for rep in 0..numIterations:
+//  for iter in [0..numRegisters/storeVec]:
+//    store registers [iter * storeVec, (iter + 1) * storeVec)] to shared memory
+//  for iter in [0..numRegisters/loadVec]:
+//    load registers [iter * loadVec, (iter + 1) * loadVec)] from shared memory
+LinearLayout
+chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
+                                      ArrayRef<int64_t> tensorShape,
+                                      ArrayRef<unsigned> repShape);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

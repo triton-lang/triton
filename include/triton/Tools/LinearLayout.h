@@ -426,7 +426,6 @@ public:
 
   int32_t getBasis(StringAttr inDim, int32_t pos, StringAttr outDim) const {
     return getBasis(inDim, pos)[getOutDimIndex(outDim)];
-    ;
   }
 
   // These are in minor-to-major order, although if you don't flatten the dims
