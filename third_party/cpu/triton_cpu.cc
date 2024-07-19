@@ -11,8 +11,6 @@
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "triton/Conversion/TritonCPUToLLVM/Passes.h"
-#include "triton/Dialect/TritonCPU/IR/Dialect.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/TargetSelect.h"
 
