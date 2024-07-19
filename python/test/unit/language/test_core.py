@@ -3071,10 +3071,11 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)] + ([(16, 16, 8)] if "gfx9" in get_arch() else [])
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
      for input_precision in ['tf32', 'tf32x3', 'ieee']
-     for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
+     for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('int8',
+                                                                                  'int32'), ('float32', 'float32')]
      if not (input_precision != 'ieee' and (in_dtype in ['float16']))] +
     [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
-     for shape_nw in [[4, 4, 16, 4], [1, 128, 32, 4], [2, 128, 32, 2], [128, 1, 32, 4], [128, 2, 32, 2],
+     for shape_nw in [[4, 4, 16, 4], [1, 64, 32, 1], [1, 128, 32, 4], [2, 128, 32, 2], [128, 1, 32, 4], [128, 2, 32, 2],
                       [128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2],
                       [128, 256, 128, 8]]

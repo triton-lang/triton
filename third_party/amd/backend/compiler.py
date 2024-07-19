@@ -148,6 +148,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
+        amd.passes.ttgpuir.add_optimize_small_dot_operands(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if options.num_stages == 0 and amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_stream_pipeline(pm)
