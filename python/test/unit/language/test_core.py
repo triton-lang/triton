@@ -3773,7 +3773,7 @@ def test_load_cache_modifier(cache, device):
 
     if is_hip():
         amdgcn = pgm.asm['amdgcn']
-        cache_modifier_str = 'nt' if 'gfx942' in get_arch() else 'glc'
+        cache_modifier_str = 'nt' if 'gfx94' in get_arch() else 'glc'
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
         if cache == '':
             assert cache_modifier_str not in global_load_line[0]

@@ -108,9 +108,10 @@ private:
     rewriter.setInsertionPointToEnd(currentBlock);
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
     rewriter.setInsertionPointToStart(trueBlock);
-    auto loadOp =
-        nt ? rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr, 0, false, true)
-           : rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr);
+    auto loadOp = nt ? rewriter.create<LLVM::LoadOp>(
+                           loc, elemTy, ptr, /*alignment=*/0,
+                           /*isVolatile=*/false, /*isNonTemporal=*/true)
+                     : rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr);
     rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
     rewriter.setInsertionPointToStart(falseBlock);
     rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
