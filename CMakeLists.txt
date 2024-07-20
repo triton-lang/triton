@@ -47,6 +47,10 @@ if(NOT WIN32)
   find_library(TERMINFO_LIBRARY tinfo)
 endif()
 
+if(TRITON_BUILD_UT)
+  include(AddTritonUnitTest)
+endif()
+
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")

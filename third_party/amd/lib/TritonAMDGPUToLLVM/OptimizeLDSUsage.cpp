@@ -26,20 +26,16 @@
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include <numeric>
 
 using namespace mlir;
-namespace mlir {
-namespace triton {
+
+namespace mlir::triton {
 #define GEN_PASS_DEF_OPTIMIZEAMDLDSUSAGE
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 namespace {
 
@@ -162,11 +158,9 @@ class OptimizeAMDLDSUsage
     int64_t LDSSizeTarget;
   };
 
-  /**
-   * Assuming that all buffer above scratch buffer in memory space can be
-   * shifted down in memory, this function gives optimistic estimation of memory
-   * space available for scratch buffer.
-   */
+  // Assuming that all buffer above scratch buffer in memory space can be
+  // shifted down in memory, gives an optimistic estimation of memory space
+  // available for scratch buffer.
   int64_t
   computeTargetScratchBufferSize(triton::gpu::ConvertLayoutOp op,
                                  Allocation *allocation,
@@ -211,49 +205,40 @@ public:
   }
 
   void runOnOperation() override {
-    if (customLDSLimit == 0) {
-      if (targetArch == "") {
-        std::string message =
-            this->getName().str() + " requires architecture name";
-        llvm_unreachable(message.c_str());
-      }
-      triton::AMD::TargetInfo targetInfo(targetArch.c_str());
-      LDSLimit = targetInfo.getSharedMemorySize();
-    } else {
-      LDSLimit = customLDSLimit;
-    }
     ModuleOp mod = getOperation();
 
-    ModuleAllocation allocAnalysis(mod);
-    if (allocAnalysis.getSharedMemorySize() > LDSLimit) {
-      auto rootFunctions = allocAnalysis.getRoots();
-      for (auto rootFunc : rootFunctions) {
-        // Find operations with peak LDS consumption
-        auto candidates =
-            findLDSBottleneckLayoutConvert(allocAnalysis, rootFunc);
-        // Try to transform candidate operations to fit them into LDS
-        for (auto candidate : candidates)
-          tryFitCvtIntoLDS(candidate.op, candidate.LDSSizeTarget);
+    if ((this->LDSLimit = this->customLDSLimit) == 0) {
+      if (this->targetArch.empty()) {
+        mod->emitError("missing gfx* target for pass ")
+            << this->getName().str();
+        return signalPassFailure();
       }
+      triton::AMD::TargetInfo targetInfo(this->targetArch.c_str());
+      LDSLimit = targetInfo.getSharedMemorySize();
+    }
+
+    ModuleAllocation allocAnalysis(mod);
+    if (allocAnalysis.getSharedMemorySize() <= LDSLimit)
+      return;
+
+    auto rootFunctions = allocAnalysis.getRoots();
+    for (auto rootFunc : rootFunctions) {
+      // Find operations with peak LDS consumption
+      auto candidates = findLDSBottleneckLayoutConvert(allocAnalysis, rootFunc);
+      // Try to transform candidate operations to fit them into LDS
+      for (auto candidate : candidates)
+        tryFitCvtIntoLDS(candidate.op, candidate.LDSSizeTarget);
     }
   }
 };
 
 } // namespace
 
-namespace mlir {
-
-namespace triton {
-
-namespace AMD {
+namespace mlir::triton::AMD {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createOptimizeLDSUsagePass(StringRef targetArch, int customLDSLimit) {
   return std::make_unique<OptimizeAMDLDSUsage>(targetArch, customLDSLimit);
 }
 
-} // namespace AMD
-
-} // namespace triton
-
-} // namespace mlir
+} // namespace mlir::triton::AMD

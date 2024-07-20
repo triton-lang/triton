@@ -1,4 +1,4 @@
-//===- OptimizeLDSTest.cpp - Tests for OptimizeLDSUtility-===//
+//===- OptimizeLDSTest.cpp - Tests for OptimizeLDSUtility -----------------===//
 
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/OptimizeLDSUtility.h"
 #include <gtest/gtest.h>

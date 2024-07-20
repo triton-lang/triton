@@ -2,13 +2,12 @@
 #define TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_OPTIMIZE_LDS_UTILITY_H
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
 namespace mlir::triton::AMD {
 
 int getCvtOpLDSUsage(RankedTensorType srcTy, RankedTensorType dstTy);
 
 int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp op);
-
-bool isPowerOfTwo(unsigned x);
 
 std::vector<SmallVector<unsigned>> factorizePowerOf2(int n, int rank);
 
@@ -25,7 +24,6 @@ Attribute createTmpLayout(Attribute layout, ArrayRef<unsigned> warpsPerCTA);
  *
  * %1 = cvtOp %0 (srcLayout -> dstLayout) // original operation
  * ->
- * %1 = cvtOp %0 (srcLayout -> dstLayout) // original operation
  * %2 = cvtOp %0 (srcLayout -> tmpLayout) // <returned pair>.first
  * %3 = cvtOp %2 (tmpLayout -> dstLayout) // <returned pair>.second
  *

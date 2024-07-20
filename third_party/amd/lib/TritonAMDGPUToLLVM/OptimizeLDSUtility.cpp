@@ -1,20 +1,12 @@
 #include "OptimizeLDSUtility.h"
-#include "TritonAMDGPUToLLVM/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include <numeric>
+#include "llvm/Support/MathExtras.h"
 
-using namespace mlir;
-
-namespace mlir {
-namespace triton {
-namespace AMD {
+namespace mlir::triton::AMD {
 
 constexpr int kPtrBitWidth = 64;
 
@@ -36,8 +28,6 @@ int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp op) {
   return getCvtOpLDSUsage(op.getSrc().getType(), op.getType());
 }
 
-bool isPowerOfTwo(unsigned x) { return x && (x & (x - 1)) == 0; }
-
 static void stepFactorizationPow2(std::vector<SmallVector<unsigned>> &factors,
                                   SmallVector<unsigned> &curFactor,
                                   int restTwos, int dim) {
@@ -54,7 +44,7 @@ static void stepFactorizationPow2(std::vector<SmallVector<unsigned>> &factors,
 }
 
 std::vector<SmallVector<unsigned>> factorizePowerOf2(int n, int rank) {
-  assert(isPowerOfTwo(n));
+  assert(llvm::isPowerOf2_32(n));
   int x = log2(n);
   std::vector<SmallVector<unsigned>> factors;
   SmallVector<unsigned> curFactor(rank, 1);
@@ -123,6 +113,4 @@ estimateResourcesForReplacement(OpBuilder builder,
   return res;
 }
 
-} // namespace AMD
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::AMD
