@@ -1,6 +1,7 @@
 name: Wheels
 on:
-  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened]
   schedule:
     - cron: "0 8 * * *"
 
