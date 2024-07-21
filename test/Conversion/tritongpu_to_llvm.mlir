@@ -1646,6 +1646,60 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 // -----
 
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // Test that %u format specifier is added for triton ui32.
+  // CHECK: llvm.mlir.global internal constant @printfFormat_0("{{.*}}uint32: %u{{.*}}")
+  // CHECK-LABEL: print_uint32
+  // CHECK: llvm.call @vprintf(%{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  tt.func @print_uint32(%arg0 : ui32) {
+    tt.print "uint32: " {hex = false} : %arg0 : ui32
+    tt.return
+  }
+}
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // Test that %u format specifier is added for triton ui32 tensor.
+  // CHECK: llvm.mlir.global internal constant @printfFormat_0("{{.*}}uint32 tensor: %u{{.*}}")
+  // CHECK-LABEL: print_uint32_tensor
+  // CHECK: llvm.call @vprintf(%{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  tt.func @print_uint32_tensor(%arg0 : tensor<256xui32, #blocked0>) {
+    tt.print "uint32 tensor: " {hex = false} : %arg0 : tensor<256xui32, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // Test that %i format specifier is added for triton i32.
+  // CHECK: llvm.mlir.global internal constant @printfFormat_0("{{.*}}int32: %i{{.*}}")
+  // CHECK-LABEL: print_int32
+  // CHECK: llvm.call @vprintf(%{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  tt.func @print_int32(%arg0 : i32) {
+    tt.print "int32: " {hex = false} : %arg0 : i32
+    tt.return
+  }
+}
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // Test that %i format specifier is added for triton i32 tensor.
+  // CHECK: llvm.mlir.global internal constant @printfFormat_0("{{.*}}int32 tensor: %i{{.*}}")
+  // CHECK-LABEL: print_int32_tensor
+  // CHECK: llvm.call @vprintf(%{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  tt.func @print_int32_tensor(%arg0 : tensor<256xi32, #blocked0>) {
+    tt.print "int32 tensor: " {hex = false} : %arg0 : tensor<256xi32, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   tt.func @int32_to_bf16(%arg0: tensor<256xi32, #blocked>) attributes {noinline = false} {
