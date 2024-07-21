@@ -56,8 +56,15 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       // out how many digits we need for each of the dimensions.
       SmallVector<int, 8> dimWidths;
       SmallVector<SmallVector<Value>> indices;
+
+      // Pass the operand original type from triton to propagate correct
+      // signness of the value, which is needed for constructing the correct
+      // format specifier.
+      Type type = op.getOperands()[i].getType();
+
       if (auto rankedTy =
               dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
+        type = rankedTy.getElementType();
         indices = emitIndices(loc, rewriter, targetInfo, rankedTy.getEncoding(),
                               rankedTy, true);
         for (int64_t dim : rankedTy.getShape()) {
@@ -76,7 +83,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       if (!elems.empty()) {
         printTensor(op.getPrefix(), /*operand=*/i,
                     /*numOperands=*/op.getNumOperands(), elems, pid, indices,
-                    dimWidths, op.getHex(), rewriter);
+                    dimWidths, op.getHex(), rewriter, type);
       }
     }
     rewriter.eraseOp(op);
@@ -87,7 +94,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
                    ArrayRef<Value> elems, std::array<Value, 3> pid,
                    ArrayRef<SmallVector<Value>> indices,
                    ArrayRef<int> dimWidths, bool hex,
-                   ConversionPatternRewriter &rewriter) const {
+                   ConversionPatternRewriter &rewriter, Type type) const {
     assert(!elems.empty());
     assert(elems.size() == indices.size());
     assert(dimWidths.size() == indices.front().size());
@@ -151,7 +158,9 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       }
 
       auto elem = elems[i];
-      os << getFormatSubstr(elem, hex);
+
+      os << getFormatSubstr(elem, hex, /*width=*/std::nullopt,
+                            /*explicit_type=*/type);
       printfOperands.push_back(elem);
 
       // It's the same format string each iteration, but it's a lot easier if we
@@ -168,12 +177,19 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     }
   }
 
-  std::string getFormatSubstr(Value value, bool hex = false,
-                              std::optional<int> width = std::nullopt) const {
-    Type type = value.getType();
-    if (isa<LLVM::LLVMPointerType>(type)) {
+  std::string
+  getFormatSubstr(Value value, bool hex = false,
+                  std::optional<int> width = std::nullopt,
+                  std::optional<Type> explicit_type = std::nullopt) const {
+    // If the `value` is a pointer, just return %p.
+    if (isa<LLVM::LLVMPointerType>(value.getType())) {
       return "%p";
     }
+
+    // If caller specified the type explicitly, use it; otherwise derive it from
+    // `value`.
+    Type type = explicit_type.has_value() ? *explicit_type : value.getType();
+
     // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
     // type (so 4 for fp16, 8 for int32, 16 for int64).
     if (hex) {
@@ -197,12 +213,15 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
 
     if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
       return prefix + "f";
-    } else if (type.isSignedInteger()) {
+    } else if (type.isSignedInteger() || type.isSignlessInteger()) {
+      // IntegerType (e.g. i32) is by default signless in MLIR; and we convert
+      // signed int from python to signless integer in triton IR. So treat
+      // signless integer as signed int here.
       if (type.getIntOrFloatBitWidth() == 64)
         return prefix + "lli";
       else
         return prefix + "i";
-    } else if (type.isUnsignedInteger() || type.isSignlessInteger()) {
+    } else if (type.isUnsignedInteger()) {
       if (type.getIntOrFloatBitWidth() == 64)
         return prefix + "llu";
       else

@@ -42,7 +42,6 @@ def is_interpreter():
                                                       ("device_print_uint", "uint32"),
                                                   ])
 def test_print(func_type: str, data_type: str, device: str):
-    print(' '.join([sys.executable, print_path, "test_print", func_type, data_type, device]))
     proc = subprocess.run(
         [sys.executable, print_path, "test_print", func_type, data_type, device],
         capture_output=True,
@@ -67,7 +66,7 @@ def test_print(func_type: str, data_type: str, device: str):
     expected_lines = Counter()
     if func_type in ("print", "device_print", "device_print_uint"):
         for i in range(N):
-            offset = (1<<31) if data_type == "uint32" else 0
+            offset = (1 << 31) if data_type == "uint32" else 0
             line = f"pid (0, 0, 0) idx ({i:3}) x: {i + offset}"
             if data_type.startswith("float"):
                 line += ".000000"

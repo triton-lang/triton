@@ -740,6 +740,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI32Type();
            })
+      .def("get_uint32_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getIntegerType(32, false);
+           })
       .def("get_int64_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI64Type();

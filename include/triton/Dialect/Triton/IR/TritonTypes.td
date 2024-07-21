@@ -26,7 +26,7 @@ def TT_BoolLike : AnyTypeOf<[I1, TT_BoolTensor]>;
 
 // Integer Type
 def I4 : I<4>;
-def TT_Int : AnyTypeOf<[I1, I4, I8, I16, I32, I64], "integer">;
+def TT_Int : AnyTypeOf<[I1, I4, I8, I16, I32, UI32, I64], "integer">;
 def TT_IntTensor : RankedTensorOf<[TT_Int]>;
 def TT_IntLike : AnyTypeOf<[TT_Int, TT_IntTensor]>;
 

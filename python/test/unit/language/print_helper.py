@@ -108,7 +108,7 @@ def test_print(func: str, data_type: str, device: str):
         x = -x
         kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_uint":
-        x = torch.arange((1<<31), (1<<31) + N, device=device).to(getattr(torch, data_type))
+        x = torch.arange((1 << 31), (1 << 31) + N, device=device).to(getattr(torch, data_type))
         kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "print":
         kernel_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
