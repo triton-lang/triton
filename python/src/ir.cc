@@ -444,6 +444,13 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::str(ret.getValue().str());
            })
+      .def("get_bool_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<BoolAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::bool_(ret.getValue());
+           })
       .def("get_flat_symbol_ref_attr",
            [](Operation &self, const std::string &name) -> py::object {
              auto ret = self.getAttrOfType<FlatSymbolRefAttr>(name);

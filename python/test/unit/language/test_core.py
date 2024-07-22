@@ -3306,12 +3306,17 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("B", [1, 2, 4, 8])
-@pytest.mark.parametrize("num_warps", [1, 2, 4, 8, 16])
-@pytest.mark.parametrize("M, N, K", [(64, 64, 64), (32, 32, 32)])
-@pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
-                                                         ('float16', 'float32'), ('float32', 'float32')])
-def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
+@pytest.mark.parametrize("B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
+                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
+                          for B in [1, 2, 4, 8]
+                          for num_warps in [1, 2, 4, 8, 16]
+                          for BLOCK_M, BLOCK_N in [(32, 32)]
+                          for M, N, K in [(64, 64, 64), (32, 32, 32)]
+                          for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
+                                                              ('float16', 'float32'), ('float32', 'float32')]] +
+                         # Large block sizes
+                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')])
+def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
@@ -3388,7 +3393,6 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     out_tri = to_triton(out, device=device)
 
     BLOCK_B = B
-    BLOCK_M, BLOCK_N = 32, 32
     BLOCK_K = K
 
     grid = (
@@ -3766,7 +3770,16 @@ def test_load_cache_modifier(cache, device):
         tl.store(dst + offsets, x)
 
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
+
     if not is_cuda():
+        if is_hip():
+            amdgcn = pgm.asm['amdgcn']
+            cache_modifier_str = 'nt' if 'gfx94' in get_arch() else 'glc'
+            global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
+            if cache == '':
+                assert cache_modifier_str not in global_load_line[0]
+            if cache == '.cg':
+                assert cache_modifier_str in global_load_line[0]
         return
 
     ptx = pgm.asm['ptx']

@@ -57,10 +57,8 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   return {inOrd, outOrd};
 }
 
-static SmallVector<unsigned>
-getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
+static SmallVector<unsigned> getRepShapeForCvtLayout(RankedTensorType srcTy,
+                                                     RankedTensorType dstTy) {
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
@@ -92,16 +90,15 @@ getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   return repShape;
 }
 
-ScratchConfig getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op) {
+ScratchConfig getScratchConfigForCvtLayout(RankedTensorType srcTy,
+                                           RankedTensorType dstTy) {
   // Initialize vector sizes and stride
   ScratchConfig scratchConfig;
-  scratchConfig.repShape = getRepShapeForCvtLayout(op);
+  scratchConfig.repShape = getRepShapeForCvtLayout(srcTy, dstTy);
   scratchConfig.paddedRepShape = scratchConfig.repShape;
   if (scratchConfig.repShape.empty())
     return scratchConfig;
   auto rank = scratchConfig.repShape.size();
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
@@ -149,8 +146,16 @@ ScratchConfig getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   return scratchConfig;
 }
 
+ScratchConfig getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op) {
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
+
+  return getScratchConfigForCvtLayout(srcTy, dstTy);
+}
+
 // TODO: extend beyond scalars
-SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
+static SmallVector<unsigned>
+getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   SmallVector<unsigned> smemShape;
   if (isa<RankedTensorType>(op.getPtr().getType())) {
     // do nothing or just assert because shared memory is not used in tensor up
@@ -163,7 +168,8 @@ SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   return smemShape;
 }
 
-SmallVector<unsigned> getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
+static SmallVector<unsigned>
+getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
   return SmallVector<unsigned>{1};
 }
 
@@ -631,6 +637,29 @@ private:
 
 void Allocation::run(FuncAllocMapT &funcAllocMap) {
   triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+}
+
+std::map<Operation *, SmallVector<Allocation::BufferId>>
+Allocation::getLiveBuffers() {
+  std::map<Operation *, SmallVector<BufferId>> liveBuffers;
+
+  Operation *rootOperation = getOperation();
+  mlir::Liveness liveness(rootOperation);
+  auto analyzeOperation = [&](Operation *op) -> void {
+    auto scratchBuffer = getBufferId(op);
+    if (scratchBuffer != InvalidBufferId)
+      liveBuffers[op].push_back(scratchBuffer);
+    for (auto result : op->getOpResults()) {
+      auto bufferId = getBufferId(result);
+      if (bufferId == Allocation::InvalidBufferId)
+        continue;
+      auto liveOperations = liveness.resolveLiveness(result);
+      for (auto depOp : liveOperations)
+        liveBuffers[depOp].push_back(bufferId);
+    }
+  };
+  rootOperation->walk(analyzeOperation);
+  return liveBuffers;
 }
 
 } // namespace mlir

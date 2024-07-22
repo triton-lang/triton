@@ -496,6 +496,9 @@ bool supportMMA(triton::DotOp op, int version) {
     auto rank = retShapePerCTA.size();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = TritonGPUDialect::getNumWarps(mod);
+    // TODO(Keren): for now, fallback to MMAv2 if handling batch matmul.
+    if (rank == 3)
+      return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
           retShapePerCTA[rank - 1] % 8 == 0 &&
           (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
