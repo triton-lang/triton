@@ -924,8 +924,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
       %29 = tt.dot %27, %28, %cst_1 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
       %30 = arith.truncf %29 : tensor<128x16xf32, #mma> to tensor<128x16xf16, #mma>
       %31 = triton_gpu.convert_layout %30 : tensor<128x16xf16, #mma> -> tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %32 = tt.trans %arg7 {order = array<i32: 1, 0>} : !tt.memdesc<64x16xf16, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<16x64xf16, #shared1, #triton_gpu.shared_memory>
-      %33 = triton_gpu.local_load %32 : !tt.memdesc<16x64xf16, #shared1, #triton_gpu.shared_memory> -> tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %32 = tt.trans %arg7 {order = array<i32: 1, 0>} : !tt.memdesc<64x16xf16, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<16x64xf16, #shared1, #triton_gpu.shared_memory, mutable>
+      %33 = triton_gpu.local_load %32 : !tt.memdesc<16x64xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %34 = tt.dot %31, %33, %arg4 : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x64xf32, #mma>
       %35 = arith.addi %arg6, %c1_i32 : i32
       %36 = arith.cmpi slt, %35, %c1_i32 : i32
@@ -1015,9 +1015,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
       %30 = tt.dot %28, %29, %cst_1 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
       %31 = arith.truncf %30 : tensor<128x16xf32, #mma> to tensor<128x16xf16, #mma>
       %32 = triton_gpu.convert_layout %31 : tensor<128x16xf16, #mma> -> tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %33 = triton_gpu.local_alloc %arg7 : (tensor<64x16xf16, #blocked>) -> !tt.memdesc<64x16xf16, #shared, #triton_gpu.shared_memory>
-      %34 = tt.trans %33 {order = array<i32: 1, 0>} : !tt.memdesc<64x16xf16, #shared, #triton_gpu.shared_memory> -> !tt.memdesc<16x64xf16, #shared1, #triton_gpu.shared_memory>
-      %35 = triton_gpu.local_load %34 : !tt.memdesc<16x64xf16, #shared1, #triton_gpu.shared_memory> -> tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %33 = triton_gpu.local_alloc %arg7 : (tensor<64x16xf16, #blocked>) -> !tt.memdesc<64x16xf16, #shared, #triton_gpu.shared_memory, mutable>
+      %34 = tt.trans %33 {order = array<i32: 1, 0>} : !tt.memdesc<64x16xf16, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<16x64xf16, #shared1, #triton_gpu.shared_memory, mutable>
+      %35 = triton_gpu.local_load %34 : !tt.memdesc<16x64xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %36 = tt.dot %32, %35, %arg4 : tensor<128x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x64xf32, #mma>
       scf.yield %30, %36, %24, %27, %21 : tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>, i32, i32, tensor<64x16xf16, #blocked>
     }
@@ -1292,8 +1292,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
       %82 = arith.cmpi slt, %81, %c1_i32 : i32
       %83 = arith.select %82, %81, %c0_i32 : i32
       %84 = triton_gpu.convert_layout %59 : tensor<64x64xf32, #blocked1> -> tensor<64x64xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
-      %85 = tt.trans %arg10 {order = array<i32: 1, 0>} : !tt.memdesc<32x64xf32, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<64x32xf32, #shared2, #triton_gpu.shared_memory>
-      %86 = triton_gpu.local_load %85 : !tt.memdesc<64x32xf32, #shared2, #triton_gpu.shared_memory> -> tensor<64x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+      %85 = tt.trans %arg10 {order = array<i32: 1, 0>} : !tt.memdesc<32x64xf32, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<64x32xf32, #shared2, #triton_gpu.shared_memory, mutable>
+      %86 = triton_gpu.local_load %85 : !tt.memdesc<64x32xf32, #shared2, #triton_gpu.shared_memory, mutable> -> tensor<64x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
       %87 = tt.dot %84, %86, %cst : tensor<64x64xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<64x32xf32, #mma>
       %88 = triton_gpu.convert_layout %87 : tensor<64x32xf32, #mma> -> tensor<64x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %89 = triton_gpu.local_load %arg11 : !tt.memdesc<32x32xf32, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
@@ -1682,9 +1682,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 :
     scf.for %arg1 = %c0_i32 to %c2_i32 step %c1_i32  : i32 {
       %10 = tt.load %9 : tensor<16x16x!tt.ptr<f32>, #blocked>
       %11 = tt.load %9 : tensor<16x16x!tt.ptr<f32>, #blocked>
-      %12 = triton_gpu.local_alloc %10 : (tensor<16x16xf32, #blocked>) -> !tt.memdesc<16x16xf32, #shared, #triton_gpu.shared_memory>
-      %13 = tt.trans %12 {order = array<i32: 1, 0>} : !tt.memdesc<16x16xf32, #shared, #triton_gpu.shared_memory> -> !tt.memdesc<16x16xf32, #shared1, #triton_gpu.shared_memory>
-      %14 = triton_gpu.local_load %13 : !tt.memdesc<16x16xf32, #shared1, #triton_gpu.shared_memory> -> tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+      %12 = triton_gpu.local_alloc %10 : (tensor<16x16xf32, #blocked>) -> !tt.memdesc<16x16xf32, #shared, #triton_gpu.shared_memory, mutable>
+      %13 = tt.trans %12 {order = array<i32: 1, 0>} : !tt.memdesc<16x16xf32, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<16x16xf32, #shared1, #triton_gpu.shared_memory, mutable>
+      %14 = triton_gpu.local_load %13 : !tt.memdesc<16x16xf32, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
       %15 = triton_gpu.local_alloc  : () -> !tt.memdesc<1x16x16xf32, #shared, #triton_gpu.shared_memory, mutable>
       %16 = triton_gpu.memdesc_subview %15[%c0_i32, %c0_i32, %c0_i32] : !tt.memdesc<1x16x16xf32, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<16x16xf32, #shared, #triton_gpu.shared_memory, mutable>
       triton_gpu.local_store %11, %16 : tensor<16x16xf32, #blocked> -> !tt.memdesc<16x16xf32, #shared, #triton_gpu.shared_memory, mutable>
