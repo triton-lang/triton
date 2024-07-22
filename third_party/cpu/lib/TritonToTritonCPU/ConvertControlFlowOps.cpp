@@ -70,6 +70,52 @@ struct ForOpConversion : public OpConversionPattern<scf::ForOp> {
   }
 };
 
+// This is borrowed from ConvertFIfOpTypes in
+//    SCF/Transforms/StructuralTypeConversions.cpp
+//    and
+//    lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp
+class SCFIfPattern : public OpConversionPattern<scf::IfOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(scf::IfOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // TODO: Generalize this to any type conversion, not just 1:1.
+    //
+    // We need to implement something more sophisticated here that tracks which
+    // types convert to which other types and does the appropriate
+    // materialization logic.
+    // For example, it's possible that one result type converts to 0 types and
+    // another to 2 types, so newResultTypes would at least be the right size to
+    // not crash in the llvm::zip call below, but then we would set the the
+    // wrong type on the SSA values! These edge cases are also why we cannot
+    // safely use the TypeConverter::convertTypes helper here.
+    SmallVector<Type> newResultTypes;
+    for (auto type : op.getResultTypes()) {
+      Type newType = typeConverter->convertType(type);
+      if (!newType)
+        return rewriter.notifyMatchFailure(op, "not a 1:1 type conversion");
+      newResultTypes.push_back(newType);
+    }
+
+    // See comments in the ForOp pattern for why we clone without regions and
+    // then inline.
+    scf::IfOp newOp =
+        cast<scf::IfOp>(rewriter.cloneWithoutRegions(*op.getOperation()));
+    rewriter.inlineRegionBefore(op.getThenRegion(), newOp.getThenRegion(),
+                                newOp.getThenRegion().end());
+    rewriter.inlineRegionBefore(op.getElseRegion(), newOp.getElseRegion(),
+                                newOp.getElseRegion().end());
+
+    // Update the operands and types.
+    newOp->setOperands(adaptor.getOperands());
+    for (auto t : llvm::zip(newOp.getResults(), newResultTypes))
+      std::get<0>(t).setType(std::get<1>(t));
+    rewriter.replaceOp(op, newOp.getResults());
+    return success();
+  }
+};
+
 struct ConvertControlFlowOps
     : public triton::impl::ConvertControlFlowOpsBase<ConvertControlFlowOps> {
   using ConvertControlFlowOpsBase::ConvertControlFlowOpsBase;
@@ -89,6 +135,17 @@ struct ConvertControlFlowOps
     {
       RewritePatternSet patterns(context);
       patterns.add<OpTypeConversion<scf::YieldOp>>(typeConverter, context);
+      if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+        return signalPassFailure();
+    }
+
+    convTarget.addDynamicallyLegalOp<scf::IfOp>(
+        [&](Operation *op) -> std::optional<bool> {
+          return typeConverter.isLegal(op);
+        });
+    {
+      RewritePatternSet patterns(context);
+      patterns.add<SCFIfPattern>(typeConverter, context);
       if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
         return signalPassFailure();
     }

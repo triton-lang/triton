@@ -6110,6 +6110,7 @@ def test_maxnreg(device):
             raise
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 def test_temp_var_in_loop(device):
 
