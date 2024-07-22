@@ -23,19 +23,25 @@ def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 
+def get_current_target():
+    if is_interpreter():
+        return None
+    return triton.runtime.driver.active.get_current_target()
+
+
 def is_cuda():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "cuda"
+    target = get_current_target()
+    return False if target is None else target.backend == "cuda"
 
 
 def is_hip():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "hip"
+    target = get_current_target()
+    return False if target is None else target.backend == "hip"
 
 
-def is_hip_mi300():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx942'
+def get_arch():
+    target = get_current_target()
+    return "" if target is None else str(target.arch)
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -3073,6 +3079,8 @@ def convert_fp8_to_fp32(x, device, dtype_str):
                                                 for col_a in [True, False]
                                                 for col_b in [True, False]] +
     [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1)] +
+    ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1),
+      (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1)] if "gfx9" in get_arch() else []) +
     [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -5161,7 +5169,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
         ## TODO: Figure out why block size (128, 256, 128) fails on MI300
-        if is_hip_mi300() and BLOCK_M == 128:
+        if ("gfx94" in get_arch()) and BLOCK_M == 128:
             pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
 
     check_type_supported(in_type_str, device)

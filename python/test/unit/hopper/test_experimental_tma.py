@@ -74,6 +74,14 @@ def test_experimetal_descriptor_load():
 @triton.jit
 def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                       M, N, K, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
+    # TODO(embg) remove TMA fence after __grid_constant__ lands
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [a_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [b_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [c_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     pid_m = pid % num_pid_m

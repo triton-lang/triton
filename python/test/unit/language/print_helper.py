@@ -83,15 +83,15 @@ def kernel_print_pointer(X, Y, BLOCK: tl.constexpr):
     tl.device_print("ptr ", X + tl.arange(0, BLOCK))
 
 
-def test_print(func: str, data_type: str):
+def test_print(func: str, data_type: str, device: str):
     N = 128  # This value should match with test_print in test_subprocess.py.
     # TODO(antiagainst): Currently the warp count is chosen to make sure wedon't have multiple
     # threads printing duplicated messages due to broadcasting. Improve print op lowering logic
     # to filter out duplicated data range.
     num_warps = N // get_current_target_warp_size()
 
-    x = torch.arange(0, N, dtype=torch.int32, device='cuda').to(getattr(torch, data_type))
-    y = torch.zeros((N, ), dtype=x.dtype, device="cuda")
+    x = torch.arange(0, N, dtype=torch.int32, device=device).to(getattr(torch, data_type))
+    y = torch.zeros((N, ), dtype=x.dtype, device=device)
     if func == "device_print":
         kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "print":
@@ -122,4 +122,5 @@ def test_print(func: str, data_type: str):
 
 
 if __name__ == "__main__":
-    test_print(sys.argv[1], sys.argv[2])
+    fn = globals()[sys.argv[1]]
+    fn(*sys.argv[2:])

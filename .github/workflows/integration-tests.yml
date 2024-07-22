@@ -256,7 +256,8 @@ jobs:
         run: |
           cd python/test/unit
           python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py language/test_subprocess.py runtime/test_autotuner::test_kwargs[False]\
+           language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
+           runtime/test_autotuner::test_kwargs[False]\
            ../../tutorials/06-fused-attention.py::test_op --device cpu
       - name: Run C++ unittests
         run: |
@@ -297,6 +298,7 @@ jobs:
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
+    name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
     container:
       image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.1.2
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
@@ -384,10 +386,6 @@ jobs:
           ## test_subprocess.py is flaky on the AMD CI.
           ## TODO (lixun) find a solution and re-enable it.
           pytest --capture=tee-sys -rfs -n 16 language \
-                 hopper/test_mixed_io.py \
-                 hopper/test_gemm.py \
-                 hopper/test_tma_store_gemm.py \
-                 hopper/test_persistent_warp_specialized_fused-attention.py \
                  --ignore=language/test_line_info.py \
                  --ignore=language/test_subprocess.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
@@ -427,6 +425,10 @@ jobs:
           mkdir -p ~/.cache/ccache
           ls -alh ~/.cache/ccache
           du -sh ~/.cache/ccache
+      - name: Clean up caches
+        run: |
+          rm -rf ~/.triton
+          rm -rf ~/.cache
   Build-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
