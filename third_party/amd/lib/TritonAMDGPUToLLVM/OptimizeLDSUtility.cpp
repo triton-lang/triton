@@ -11,11 +11,8 @@ namespace mlir::triton::AMD {
 constexpr int kPtrBitWidth = 64;
 
 int getCvtOpLDSUsage(RankedTensorType srcTy, RankedTensorType dstTy) {
-  unsigned inVec = 0;
-  unsigned outVec = 0;
-  auto smemShape =
-      triton::getScratchConfigForCvtLayout(srcTy, dstTy, inVec, outVec);
-  unsigned elems = getNumElements<unsigned>(smemShape);
+  auto scratchConfig = triton::getScratchConfigForCvtLayout(srcTy, dstTy);
+  unsigned elems = getTotalSize<unsigned>(scratchConfig.paddedRepShape);
   auto bytes =
       isa<triton::PointerType>(srcTy.getElementType())
           ? elems * kPtrBitWidth / 8
