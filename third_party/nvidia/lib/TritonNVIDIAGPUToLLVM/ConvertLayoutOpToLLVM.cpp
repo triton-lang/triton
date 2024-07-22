@@ -488,7 +488,7 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto scratchConfig = getScratchConfigForCvtLayout(op);
+    auto scratchConfig = ScratchConfig::get(op);
     unsigned inVec = scratchConfig.inVec;
     unsigned outVec = scratchConfig.outVec;
     auto origRepShape = scratchConfig.repShape;

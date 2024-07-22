@@ -190,7 +190,7 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto scratchConfig = getScratchConfigForCvtLayout(op);
+    auto scratchConfig = ScratchConfig::get(op);
     unsigned inVec = scratchConfig.inVec;
     unsigned outVec = scratchConfig.outVec;
     auto paddedRepShape = scratchConfig.paddedRepShape;
@@ -303,6 +303,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return transferWithinLane(*c, op, adaptor, rewriter);
     }
 
+    // TODO(Keren): LinearLayout doesn't support cross-CTA conversion yet.
     if (isCrossCTAConversion(conversion))
       return failure();
     return transferWithinBlockOrGroup(conversion, op, *srcLayout, *dstLayout,
@@ -372,35 +373,39 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
     assert(!inVals.empty());
-    Type origTy = inVals[0].getType();
 
-    // Munge and unmunge are necessary because otherwise Targetinfo load/store
+    // Munge and unmunge are necessary because otherwise TargetInfo load/store
     // cannot handle pointers correctly.
-    // Munge inVals into the right type.
-    assert(!inVals.empty());
-    for (auto &v : inVals) {
-      if (isa<LLVM::LLVMPointerType>(v.getType())) {
-        v = ptrtoint(int_ty(64), v);
-      }
-      // Currently can't handle sub-byte stores to shmem.
-      int bitwidth = v.getType().getIntOrFloatBitWidth();
-      if (bitwidth < 8) {
-        v = zext(int_ty(8), bitcast(v, int_ty(bitwidth)));
-      }
+    RankedTensorType srcTy = op.getSrc().getType();
+    auto elemTy = srcTy.getElementType();
+    auto isInt1 = elemTy.isInteger(1);
+    auto isPtr = isa<triton::PointerType>(elemTy);
+    auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
+    if (isInt1)
+      elemTy = IntegerType::get(elemTy.getContext(), 8);
+    else if (isPtr)
+      elemTy = IntegerType::get(elemTy.getContext(), 64);
+    auto llvmElemTy = getTypeConverter()->convertType(elemTy);
+
+    // Munge input values
+    for (const auto &it : llvm::enumerate(inVals)) {
+      if (isInt1)
+        inVals[it.index()] = zext(llvmElemTy, it.value());
+      else if (isPtr)
+        inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
     }
 
     SmallVector<Value> outVals = transferWithinBlockOrGroupImpl(
         inVals, conversion, op, srcLayout, dstLayout, adaptor, rewriter);
 
-    // Un-munge dstVals.
-    for (auto &v : outVals) {
-      if (isa<LLVM::LLVMPointerType>(origTy)) {
-        v = inttoptr(origTy, v);
-      }
-      int bitwidth = origTy.getIntOrFloatBitWidth();
-      if (bitwidth < 8) {
-        v = bitcast(trunc(int_ty(bitwidth), v), origTy);
-      }
+    // Unmunge output values
+    for (const auto &it : llvm::enumerate(outVals)) {
+      if (isInt1)
+        outVals[it.index()] =
+            icmp_ne(it.value(), rewriter.create<LLVM::ConstantOp>(
+                                    loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+      else if (isPtr)
+        outVals[it.index()] = inttoptr(llvmElemTyOrig, it.value());
     }
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
@@ -425,7 +430,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
     StringAttr kOffset = str_attr("offset");
-    StringAttr kDim = str_attr("dim");
     StringAttr kIteration = str_attr("iteration");
 
     Value threadId = getThreadId(rewriter, loc);
@@ -433,16 +437,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value laneId = urem(threadId, threadsPerWarp);
     Value warpId = udiv(threadId, threadsPerWarp);
 
-    // Input dims: [offset, block, iteration]
-    // Output dims: same as `src`'s output dims.
-    auto scratchConfig = getScratchConfigForCvtLayout(op);
+    auto scratchConfig = ScratchConfig::get(op);
     auto tensorShape = op.getType().getShape();
+    // Convert int64_t to unsigned
+    SmallVector<unsigned> tensorShapeUnsigned(tensorShape.begin(),
+                                              tensorShape.end());
+    // Input dims: [offset, iteration, block]
+    // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
     LinearLayout sharedLayout =
         mlir::triton::gpu::chooseShemLayoutForRegToRegConversion(
-            ctx, tensorShape, scratchConfig.repShape);
-    const int shmemAllocatedNumElems =
-        getTotalSize<unsigned>(scratchConfig.paddedRepShape);
-    const int numIterations = sharedLayout.getInDimSize(kIteration);
+            ctx, tensorShapeUnsigned, scratchConfig.repShape);
 
     // Layout for the store from registers to shared memory.
     //
@@ -450,18 +454,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // hardware resolves that without a stall or a bank conflict.  Therefore we
     // don't need to avoid duplicate writes.
     LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
+    const int shmemAllocatedNumElems =
+        getTotalSize<unsigned>(scratchConfig.paddedRepShape);
     assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
 
     // Layout for the load from shmem to registers.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
-
-    // Avoid emitting a call to getClusterCTAId if we know it's always 0.
-    std::optional<Value> ctaId;
-    if (conversion.getInDimSize(kBlock) > 1)
-      ctaId = targetInfo.getClusterCTAId(rewriter, loc);
-
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
 
     // Check that the `register` fully determines the `iteration`.  That is,
     // each thread does exactly the same reads and writes to shmem on each
@@ -471,18 +469,28 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(
         shmemLoadLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
 
-    // Map src/dst registers to each iteration.
+    // iteration -> registers
+    SmallVector<SmallVector<int>> inRegsForIter =
+        collectRegsForIter(ctx, shmemStoreLayout);
+    SmallVector<SmallVector<int>> outRegsForIter =
+        collectRegsForIter(ctx, shmemLoadLayout);
 
-    SmallVector<Value> outVals;
+    // Avoid emitting a call to getClusterCTAId if we know it's always 0.
+    std::optional<Value> ctaId;
+    if (conversion.getInDimSize(kBlock) > 1)
+      ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+
+    // Map src/dst registers to each iteration.
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     Type elemTy = inVals[0].getType();
     auto outSize = shmemLoadLayout.getInDimSize(kRegister);
     auto iterations = sharedLayout.getInDimSize(kIteration);
 
     auto getVecAddrAndBlock = [&](ArrayRef<Value> offsetAndBlock)
         -> std::pair<Value, std::optional<Value>> {
-      assert(offsetAndBlock.size() == 2);
       std::optional<Value> block =
-          isCrossCTA ? std::make_optional(offsetAndBlock[1]) : std::nullopt;
+          isCrossCTA ? std::make_optional(offsetAndBlock[2]) : std::nullopt;
       Value offset = offsetAndBlock[0];
       if (scratchConfig.paddedSize > 0) {
         assert(llvm::isPowerOf2_32(scratchConfig.paddedStride));
@@ -494,25 +502,33 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
       auto vecAddr = gep(sharedPtrTy, elemTy, smemBase, offset);
       vecAddr.setInbounds(true);
-      return {offset, block};
+      return {vecAddr, block};
     };
 
+    // register idx -> Value
+    llvm::MapVector<int, Value> outVals;
     for (int i = 0; i < iterations; i++) {
       if (i != 0)
         barrier();
 
+      auto &inRegs = inRegsForIter[i];
+      auto &outRegs = outRegsForIter[i];
+
       // XXX: CSE applyLinearLayout.
       for (int j = 0; j < inVals.size() / iterations;
            j += scratchConfig.inVec) {
+        auto inRegSlice = inRegs[j];
         auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
             applyLinearLayout(loc, rewriter, shmemStoreLayout,
-                              {{kRegister, i32_val(j)},
+                              {{kRegister, i32_val(inRegSlice)},
                                {kLane, laneId},
                                {kWarp, warpId},
                                {kBlock, ctaId.value_or(i32_val(0))}})));
         auto [vecAddr, block] = getVecAddrAndBlock(offsetAndBlock);
-        Value valsVec = packLLVector(
-            loc, ArrayRef(inVals).slice(j, scratchConfig.inVec), rewriter);
+        SmallVector<Value> inValsVec;
+        for (int k = 0; k < scratchConfig.inVec; k++)
+          inValsVec.push_back(inVals[inRegSlice + k]);
+        Value valsVec = packLLVector(loc, inValsVec, rewriter);
         targetInfo.storeDShared(rewriter, loc, vecAddr, block, valsVec,
                                 /*pred=*/true_val());
       }
@@ -520,9 +536,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       barrier();
 
       for (int j = 0; j < outSize / iterations; j += scratchConfig.outVec) {
+        auto outRegSlice = outRegs[j];
         auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
             applyLinearLayout(loc, rewriter, shmemLoadLayout,
-                              {{kRegister, i32_val(j)},
+                              {{kRegister, i32_val(outRegSlice)},
                                {kLane, laneId},
                                {kWarp, warpId},
                                {kBlock, ctaId.value_or(i32_val(0))}})));
@@ -530,18 +547,21 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         Value valsVec = targetInfo.loadDShared(
             rewriter, loc, vecAddr, block, vec_ty(elemTy, scratchConfig.outVec),
             /*pred=*/true_val());
-        for (Value v : unpackLLVector(loc, valsVec, rewriter)) {
-          outVals.push_back(v);
-        }
+        for (Value v : unpackLLVector(loc, valsVec, rewriter))
+          outVals[outRegSlice++] = v;
       }
     }
 
-    return outVals;
+    SmallVector<Value> reorderedOutVals;
+    for (size_t i = 0; i < outVals.size(); i++) {
+      reorderedOutVals.push_back(outVals[i]);
+    }
+    return reorderedOutVals;
   }
 
   // Determine which registers are read/written in which iteration of the shmem
   // transfer specified by `layout`.
-  std::vector<SmallVector<int> /*registers*/>
+  SmallVector<SmallVector<int> /*registers*/>
   collectRegsForIter(MLIRContext *ctx, const LinearLayout &layout) const {
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
@@ -554,9 +574,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(layout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
 
     LinearLayout sublayout = layout.sublayout({kRegister}, {kIteration});
-    std::vector<SmallVector<int>> ret(sublayout.getOutDimSize(kIteration));
+    SmallVector<SmallVector<int>> ret(sublayout.getOutDimSize(kIteration));
     for (int reg = 0; reg < sublayout.getInDimSize(kRegister); reg++) {
-      auto idx = sublayout.apply({{kRegister, reg}, {kIteration, 0}});
+      auto idx = sublayout.apply({{kRegister, reg}});
       ret[idx.begin()->second].push_back(reg);
     }
     return ret;
@@ -569,8 +589,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 void mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(typeConverter,
-                                                                 benefit);
+  patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
+      typeConverter, targetInfo, benefit);
 }
 
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(

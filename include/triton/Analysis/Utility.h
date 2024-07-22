@@ -62,7 +62,7 @@ public:
 
   unsigned getThreadsReductionAxis();
 
-  SmallVector<unsigned> getScratchConfig();
+  SmallVector<unsigned> getScratchShape();
 
   SmallVector<unsigned> getOrderWithAxisAtBeginning();
 

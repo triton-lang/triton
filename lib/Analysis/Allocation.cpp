@@ -75,23 +75,39 @@ static SmallVector<unsigned> getRepShapeForCvtLayout(RankedTensorType srcTy,
 
   auto srcShapePerCTA = getShapePerCTA(srcTy);
   auto dstShapePerCTA = getShapePerCTA(dstTy);
+  auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
+  auto dstShapePerCTATile = getShapePerCTATile(dstLayout, dstTy.getShape());
 
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> repShape(rank);
   for (unsigned d = 0; d < rank; ++d) {
-    // XXX This uses a lot more shmem!
-    repShape[d] = std::max(srcShapePerCTA[d], dstShapePerCTA[d]);
-    // repShape[d] =
-    //     std::max(std::min<unsigned>(srcShapePerCTA[d],
-    //     srcShapePerCTATile[d]),
-    //              std::min<unsigned>(dstShapePerCTA[d],
-    //              dstShapePerCTATile[d]));
+    repShape[d] =
+        std::max(std::min<unsigned>(srcShapePerCTA[d], srcShapePerCTATile[d]),
+                 std::min<unsigned>(dstShapePerCTA[d], dstShapePerCTATile[d]));
   }
   return repShape;
 }
 
-ScratchConfig getScratchConfigForCvtLayout(RankedTensorType srcTy,
-                                           RankedTensorType dstTy) {
+// TODO: extend beyond scalars
+static SmallVector<unsigned> getRepShapeForAtomicRMW(triton::AtomicRMWOp op) {
+  SmallVector<unsigned> smemShape;
+  if (isa<RankedTensorType>(op.getPtr().getType())) {
+    // do nothing or just assert because shared memory is not used in tensor up
+    // to now
+  } else {
+    // need only bytes for scalar
+    // always vec = 1 and elemsPerThread = 1 for scalar?
+    smemShape.push_back(1);
+  }
+  return smemShape;
+}
+
+static SmallVector<unsigned> getRepShapeForAtomicCAS(triton::AtomicCASOp op) {
+  return SmallVector<unsigned>{1};
+}
+
+ScratchConfig ScratchConfig::get(RankedTensorType srcTy,
+                                 RankedTensorType dstTy) {
   // Initialize vector sizes and stride
   ScratchConfig scratchConfig;
   scratchConfig.repShape = getRepShapeForCvtLayout(srcTy, dstTy);
@@ -137,40 +153,19 @@ ScratchConfig getScratchConfigForCvtLayout(RankedTensorType srcTy,
   if (auto dstBlockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(dstLayout)) {
     scratchConfig.paddedDim = dstBlockedLayout.getOrder()[0];
   }
-  scratchConfig.paddedStride =
-      scratchConfig.paddedRepShape[scratchConfig.paddedDim];
   scratchConfig.paddedSize =
       std::max(scratchConfig.inVec, scratchConfig.outVec);
+  scratchConfig.paddedStride = scratchConfig.repShape[scratchConfig.paddedDim];
   scratchConfig.paddedRepShape[scratchConfig.paddedDim] +=
       scratchConfig.paddedSize;
   return scratchConfig;
 }
 
-ScratchConfig getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op) {
+ScratchConfig ScratchConfig::get(triton::gpu::ConvertLayoutOp op) {
   auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
 
-  return getScratchConfigForCvtLayout(srcTy, dstTy);
-}
-
-// TODO: extend beyond scalars
-static SmallVector<unsigned>
-getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
-  SmallVector<unsigned> smemShape;
-  if (isa<RankedTensorType>(op.getPtr().getType())) {
-    // do nothing or just assert because shared memory is not used in tensor up
-    // to now
-  } else {
-    // need only bytes for scalar
-    // always vec = 1 and elemsPerThread = 1 for scalar?
-    smemShape.push_back(1);
-  }
-  return smemShape;
-}
-
-static SmallVector<unsigned>
-getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
-  return SmallVector<unsigned>{1};
+  return ScratchConfig::get(srcTy, dstTy);
 }
 
 class AllocationAnalysis {
@@ -281,7 +276,7 @@ private:
       // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
       //       also possible to realize it with other approaches in restricted
       //       conditions, such as warp-shuffle
-      auto scratchConfig = getScratchConfigForCvtLayout(cvtLayout);
+      auto scratchConfig = ScratchConfig::get(cvtLayout);
       auto elems = getTotalSize<unsigned>(scratchConfig.paddedRepShape);
       auto bytes =
           isa<triton::PointerType>(srcTy.getElementType())
@@ -296,7 +291,7 @@ private:
       if (dyn_cast<RankedTensorType>(value.getType())) {
         // nothing to do
       } else {
-        auto smemShape = getScratchConfigForAtomicRMW(atomicRMWOp);
+        auto smemShape = getRepShapeForAtomicRMW(atomicRMWOp);
         auto elems = getTotalSize<unsigned>(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();
@@ -314,7 +309,7 @@ private:
       if (dyn_cast<RankedTensorType>(value.getType())) {
         // nothing to do
       } else {
-        auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
+        auto smemShape = getRepShapeForAtomicCAS(atomicCASOp);
         auto elems = getTotalSize<unsigned>(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();

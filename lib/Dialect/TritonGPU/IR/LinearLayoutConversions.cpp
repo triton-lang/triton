@@ -907,35 +907,44 @@ LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
 
 LinearLayout
 chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
-                                      ArrayRef<int64_t> tensorShape,
+                                      ArrayRef<unsigned> tensorShape,
                                       ArrayRef<unsigned> repShape) {
+  auto outDimNames = standardOutDimNames(ctx, tensorShape.size());
+  LinearLayout layout = LinearLayout::empty();
+  SmallVector<StringAttr> kRepDims;
+  SmallVector<StringAttr> kOffsetDims;
+  auto totalIters = 1;
+  auto totalOffsets = 1;
+  for (int i = 0; i < tensorShape.size(); i++) {
+    // Start with the fastest changing dimension.
+    // e.g., In the 2-D case, row-major layout is used.
+    int dim = tensorShape.size() - 1 - i;
+    StringAttr kIteration = S("iteration" + std::to_string(dim));
+    StringAttr kOffset = S("offset" + std::to_string(dim));
+    kRepDims.push_back(kIteration);
+    kOffsetDims.push_back(kOffset);
+    assert(llvm::isPowerOf2_32(repShape[dim]));
+    assert(llvm::isPowerOf2_32(tensorShape[dim]));
+    auto numIters = tensorShape[dim] / repShape[dim];
+    layout *=
+        LinearLayout::identity1D(repShape[dim], kOffset, outDimNames[dim]);
+    layout *= LinearLayout::identity1D(numIters, kIteration, outDimNames[dim]);
+    totalIters *= numIters;
+    totalOffsets *= repShape[dim];
+  }
+  StringAttr kOffset = S("offset");
   StringAttr kIteration = S("iteration");
   StringAttr kBlock = S("block");
-  StringAttr kOffset = S("offset");
-
-  // This intermediate layout has a shape [dimN-1, ..., dim0],
-  // where dimI-1 is accessed before dimI.
-  auto order =
-      llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(tensorShape.size())));
-  SmallVector<StringAttr> outDimNames =
-      standardOutDimNames(ctx, tensorShape.size());
-  auto outDimNamesRev = llvm::to_vector(llvm::reverse(outDimNames));
-  auto singleIter = identityND(kOffset, repShape, order, outDimNames);
-  //  There's no cross-CTA transfers.
-  singleIter *= LinearLayout({{kBlock, {}}}, outDimNamesRev);
-
-  // Now split up the layout into one or more iterations.
-  auto numIters = 1;
-  for (size_t i = 0; i < tensorShape.size(); i++)
-    numIters *= (tensorShape[i] - 1) / repShape[i] + 1;
-
-  LinearLayout ret = singleIter.reshapeIns({
-      {kOffset, singleIter.getInDimSize(kOffset) / numIters},
-      {kIteration, numIters},
-      {kBlock, singleIter.getInDimSize(kBlock)},
-  });
-
-  return ret;
+  SmallVector<StringAttr> newDims;
+  newDims.append(kOffsetDims.begin(), kOffsetDims.end());
+  newDims.append(kRepDims.begin(), kRepDims.end());
+  // Transpose layout from [offset0, rep0, offset1, rep1, ...] to
+  // [offset0, offset1, ..., rep0, rep1, ...]
+  auto ret = layout.transposeIns(newDims);
+  // Reshape layout from [offset0, offset1, ..., rep0, rep1, ...] to
+  // [offset, rep, block]
+  return ret.reshapeIns(
+      {{kOffset, totalOffsets}, {kIteration, totalIters}, {kBlock, 1}});
 }
 
 } // namespace mlir::triton::gpu

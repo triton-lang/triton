@@ -172,7 +172,7 @@ bool ReduceOpHelper::isWarpSynchronous() {
   return getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] == 1;
 }
 
-SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
+SmallVector<unsigned> ReduceOpHelper::getScratchShape() {
   SmallVector<unsigned> smemShape;
   // that case doesn't need inter-warp communication
   if (isWarpSynchronous())
@@ -185,7 +185,7 @@ SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
 }
 
 unsigned ReduceOpHelper::getScratchSizeInBytes() {
-  auto smemShape = getScratchConfig();
+  auto smemShape = getScratchShape();
   auto elems = product<unsigned>(smemShape);
 
   unsigned bytesPerElem = 0;

@@ -47,12 +47,10 @@ struct ScratchConfig {
        << ", paddedDim: " << paddedDim << ", paddedSize: " << paddedSize
        << ", paddedStride: " << paddedStride;
   }
+
+  static ScratchConfig get(RankedTensorType srcTy, RankedTensorType dstTy);
+  static ScratchConfig get(triton::gpu::ConvertLayoutOp op);
 };
-
-ScratchConfig getScratchConfigForCvtLayout(RankedTensorType srcTy,
-                                           RankedTensorType dstTy);
-
-ScratchConfig getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op);
 
 } // namespace triton
 

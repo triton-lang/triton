@@ -74,25 +74,33 @@ bool isCrossCTAConversion(const LinearLayout &layout);
 // vectorized load/store per iteration.  (In the example, we'd try to do two
 // stages of size 4 32-bit values each, assuming the src/dst layouts allow us to
 // vectorize the stores or loads as 4xi32.)
-LinearLayout chooseShemLayoutForRegToRegConversion(LinearLayout &src,
-                                                   LinearLayout &dst,
+LinearLayout chooseShemLayoutForRegToRegConversion(const LinearLayout &src,
+                                                   const LinearLayout &dst,
                                                    int maxVecElems);
 
 // The legacy version of the linear layout conversion function.  We determined
-// the shared memory needed for a register-to-register conversion using a legacy
-// heuristic (i.e., repShape).  Then, we use the tensor shape to
-// construct a intermediate linear layout for the shared memory being used.  The
-// intermediate layout is simply a mapping of contiguous sequence of integers to
-// the tensor shape.
-// The pesudo code of the conversion is as follows:
-// for rep in 0..numIterations:
-//  for iter in [0..numRegisters/storeVec]:
-//    store registers [iter * storeVec, (iter + 1) * storeVec)] to shared memory
-//  for iter in [0..numRegisters/loadVec]:
-//    load registers [iter * loadVec, (iter + 1) * loadVec)] from shared memory
+// the intermediate shared memory needed for a register-to-register conversion
+// using a legacy heuristic (i.e., repShape), which uses the maximum accessing
+// size of each dimension from srcLayout and dstLayout.   See Allocation.cpp for
+// details.  Then, we construct an intermediate linear layout representing the
+// shared memory -> tensor element index mapping for entire src and dst tensors.
+// The pesudo code of layout conversion is as follows:
+// for iter in 0..numIterations:
+//   sync threads
+//   for vecIdx in [0..numRegisters/storeVec]:
+//     registers <- get registers used in iter
+//     offsets <- get offsets using the intermediate linear layout
+//     store registers[vecIdx * storeVec, (vecIdx + 1) * storeVec)] to shared
+//     memory
+//   sync threads
+//   for vecIdx in [0..numRegisters/loadVec]:
+//     registers <- get registers used in iter
+//     offsets <- get offsets using the intermediate linear layout
+//     load registers[vecIdx * loadVec, (vecIdx + 1) * loadVec)] from shared
+//     memory
 LinearLayout
 chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
-                                      ArrayRef<int64_t> tensorShape,
+                                      ArrayRef<unsigned> tensorShape,
                                       ArrayRef<unsigned> repShape);
 } // namespace mlir::triton::gpu
 
