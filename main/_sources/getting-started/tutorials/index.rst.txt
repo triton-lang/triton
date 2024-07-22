@@ -39,7 +39,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In this tutorial, you will write a fused softmax operation that is significantly faster than Py...">
+    <div class="sphx-glr-thumbcontainer" tooltip="In this tutorial, you will write a fused softmax operation that is significantly faster than PyTorch&#x27;s native op for a particular class of matrices: those whose rows can fit in the GPU&#x27;s SRAM.">
 
 .. only:: html
 
@@ -73,7 +73,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In this tutorial, you will write a memory-efficient implementation of dropout whose state will ...">
+    <div class="sphx-glr-thumbcontainer" tooltip="In this tutorial, you will write a memory-efficient implementation of dropout whose state will be composed of a single int32 seed. This differs from more traditional implementations of dropout, whose state is generally composed of a bit mask tensor of the same shape as the input.">
 
 .. only:: html
 
@@ -107,7 +107,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://trida...">
+    <div class="sphx-glr-thumbcontainer" tooltip="This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf) Credits: OpenAI kernel team">
 
 .. only:: html
 

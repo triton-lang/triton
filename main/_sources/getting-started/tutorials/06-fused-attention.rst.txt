@@ -63,25 +63,25 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     113.030589     93.492784
-    1   2048.0     140.240313    109.968415
-    2   4096.0     155.492895    122.502318
-    3   8192.0     167.843826    129.189606
-    4  16384.0     173.219079    133.408937
+    0   1024.0     115.081344     93.230134
+    1   2048.0     141.839838    111.107391
+    2   4096.0     156.866386    123.964123
+    3   8192.0     170.145341    130.420734
+    4  16384.0     175.531671    135.283080
     fused-attention-batch4-head32-d64-fwd-causal=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     156.401811    128.835996
-    1   2048.0     167.549499    141.941583
-    2   4096.0     169.665996    143.416463
-    3   8192.0     171.307286    143.589972
-    4  16384.0     170.818193    145.385127
+    0   1024.0     159.175509    129.939708
+    1   2048.0     169.610248    143.360592
+    2   4096.0     172.800944    145.092404
+    3   8192.0     173.511247    145.118218
+    4  16384.0     172.696709    146.896752
     fused-attention-batch4-head32-d64-bwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      73.597497     72.713983
-    1   2048.0      98.183609     97.943843
-    2   4096.0     116.111564    116.171878
-    3   8192.0     127.657721    128.542588
-    4  16384.0     133.521746    133.694653
+    0   1024.0      74.070839     72.983329
+    1   2048.0      98.782044     99.265559
+    2   4096.0     117.407706    118.620607
+    3   8192.0     127.955894    129.897035
+    4  16384.0     135.038090    135.055073
 
 
 
@@ -725,7 +725,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 53.336 seconds)
+   **Total running time of the script:** (0 minutes 53.545 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
@@ -741,6 +741,10 @@ Extra Credits:
     .. container:: sphx-glr-download sphx-glr-download-python
 
       :download:`Download Python source code: 06-fused-attention.py <06-fused-attention.py>`
+
+    .. container:: sphx-glr-download sphx-glr-download-zip
+
+      :download:`Download zipped: 06-fused-attention.zip <06-fused-attention.zip>`
 
 
 .. only:: html

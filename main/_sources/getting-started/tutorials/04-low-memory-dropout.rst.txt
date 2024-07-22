@@ -242,7 +242,7 @@ References
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.679 seconds)
+   **Total running time of the script:** (0 minutes 0.666 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_04-low-memory-dropout.py:
@@ -258,6 +258,10 @@ References
     .. container:: sphx-glr-download sphx-glr-download-python
 
       :download:`Download Python source code: 04-low-memory-dropout.py <04-low-memory-dropout.py>`
+
+    .. container:: sphx-glr-download sphx-glr-download-zip
+
+      :download:`Download zipped: 04-low-memory-dropout.zip <04-low-memory-dropout.zip>`
 
 
 .. only:: html

@@ -527,7 +527,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.715 seconds)
+   **Total running time of the script:** (0 minutes 1.719 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
@@ -543,6 +543,10 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
     .. container:: sphx-glr-download sphx-glr-download-python
 
       :download:`Download Python source code: 09-persistent-matmul.py <09-persistent-matmul.py>`
+
+    .. container:: sphx-glr-download sphx-glr-download-zip
+
+      :download:`Download zipped: 09-persistent-matmul.zip <09-persistent-matmul.zip>`
 
 
 .. only:: html
