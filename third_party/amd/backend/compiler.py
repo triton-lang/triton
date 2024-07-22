@@ -150,7 +150,11 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if amd.has_matrix_core_feature(options.arch):
-            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages)
+            if os.getenv("TRITONAMD_OLD_STREAM_PIPELINE", "0") == "1":
+                if options.num_stages == 0:
+                    amd.passes.ttgpuir.add_stream_pipeline(pm)
+            else:
+                amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
             passes.common.add_canonicalizer(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
