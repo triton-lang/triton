@@ -1,5 +1,4 @@
-#include "OptCommon.h"
-
+#include "cpu/include/TritonCPUTransforms/OptCommon.h"
 #include "cpu/include/TritonCPUTransforms/Passes.h"
 
 #include "mlir/Dialect/Utils/IndexingUtils.h"

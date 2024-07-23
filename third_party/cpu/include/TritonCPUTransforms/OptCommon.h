@@ -56,6 +56,10 @@ inline Type toInt32(Type ty) {
   return toTyOrVectorOf(ty, IntegerType::get(ty.getContext(), 32));
 }
 
+inline Type toInt64(Type ty) {
+  return toTyOrVectorOf(ty, IntegerType::get(ty.getContext(), 64));
+}
+
 inline Type toFp8E5M2(Type ty) {
   return toTyOrVectorOf(ty, Float8E5M2Type::get(ty.getContext()));
 }

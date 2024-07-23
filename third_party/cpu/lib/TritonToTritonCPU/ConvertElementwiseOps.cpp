@@ -1,6 +1,7 @@
 #include "OpTypeConversion.h"
 #include "TypeConverter.h"
 
+#include "cpu/include/TritonCPUTransforms/OptCommon.h"
 #include "cpu/include/TritonToTritonCPU/Passes.h"
 
 #include "mlir/Analysis/DataFlowFramework.h"
@@ -90,20 +91,9 @@ struct MulhiUIOpConversion : public OpConversionPattern<triton::MulhiUIOp> {
     auto lhs = rewriter.getRemappedValue(op.getX());
     auto rhs = rewriter.getRemappedValue(op.getY());
 
-    Type extUITy = rewriter.getI64Type();
-    Type truncITy = rewriter.getI32Type();
-    Value cst32;
-    if (auto lhsTy = dyn_cast<ShapedType>(lhs.getType())) {
-      assert(isa<ShapedType>(rhs.getType()));
-      extUITy = lhsTy.cloneWith(std::nullopt, extUITy);
-      truncITy = lhsTy.cloneWith(std::nullopt, truncITy);
-      cst32 = rewriter.create<arith::ConstantOp>(
-          loc, DenseElementsAttr::get(dyn_cast<ShapedType>(extUITy), 32LL));
-    } else {
-      cst32 = rewriter.create<arith::ConstantOp>(
-          loc, rewriter.getI64IntegerAttr(32LL));
-    }
-
+    Type extUITy = toInt64(lhs.getType());
+    Type truncITy = toInt32(lhs.getType());
+    Value cst32 = intCst(loc, extUITy, 32LL, rewriter);
     auto lhsTy = getElementTypeOrSelf(lhs.getType());
     auto rhsTy = getElementTypeOrSelf(rhs.getType());
     if (lhsTy.getIntOrFloatBitWidth() < 64) {
