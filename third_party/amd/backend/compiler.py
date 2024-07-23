@@ -28,7 +28,7 @@ def min_dot_size(target: GPUTarget):
 class HIPOptions:
     num_warps: int = 4
     waves_per_eu: int = 1
-    num_stages: int = 2
+    num_stages: int = 0
     num_ctas: int = 1
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
@@ -149,17 +149,20 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
+        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "0") == "1"
         if amd.has_matrix_core_feature(options.arch):
-            if os.getenv("TRITONAMD_OLD_STREAM_PIPELINE", "0") == "1":
+            if use_new_pipeliner:
+                num_stages = options.num_stages if options.num_stages != 0 else 2
+                amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages)
+            else:
                 if options.num_stages == 0:
                     amd.passes.ttgpuir.add_stream_pipeline(pm)
-            else:
-                amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
             passes.common.add_canonicalizer(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        amd.passes.ttgpuir.add_reorder_instructions(pm)
+        if use_new_pipeliner or options.num_stages != 0:
+            amd.passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         pm.run(mod)
