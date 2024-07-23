@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -85,28 +86,35 @@ struct MulhiUIOpConversion : public OpConversionPattern<triton::MulhiUIOp> {
   LogicalResult
   matchAndRewrite(triton::MulhiUIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(isa<RankedTensorType>(op.getType()));
     auto loc = op.getLoc();
     auto lhs = rewriter.getRemappedValue(op.getX());
     auto rhs = rewriter.getRemappedValue(op.getY());
-    auto lhsTy = dyn_cast<VectorType>(lhs.getType());
-    auto rhsTy = dyn_cast<VectorType>(rhs.getType());
-    auto vecI32Ty = lhsTy.cloneWith(std::nullopt, rewriter.getI32Type());
-    auto vecI64Ty = lhsTy.cloneWith(std::nullopt, rewriter.getI64Type());
-    assert(lhsTy.getElementType().isInteger());
-    assert(rhsTy.getElementType().isInteger());
-    // Cast to int64
-    if (lhsTy.getElementTypeBitWidth() < 64) {
-      lhs = rewriter.create<arith::ExtUIOp>(loc, vecI64Ty, lhs);
+
+    Type extUITy = rewriter.getI64Type();
+    Type truncITy = rewriter.getI32Type();
+    Value cst32;
+    if (auto lhsTy = dyn_cast<ShapedType>(lhs.getType())) {
+      assert(isa<ShapedType>(rhs.getType()));
+      extUITy = lhsTy.cloneWith(std::nullopt, extUITy);
+      truncITy = lhsTy.cloneWith(std::nullopt, truncITy);
+      cst32 = rewriter.create<arith::ConstantOp>(
+          loc, DenseElementsAttr::get(dyn_cast<ShapedType>(extUITy), 32LL));
+    } else {
+      cst32 = rewriter.create<arith::ConstantOp>(
+          loc, rewriter.getI64IntegerAttr(32LL));
     }
-    if (rhsTy.getElementTypeBitWidth() < 64) {
-      rhs = rewriter.create<arith::ExtUIOp>(loc, vecI64Ty, rhs);
+
+    auto lhsTy = getElementTypeOrSelf(lhs.getType());
+    auto rhsTy = getElementTypeOrSelf(rhs.getType());
+    if (lhsTy.getIntOrFloatBitWidth() < 64) {
+      lhs = rewriter.create<arith::ExtUIOp>(loc, extUITy, lhs);
+    }
+    if (rhsTy.getIntOrFloatBitWidth() < 64) {
+      rhs = rewriter.create<arith::ExtUIOp>(loc, extUITy, rhs);
     }
     Value res = rewriter.create<arith::MulIOp>(loc, lhs, rhs);
-    Value cst32 = rewriter.create<arith::ConstantOp>(
-        loc, DenseElementsAttr::get(vecI64Ty, 32LL));
     res = rewriter.create<arith::ShRUIOp>(loc, res, cst32);
-    res = rewriter.create<arith::TruncIOp>(loc, vecI32Ty, res);
+    res = rewriter.create<arith::TruncIOp>(loc, truncITy, res);
     rewriter.replaceOp(op, res);
     return success();
   }
