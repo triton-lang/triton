@@ -77,6 +77,7 @@ def get_min_time_bytes(df, device_info):
 
 FactorDict = namedtuple("FactorDict", ["name", "factor"])
 time_factor_dict = FactorDict("time", {"time/s": 1, "time/ms": 1e-3, "time/us": 1e-6, "time/ns": 1e-9})
+avg_time_factor_dict = FactorDict("avg_time", {f"avg_{key}": value for key, value in time_factor_dict.factor.items()})
 flops_factor_dict = FactorDict("flops", {"flop/s": 1, "gflop/s": 1e9, "tflop/s": 1e12})
 bytes_factor_dict = FactorDict("bytes", {"byte/s": 1, "gbyte/s": 1e9, "tbyte/s": 1e12})
 
@@ -113,14 +114,16 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
                                                (get_time_seconds(gf.dataframe)) /
                                                metric_factor_dict[metric])
             derived_metrics.append(f"{metric} (inc)")
-        elif metric in time_factor_dict.factor or metric.split("/")[0] == "avgtime":
+        elif metric in time_factor_dict.factor:
             metric_time_unit = time_factor_dict.name + "/" + metric.split("/")[1]
-            converted_time_df = (get_time_seconds(gf.dataframe) /
-                                                time_factor_dict.factor[metric_time_unit])
-            if metric.split("/")[0] == "avgtime":
-                gf.dataframe[f"{metric} (inc)"] = (converted_time_df/gf.dataframe['Count']).replace([inf, -inf], nan)
-            else:
-                gf.dataframe[f"{metric} (inc)"] = converted_time_df
+            gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) /
+                                               time_factor_dict.factor[metric_time_unit])
+            derived_metrics.append(f"{metric} (inc)")
+        elif metric in avg_time_factor_dict.factor:
+            metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
+            gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['Count'] /
+                                               avg_time_factor_dict.factor[metric_time_unit]
+                                               ).replace([inf, -inf], nan)
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)
@@ -186,7 +189,7 @@ def main():
         help="""List available metrics. Metric names are case insensitive and ignore units.
 Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
-- avgtime/s, avgtime/ms, avgtime/us, avgtime/ns: time / kernel_exec_count
+- avg_time/s, avg_time/ms, avg_time/us, avg_time/ns: time / kernel_exec_count
 - flop/s, gflop/s, tflop/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
