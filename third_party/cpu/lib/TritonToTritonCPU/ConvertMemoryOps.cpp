@@ -100,19 +100,17 @@ struct LoadOpConversion : public MemoryOpConversion<triton::LoadOp> {
   getPaddingValue(Location loc, Type type,
                   const std::optional<triton::PaddingOption> &padding,
                   ConversionPatternRewriter &rewriter) {
-    if (!padding.has_value())
-      return Value();
+    auto padding_option = padding.value_or(PaddingOption::PAD_ZERO);
 
     TypedAttr attr;
-    switch (padding.value()) {
-    case triton::PaddingOption::PAD_ZERO:
-      attr = type.isIntOrIndex() ? cast<TypedAttr>(IntegerAttr::get(type, 0))
-                                 : cast<TypedAttr>(FloatAttr::get(type, 0));
+    switch (padding_option) {
+    case PaddingOption::PAD_ZERO:
+      attr = rewriter.getZeroAttr(type);
       break;
-    case triton::PaddingOption::PAD_NAN:
+    case PaddingOption::PAD_NAN:
       assert(!type.isIntOrIndex());
-      auto apNaN = llvm::APFloat::getNaN(
-          FloatAttr::get(type, 0).getValue().getSemantics());
+      auto apNaN =
+          llvm::APFloat::getNaN(cast<FloatType>(type).getFloatSemantics());
       attr = FloatAttr::get(type, apNaN);
       break;
     }
