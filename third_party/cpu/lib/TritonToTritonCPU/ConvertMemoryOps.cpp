@@ -96,6 +96,30 @@ protected:
 struct LoadOpConversion : public MemoryOpConversion<triton::LoadOp> {
   using MemoryOpConversion::MemoryOpConversion;
 
+  static Value
+  getPaddingValue(Location loc, Type type,
+                  const std::optional<triton::PaddingOption> &padding,
+                  ConversionPatternRewriter &rewriter) {
+    if (!padding.has_value())
+      return Value();
+
+    TypedAttr attr;
+    switch (padding.value()) {
+    case triton::PaddingOption::PAD_ZERO:
+      attr = type.isIntOrIndex() ? cast<TypedAttr>(IntegerAttr::get(type, 0))
+                                 : cast<TypedAttr>(FloatAttr::get(type, 0));
+      break;
+    case triton::PaddingOption::PAD_NAN:
+      assert(!type.isIntOrIndex());
+      auto apNaN = llvm::APFloat::getNaN(
+          FloatAttr::get(type, 0).getValue().getSemantics());
+      attr = FloatAttr::get(type, apNaN);
+      break;
+    }
+
+    return rewriter.create<arith::ConstantOp>(loc, attr);
+  }
+
   LogicalResult
   matchAndRewrite(triton::LoadOp loadOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -126,8 +150,10 @@ struct LoadOpConversion : public MemoryOpConversion<triton::LoadOp> {
     for (auto dim : boundaryChecks) {
       inBounds[dim] = false;
     }
-    auto vecRead = rewriter.create<vector::TransferReadOp>(loc, resTy, memRef,
-                                                           indices, inBounds);
+    Value padding = getPaddingValue(loc, resTy.getElementType(),
+                                    loadOp.getPadding(), rewriter);
+    auto vecRead = rewriter.create<vector::TransferReadOp>(
+        loc, resTy, memRef, indices, padding, inBounds);
     rewriter.replaceOp(loadOp, vecRead);
     return success();
   }
