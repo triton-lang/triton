@@ -2,7 +2,7 @@ import argparse
 from collections import namedtuple
 import json
 import pandas as pd
-
+from numpy import inf, nan
 import hatchet as ht
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
@@ -93,12 +93,15 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
     original_metrics = []
     time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
     time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
+
+    def get_time_seconds(df):
+        return df[time_metric_name] * time_factor_dict.factor[time_unit]
+
     for metric in metrics:
         if metric == "util":  # Tensor core only
             min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
             min_time_flops = get_min_time_flops(gf.dataframe, device_info)
-            time_sec = gf.dataframe[time_metric_name] * (time_factor_dict.factor[time_unit] /
-                                                         time_factor_dict.factor["time/s"])
+            time_sec = get_time_seconds(gf.dataframe, time_metric_name, time_unit)
             gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
             derived_metrics.append("util (inc)")
         elif metric in derivable_metrics:
@@ -107,19 +110,24 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             metric_factor_dict = deriveable_metric.factor
             matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
             gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] /
-                                               (gf.dataframe[time_metric_name] * time_factor_dict.factor[time_unit]) /
+                                               (get_time_seconds(gf.dataframe)) /
                                                metric_factor_dict[metric])
             derived_metrics.append(f"{metric} (inc)")
-        elif metric in time_factor_dict.factor:
+        elif metric in time_factor_dict.factor or metric.split("/")[0] == "avgtime":
             metric_time_unit = time_factor_dict.name + "/" + metric.split("/")[1]
-            gf.dataframe[f"{metric} (inc)"] = gf.dataframe[time_metric_name] * (
-                time_factor_dict.factor[time_unit] / time_factor_dict.factor[metric_time_unit])
+            converted_time_df = (get_time_seconds(gf.dataframe) /
+                                                time_factor_dict.factor[metric_time_unit])
+            if metric.split("/")[0] == "avgtime":
+                gf.dataframe[f"{metric} (inc)"] = (converted_time_df/gf.dataframe['Count']).replace([inf, -inf], nan)
+            else:
+                gf.dataframe[f"{metric} (inc)"] = converted_time_df
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)
 
     if original_metrics:
         original_metrics = match_available_metrics(original_metrics, raw_metrics)
+    gf.dataframe.to_csv("./mytest.csv")
     return derived_metrics + original_metrics
 
 
@@ -178,6 +186,7 @@ def main():
         help="""List available metrics. Metric names are case insensitive and ignore units.
 Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
+- avgtime/s, avgtime/ms, avgtime/us, avgtime/ns: time / kernel_exec_count
 - flop/s, gflop/s, tflop/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
