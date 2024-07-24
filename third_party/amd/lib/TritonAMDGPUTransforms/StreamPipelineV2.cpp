@@ -710,6 +710,7 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
 
   if (failed(newForOp))
     return false;
+  LDBG("Loop before expander\n" << *newForOp);
   return true;
 }
 
