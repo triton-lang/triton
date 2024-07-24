@@ -104,6 +104,12 @@ def test_print(func: str, data_type: str, device: str):
     elif func == "device_print_scalar":
         scalar = torch.tensor(42, dtype=x.dtype, device="cuda")
         kernel_device_print_scalar[(1, )](scalar, num_warps=num_warps)
+    elif func == "device_print_negative":
+        x = -x
+        kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
+    elif func == "device_print_uint":
+        x = torch.arange((1<<31), (1<<31) + N, device=device).to(getattr(torch, data_type))
+        kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "print":
         kernel_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_large":
