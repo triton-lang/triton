@@ -78,10 +78,8 @@ def test_avg_time_derivation():
     metrics = ["avg_time/s", "avg_time/ms", "avg_time/us", "avg_time/ns"]
     with open(cuda_example_file, "r") as f:
         expected_data = {
-            'avg_time/s (inc)': [np.nan, 0.000205, 0.000205],
-            'avg_time/ms (inc)': [np.nan, 0.2048, 0.2048],
-            'avg_time/us (inc)': [np.nan, 204.8, 204.8],
-            'avg_time/ns (inc)': [np.nan, 204800.0, 204800.0]
+            'avg_time/s (inc)': [np.nan, 0.000205, 0.000205], 'avg_time/ms (inc)': [np.nan, 0.2048, 0.2048],
+            'avg_time/us (inc)': [np.nan, 204.8, 204.8], 'avg_time/ns (inc)': [np.nan, 204800.0, 204800.0]
         }
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)

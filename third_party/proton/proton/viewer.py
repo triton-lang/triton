@@ -110,8 +110,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             metric_name = deriveable_metric.name
             metric_factor_dict = deriveable_metric.factor
             matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
-            gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] /
-                                               (get_time_seconds(gf.dataframe)) /
+            gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] / (get_time_seconds(gf.dataframe)) /
                                                metric_factor_dict[metric])
             derived_metrics.append(f"{metric} (inc)")
         elif metric in time_factor_dict.factor:
@@ -122,8 +121,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['Count'] /
-                                               avg_time_factor_dict.factor[metric_time_unit]
-                                               ).replace([inf, -inf], nan)
+                                               avg_time_factor_dict.factor[metric_time_unit]).replace([inf, -inf], nan)
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)
