@@ -73,24 +73,6 @@ static void createStreamCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   Value src = loadOp.getPtr();
   Value mask = loadOp.getMask();
   Value other = loadOp.getOther();
-  if (!isExpensiveLoadOrStore(loadOp) && loadToInfo[loadOp].blockedEncoding) {
-    // For inexpensive loads that do not directly feed into dot ops
-    // we want to use optimal layout for the data.
-    ttg::BlockedEncodingAttr encoding = loadToInfo[loadOp].blockedEncoding;
-    auto convertBlockLayout = [&](Value src) {
-      auto ty = cast<RankedTensorType>(src.getType());
-      auto newTy =
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
-      auto cvt =
-          builder.create<ttg::ConvertLayoutOp>(loadOp->getLoc(), newTy, src);
-      return cvt.getResult();
-    };
-    src = convertBlockLayout(src);
-    if (mask)
-      mask = convertBlockLayout(mask);
-    if (other)
-      other = convertBlockLayout(other);
-  }
 
   tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
