@@ -68,6 +68,16 @@ public:
   // placeholders in the format string.
   virtual void printf(RewriterBase &rewriter, Value formatStrStart,
                       int formatStrByteCount, ValueRange args) const = 0;
+
+  // Emits LLVM code with |rewriter| to print a message, particularly useful for
+  // backend debug. |msg| is the message to print, |args| are the arguments to
+  // fill placeholders in the |msg|.
+  // NOTE: This function is used for backend debug. DO NOT DELETE.
+  // Example use: targetInfo.printf(rewriter,"index: %d, value: %f", {index,
+  // value});
+  virtual void printf(RewriterBase &rewriter, StringRef msg,
+                      ValueRange args) const = 0;
+
   // Emits LLVM code with |rewriter| to perform assertion failure with the given
   // |message| from the given |func| in |file|.
   virtual void assertFail(RewriterBase &rewriter, Location loc,
