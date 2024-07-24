@@ -740,10 +740,6 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI32Type();
            })
-      .def("get_uint32_ty",
-           [](TritonOpBuilder &self) -> Type {
-             return self.getBuilder().getIntegerType(32, false);
-           })
       .def("get_int64_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI64Type();
@@ -1524,11 +1520,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_print",
            [](TritonOpBuilder &self, const std::string &prefix, bool hex,
-              const std::vector<Value> &values) -> void {
-             self.create<PrintOp>(
-                 StringAttr::get(self.getBuilder().getContext(),
-                                 llvm::StringRef(prefix)),
-                 hex, values);
+              const std::vector<Value> &values,
+              const std::vector<int32_t> &isSigned) -> void {
+             auto prefixAttr = StringAttr::get(self.getBuilder().getContext(),
+                                               llvm::StringRef(prefix));
+             self.create<PrintOp>(prefixAttr, hex, values, isSigned);
            })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,

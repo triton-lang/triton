@@ -505,10 +505,8 @@ class dtype:
             return builder.get_int8_ty()
         elif self.name in ('int16', 'uint16'):
             return builder.get_int16_ty()
-        elif self.name == 'int32':
+        elif self.name in ('int32', 'uint32'):
             return builder.get_int32_ty()
-        elif self.name == 'uint32':
-            return builder.get_uint32_ty()
         elif self.name in ('int64', 'uint64'):
             return builder.get_int64_ty()
         elif self.name == 'fp8e5':
