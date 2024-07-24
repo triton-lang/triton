@@ -71,8 +71,10 @@ public:
 
   // Emits LLVM code with |rewriter| to print a message, particularly useful for
   // backend debug. |msg| is the message to print, |args| are the arguments to
-  // fill placeholders in the |msg|. Example use: targetInfo.printf(rewriter,
-  // "index: %d, value: %f", {index, value});
+  // fill placeholders in the |msg|.
+  // NOTE: This function is used for backend debug. DO NOT DELETE.
+  // Example use: targetInfo.printf(rewriter,"index: %d, value: %f", {index,
+  // value});
   virtual void printf(RewriterBase &rewriter, StringRef msg,
                       ValueRange args) const = 0;
 
