@@ -1,7 +1,8 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics
 import numpy as np
+import pandas as pd
 
 file_path = __file__
 cuda_example_file = file_path.replace("test_viewer.py", "example_cuda.json")
@@ -71,3 +72,21 @@ def test_min_time_bytes():
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[6.10351e-06]], atol=1e-6)
         # MI300
         np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[1.93378e-05]], atol=1e-6)
+
+
+def test_avg_time_derivation():
+    metrics = ["avg_time/s", "avg_time/ms", "avg_time/us", "avg_time/ns"]
+    with open(cuda_example_file, "r") as f:
+        expected_data = {
+            'avg_time/s (inc)': [np.nan, 0.000205, 0.000205],
+            'avg_time/ms (inc)': [np.nan, 0.2048, 0.2048],
+            'avg_time/us (inc)': [np.nan, 204.8, 204.8],
+            'avg_time/ns (inc)': [np.nan, 204800.0, 204800.0]
+        }
+        gf, raw_metrics, device_info = get_raw_metrics(f)
+        gf = format_frames(gf, format)
+        assert len(raw_metrics) > 0, "No metrics found in the input file"
+        gf.update_inclusive_columns()
+        d_metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
+        for metric in d_metrics:
+            np.testing.assert_allclose(gf.dataframe[metric].to_numpy(), expected_data[metric], atol=1e-6)
