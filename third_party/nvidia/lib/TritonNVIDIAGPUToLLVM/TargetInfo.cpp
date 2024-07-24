@@ -643,6 +643,18 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
   call(funcOp, operands);
 }
 
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
+                        ValueRange args) const {
+  assert(!msg.empty() && "printf with empty string not supported");
+  llvm::SmallString<64> msgNewline(msg);
+  msgNewline.push_back('\n');
+  msgNewline.push_back('\0');
+  Value msgValue =
+      LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
+                              "printfFormat_", msgNewline);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+}
+
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
