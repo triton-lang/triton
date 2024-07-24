@@ -43,6 +43,11 @@ public:
           llvm::dyn_cast_or_null<triton::LoadOp>(bCvt.getSrc().getDefiningOp());
       if (!loadOp)
         return mlir::failure();
+      auto loadTy = llvm::cast<RankedTensorType>(loadOp.getResult().getType());
+      auto oldBLoadLayout =
+          dyn_cast<triton::gpu::BlockedEncodingAttr>(loadTy.getEncoding());
+      if (!oldBLoadLayout)
+        return mlir::failure();
       auto ctx = dotOp.getContext();
       auto cLayout = llvm::dyn_cast<triton::gpu::BlockedEncodingAttr>(
           cOp.getType().getEncoding());
@@ -62,8 +67,6 @@ public:
       auto newCLayout = triton::gpu::BlockedEncodingAttr::get(
           ctx, cElemsPerThread, cThreadsPerWarp, cWarpsPerCTA, order,
           ctaLayout);
-      if (newCLayout == cLayout)
-        return failure();
       auto elTy = aCvt.getType().getElementType();
       auto newALayout =
           triton::gpu::DotOperandEncodingAttr::get(ctx, 0, newCLayout, elTy);
@@ -77,6 +80,9 @@ public:
           ctx, bElemsPerThread, bThreadsPerWarp, bWarpsPerCTA, order,
           ctaLayout);
 
+      if (newCLayout == cLayout && oldBLoadLayout == newBLoadLayout)
+        return failure();
+
       rewriter.setInsertionPoint(loadOp);
       auto loadLoc = loadOp.getLoc();
       auto loadPtrTy = llvm::cast<RankedTensorType>(loadOp.getPtr().getType());
@@ -84,12 +90,15 @@ public:
           loadPtrTy.getShape(), loadPtrTy.getElementType(), newBLoadLayout);
       auto newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(
           loadLoc, newLoadPtrTy, loadOp.getPtr());
-      auto loadMaskTy =
-          llvm::cast<RankedTensorType>(loadOp.getMask().getType());
-      auto newLoadMaskTy = RankedTensorType::get(
-          loadMaskTy.getShape(), loadMaskTy.getElementType(), newBLoadLayout);
-      auto newMask = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          loadLoc, newLoadMaskTy, loadOp.getMask());
+      Value newMask;
+      if (loadOp.getMask()) {
+        auto loadMaskTy =
+            llvm::cast<RankedTensorType>(loadOp.getMask().getType());
+        auto newLoadMaskTy = RankedTensorType::get(
+            loadMaskTy.getShape(), loadMaskTy.getElementType(), newBLoadLayout);
+        newMask = rewriter.create<triton::gpu::ConvertLayoutOp>(
+            loadLoc, newLoadMaskTy, loadOp.getMask());
+      }
       auto newLoadOp = rewriter.replaceOpWithNewOp<triton::LoadOp>(
           loadOp, newPtr, newMask, loadOp.getCache(), loadOp.getEvict(),
           loadOp.getIsVolatile());

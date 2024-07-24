@@ -551,6 +551,34 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 
+bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+  auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (blockedLayout == nullptr || dotOperandLayout == nullptr)
+    return false;
+  auto parentLayout =
+      dyn_cast<BlockedEncodingAttr>(dotOperandLayout.getParent());
+  if (parentLayout == nullptr)
+    return false;
+  auto opShape = srcTy.getShape();
+  if (opShape.size() != 2)
+    return false;
+  int kDim = dotOperandLayout.getOpIdx() == 0 ? 1 : 0;
+  int nonKDim = dotOperandLayout.getOpIdx() == 0 ? 0 : 1;
+  bool threadHoldsWholeKDim =
+      blockedLayout.getSizePerThread()[kDim] == opShape[kDim];
+  bool nonKDimCompatible =
+      blockedLayout.getCTALayout() == parentLayout.getCTALayout() &&
+      blockedLayout.getOrder() == parentLayout.getOrder() &&
+      blockedLayout.getSizePerThread()[nonKDim] ==
+          parentLayout.getSizePerThread()[nonKDim] &&
+      blockedLayout.getThreadsPerWarp()[nonKDim] ==
+          parentLayout.getThreadsPerWarp()[nonKDim] &&
+      blockedLayout.getWarpsPerCTA()[nonKDim] ==
+          parentLayout.getWarpsPerCTA()[nonKDim];
+  return threadHoldsWholeKDim && nonKDimCompatible;
+}
+
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
   auto src = dyn_cast<NvidiaMmaEncodingAttr>(srcEncoding);
   auto dst = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding);
@@ -615,7 +643,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // linear-layout check above.
   return !isMmaToMmaShortcut(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
-         !isMfmaToDotShortcut(srcTy, dstTy);
+         !isMfmaToDotShortcut(srcTy, dstTy) &&
+         !isBlockedToDotShortcut(srcTy, dstTy);
 }
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {

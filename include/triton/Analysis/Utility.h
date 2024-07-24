@@ -192,6 +192,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 
+bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstT);
+
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 // TODO(jlebar): Remove this function; it's subsumed by the linear-layout case
