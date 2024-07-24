@@ -1,7 +1,6 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -744,18 +743,6 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineV2Base<PipelinePass> {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
       pipelined |= pipelineLoop(forOp, loopNumStages);
-    }
-
-    if (pipelined) {
-      // Clean up arithmetic before applying the next level of pipelining to
-      // simplify the IR.
-      auto arithDialect =
-          getOperation().getContext()->getLoadedDialect<arith::ArithDialect>();
-      RewritePatternSet patterns(getOperation().getContext());
-      arithDialect->getCanonicalizationPatterns(patterns);
-      if (applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))
-              .failed())
-        signalPassFailure();
     }
   }
 };
