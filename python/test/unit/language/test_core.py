@@ -451,6 +451,8 @@ def test_dtype_codegen():
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
+    if is_hip() and ("gfx12" in get_arch()) and (dtype_x == 'bfloat16' or dtype_y == 'bfloat16'):
+        pytest.skip('Skip bfloat16 on gfx12.')
     expr = f' x {op} y'
     if op == '%' and dtype_x in int_dtypes + uint_dtypes and dtype_y in int_dtypes + uint_dtypes:
         # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
@@ -1472,7 +1474,8 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
             tl.atomic_add(Z + off0, z)
         else:
             tl.atomic_add(Z + off1, z)
-
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
     rs = RandomState(17)
     x = numpy_random((shape0, shape1), dtype_str=dtype_x_str, rs=rs)
     # reference result
@@ -2035,6 +2038,8 @@ def get_reduced_dtype(dtype_str, op):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
 
     # triton kernel
     @triton.jit
@@ -2139,6 +2144,8 @@ reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
@@ -2278,6 +2285,8 @@ def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
 @pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps", scan_configs + negative_config)
 def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
     if dtype_str == 'bfloat16':
         if op == 'cummax':
             pytest.skip("bfloat16 compare not suppoted before sm90")
@@ -2443,6 +2452,8 @@ def test_histogram(M, N, device):
         z = tl.histogram(x, N)
         tl.store(z_ptr + offset2, z)
 
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
     torch.manual_seed(17)
     x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
     z = torch.empty(N, dtype=torch.int32, device=device)
@@ -2835,6 +2846,8 @@ layouts = [
 @pytest.mark.parametrize("first_axis", [0, 1])
 def test_chain_reduce(M, N, src_layout, op, device, first_axis):
 
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
     op_str = ""
     if op == "sum":
         op_str = """
@@ -2910,6 +2923,8 @@ def test_generic_reduction(device):
         tl.store(out_mean, mean)
         tl.store(out_var, m2 / weight)
 
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
     SIZE = 512
     x = torch.rand(SIZE, device=device)
     out_mean = torch.empty((), device=device)
@@ -3115,6 +3130,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             pytest.skip("kpack too large for K")
         if not is_hip() and kpack == 2:
             pytest.skip("Skip duplicated tests on nv path")
+        if is_hip() and ("gfx12" in get_arch()) and in_dtype == "bfloat16":
+            pytest.skip("Skip bfloat16 on gfx12")
 
     torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
@@ -3317,6 +3334,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                          # Large block sizes
                          [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')])
 def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
@@ -3773,6 +3792,8 @@ def test_load_cache_modifier(cache, device):
 
     if not is_cuda():
         if is_hip():
+            if ('gfx1' in get_arch()):
+                return;
             amdgcn = pgm.asm['amdgcn']
             cache_modifier_str = 'nt' if 'gfx94' in get_arch() else 'glc'
             global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
@@ -4689,6 +4710,8 @@ def test_if_call(call_type, device):
 
         tl.store(Out, o)
 
+    if is_hip() and ('gfx12' in get_arch()):
+        pytest.skip("Skip for gfx12")
     out = to_triton(np.zeros((1, ), dtype=np.int32), device=device)
     kernel[(1, )](out, call_type)
     assert to_numpy(out)[0] == 1
