@@ -8,7 +8,7 @@ import pytest
 @pytest.mark.parametrize('use_cuda_graph', [False, True])
 def test_kwargs(use_cuda_graph: bool, device: str):
     N = 1024
-    src = torch.empty(N, device=device)
+    src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
@@ -89,7 +89,7 @@ def test_hooks(device):
 @pytest.mark.parametrize('with_perf_model', [False, True])
 def test_prune_configs(with_perf_model: bool, device: str):
     N = 1024
-    src = torch.empty(N, device=device)
+    src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
     records = {}
 

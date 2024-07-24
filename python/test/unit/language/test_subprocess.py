@@ -24,19 +24,21 @@ def is_interpreter():
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("func_type, data_type", [("device_print", data_type) for data_type in torch_types] + [
-    ("print", "int32"),
-    ("static_print", "int32"),
-    ("no_arg_print", "int32"),
-    ("print_no_arg", "int32"),
-    ("device_print_large", "int32"),
-    ("print_multiple_args", "int32"),
-    ("device_print_multiple_args", "int32"),
-    ("device_print_hex", "int16"),
-    ("device_print_hex", "int32"),
-    ("device_print_hex", "int64"),
-    ("device_print_pointer", "int32"),
-])
+@pytest.mark.parametrize("func_type, data_type", [(fn, data_type)
+                                                  for fn in ["device_print", "device_print_scalar"]
+                                                  for data_type in torch_types] + [
+                                                      ("print", "int32"),
+                                                      ("static_print", "int32"),
+                                                      ("no_arg_print", "int32"),
+                                                      ("print_no_arg", "int32"),
+                                                      ("device_print_large", "int32"),
+                                                      ("print_multiple_args", "int32"),
+                                                      ("device_print_multiple_args", "int32"),
+                                                      ("device_print_hex", "int16"),
+                                                      ("device_print_hex", "int32"),
+                                                      ("device_print_hex", "int64"),
+                                                      ("device_print_pointer", "int32"),
+                                                  ])
 def test_print(func_type: str, data_type: str, device: str):
     proc = subprocess.run(
         [sys.executable, print_path, "test_print", func_type, data_type, device],
@@ -54,6 +56,9 @@ def test_print(func_type: str, data_type: str, device: str):
     # The total number of elements in the 1-D tensor to print.
     N = 128
 
+    # Constant for testing the printing of scalar values
+    SCALAR_VAL = 42
+
     # Format is
     #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>
     expected_lines = Counter()
@@ -63,6 +68,11 @@ def test_print(func_type: str, data_type: str, device: str):
             if data_type.startswith("float"):
                 line += ".000000"
             expected_lines[line] = 1
+    elif func_type == "device_print_scalar":
+        line = f"pid (0, 0, 0) idx () x: {SCALAR_VAL}"
+        if data_type.startswith("float"):
+            line += ".000000"
+        expected_lines[line] = N
     elif func_type == "device_print_hex":
         for i in range(N):
             line = f"pid (0, 0, 0) idx ({i:3}) x: 0x"

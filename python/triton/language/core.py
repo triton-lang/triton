@@ -1167,7 +1167,7 @@ def program_id(axis, _builder=None):
     #     pid1 = program_id(1, _builder)
     #     pid2 = program_id(2, _builder)
     #     npg0 = num_programs(0, _builder)
-    #     npg1 = num_programs(0, _builder)
+    #     npg1 = num_programs(1, _builder)
     #     return pid0 + pid1*npg0 + pid2*npg0*npg1
     axis = _constexpr_to_value(axis)
     return semantic.program_id(axis, _builder)
