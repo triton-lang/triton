@@ -130,7 +130,6 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
 
     if original_metrics:
         original_metrics = match_available_metrics(original_metrics, raw_metrics)
-    gf.dataframe.to_csv("./mytest.csv")
     return derived_metrics + original_metrics
 
 
