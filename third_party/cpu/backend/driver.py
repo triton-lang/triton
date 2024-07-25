@@ -1,15 +1,20 @@
 import os
 import hashlib
+import importlib
 import tempfile
-from pathlib import Path
+
+import triton._C
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import DriverBase
 from triton.backends.compiler import GPUTarget
 
-dirname = os.getenv("TRITON_SYS_PATH", default="/usr/local")
-include_dir = [os.path.join(dirname, "include")]
-library_dir = [os.path.join(dirname, "lib")]
+_dirname = os.getenv("TRITON_SYS_PATH", default="/usr/local")
+# for locating libTritonCPURuntime
+_triton_C_dir = importlib.resources.files(triton._C).joinpath("")
+
+include_dirs = [os.path.join(_dirname, "include")]
+library_dirs = [os.path.join(_dirname, "lib"), _triton_C_dir]
 libraries = ["stdc++"]
 
 
@@ -22,7 +27,7 @@ def compile_module_from_src(src, name):
             src_path = os.path.join(tmpdir, "main.cpp")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
+            so = _build(name, src_path, tmpdir, library_dirs, include_dirs, libraries)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
     import importlib.util

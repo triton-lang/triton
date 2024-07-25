@@ -182,9 +182,9 @@ class CPUBackend(BaseBackend):
                 "kernel",
                 asm_path,
                 tmpdir,
-                cpu_driver.library_dir,
-                cpu_driver.include_dir,
-                ["gcc", "m"],
+                cpu_driver.library_dirs,
+                cpu_driver.include_dirs,
+                ["gcc", "m", "TritonCPURuntime"],
             )
             with open(so, "rb") as f:
                 return f.read()
