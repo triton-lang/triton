@@ -13,8 +13,12 @@ def match_available_metrics(metrics, raw_metrics):
         for metric in metrics:
             metric = metric.lower()
             for raw_metric in raw_metrics:
-                raw_metric_no_unit = raw_metric.split("(")[0].strip().lower()
-                if metric in (raw_metric, raw_metric_no_unit):
+                raw_metric_names = [
+                    raw_metric,
+                    raw_metric.split("(")[0].strip().lower(),
+                    'flops' if 'flops' in raw_metric else ""
+                ]
+                if metric in raw_metric_names:
                     ret.append(raw_metric + " (inc)")
                     break
     else:
