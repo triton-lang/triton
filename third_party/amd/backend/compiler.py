@@ -13,6 +13,9 @@ from pathlib import Path
 
 def min_dot_size(target: GPUTarget):
     arch_str = target.arch
+    # FMA path supprot all sizes,
+    # Large sizes (MNK >= 16) goes through MFMA/WMMA instructions
+    return lambda lhsType, rhsType: (1, 1, 1)
     # CDNA 3.0 supports k==8 in all mfma variants except for int8
     # (where the smallest `k` supported is 16)
     if "gfx94" in arch_str:
