@@ -45,7 +45,7 @@ struct ScratchConfig {
     os << "]";
     os << ", inVec: " << inVec << ", outVec: " << outVec
        << ", paddedDim: " << paddedDim << ", paddedSize: " << paddedSize
-       << ", paddedStride: " << paddedStride;
+       << ", paddedStride: " << paddedStride << "\n";
   }
 
   static ScratchConfig get(RankedTensorType srcTy, RankedTensorType dstTy);
