@@ -1601,7 +1601,7 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type other: Block, optional
     :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
     :type boundary_check: tuple of ints, optional
-    :param padding_option: should be one of {"", "zero", "nan"}, do padding while out of bound
+    :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
         cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
