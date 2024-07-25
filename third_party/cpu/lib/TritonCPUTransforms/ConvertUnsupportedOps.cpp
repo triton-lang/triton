@@ -166,6 +166,28 @@ struct ConvertBf16Abs : public OpRewritePattern<math::AbsFOp> {
   }
 };
 
+struct ConvertF8Abs : public OpRewritePattern<math::AbsFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(math::AbsFOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFp8(op.getType()) || !isFp8(op.getOperand().getType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    Value src = op.getOperand();
+    Type srcType = op.getType();
+
+    Value i8Src = op_bitcast(toInt8(srcType), src);
+    // Mask out the sign bit
+    Value nosign = op_and(i8Src, cst_like(i8Src, 0x7f));
+    Value res = op_bitcast(srcType, nosign);
+
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
 struct ConvertMixedPrecisionMatmul
     : public OpRewritePattern<vector::ContractionOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -253,6 +275,7 @@ struct ConvertUnsupportedOps
       patterns.add<ConvertBf16MaskedStoreOp>(context);
       patterns.add<ConvertBf16Abs>(context);
     }
+    patterns.add<ConvertF8Abs>(context);
     if (convertMixedPrecisionMatmul) {
       patterns.add<ConvertMixedPrecisionMatmul>(context);
     }

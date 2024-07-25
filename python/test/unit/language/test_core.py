@@ -113,6 +113,8 @@ def check_type_supported(dtype, device):
     if is_interpreter():
         if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
             pytest.skip("bfloat16 is not supported in the interpreter")
+    if dtype == 'float8e4b15' and is_cpu():
+        pytest.skip("float8e4b15 not supported on CPU")
 
 
 class MfmaLayout:
@@ -1125,6 +1127,7 @@ def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5])
 def test_abs_fp8(in_dtype, device):
@@ -5344,6 +5347,7 @@ def test_poison_return(device):
 # -----------------------
 
 
+@pytest.mark.cpu
 def test_num_threads(device):
     if is_hip():
         pytest.skip("test_num_threads is not supported in HIP")
@@ -5794,6 +5798,9 @@ def test_ptx_cast(dtype_str, device):
 
 def f8_to_f16(x, dtype):
 
+    if is_cpu():
+        assert (False and "Works as expected only for GPU")
+
     @triton.jit
     def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
         pid = tl.program_id(0)
@@ -5820,10 +5827,9 @@ def matmul_kernel(  #
         low_precision_acc: tl.constexpr,  #
         num_stages: tl.constexpr = 3  #
 ):
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    pid_m = pid % num_pid_m
-    pid_n = pid // num_pid_m
+    pid_m = tl.program_id(axis=0)
+    pid_n = tl.program_id(axis=1)
+
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
@@ -5842,6 +5848,7 @@ def matmul_kernel(  #
     tl.store(c_ptrs, accumulator)
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(128, 256, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64)])
@@ -5865,16 +5872,23 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     num_warps = 8
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
-    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
                             C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps,
                             num_stages=num_stages)
     torch_a = torch.from_numpy(A).to(device=device)
-    th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
-    th_b = f8_to_f16(torch_b, in_type_str)
-    ref_out = torch.matmul(th_a, th_b).to(torch.float32)
+    if is_cpu() and 'float8' in in_type_str:
+        in_dtype = getattr(tl, in_type_str)
+        th_a = convert_float_to_float32(torch_a, in_dtype)
+        th_b = convert_float_to_float32(torch_b, in_dtype)
+        ref_out = torch.matmul(th_a, th_b).to(torch.float32)
+    else:
+        th_a = f8_to_f16(torch_a, in_type_str)
+        th_b = f8_to_f16(torch_b, in_type_str)
+        ref_out = torch.matmul(th_a, th_b).to(torch.float32)
+
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
     else:
@@ -6059,7 +6073,11 @@ def test_tl_range(device):
     if is_hip():
         pytest.skip("test_tl_range is not supported in HIP")
     M, N, K = 64, 64, 512
-    BLOCK_M, BLOCK_N, BLOCK_K = M, N, 64
+    if is_cpu():
+        block_m, block_n, block_k = 32, 32, 64
+    else:
+        block_m, block_n, block_k = M, N, 64
+    BLOCK_M, BLOCK_N, BLOCK_K = block_m, block_n, block_k
     a = torch.randn((M, K), device=device, dtype=torch.float16)
     b = torch.randn((K, N), device=device, dtype=torch.float16)
     c = torch.empty((M, N), dtype=torch.float32, device=device)
@@ -6069,7 +6087,7 @@ def test_tl_range(device):
       BLOCK_K, 0, num_stages=5)
     if is_cpu():
         # torch.matmul not implemented for Half float (float16) cpu
-        ref_out = torch.tensor(np.matmul(to_numpy(a), to_numpy(b))).to(torch.float32)
+        ref_out = torch.tensor(np.matmul(to_numpy(a), to_numpy(b)), dtype=torch.float32, device=device)
     else:
         ref_out = torch.matmul(a, b).to(torch.float32)
     if is_interpreter():
