@@ -93,7 +93,6 @@ def test_util():
     metrics = ["util"]
     with open(cuda_example_file, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
-        gf = format_frames(gf, format)
         assert len(raw_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
         derived_metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
