@@ -601,7 +601,7 @@ static bool preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
     return false;
 
   LLVM_DEBUG({
-    LDBG("\nCoarse schedule loads only:");
+    LDBG("Coarse schedule loads only:");
     coarseSchedule.dump();
   });
 
@@ -610,7 +610,7 @@ static bool preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
       createStreamOps(forOp, coarseSchedule, loadToInfo, numStages);
 
   LLVM_DEBUG({
-    LDBG("\nCoarse schedule with stream loads:");
+    LDBG("Coarse schedule with stream loads:");
     coarseSchedule.dump();
   });
 
@@ -618,19 +618,19 @@ static bool preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
 
   scheduleDependencies(forOp, coarseSchedule, numStages);
   LLVM_DEBUG({
-    LDBG("\nCoarse schedule with dependencies:");
+    LDBG("Coarse schedule with dependencies:");
     coarseSchedule.dump();
   });
 
   scheduleDistanceOneDependencies(forOp, coarseSchedule, numStages);
   LLVM_DEBUG({
-    LDBG("\nCoarse schedule with dist 1:");
+    LDBG("Coarse schedule with dist 1:");
     coarseSchedule.dump();
   });
 
   scheduleRemainingToLastStage(forOp, coarseSchedule, afterPrologue, numStages);
   LLVM_DEBUG({
-    LDBG("\nFinal coarse schedule:");
+    LDBG("Final coarse schedule:");
     coarseSchedule.dump();
   });
 
