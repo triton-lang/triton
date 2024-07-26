@@ -116,10 +116,10 @@ def test_bytes_derivation():
 
 def test_flops_derivation():
     derivation_metrics_test(
-        metrics=["flop/s", "gflop/s", "tflop/s"],
+        metrics=["flop8/s", "gflop8/s", "tflop8/s"],
         expected_data={
-            'flop/s (inc)': [2.68554687e+14, 4.88281250e+14, 4.88281250e+13], 'gflop/s (inc)':
-            [268554.6875, 488281.25, 48828.125], 'tflop/s (inc)': [268.554687, 488.28125, 48.828125]
+            'flop8/s (inc)': [2.68554687e+14, 4.88281250e+14, 4.88281250e+13], 'gflop8/s (inc)':
+            [268554.6875, 488281.25, 48828.125], 'tflop8/s (inc)': [268.554687, 488.28125, 48.828125]
         },
         sample_file=cuda_example_file,
     )
