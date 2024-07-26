@@ -5193,8 +5193,9 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
-                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
+                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
