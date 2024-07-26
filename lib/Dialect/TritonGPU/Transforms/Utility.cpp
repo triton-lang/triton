@@ -896,6 +896,8 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       }
       if (auto nestedIf = value.getDefiningOp<scf::IfOp>()) {
         auto result = mlir::cast<OpResult>(value);
+        // mark condition as live.
+        markLive(nestedIf.getCondition());
         for (scf::YieldOp nestedYieldOp :
              {nestedIf.thenYield(), nestedIf.elseYield()}) {
           Value nestedYieldOperand =
