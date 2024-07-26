@@ -558,14 +558,14 @@ _DtypeClass = dtype
 
 class pointer_type(dtype):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1, is_const: bool = False):
+    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False):
         element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
         self.address_space = address_space
-        self.is_const = is_const
-        self.name = f'pointer<{element_ty}>' if not is_const else f'const_pointer<{element_ty}>'
+        self.const = const
+        self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
@@ -580,7 +580,7 @@ class pointer_type(dtype):
         return True
 
     def is_const(self):
-        return self.is_const
+        return self.const
 
     def __eq__(self, other: pointer_type) -> bool:
         if not isinstance(other, pointer_type):

@@ -251,12 +251,12 @@ __all__ = [
 def str_to_ty(name):
     if name[0] == "*":
         name = name[1:]
-        is_const = False
+        const = False
         if name[0] == "k":
             name = name[1:]
-            is_const = True
+            const = True
         ty = str_to_ty(name)
-        return pointer_type(element_ty=ty, is_const=is_const)
+        return pointer_type(element_ty=ty, const=const)
     tys = {
         "fp8e4nv": float8e4nv,
         "fp8e4b8": float8e4b8,
