@@ -118,6 +118,7 @@ struct AddPtrOpConversion : public OpConversionPattern<triton::AddPtrOp> {
     assert(isa<VectorType>(offset.getType()));
     assert(isa<VectorType>(ptr.getType()));
     VectorType offsetTy = cast<VectorType>(offset.getType());
+    VectorType ptrTy = cast<VectorType>(ptr.getType());
     // Build scale vector. i1 elements take 1 byte.
     Value scale = rewriter.create<arith::ConstantOp>(
         loc, offsetTy,
@@ -125,7 +126,8 @@ struct AddPtrOpConversion : public OpConversionPattern<triton::AddPtrOp> {
             offsetTy, rewriter.getIntegerAttr(offsetTy.getElementType(),
                                               (elemBitWidth + 7) / 8)));
     offset = rewriter.create<arith::MulIOp>(loc, offset, scale);
-    offset = rewriter.create<arith::ExtSIOp>(loc, ptr.getType(), offset);
+    if (offsetTy.getElementTypeBitWidth() < ptrTy.getElementTypeBitWidth())
+      offset = rewriter.create<arith::ExtSIOp>(loc, ptr.getType(), offset);
     rewriter.replaceOpWithNewOp<arith::AddIOp>(op, ptr.getType(), ptr, offset);
     return success();
   }

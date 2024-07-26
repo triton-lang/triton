@@ -5,6 +5,7 @@
 #include "cpu/include/TritonToTritonCPU/Passes.h"
 
 #include "mlir/Analysis/DataFlowFramework.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -90,21 +91,8 @@ struct MulhiUIOpConversion : public OpConversionPattern<triton::MulhiUIOp> {
     auto loc = op.getLoc();
     auto lhs = rewriter.getRemappedValue(op.getX());
     auto rhs = rewriter.getRemappedValue(op.getY());
-
-    Type extUITy = toInt64(lhs.getType());
-    Type truncITy = toInt32(lhs.getType());
-    Value cst32 = intCst(loc, extUITy, 32LL, rewriter);
-    auto lhsTy = getElementTypeOrSelf(lhs.getType());
-    auto rhsTy = getElementTypeOrSelf(rhs.getType());
-    if (lhsTy.getIntOrFloatBitWidth() < 64) {
-      lhs = rewriter.create<arith::ExtUIOp>(loc, extUITy, lhs);
-    }
-    if (rhsTy.getIntOrFloatBitWidth() < 64) {
-      rhs = rewriter.create<arith::ExtUIOp>(loc, extUITy, rhs);
-    }
-    Value res = rewriter.create<arith::MulIOp>(loc, lhs, rhs);
-    res = rewriter.create<arith::ShRUIOp>(loc, res, cst32);
-    res = rewriter.create<arith::TruncIOp>(loc, truncITy, res);
+    Value res =
+        rewriter.create<arith::MulUIExtendedOp>(loc, lhs, rhs).getHigh();
     rewriter.replaceOp(op, res);
     return success();
   }
