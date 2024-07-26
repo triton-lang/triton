@@ -36,8 +36,6 @@ namespace {
 struct LoadInfo {
   // Shared layout is used for loads feeding into dot ops.
   ttg::SharedEncodingAttr sharedEncoding = nullptr;
-  // Blocked layout is used for loads not feeding into dot ops.
-  ttg::BlockedEncodingAttr blockedEncoding = nullptr;
   // The distance of this load's stage to its use' stage.
   int distToUse = 0;
   bool usedByDot = false;
@@ -167,25 +165,6 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
   return attr;
 }
 
-static ttg::BlockedEncodingAttr
-getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
-  Value src = loadOp.getPtr();
-  auto ty = cast<RankedTensorType>(src.getType());
-  auto mod = loadOp->getParentOfType<ModuleOp>();
-  int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
-  int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  tt::AxisInfo::DimVectorT contiguity =
-      axisInfo.getAxisInfo(src)->getContiguity();
-  SmallVector<unsigned> order = argSort(contiguity);
-  unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
-  SmallVector<unsigned> sizePerThread(order.size(), 1);
-  sizePerThread[order[0]] = currPerThread;
-  ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
-                                       sizePerThread, order, numWarps,
-                                       threadsPerWarp, ctaLayout);
-}
-
 // Create a map from load ops to their indirection levels and the final uses
 // of the load op (another load op, or a dot op).
 //
@@ -248,7 +227,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
   for (auto &[op, dist, use] : loadOpToIndLevelAndUse) {
     if (loadToInfo.count(op))
-      // TODO We'd need to verify that the distance is the same
+      // TODO: We'd need to verify that the distance is the same.
       continue;
 
     LoadInfo loadInfo;
@@ -294,13 +273,6 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       if (loadToInfo.count(useOp) == 0) {
         continue;
       }
-    }
-
-    // If we still don't have a shared encoding, try a "generic" shared
-    // encoding.
-    if (!loadInfo.sharedEncoding) {
-      // Also pipeline in-register buffers.
-      loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
 
     loadToInfo[op] = loadInfo;
