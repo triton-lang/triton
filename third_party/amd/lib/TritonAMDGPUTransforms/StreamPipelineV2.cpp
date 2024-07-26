@@ -56,8 +56,7 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 }
 
 static void createStreamCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
-                             Value insertIdx, Value extractIdx,
-                             tt::CoarseSchedule &schedule,
+                             Value extractIdx, tt::CoarseSchedule &schedule,
                              tt::CoarseSchedule::Cluster prefetchCluster,
                              llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                              int numStages) {
@@ -71,7 +70,6 @@ static void createStreamCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
   tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
-  copyOffsets[0] = insertIdx;
   Operation *copy = builder.clone(*loadOp);
 
   auto [stage, cluster] = schedule[loadOp];
@@ -524,33 +522,22 @@ createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
   Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
-  Value insertIdx = minusOne;
   Value extractIdx = minusOne;
   Value numBuffersVal =
       builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
 
-  SmallVector<Value> newOperands;
-  newOperands.push_back(insertIdx);
-  newOperands.push_back(extractIdx);
-
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
   scf::ForOp newForOp =
-      replaceForOpWithNewSignature(builder, forOp, newOperands);
+      replaceForOpWithNewSignature(builder, forOp, {extractIdx});
   forOp.erase();
   forOp = newForOp;
 
-  // Create two counters for the insert and extract indices to avoid creating
-  // long liverange.
-  insertIdx = newForOp.getBody()->getArgument(newOperandIndex);
-  extractIdx = newForOp.getBody()->getArgument(newOperandIndex + 1);
+  // Create one counter for the extract indices to avoid creating long
+  // live range.
+  extractIdx = newForOp.getBody()->getArgument(newOperandIndex);
 
   builder.setInsertionPoint(newForOp.getBody(), newForOp.getBody()->begin());
-  insertIdx = builder.create<arith::AddIOp>(loc, insertIdx, one);
-  Value cndIns = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                               insertIdx, numBuffersVal);
-  insertIdx = builder.create<arith::SelectOp>(loc, cndIns, insertIdx, zero);
-
   extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
   Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                extractIdx, numBuffersVal);
@@ -562,13 +549,12 @@ createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
 
   for (auto &[op, alloc] : loadToAllocs) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      createStreamCopy(forOp, loadOp, alloc, insertIdx, extractIdx, schedule,
+      createStreamCopy(forOp, loadOp, alloc, extractIdx, schedule,
                        prefetchCluster, loadToInfo, numStages);
     }
   }
-  SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   // Patch the yield with the updated counters.
-  appendToYield(forOp, newYieldOperands);
+  appendToYield(forOp, {extractIdx});
 
   return allocs;
 }
