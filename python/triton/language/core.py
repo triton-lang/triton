@@ -585,7 +585,7 @@ class pointer_type(dtype):
     def __eq__(self, other: pointer_type) -> bool:
         if not isinstance(other, pointer_type):
             return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space
+        return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
 
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
