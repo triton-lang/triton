@@ -320,15 +320,16 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
 
   // Calculate the stage distance between applicable loads.
   int maxIndirectionLevel = -1;
-  for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse) {
+  for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse)
     maxIndirectionLevel = std::max(maxIndirectionLevel, dist);
-  }
+
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
   // large.
   assert(numStages >= 2 && "requires num_stages=2 at least");
   unsigned stagesBetweenLoads =
       llvm::divideCeil(numStages - 2, maxIndirectionLevel + 1);
+  LDBG("stagesBetweenLoads = " << stagesBetweenLoads);
 
   // Put the root uses of the loads in the last stage.
   tt::CoarseSchedule::Cluster rootUsersCluster = schedule.clusters.newAtFront();
@@ -356,6 +357,14 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     loadToInfo[loadOp].distToUse = schedule[use].first - schedule[loadOp].first;
   }
 
+  LLVM_DEBUG({
+    LDBG("Chosen loads to pipeline:");
+    for (const auto &[load, info] : loadToInfo) {
+      LDBG("  - load: " << *load);
+      LDBG("    distToUse: " << info.distToUse);
+      LDBG("    usedByDot: " << info.usedByDot);
+    }
+  });
   return loadToInfo;
 }
 
@@ -494,6 +503,7 @@ createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
   int numBuffers = -1;
   for (auto &[_, info] : loadToInfo)
     numBuffers = std::max(numBuffers, info.distToUse);
+  LDBG("deduced shared memory buffer number = " << numBuffers);
 
   SmallVector<Value> allocs;
   SmallVector<std::pair<Operation *, Value>> loadToAllocs;
@@ -663,7 +673,7 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
   if (failed(newForOp))
     return false;
 
-  LDBG("Loop before expander:\n" << *newForOp);
+  LDBG("Loop before sending to expander:\n" << *newForOp);
   return true;
 }
 
