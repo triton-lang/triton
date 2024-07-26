@@ -1812,7 +1812,7 @@ pointer to the block tensor, e.g. returns a type of <code class="docutils litera
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">tt.print</span></code> takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
 format are generated automatically from the arguments.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameVariadicOperandSize</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
 <section id="id67">
@@ -1821,6 +1821,7 @@ format are generated automatically from the arguments.</p>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>prefix</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 <tr><td><code>hex</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>isSigned</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 </section>
 <section id="id68">

@@ -162,7 +162,7 @@ tensor is loaded.  In this case:</p>
 (must be <cite>None</cite> with block pointers)</p></li>
 <li><p><strong>other</strong> (<em>Block</em><em>, </em><em>optional</em>) – if <cite>mask[idx]</cite> is false, return <cite>other[idx]</cite></p></li>
 <li><p><strong>boundary_check</strong> (<em>tuple</em><em> of </em><em>ints</em><em>, </em><em>optional</em>) – tuple of integers, indicating the dimensions which should do the boundary check</p></li>
-<li><p><strong>padding_option</strong> – should be one of {“”, “zero”, “nan”}, do padding while out of bound</p></li>
+<li><p><strong>padding_option</strong> – should be one of {“”, “zero”, “nan”}, the padding value to use while out of bounds. “” means an undefined value.</p></li>
 <li><p><strong>cache_modifier</strong> (str, optional, should be one of {“”, “ca”, “cg”}, where “ca” stands for
 cache at all levels and “cg” stands for cache at global level (cache in L2 and below, not L1), see
 <a class="reference external" href="https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators">cache operator</a> for more details.) – changes cache option in NVIDIA PTX</p></li>

@@ -1190,7 +1190,7 @@ operation ::= `tt.print` $prefix attr-dict (`:` $args^ `:` type($args))?
 `tt.print` takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
 format are generated automatically from the arguments.
 
-Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `SameVariadicOperandSize`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -1202,6 +1202,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>prefix</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
 <tr><td><code>hex</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>isSigned</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 
 #### Operands:
