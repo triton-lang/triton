@@ -115,8 +115,9 @@ static void createStreamCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
   loadOp->replaceAllUsesWith(result);
 
-  // Prefetch load if is used by the dot.
+  // Prefetch load ahead of the dot stage if is used by the dot.
   if (loadToInfo[loadOp].usedByDot) {
+    assert(numStages >= 2 && "requires num_stages=2 at least");
     schedule.insert(storeOp, numStages - 2, prefetchCluster);
     schedule.insert(viewLoad, numStages - 2, prefetchCluster);
   }
@@ -325,6 +326,7 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
   // large.
+  assert(numStages >= 2 && "requires num_stages=2 at least");
   unsigned stagesBetweenLoads =
       llvm::divideCeil(numStages - 2, maxIndirectionLevel + 1);
 
@@ -364,7 +366,7 @@ static void scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
       opsInOrder = schedule.getOpsInOrder(forOp);
   // Schedule dependencies stage by stage.
-  for (int stage = 0; stage < numStages; stage++) {
+  for (int stage = 0; stage < numStages; ++stage) {
     for (auto [op, stage_, cluster] : opsInOrder) {
       if (stage_ != stage)
         continue;
