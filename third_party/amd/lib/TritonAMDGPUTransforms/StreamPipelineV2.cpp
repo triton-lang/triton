@@ -650,17 +650,11 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
   tt::PipeliningOption options;
   if (!preprocessLoopAndBuildSchedule(forOp, numStages, options))
     return false;
+  LDBG("Loop before sending to expander:\n" << *forOp);
 
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
-  FailureOr<scf::ForOp> newForOp =
-      tt::pipelineForLoop(rewriter, forOp, options);
-
-  if (failed(newForOp))
-    return false;
-
-  LDBG("Loop before sending to expander:\n" << *newForOp);
-  return true;
+  return succeeded(tt::pipelineForLoop(rewriter, forOp, options));
 }
 
 namespace {
@@ -675,9 +669,6 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineV2Base<PipelinePass> {
       if (getNumStagesOrDefault(forOp) > 1)
         loops.push_back(forOp);
     });
-
-    if (loops.empty())
-      return;
 
     for (scf::ForOp forOp : loops)
       pipelineLoop(forOp, getNumStagesOrDefault(forOp));
