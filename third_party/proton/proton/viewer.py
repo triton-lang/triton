@@ -13,15 +13,14 @@ def match_available_metrics(metrics, raw_metrics):
         for metric in metrics:
             metric = metric.lower()
             for raw_metric in raw_metrics:
-                raw_metric_names = [
-                    raw_metric,
-                    raw_metric.split("(")[0].strip().lower(), 'flops' if 'flops' in raw_metric else ""
-                ]
-                if metric in raw_metric_names:
+                raw_metric_no_unit = raw_metric.split("(")[0].strip().lower()
+                if metric in (raw_metric, raw_metric_no_unit):
                     ret.append(raw_metric + " (inc)")
                     break
     else:
         ret = [raw_metrics[0]] + " (inc)"
+    if len(ret) == 0:
+        raise RuntimeError(f"Metric {metric} is not found. Use the --list flag to list available metrics")
     return ret
 
 
@@ -81,15 +80,18 @@ def get_min_time_bytes(df, device_info):
 FactorDict = namedtuple("FactorDict", ["name", "factor"])
 time_factor_dict = FactorDict("time", {"time/s": 1, "time/ms": 1e-3, "time/us": 1e-6, "time/ns": 1e-9})
 avg_time_factor_dict = FactorDict("avg_time", {f"avg_{key}": value for key, value in time_factor_dict.factor.items()})
-flops_factor_dict = FactorDict("flops", {"flop/s": 1, "gflop/s": 1e9, "tflop/s": 1e12})
 bytes_factor_dict = FactorDict("bytes", {"byte/s": 1, "gbyte/s": 1e9, "tbyte/s": 1e12})
 
 derivable_metrics = {
-    **{key: flops_factor_dict
-       for key in flops_factor_dict.factor.keys()},
     **{key: bytes_factor_dict
        for key in bytes_factor_dict.factor.keys()},
 }
+
+# FLOPS have a specific width to their metric
+for width in TritonHook.flops_width:
+    factor_name = f"flops{width}"
+    factor_dict = {f"flop{width}/s": 1, f"gflop{width}/s": 1e9, f"tflop{width}/s": 1e12}
+    derivable_metrics.update({key: FactorDict(factor_name, factor_dict) for key in factor_dict.keys()})
 
 
 def derive_metrics(gf, metrics, raw_metrics, device_info):
@@ -192,8 +194,8 @@ def main():
         help="""List available metrics. Metric names are case insensitive and ignore units.
 Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
-- avg_time/s, avg_time/ms, avg_time/us, avg_time/ns: time / kernel_exec_count
-- flop/s, gflop/s, tflop/s: flops / time
+- avg_time/s, avg_time/ms, avg_time/us, avg_time/ns: time / count
+- flop<8/16/32/64>/s, gflop<8/16/32/64>/s, tflop<8/16/32/64>/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
 """,
