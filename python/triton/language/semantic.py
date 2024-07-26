@@ -1551,6 +1551,10 @@ def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: 
     return tl.tensor(builder.create_assert(cond.handle, msg, file_name, func_name, lineno), tl.void)
 
 
+def assume(cond, builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_assume(cond.handle), tl.void)
+
+
 def _convert_elem_to_ir_value(builder, elem, require_i64):
     if isinstance(elem, int):
         elem = tl.constexpr(elem)

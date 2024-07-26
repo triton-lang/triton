@@ -3855,6 +3855,31 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" not in ptx
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("has_hints", [False, True])
+def test_assume(has_hints, device):
+
+    @triton.jit
+    def _kernel(out_ptr, N: tl.constexpr, BLOCK_N: tl.constexpr, HINT: tl.constexpr):
+        current_size = N - tl.program_id(0) * BLOCK_N
+        if HINT:
+            tl.assume(current_size >= BLOCK_N)
+        if current_size >= 128:
+            tl.store(out_ptr + tl.program_id(0), current_size)
+        else:
+            tl.store(out_ptr + tl.program_id(0), current_size + 101024)
+
+    output = torch.zeros(1024 // 128, device='cuda')
+    pgm = _kernel[(1024 // 128, )](output, N=1024, BLOCK_N=128, HINT=has_hints)
+    if not is_cuda():
+        return
+
+    if has_hints:
+        assert 'br label' not in pgm.asm['llir']
+    else:
+        assert 'br label' in pgm.asm['llir']
+
+
 # ---------------
 # test store
 # ---------------
