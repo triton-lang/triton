@@ -186,7 +186,7 @@ tt.func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
 // CHECK-LABEL: @print_no_arg
 tt.func @print_no_arg(%arg0: !tt.ptr<f32>) {
 // CHECK: tt.print "test"
-  tt.print "test" { hex = false }
+  tt.print "test" { hex = false, isSigned = array<i32: 0>}
   %0 = tt.load %arg0 : !tt.ptr<f32>
   tt.store %arg0, %0 : !tt.ptr<f32>
   tt.return

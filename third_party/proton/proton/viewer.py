@@ -2,8 +2,8 @@ import argparse
 from collections import namedtuple
 import json
 import pandas as pd
-from numpy import inf, nan
 import hatchet as ht
+import numpy as np
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
 
@@ -92,18 +92,20 @@ derivable_metrics = {
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
-    time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
-    time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
+    internal_frame_indices = gf.dataframe["DeviceId"].isna()
 
     def get_time_seconds(df):
+        time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
+        time_unit = (time_factor_dict.name + "/" + time_metric_name.split("(")[1].split(")")[0])
         return df[time_metric_name] * time_factor_dict.factor[time_unit]
 
     for metric in metrics:
         if metric == "util":  # Tensor core only
             min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
             min_time_flops = get_min_time_flops(gf.dataframe, device_info)
-            time_sec = get_time_seconds(gf.dataframe, time_metric_name, time_unit)
+            time_sec = get_time_seconds(gf.dataframe)
             gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
+            gf.dataframe.loc[internal_frame_indices, "util (inc)"] = np.nan
             derived_metrics.append("util (inc)")
         elif metric in derivable_metrics:
             deriveable_metric = derivable_metrics[metric]
@@ -121,7 +123,8 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['Count'] /
-                                               avg_time_factor_dict.factor[metric_time_unit]).replace([inf, -inf], nan)
+                                               avg_time_factor_dict.factor[metric_time_unit])
+            gf.dataframe.loc[internal_frame_indices, f"{metric} (inc)"] = np.nan
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)

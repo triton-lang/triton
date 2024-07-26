@@ -1535,7 +1535,8 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
         prefix = " " + prefix
 
     new_args = [arg.handle for arg in args]
-    return tl.tensor(builder.create_print(prefix, hex, new_args), tl.void)
+    is_signed = [arg.dtype in (tl.int1, tl.int8, tl.int16, tl.int32, tl.int64) for arg in args]
+    return tl.tensor(builder.create_print(prefix, hex, new_args, is_signed), tl.void)
 
 
 def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: int, builder: ir.builder) -> tl.tensor:
