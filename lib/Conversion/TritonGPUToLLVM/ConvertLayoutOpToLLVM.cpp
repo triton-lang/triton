@@ -534,7 +534,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // don't need to avoid duplicate writes.
     LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
     const int shmemAllocatedNumElems =
-        getTotalSize<unsigned>(scratchConfig.paddedRepShape);
+        triton::getNumElements<unsigned>(scratchConfig.paddedRepShape);
     assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
 
     // Layout for the load from shmem to registers.
