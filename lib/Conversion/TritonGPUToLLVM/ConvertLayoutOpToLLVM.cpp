@@ -24,6 +24,84 @@ using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
 
+struct LocalLoadOpConversion : public ConvertOpToLLVMPattern<LocalLoadOp> {
+public:
+  LocalLoadOpConversion(LLVMTypeConverter &typeConverter,
+                        const TargetInfoBase &targetInfo,
+                        PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
+  LogicalResult
+  matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MemDescType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
+    Attribute srcLayout = srcTy.getEncoding();
+    Attribute dstLayout = dstTy.getEncoding();
+    // TODO: do we need to check if src is shared ?
+    if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout)) {
+      return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
+                                      rewriter);
+    }
+    if (isa<DotOperandEncodingAttr>(dstLayout) &&
+        isa<BlockedEncodingAttr>(
+            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
+      return lowerSharedToDotOpFMA(op, adaptor, getTypeConverter(), rewriter);
+    }
+    return failure();
+  }
+
+private:
+  LogicalResult
+  lowerSharedToDotOpFMA(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
+                        const LLVMTypeConverter *typeConverter,
+                        ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    RankedTensorType dstTy = op.getType();
+    Attribute dstLayout = dstTy.getEncoding();
+    auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
+    auto blockedLayout = cast<BlockedEncodingAttr>(
+        cast<DotOperandEncodingAttr>(dstLayout).getParent());
+    auto thread = getThreadId(rewriter, loc);
+    Value res = SharedToDotOperandFMA::convertLayout(
+        dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
+        thread, loc, getTypeConverter(), rewriter);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+  LogicalResult
+  lowerSharedToDistributed(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
+                           const LLVMTypeConverter *typeConverter,
+                           ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getResult().getType();
+    auto dstShape = dstTy.getShape();
+    assert(dstShape.size() <= 2 &&
+           "Unexpected rank of ConvertLayout(shared->blocked)");
+    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
+    auto dstLayout = dstTy.getEncoding();
+    auto inOrd = getOrder(srcSharedLayout);
+
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(),
+        typeConverter->convertType(srcTy.getElementType()), rewriter);
+    auto elemLlvmTy = typeConverter->convertType(dstTy.getElementType());
+
+    SmallVector<Value> outVals = loadSharedToDistributed(
+        dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
+
+    Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
 public:
@@ -606,4 +684,5 @@ void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
       typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
                                                benefit);
+  patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
 }
