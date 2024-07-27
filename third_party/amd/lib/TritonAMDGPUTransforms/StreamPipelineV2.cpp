@@ -43,18 +43,6 @@ struct LoadInfo {
 
 } // namespace
 
-// Replace the forOp's yield with a new one with the given operands appended.
-static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
-  // Fix up the yield op.
-  Operation *yieldOp = forOp.getBody()->getTerminator();
-  SmallVector<Value> operands(yieldOp->getOperands());
-  operands.append(newOperands.begin(), newOperands.end());
-
-  OpBuilder builder(yieldOp);
-  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
-  yieldOp->erase();
-}
-
 static void createStreamCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                              Value extractIdx, tt::CoarseSchedule &schedule,
                              tt::CoarseSchedule::Cluster prefetchCluster,
@@ -543,18 +531,16 @@ createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  // Create a cluster for the prefetches. It may end up being empty, but this
-  // is OK.
+  // Create a cluster for prefetching global reads for the dot.
   tt::CoarseSchedule::Cluster prefetchCluster = schedule.clusters.newAtBack();
 
   for (auto &[op, alloc] : loadToAllocs) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
       createStreamCopy(forOp, loadOp, alloc, extractIdx, schedule,
                        prefetchCluster, loadToInfo, numStages);
-    }
   }
   // Patch the yield with the updated counters.
-  appendToYield(forOp, {extractIdx});
+  appendToForOpYield(forOp, {extractIdx});
 
   return allocs;
 }
