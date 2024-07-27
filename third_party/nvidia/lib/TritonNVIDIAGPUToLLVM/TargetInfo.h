@@ -55,8 +55,6 @@ public:
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
 
-  int getMaxSharedAccessBitwidth() const override { return 128; }
-
 private:
   int computeCapability;
 };

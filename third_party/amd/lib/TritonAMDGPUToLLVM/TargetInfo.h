@@ -60,10 +60,6 @@ public:
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
 
-  bool enableLinearLayout() const override { return false; }
-
-  int getMaxSharedAccessBitwidth() const override { return 128; }
-
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   RewriterBase &rewriter, bool useStdErr) const;

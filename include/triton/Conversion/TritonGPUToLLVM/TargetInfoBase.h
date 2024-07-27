@@ -74,15 +74,6 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
-  // Whether to enable linear layout. This is a per-backend temporary escape
-  // hatch to disable linear layout while figuring out issues. Eventually we
-  // want to enable linear layout everywhere and delete this control.
-  virtual bool enableLinearLayout() const { return true; }
-
-  // Maximum number of bits that can be loaded or stored from shared memory with
-  // a single vector instruction.
-  virtual int getMaxSharedAccessBitwidth() const = 0;
-
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton
