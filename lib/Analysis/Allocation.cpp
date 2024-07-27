@@ -267,7 +267,8 @@ private:
       //       also possible to realize it with other approaches in restricted
       //       conditions, such as warp-shuffle
       auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-      auto elems = triton::getNumElements<unsigned>(scratchConfig.paddedRepShape);
+      auto elems =
+          triton::getNumElements<unsigned>(scratchConfig.paddedRepShape);
       auto bytes =
           isa<triton::PointerType>(srcTy.getElementType())
               ? elems * kPtrBitWidth / 8

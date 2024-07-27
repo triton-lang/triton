@@ -12,7 +12,8 @@ constexpr int kPtrBitWidth = 64;
 
 int getCvtOpLDSUsage(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-  unsigned elems = triton::getNumElements<unsigned>(scratchConfig.paddedRepShape);
+  unsigned elems =
+      triton::getNumElements<unsigned>(scratchConfig.paddedRepShape);
   auto bytes =
       isa<triton::PointerType>(srcTy.getElementType())
           ? elems * kPtrBitWidth / 8
