@@ -106,15 +106,14 @@ static SmallVector<unsigned> getRepShapeForAtomicCAS(triton::AtomicCASOp op) {
   return SmallVector<unsigned>{1};
 }
 
-ScratchConfig ScratchConfig::get(RankedTensorType srcTy,
-                                 RankedTensorType dstTy) {
+ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
+                                     RankedTensorType dstTy) {
   // Initialize vector sizes and stride
-  ScratchConfig scratchConfig;
-  scratchConfig.repShape = getRepShapeForCvtLayout(srcTy, dstTy);
-  scratchConfig.paddedRepShape = scratchConfig.repShape;
-  if (scratchConfig.repShape.empty())
-    return scratchConfig;
-  auto rank = scratchConfig.repShape.size();
+  auto repShape = getRepShapeForCvtLayout(srcTy, dstTy);
+  if (repShape.empty())
+    return ScratchConfig({}, {});
+  ScratchConfig scratchConfig(repShape, repShape);
+  auto rank = repShape.size();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
@@ -149,23 +148,14 @@ ScratchConfig ScratchConfig::get(RankedTensorType srcTy,
   if (rank <= 1)
     return scratchConfig;
   // pad the last dimension
-  scratchConfig.paddedDim = rank - 1;
+  auto paddedDim = rank - 1;
   if (auto dstBlockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(dstLayout)) {
-    scratchConfig.paddedDim = dstBlockedLayout.getOrder()[0];
+    paddedDim = dstBlockedLayout.getOrder()[0];
   }
-  scratchConfig.paddedSize =
-      std::max(scratchConfig.inVec, scratchConfig.outVec);
-  scratchConfig.paddedStride = scratchConfig.repShape[scratchConfig.paddedDim];
-  scratchConfig.paddedRepShape[scratchConfig.paddedDim] +=
-      scratchConfig.paddedSize;
+  auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
+  scratchConfig.paddedRepShape[paddedDim] += paddedSize;
+
   return scratchConfig;
-}
-
-ScratchConfig ScratchConfig::get(triton::gpu::ConvertLayoutOp op) {
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
-
-  return ScratchConfig::get(srcTy, dstTy);
 }
 
 class AllocationAnalysis {
@@ -276,7 +266,7 @@ private:
       // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
       //       also possible to realize it with other approaches in restricted
       //       conditions, such as warp-shuffle
-      auto scratchConfig = ScratchConfig::get(cvtLayout);
+      auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
       auto elems = getTotalSize<unsigned>(scratchConfig.paddedRepShape);
       auto bytes =
           isa<triton::PointerType>(srcTy.getElementType())

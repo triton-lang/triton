@@ -28,7 +28,8 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
 }
 
 static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
-  auto scratchConfig = triton::ScratchConfig::get(cvtOp);
+  auto scratchConfig = mlir::triton::getScratchConfigForCvt(
+      cvtOp.getSrc().getType(), cvtOp.getType());
   unsigned elems = getTotalSize<unsigned>(scratchConfig.paddedRepShape);
   auto srcType = cvtOp.getSrc().getType();
   auto bytes =

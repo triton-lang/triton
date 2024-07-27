@@ -21,20 +21,14 @@ class AllocationAnalysis;
 struct ScratchConfig {
   SmallVector<unsigned> repShape;
   SmallVector<unsigned> paddedRepShape;
-  unsigned inVec{1};
-  unsigned outVec{1};
-  unsigned paddedDim;
-  unsigned paddedSize{0};
-  unsigned paddedStride;
+  unsigned inVec;
+  unsigned outVec;
 
-  ScratchConfig() = default;
   ScratchConfig(SmallVector<unsigned> repShape,
-                SmallVector<unsigned> paddedRepShape, unsigned inVec,
-                unsigned outVec, unsigned paddedDim, unsigned paddedSize,
-                unsigned paddedStride)
+                SmallVector<unsigned> paddedRepShape, unsigned inVec = 1,
+                unsigned outVec = 1)
       : repShape(repShape), paddedRepShape(paddedRepShape), inVec(inVec),
-        outVec(outVec), paddedDim(paddedDim), paddedSize(paddedSize),
-        paddedStride(paddedStride) {}
+        outVec(outVec) {}
 
   void print(llvm::raw_ostream &os) const {
     os << "repShape: [";
@@ -43,14 +37,12 @@ struct ScratchConfig {
     os << ", paddedRepShape: [";
     llvm::interleaveComma(paddedRepShape, os);
     os << "]";
-    os << ", inVec: " << inVec << ", outVec: " << outVec
-       << ", paddedDim: " << paddedDim << ", paddedSize: " << paddedSize
-       << ", paddedStride: " << paddedStride << "\n";
+    os << ", inVec: " << inVec << ", outVec: " << outVec << "\n";
   }
-
-  static ScratchConfig get(RankedTensorType srcTy, RankedTensorType dstTy);
-  static ScratchConfig get(triton::gpu::ConvertLayoutOp op);
 };
+
+ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
+                                     RankedTensorType dstTy);
 
 } // namespace triton
 

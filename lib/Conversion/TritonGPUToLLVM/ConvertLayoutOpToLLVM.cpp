@@ -190,7 +190,7 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto scratchConfig = ScratchConfig::get(op);
+    auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
     unsigned inVec = scratchConfig.inVec;
     unsigned outVec = scratchConfig.outVec;
     auto paddedRepShape = scratchConfig.paddedRepShape;
@@ -437,7 +437,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value laneId = urem(threadId, threadsPerWarp);
     Value warpId = udiv(threadId, threadsPerWarp);
 
-    auto scratchConfig = ScratchConfig::get(op);
+    auto scratchConfig =
+        getScratchConfigForCvt(op.getSrc().getType(), op.getType());
     auto tensorShape = op.getType().getShape();
     // Convert int64_t to unsigned
     SmallVector<unsigned> tensorShapeUnsigned(tensorShape.begin(),
@@ -480,23 +481,26 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     if (conversion.getInDimSize(kBlock) > 1)
       ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
-    // Map src/dst registers to each iteration.
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     Type elemTy = inVals[0].getType();
     auto outSize = shmemLoadLayout.getInDimSize(kRegister);
     auto iterations = sharedLayout.getInDimSize(kIteration);
 
+    auto rank = scratchConfig.repShape.size();
+    auto paddedStride = scratchConfig.repShape[rank - 1];
+    auto paddedSize = scratchConfig.paddedRepShape[rank - 1] - paddedStride;
+
     auto getVecAddrAndBlock = [&](ArrayRef<Value> offsetAndBlock)
         -> std::pair<Value, std::optional<Value>> {
       std::optional<Value> block =
           isCrossCTA ? std::make_optional(offsetAndBlock[2]) : std::nullopt;
       Value offset = offsetAndBlock[0];
-      if (scratchConfig.paddedSize > 0) {
-        assert(llvm::isPowerOf2_32(scratchConfig.paddedStride));
-        assert(llvm::isPowerOf2_32(scratchConfig.paddedSize));
-        auto rshiftVal = llvm::Log2_32(scratchConfig.paddedStride);
-        auto lshiftVal = llvm::Log2_32(scratchConfig.paddedSize);
+      if (paddedSize > 0) {
+        assert(llvm::isPowerOf2_32(paddedStride));
+        assert(llvm::isPowerOf2_32(paddedSize));
+        auto rshiftVal = llvm::Log2_32(paddedStride);
+        auto lshiftVal = llvm::Log2_32(paddedSize);
         offset = add(shl(lshr(offset, i32_val(rshiftVal)), i32_val(lshiftVal)),
                      offset);
       }
@@ -552,11 +556,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    SmallVector<Value> reorderedOutVals;
-    for (size_t i = 0; i < outVals.size(); i++) {
-      reorderedOutVals.push_back(outVals[i]);
-    }
-    return reorderedOutVals;
+    SmallVector<Value> outValsVec;
+    for (size_t i = 0; i < outVals.size(); i++)
+      outValsVec.push_back(outVals[i]);
+    return outValsVec;
   }
 
   // Determine which registers are read/written in which iteration of the shmem
