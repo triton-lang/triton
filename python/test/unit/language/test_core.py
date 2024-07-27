@@ -3593,6 +3593,13 @@ def test_const(device, choose_const, constexpr, mode):
     if expect_fail:
         with pytest.raises(triton.CompilationError) as exc_info:
             patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
+        if constexpr:
+            assert "Cannot store to a constant pointer" in str(exc_info.value.__cause__), "Wrong error message!"
+        elif not constexpr and mode == "call":
+            assert "Inconsistent return types" in str(exc_info.value.__cause__), "Wrong error message!"
+        else:
+            # TODO: Add error messages for the other cases
+            pass
     else:
         patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
         assert torch.all(input == output)
