@@ -684,5 +684,5 @@ void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
       typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
                                                benefit);
-  patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<gpu::LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
 }
