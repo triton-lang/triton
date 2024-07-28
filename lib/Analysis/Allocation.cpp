@@ -57,8 +57,8 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   return {inOrd, outOrd};
 }
 
-static SmallVector<unsigned> getRepShapeForCvtLayout(RankedTensorType srcTy,
-                                                     RankedTensorType dstTy) {
+static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
+                                               RankedTensorType dstTy) {
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
@@ -109,7 +109,7 @@ static SmallVector<unsigned> getRepShapeForAtomicCAS(triton::AtomicCASOp op) {
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy) {
   // Initialize vector sizes and stride
-  auto repShape = getRepShapeForCvtLayout(srcTy, dstTy);
+  auto repShape = getRepShapeForCvt(srcTy, dstTy);
   if (repShape.empty())
     return ScratchConfig({}, {});
   ScratchConfig scratchConfig(repShape, repShape);

@@ -48,13 +48,17 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // dimension, determines if the layout moves data across block boundaries.
 bool isCrossCTAConversion(const LinearLayout &layout);
 
-// The legacy version of the linear layout conversion function.  We determined
-// the intermediate shared memory needed for a register-to-register conversion
-// using a legacy heuristic (i.e., repShape), which uses the maximum accessing
-// size of each dimension from srcLayout and dstLayout.   See Allocation.cpp for
-// details.  Then, we construct an intermediate linear layout representing the
-// shared memory -> tensor element index mapping for entire src and dst tensors.
-// The pesudo code of layout conversion is as follows:
+// In this function, we construct a linear layout representing the
+// <shared memory offset, iteration> -> <tensor element index> mapping for
+// entire `src` and `dst` tensors.  We determine the shape of the intermediate
+// shared memory buffer needed for a register-to-register conversion using the
+// maximum accessing size of each dimension from `src`'s layout and `dst`'s
+// layout.  See the getRepShapeForCvt function in Allocation.cpp for details.
+// Note that the buffer might be smaller than the tensor being converted, so we
+// need multiple "iterations" to move a subregion of the `src` tensor to the
+// corresponding subregion of the `dst` tensor.  The pesudo code of layout
+// conversion is as follows:
+//
 // for iter in 0..numIterations:
 //   sync threads
 //   for vecIdx in [0..numRegisters/storeVec]:

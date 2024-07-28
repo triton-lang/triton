@@ -18,6 +18,12 @@ namespace mlir {
 namespace triton {
 class AllocationAnalysis;
 
+// To convert a tensor from one layout to another, we need to allocate a
+// temporary buffer (i.e., scratch buffer) in the shared memory.  We may go
+// through multiple iterations to convert the tensor, and each iteration may
+// have multiple vectorized loads/stores.  The scratch buffer has a shape
+// ("repShape") that is the maximum accessing size of each dimension handled by
+// each iteration.
 struct ScratchConfig {
   SmallVector<unsigned> repShape;
   SmallVector<unsigned> paddedRepShape;

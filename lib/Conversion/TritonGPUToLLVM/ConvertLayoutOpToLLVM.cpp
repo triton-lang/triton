@@ -517,15 +517,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto scratchConfig =
         getScratchConfigForCvt(op.getSrc().getType(), op.getType());
-    auto tensorShape = op.getType().getShape();
-    // Convert int64_t to unsigned
-    SmallVector<unsigned> tensorShapeUnsigned(tensorShape.begin(),
-                                              tensorShape.end());
+    auto tensorShape = convertType<unsigned, int64_t>(op.getType().getShape());
     // Input dims: [offset, iteration, block]
     // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
-    LinearLayout sharedLayout =
-        mlir::triton::gpu::chooseShemLayoutForRegToRegConversion(
-            ctx, tensorShapeUnsigned, scratchConfig.repShape);
+    LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
+        ctx, tensorShape, scratchConfig.repShape);
 
     // Layout for the store from registers to shared memory.
     //
