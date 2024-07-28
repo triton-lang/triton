@@ -825,8 +825,8 @@ chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
   auto totalIters = 1;
   auto totalOffsets = 1;
   for (int i = 0; i < tensorShape.size(); i++) {
-    // The scratch buffer always has the last dimension to be most-minor dim
-    // e.g., In the 2-D case, row-major access is used.
+    // The scratch buffer always has the last dimension to be the most-minor
+    // dimension
     int dim = tensorShape.size() - 1 - i;
     StringAttr kIteration = S("iteration" + std::to_string(dim));
     StringAttr kOffset = S("offset" + std::to_string(dim));

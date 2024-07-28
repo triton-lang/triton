@@ -381,9 +381,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return transferWithinLane(*c, op, adaptor, rewriter);
     }
 
-    // TODO(Keren): LinearLayout doesn't support cross-CTA conversion yet.
-    if (isCrossCTAConversion(conversion))
-      return failure();
     return transferWithinBlockOrGroup(conversion, op, *srcLayout, *dstLayout,
                                       adaptor, rewriter);
   }
@@ -426,6 +423,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                              const LinearLayout &srcLayout,
                              const LinearLayout &dstLayout, OpAdaptor adaptor,
                              ConversionPatternRewriter &rewriter) const {
+    // TODO(Keren): LinearLayout doesn't support cross-CTA conversion yet.
+    if (isCrossCTAConversion(conversion))
+      return failure();
+
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
 
@@ -452,14 +453,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
     assert(!inVals.empty());
 
-    // Munge and unmunge are necessary because otherwise TargetInfo load/store
-    // cannot handle pointers correctly.
+    // We munge the input values by converting i<n> (n<8) elements to i8 and
+    // pointers to i64. This is necessary because TargetInfo::loadDShared and
+    // storeDShared can't handle vectors of pointers or sub-byte elements.
     RankedTensorType srcTy = op.getSrc().getType();
     auto elemTy = srcTy.getElementType();
-    auto isInt1 = elemTy.isInteger(1);
+    auto isSubByte = elemTy.getIntOrFloatBitWidth() < 8;
     auto isPtr = isa<triton::PointerType>(elemTy);
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
-    if (isInt1)
+    if (isSubByte)
       elemTy = IntegerType::get(elemTy.getContext(), 8);
     else if (isPtr)
       elemTy = IntegerType::get(elemTy.getContext(), 64);
@@ -467,10 +469,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Munge input values
     for (const auto &it : llvm::enumerate(inVals)) {
-      if (isInt1)
+      if (isSubByte) {
         inVals[it.index()] = zext(llvmElemTy, it.value());
-      else if (isPtr)
+      } else if (isPtr) {
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
+      }
     }
 
     SmallVector<Value> outVals = transferWithinBlockOrGroupImpl(
@@ -478,12 +481,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
-      if (isInt1)
-        outVals[it.index()] =
-            icmp_ne(it.value(), rewriter.create<LLVM::ConstantOp>(
-                                    loc, i8_ty, rewriter.getI8IntegerAttr(0)));
-      else if (isPtr)
+      if (isSubByte) {
+        outVals[it.index()] = trunc(llvmElemTyOrig, it.value());
+      } else if (isPtr) {
         outVals[it.index()] = inttoptr(llvmElemTyOrig, it.value());
+      }
     }
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
