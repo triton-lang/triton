@@ -458,10 +458,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // storeDShared can't handle vectors of pointers or sub-byte elements.
     RankedTensorType srcTy = op.getSrc().getType();
     auto elemTy = srcTy.getElementType();
-    auto isSubByte = elemTy.getIntOrFloatBitWidth() < 8;
+    auto isSubByteInt =
+        elemTy.isInteger() && elemTy.getIntOrFloatBitWidth() < 8;
     auto isPtr = isa<triton::PointerType>(elemTy);
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
-    if (isSubByte)
+    if (isSubByteInt)
       elemTy = IntegerType::get(elemTy.getContext(), 8);
     else if (isPtr)
       elemTy = IntegerType::get(elemTy.getContext(), 64);
@@ -469,7 +470,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Munge input values
     for (const auto &it : llvm::enumerate(inVals)) {
-      if (isSubByte) {
+      if (isSubByteInt) {
         inVals[it.index()] = zext(llvmElemTy, it.value());
       } else if (isPtr) {
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
@@ -481,7 +482,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
-      if (isSubByte) {
+      if (isSubByteInt) {
         outVals[it.index()] = trunc(llvmElemTyOrig, it.value());
       } else if (isPtr) {
         outVals[it.index()] = inttoptr(llvmElemTyOrig, it.value());
@@ -552,16 +553,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     SmallVector<SmallVector<int>> outRegsForIter =
         collectRegsForIter(ctx, shmemLoadLayout);
 
-    // Avoid emitting a call to getClusterCTAId if we know it's always 0.
-    std::optional<Value> ctaId;
-    if (conversion.getInDimSize(kBlock) > 1)
-      ctaId = targetInfo.getClusterCTAId(rewriter, loc);
-
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     Type elemTy = inVals[0].getType();
     auto outSize = shmemLoadLayout.getInDimSize(kRegister);
     auto iterations = sharedLayout.getInDimSize(kIteration);
+    assert(scratchConfig.inVec * iterations == inVals.size());
 
     auto rank = scratchConfig.repShape.size();
     auto paddedStride = scratchConfig.repShape[rank - 1];
@@ -603,7 +600,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                               {{kRegister, i32_val(inRegSlice)},
                                {kLane, laneId},
                                {kWarp, warpId},
-                               {kBlock, ctaId.value_or(i32_val(0))}})));
+                               {kBlock, i32_val(0)}})));
         auto [vecAddr, block] = getVecAddrAndBlock(offsetAndBlock);
         SmallVector<Value> inValsVec;
         for (int k = 0; k < scratchConfig.inVec; k++)
@@ -622,7 +619,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                               {{kRegister, i32_val(outRegSlice)},
                                {kLane, laneId},
                                {kWarp, warpId},
-                               {kBlock, ctaId.value_or(i32_val(0))}})));
+                               {kBlock, i32_val(0)}})));
         auto [vecAddr, block] = getVecAddrAndBlock(offsetAndBlock);
         Value valsVec = targetInfo.loadDShared(
             rewriter, loc, vecAddr, block, vec_ty(elemTy, scratchConfig.outVec),
