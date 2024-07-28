@@ -559,6 +559,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto outSize = shmemLoadLayout.getInDimSize(kRegister);
     auto iterations = sharedLayout.getInDimSize(kIteration);
     assert(scratchConfig.inVec * iterations <= inVals.size());
+    assert(scratchConfig.outVec * iterations <= outSize);
 
     auto rank = scratchConfig.repShape.size();
     auto paddedStride = scratchConfig.repShape[rank - 1];
