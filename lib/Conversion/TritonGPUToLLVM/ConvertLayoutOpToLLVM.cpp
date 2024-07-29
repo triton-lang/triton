@@ -504,7 +504,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto loc = op.getLoc();
 
     auto sharedPtrTy = ptr_ty(ctx, /*addressSpace=*/3);
-    bool isCrossCTA = isCrossCTAConversion(conversion);
 
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
@@ -565,11 +564,22 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto paddedStride = scratchConfig.repShape[rank - 1];
     auto paddedSize = scratchConfig.paddedRepShape[rank - 1] - paddedStride;
 
-    auto getVecAddrAndBlock = [&](ArrayRef<Value> offsetAndBlock)
-        -> std::pair<Value, std::optional<Value>> {
-      std::optional<Value> block =
-          isCrossCTA ? std::make_optional(offsetAndBlock[2]) : std::nullopt;
-      Value offset = offsetAndBlock[0];
+    // Linear layout function is split in two parts below:
+    //
+    // L(r, t, w, b) = L(0, t, w, b) xor L(r, 0, 0, 0)
+    //   offset      =    regBase   xor    regIdx
+    //
+    // It is the same hack as what we've done in the emitIndices function to get
+    // around performance issues on AMD GPUs
+    auto getVecAddr = [&](LinearLayout &layout, Value &regBase,
+                          int regSlice) -> Value {
+      auto regIdx = shmemStoreLayout
+                        .apply({{kRegister, regSlice},
+                                {kLane, 0},
+                                {kWarp, 0},
+                                {kBlock, 0}})[0]
+                        .second;
+      Value offset = xor_(regBase, i32_val(regIdx));
       if (paddedSize > 0) {
         assert(llvm::isPowerOf2_32(paddedStride));
         assert(llvm::isPowerOf2_32(paddedSize));
@@ -580,9 +590,22 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
       auto vecAddr = gep(sharedPtrTy, elemTy, smemBase, offset);
       vecAddr.setInbounds(true);
-      return {vecAddr, block};
+      return vecAddr;
     };
 
+    Value blockId = i32_val(0);
+    auto storeBase = applyLinearLayout(loc, rewriter, shmemStoreLayout,
+                                       {{kRegister, i32_val(0)},
+                                        {kLane, laneId},
+                                        {kWarp, warpId},
+                                        {kBlock, blockId}})[0]
+                         .second;
+    auto loadBase = applyLinearLayout(loc, rewriter, shmemLoadLayout,
+                                      {{kRegister, i32_val(0)},
+                                       {kLane, laneId},
+                                       {kWarp, warpId},
+                                       {kBlock, blockId}})[0]
+                        .second;
     // register idx -> Value
     llvm::MapVector<int, Value> outVals;
     for (int i = 0; i < iterations; i++) {
@@ -592,22 +615,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       auto &inRegs = inRegsForIter[i];
       auto &outRegs = outRegsForIter[i];
 
-      // XXX: CSE applyLinearLayout.
       for (int j = 0; j < inVals.size() / iterations;
            j += scratchConfig.inVec) {
         auto inRegSlice = inRegs[j];
-        auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
-            applyLinearLayout(loc, rewriter, shmemStoreLayout,
-                              {{kRegister, i32_val(inRegSlice)},
-                               {kLane, laneId},
-                               {kWarp, warpId},
-                               {kBlock, i32_val(0)}})));
-        auto [vecAddr, block] = getVecAddrAndBlock(offsetAndBlock);
+        auto vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
         SmallVector<Value> inValsVec;
         for (int k = 0; k < scratchConfig.inVec; k++)
           inValsVec.push_back(inVals[inRegSlice + k]);
         Value valsVec = packLLVector(loc, inValsVec, rewriter);
-        targetInfo.storeDShared(rewriter, loc, vecAddr, block, valsVec,
+        targetInfo.storeDShared(rewriter, loc, vecAddr, blockId, valsVec,
                                 /*pred=*/true_val());
       }
 
@@ -615,16 +631,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
       for (int j = 0; j < outSize / iterations; j += scratchConfig.outVec) {
         auto outRegSlice = outRegs[j];
-        auto offsetAndBlock = llvm::to_vector(llvm::make_second_range(
-            applyLinearLayout(loc, rewriter, shmemLoadLayout,
-                              {{kRegister, i32_val(outRegSlice)},
-                               {kLane, laneId},
-                               {kWarp, warpId},
-                               {kBlock, i32_val(0)}})));
-        auto [vecAddr, block] = getVecAddrAndBlock(offsetAndBlock);
-        Value valsVec = targetInfo.loadDShared(
-            rewriter, loc, vecAddr, block, vec_ty(elemTy, scratchConfig.outVec),
-            /*pred=*/true_val());
+        auto vecAddr = getVecAddr(shmemLoadLayout, loadBase, outRegSlice);
+        Value valsVec =
+            targetInfo.loadDShared(rewriter, loc, vecAddr, blockId,
+                                   vec_ty(elemTy, scratchConfig.outVec),
+                                   /*pred=*/true_val());
         for (Value v : unpackLLVector(loc, valsVec, rewriter))
           outVals[outRegSlice++] = v;
       }
