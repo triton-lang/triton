@@ -199,7 +199,7 @@ def main():
 Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
 - avg_time/s, avg_time/ms, avg_time/us, avg_time/ns: time / count
-- flop<8/16/32/64>/s, gflop<8/16/32/64>/s, tflop<8/16/32/64>/s: flops / time
+- flop[<8/16/32/64>]/s, gflop[<8/16/32/64>]/s, tflop[<8/16/32/64>]/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
 """,
@@ -246,7 +246,7 @@ There are two modes:
     )
     argparser.add_argument(
         "-f", "--format", type=str, choices=["full", "file_function_line", "function_line", "file_function"],
-        default="full", help="""Formating the frame name.
+        default="full", help="""Formatting the frame name.
 - full: include the path, file name, function name and line number.
 - file_function_line: include the file name, function name and line number.
 - function_line: include the function name and line number.
