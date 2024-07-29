@@ -665,10 +665,12 @@ public:
     case ISAFamily::CDNA3:
       patterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
                                     matrixInstructionSize, kPack);
+      break;
     case ISAFamily::RDNA1:
     case ISAFamily::RDNA2:
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context);
+      break;
     default:
       break;
     }
