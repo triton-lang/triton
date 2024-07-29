@@ -53,7 +53,7 @@ endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
 
 
 # #########
