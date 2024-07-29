@@ -593,18 +593,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return vecAddr;
     };
 
-    Value blockId = i32_val(0);
     auto storeBase = applyLinearLayout(loc, rewriter, shmemStoreLayout,
                                        {{kRegister, i32_val(0)},
                                         {kLane, laneId},
                                         {kWarp, warpId},
-                                        {kBlock, blockId}})[0]
+                                        {kBlock, i32_val(0)}})[0]
                          .second;
     auto loadBase = applyLinearLayout(loc, rewriter, shmemLoadLayout,
                                       {{kRegister, i32_val(0)},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, blockId}})[0]
+                                       {kBlock, i32_val(0)}})[0]
                         .second;
     // register idx -> Value
     llvm::MapVector<int, Value> outVals;
