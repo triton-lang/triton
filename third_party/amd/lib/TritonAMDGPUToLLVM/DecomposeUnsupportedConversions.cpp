@@ -27,7 +27,7 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
     op->setAttr(attr.getName(), attr.getValue());
 }
 
-static int getCvtODTypepLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
+static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
   auto scratchConfig = mlir::triton::getScratchConfigForCvt(
       cvtOp.getSrc().getType(), cvtOp.getType());
   unsigned elems = getNumScratchElements(scratchConfig.paddedRepShape);
