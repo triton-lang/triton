@@ -130,10 +130,12 @@ void kronrod(uint64_t* RESTRICT matrix, uint64_t rows, uint64_t stride, const ui
         if (N >= 32) {
             // prefetch 256 bytes, 15 rows later:
             uint64_t* ppp = matrix + (r + 15) * stride;
+#if defined(__GNUC__)
             __builtin_prefetch(ppp);
             __builtin_prefetch(ppp + 8);
             __builtin_prefetch(ppp + 16);
             __builtin_prefetch(ppp + 24);
+#endif
         }
 
         uint64_t w = workspace[r];
