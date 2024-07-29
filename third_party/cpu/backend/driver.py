@@ -12,7 +12,7 @@ from triton.backends.compiler import GPUTarget
 
 _dirname = os.getenv("TRITON_SYS_PATH", default="/usr/local")
 # for locating libTritonCPURuntime
-_triton_C_dir = importlib.resources.files(triton._C).joinpath("")
+_triton_C_dir = importlib.resources.files(triton).joinpath("_C")
 
 include_dirs = [os.path.join(_dirname, "include")]
 library_dirs = [os.path.join(_dirname, "lib"), _triton_C_dir]
