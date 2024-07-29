@@ -264,13 +264,16 @@ LogicalResult LoopPipeliner::checkOpUses() {
 
       // TODO: handle fp_to_fp conversions in between
       if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use))
-        if (auto tensorType =
-                dyn_cast<RankedTensorType>(convertLayout.getResult().getType()))
-          if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
-                  tensorType.getEncoding())) {
+        if (auto dstTy = convertLayout.getResult().getType()) {
+          auto srcTy = convertLayout.getSrc().getType();
+          bool isShortcut = isBlockedToDotShortcut(srcTy, dstTy);
+          auto dotOpEnc =
+              dyn_cast<ttg::DotOperandEncodingAttr>(dstTy.getEncoding());
+          if (!isShortcut && dotOpEnc) {
             isCandidate = true;
             convertMapping[loadOp] = convertLayout;
           }
+        }
     } else
       isCandidate = false;
 

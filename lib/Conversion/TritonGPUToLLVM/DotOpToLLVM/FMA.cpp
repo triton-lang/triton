@@ -1,30 +1,112 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace ::mlir::triton::gpu;
 
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::expandMatrixOrderWithBatch;
+using ::mlir::triton::gpu::expandMatrixShapeWithBatch;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::getSizePerThread;
 
-using ValueTableFMA = std::map<std::pair<int, int>, Value>;
+using ValueTableFMA = std::map<std::tuple<int, int, int>, Value>;
 
 static ValueTableFMA
-getValueTableFromStructFMA(Value val, int K, int n0, int shapePerCTATile,
-                           int sizePerThread,
-                           ConversionPatternRewriter &rewriter, Location loc,
-                           const LLVMTypeConverter *typeConverter, Type type) {
+getValueTableFromStructFMA(Value val, int batch, int nonK, int K,
+                           ConversionPatternRewriter &rewriter, Location loc) {
   ValueTableFMA res;
   auto elems = unpackLLElements(loc, val, rewriter);
+  assert(elems.size() == K * nonK * batch);
   int index = 0;
-  for (unsigned k = 0; k < K; ++k) {
-    for (unsigned m = 0; m < n0; m += shapePerCTATile)
-      for (unsigned mm = 0; mm < sizePerThread; ++mm) {
-        res[{m + mm, k}] = elems[index++];
-      }
-  }
+  for (unsigned b = 0; b < batch; ++b)
+    for (unsigned k = 0; k < K; ++k)
+      for (unsigned i = 0; i < nonK; ++i)
+        res[{b, i, k}] = elems[index++];
   return res;
+}
+
+struct DotIntrinsic {
+  int vectorSize;
+  Type outElemTy;
+  StringRef intrinsicName;
+  SmallVector<Value> additionalArgs;
+};
+
+DotIntrinsic chooseIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
+                             triton::DotOp op) {
+  auto aOpTy = cast<RankedTensorType>(op.getA().getType());
+  auto aElemTy = aOpTy.getElementType();
+  auto dOpTy = cast<RankedTensorType>(op.getD().getType());
+  auto dElemTy = dOpTy.getElementType();
+  auto mod = op->getParentOfType<ModuleOp>();
+  auto arch = getAMDArch(mod);
+  DotIntrinsic chosenOp;
+  bool dotAvailable = arch == "gfx908" || arch == "gfx90a" ||
+                      arch.starts_with("gfx94") || arch.starts_with("gfx11") ||
+                      arch.starts_with("gfx103");
+  if (dotAvailable) {
+    if (aElemTy.isF16() && dElemTy.isF32()) {
+      chosenOp.vectorSize = 2;
+      chosenOp.outElemTy = f32_ty;
+      chosenOp.intrinsicName = "llvm.amdgcn.fdot2";
+      chosenOp.additionalArgs = {false_val()};
+      return chosenOp;
+    }
+    if (aElemTy.isInteger(8) && dElemTy.isInteger(32)) {
+      chosenOp.vectorSize = 4;
+      chosenOp.outElemTy = i32_ty;
+      chosenOp.intrinsicName = "llvm.amdgcn.sdot4";
+      chosenOp.additionalArgs = {false_val()};
+      return chosenOp;
+    }
+  }
+  // choose one of FMA intrinsics
+  assert(aElemTy.isIntOrFloat() && !aElemTy.isIntOrIndex());
+  assert(aElemTy == dElemTy);
+  assert(cast<RankedTensorType>(op.getA().getType()).getElementType() ==
+         dElemTy);
+  chosenOp.vectorSize = 1;
+  chosenOp.outElemTy = aElemTy;
+  if (aElemTy.isF32())
+    chosenOp.intrinsicName = "llvm.fmuladd.f32";
+  if (aElemTy.isF16())
+    chosenOp.intrinsicName = "llvm.fmuladd.f16";
+  chosenOp.additionalArgs = {};
+  return chosenOp;
+}
+
+Value packOperand(ConversionPatternRewriter &rewriter, Location loc,
+                  ValueTableFMA scalarValues, unsigned b, unsigned nonK,
+                  unsigned k, unsigned vectorSize) {
+  if (vectorSize == 1)
+    return scalarValues[{b, nonK, k}];
+  auto elemTy = scalarValues[{b, nonK, k}].getType();
+  auto vecTy = vec_ty(elemTy, vectorSize);
+  Value vec = undef(vecTy);
+  for (int elem = 0; elem < vectorSize; ++elem) {
+    vec = insert_element(vecTy, vec, scalarValues[{b, nonK, k + elem}],
+                         i32_val(elem));
+  }
+  if (elemTy.isInteger(8)) {
+    assert(vectorSize == 4);
+    vec = bitcast(vec, i32_ty);
+  }
+  return vec;
+}
+
+Value generateDotOp(ConversionPatternRewriter &rewriter, Location loc,
+                    DotIntrinsic op, Value a, Value b, Value c) {
+  SmallVector<Value> args{a, b, c};
+  args.append(op.additionalArgs.begin(), op.additionalArgs.end());
+  SmallVector<Type> argTypes;
+  for (auto arg : args)
+    argTypes.push_back(arg.getType());
+  auto funcType = LLVM::LLVMFunctionType::get(op.outElemTy, argTypes);
+  auto d = call_intrinsic(op.outElemTy, op.intrinsicName, args);
+  return d.getResult(0);
 }
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
@@ -39,61 +121,58 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto D = op.getResult();
 
   auto aTensorTy = cast<RankedTensorType>(A.getType());
-  auto bTensorTy = cast<RankedTensorType>(B.getType());
   auto dTensorTy = cast<RankedTensorType>(D.getType());
+  auto dElemTy = dTensorTy.getElementType();
 
-  auto aShapePerCTA = getShapePerCTA(aTensorTy);
-  auto bShapePerCTA = getShapePerCTA(bTensorTy);
+  auto aShapePerCTA = expandMatrixShapeWithBatch(getShapePerCTA(aTensorTy));
+  auto dShapePerCTA = expandMatrixShapeWithBatch(getShapePerCTA(dTensorTy));
 
   BlockedEncodingAttr dLayout =
       cast<BlockedEncodingAttr>(dTensorTy.getEncoding());
-  auto order = dLayout.getOrder();
+  auto order = expandMatrixOrderWithBatch(dLayout.getOrder());
   auto cc = unpackLLElements(loc, adaptor.getC(), rewriter);
 
   Value llA = adaptor.getA();
   Value llB = adaptor.getB();
 
-  auto sizePerThread = getSizePerThread(dLayout);
-  auto shapePerCTATile = getShapePerCTATile(dLayout);
+  auto sizePerThread = expandMatrixShapeWithBatch(getSizePerThread(dLayout));
+  auto shapePerCTATile =
+      expandMatrixShapeWithBatch(getShapePerCTATile(dLayout));
 
-  int K = aShapePerCTA[1];
-  int M = aShapePerCTA[0];
-  int N = bShapePerCTA[1];
+  int K = aShapePerCTA[2];
 
-  int mShapePerCTATile =
-      order[0] == 1 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-  int mSizePerThread =
-      order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-  int nShapePerCTATile =
-      order[0] == 0 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-  int nSizePerThread =
-      order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+  unsigned retSize[3];
+  for (int i = 0; i < 3; ++i) {
+    unsigned numRep = dShapePerCTA[i] / shapePerCTATile[i];
+    numRep = std::max(static_cast<unsigned>(1), numRep);
+    retSize[i] = numRep * sizePerThread[i];
+  }
 
   auto has =
-      getValueTableFromStructFMA(llA, K, M, mShapePerCTATile, mSizePerThread,
-                                 rewriter, loc, typeConverter, aTensorTy);
+      getValueTableFromStructFMA(llA, retSize[0], retSize[1], K, rewriter, loc);
   auto hbs =
-      getValueTableFromStructFMA(llB, K, N, nShapePerCTATile, nSizePerThread,
-                                 rewriter, loc, typeConverter, bTensorTy);
+      getValueTableFromStructFMA(llB, retSize[0], retSize[2], K, rewriter, loc);
 
   SmallVector<Value> ret = cc;
-  bool isCRow = order[0] == 1;
+  auto selectedOp = chooseIntrinsic(rewriter, loc, op);
 
-  for (unsigned k = 0; k < K; k++) {
-    for (unsigned m = 0; m < M; m += mShapePerCTATile)
-      for (unsigned n = 0; n < N; n += nShapePerCTATile)
-        for (unsigned mm = 0; mm < mSizePerThread; ++mm)
-          for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
-            int mIdx = m / mShapePerCTATile * mSizePerThread + mm;
-            int nIdx = n / nShapePerCTATile * nSizePerThread + nn;
-
-            int z = isCRow
-                        ? mIdx * N / nShapePerCTATile * mSizePerThread + nIdx
-                        : nIdx * M / mShapePerCTATile * nSizePerThread + mIdx;
-            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
-                                                      hbs[{n + nn, k}], ret[z]);
-          }
-  }
+  for (unsigned b = 0; b < retSize[0]; ++b)
+    for (unsigned m = 0; m < retSize[1]; ++m)
+      for (unsigned n = 0; n < retSize[2]; ++n) {
+        unsigned idx[] = {b, m, n};
+        unsigned linearIdx = 0;
+        for (auto dim : llvm::reverse(order)) {
+          linearIdx = linearIdx * retSize[dim] + idx[dim];
+        }
+        for (unsigned k = 0; k < K; k += selectedOp.vectorSize) {
+          auto aOp =
+              packOperand(rewriter, loc, has, b, m, k, selectedOp.vectorSize);
+          auto bOp =
+              packOperand(rewriter, loc, hbs, b, n, k, selectedOp.vectorSize);
+          ret[linearIdx] = generateDotOp(rewriter, loc, selectedOp, aOp, bOp,
+                                         ret[linearIdx]);
+        }
+      }
 
   auto res = packLLElements(loc, typeConverter, ret, rewriter, dTensorTy);
   rewriter.replaceOp(op, res);

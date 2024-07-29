@@ -44,6 +44,12 @@ def get_arch():
     return "" if target is None else str(target.arch)
 
 
+def get_arch():
+    if is_interpreter():
+        return ""
+    return str(triton.runtime.driver.active.get_current_target().arch)
+
+
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
@@ -3062,19 +3068,22 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack",
     [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1)
-     for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
+     for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)] + ([(16, 16, 8)] if "gfx9" in get_arch() else [])
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
      for input_precision in ['tf32', 'tf32x3', 'ieee']
-     for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
+     for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('int8',
+                                                                                  'int32'), ('float32', 'float32')]
      if not (input_precision != 'ieee' and (in_dtype in ['float16']))] +
     [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
-     for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
-                      [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
+     for shape_nw in [[4, 4, 16, 4], [1, 64, 32, 1], [1, 128, 32, 4], [2, 128, 32, 2], [128, 1, 32, 4], [128, 2, 32, 2],
+                      [128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
+                      [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2],
+                      [128, 256, 128, 8]]
      for input_precision in ["ieee" if is_hip() else "tf32"]
      for col_a in [True, False]
      for col_b in [True, False]
-     for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
-                                                                                                    'float32')]
+     for in_dtype, out_dtype in [('int8', 'int8'), ('int8', 'int32'), ('float16', 'float16'), ('float16', 'float32'),
+                                 ('float32', 'float32')]
      for kpack in [1, 2 if is_hip() else 1]] + [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1)
                                                 for col_a in [True, False]
                                                 for col_b in [True, False]] +
@@ -3306,17 +3315,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
-                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
-                          for B in [1, 2, 4, 8]
-                          for num_warps in [1, 2, 4, 8, 16]
-                          for BLOCK_M, BLOCK_N in [(32, 32)]
-                          for M, N, K in [(64, 64, 64), (32, 32, 32)]
-                          for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
-                                                              ('float16', 'float32'), ('float32', 'float32')]] +
-                         # Large block sizes
-                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')])
-def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
+@pytest.mark.parametrize("B", [1, 2, 4, 8])
+@pytest.mark.parametrize("num_warps", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("M, N, K", [(1, 64, 64), (64, 1, 64), (2, 64, 64), (64, 2, 64), (64, 64, 64), (32, 32, 32)])
+@pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
+                                                         ('float16', 'float32'), ('float32', 'float32')])
+def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
@@ -3393,6 +3397,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
     out_tri = to_triton(out, device=device)
 
     BLOCK_B = B
+    BLOCK_M, BLOCK_N = min(32, M), min(32, N)
     BLOCK_K = K
 
     grid = (
@@ -3425,6 +3430,12 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
         out_ref = np.matmul(x.astype(np.float32), y.astype(np.float32)).astype(np.int32)
     else:
         out_ref = np.matmul(x, y)
+
+    # import sys
+    # np.set_printoptions(threshold=sys.maxsize)
+    # print("M: {}, N: {}, K: {}".format(M, N, K))
+    # print("shapes: {} x {} -> {}".format(x_tri.shape, y_tri.shape, out_tri.shape))
+
     np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
 
 
@@ -5175,8 +5186,9 @@ def matmul_kernel(  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N, K", [(128, 256, 256)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64)])
+@pytest.mark.parametrize("M, N, K", [(64, 256, 256), (128, 256, 256), (128, 256, 128)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 256, 128), (128, 256, 128), (128, 256, 64), (128, 128, 128),
+                                                       (64, 64, 64)])
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
@@ -5196,7 +5208,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
     C = torch.empty((M, N), dtype=torch.float32, device=device)
-    num_warps = 8
+    num_warps = 4
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
@@ -5208,6 +5220,9 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     torch_b = torch.from_numpy(B).to(device=device)
     th_b = f8_to_f16(torch_b, in_type_str)
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
+    # import sys
+    # np.set_printoptions(threshold=sys.maxsize)
+    # print(C.to("cpu").numpy())
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
     else:

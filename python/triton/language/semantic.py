@@ -1322,6 +1322,12 @@ def _str_to_dot_input_precision(input_precision, builder):
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optional[str], max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
+    def support_small_matrices():
+        if not hasattr(builder.options, "arch"):
+            return False
+        archStr = builder.options.arch
+        return "gfx9" in archStr
+
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
         if not options.allow_fp8e4nv:
             assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(

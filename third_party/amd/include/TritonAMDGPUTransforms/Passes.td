@@ -72,6 +72,17 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
 
 }
 
+def TritonAMDGPUOptimizeSmallDotOperands : Pass<"tritonamdgpu-optimize-small-dot-operands", "mlir::ModuleOp"> {
+  let summary = "Optimize small matrices operands: Load dot operands in layout compatible to dotOp.";
+
+  let description = [{
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUOptimizeSmallDotOperandsPass()";
+
+  let dependentDialects = [];
+}
+
 def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
   let summary = "Reorder instructions";
 

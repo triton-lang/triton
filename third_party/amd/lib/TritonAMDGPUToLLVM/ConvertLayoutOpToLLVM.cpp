@@ -129,6 +129,12 @@ public:
         isa<DotOperandEncodingAttr>(dstLayout)) {
       return lowerMfmaToDotOperand(op, adaptor, rewriter);
     }
+
+    // TODO move to common code
+    if (isa<BlockedEncodingAttr>(srcLayout) &&
+        isa<DotOperandEncodingAttr>(dstLayout)) {
+      return lowerBlockedToDotOperand(op, adaptor, rewriter);
+    }
     return failure();
   }
 
@@ -150,6 +156,22 @@ private:
       //
       // For cases where these two values are equal MFMA and MFMA operand
       // layouts are the same.
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      Value view =
+          packLLElements(loc, getTypeConverter(), vals, rewriter, dstTy);
+      rewriter.replaceOp(op, view);
+      return success();
+    }
+    return failure();
+  }
+
+  LogicalResult
+  lowerBlockedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                           ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
+    if (isBlockedToDotShortcut(srcTy, dstTy)) {
       auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       Value view =
           packLLElements(loc, getTypeConverter(), vals, rewriter, dstTy);

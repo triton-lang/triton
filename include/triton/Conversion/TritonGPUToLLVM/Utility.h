@@ -102,6 +102,8 @@ using namespace mlir::triton;
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
+#define call_intrinsic(...)                                                    \
+  rewriter.create<LLVM::CallIntrinsicOp>(loc, __VA_ARGS__)
 
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
@@ -1469,6 +1471,22 @@ inline bool isLayoutMmaV1(Attribute layout) {
               cast<NvidiaMmaEncodingAttr>(sliceLayout.getParent()).isVolta();
   }
   return isMmaV1;
+}
+
+inline SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape) {
+  auto strides = smemObj.getStrides();
+  auto offsets = smemObj.getOffsets();
+  auto rank = strides.size();
+  if (rank == 3)
+    return smemObj;
+  strides.insert(strides.begin(), i32_val(shape[0] * shape[1]));
+  offsets.insert(offsets.begin(), i32_val(0));
+  auto expandedSmemObj = SharedMemoryObject(
+      smemObj.getBase(), smemObj.getBaseElemType(), strides, offsets);
+  return expandedSmemObj;
 }
 
 } // namespace mlir

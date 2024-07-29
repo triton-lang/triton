@@ -90,6 +90,8 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
     OpBuilder builder(cvtOp);
     auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
     auto dstType = cast<RankedTensorType>(cvtOp.getType());
+    if (isBlockedToDotShortcut(srcType, dstType))
+      return;
     auto srcBlocked =
         dyn_cast<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding());
     auto dstDotOp =
