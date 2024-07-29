@@ -89,7 +89,9 @@ derivable_metrics = {
 
 # FLOPS have a specific width to their metric
 default_flop_factor_dict = {f"flop/s": 1, f"gflop/s": 1e9, f"tflop/s": 1e12}
-derivable_metrics.update({key: FactorDict("flops", default_flop_factor_dict) for key in default_flop_factor_dict.keys()})
+derivable_metrics.update(
+    {key: FactorDict("flops", default_flop_factor_dict)
+     for key in default_flop_factor_dict.keys()})
 for width in TritonHook.flops_width:
     factor_name = f"flops{width}"
     factor_dict = {f"flop{width}/s": 1, f"gflop{width}/s": 1e9, f"tflop{width}/s": 1e12}
