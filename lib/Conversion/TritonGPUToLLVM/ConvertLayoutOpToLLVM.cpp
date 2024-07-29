@@ -573,7 +573,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // around performance issues on AMD GPUs
     auto getVecAddr = [&](LinearLayout &layout, Value &regBase,
                           int regSlice) -> Value {
-      auto regIdx = shmemStoreLayout
+      auto regIdx = layout
                         .apply({{kRegister, regSlice},
                                 {kLane, 0},
                                 {kWarp, 0},
