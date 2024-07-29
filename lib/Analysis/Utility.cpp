@@ -172,7 +172,7 @@ bool ReduceOpHelper::isWarpSynchronous() {
   return getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] == 1;
 }
 
-SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
+SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
   SmallVector<unsigned> smemShape;
   // that case doesn't need inter-warp communication
   if (isWarpSynchronous())
@@ -185,7 +185,7 @@ SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
 }
 
 unsigned ReduceOpHelper::getScratchSizeInBytes() {
-  auto smemShape = getScratchConfig();
+  auto smemShape = getScratchRepShape();
   auto elems = product<unsigned>(smemShape);
 
   unsigned bytesPerElem = 0;
@@ -399,6 +399,12 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
                                                       warpsPerCTA[dim]);
   }
   llvm_unreachable("Axis not found in order");
+}
+
+unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
+  if (shape.empty())
+    return 0;
+  return product<unsigned>(shape);
 }
 
 bool maybeSharedAllocationOp(Operation *op) {
