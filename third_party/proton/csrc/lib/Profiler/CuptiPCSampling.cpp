@@ -99,9 +99,9 @@ size_t matchStallReasonsToIndices(
   for (size_t i = 0; i < numStallReasons; i++) {
     bool notIssued = std::string(stallReasonNames[i]).find("not_issued") !=
                      std::string::npos;
-    auto cuptiStallName = replace(stallReasonNames[i], "_", "");
+    auto cuptiStallName = std::string(stallReasonNames[i]);
     for (size_t j = 0; j < PCSamplingMetric::PCSamplingMetricKind::Count; j++) {
-      auto metricName = toLower(PCSamplingMetric().getValueName(j));
+      auto metricName = PCSamplingMetric().getValueName(j);
       if (cuptiStallName.find(metricName) != std::string::npos) {
         if (notIssued)
           notIssuedStallReasonIndices.insert(stallReasonIndices[i]);

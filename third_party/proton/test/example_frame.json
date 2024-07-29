@@ -8,10 +8,10 @@
           "type": "function"
         },
         "metrics": {
-          "Count": 1,
-          "DeviceId": "0",
-          "DeviceType": "HIP",
-          "Time (ns)": 204800
+          "count": 1,
+          "device_id": "0",
+          "device_type": "HIP",
+          "time (ns)": 204800
         }
       }
     ],
@@ -20,8 +20,8 @@
       "type": "function"
     },
     "metrics": {
-      "Count": 0,
-      "Time (ns)": 0
+      "count": 0,
+      "time (ns)": 0
     }
   },
   {

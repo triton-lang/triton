@@ -143,8 +143,8 @@ private:
   const static inline bool AGGREGABLE[kernelMetricKind::Count] = {
       false, false, true, true, false, false};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
-      "StartTime (ns)", "EndTime (ns)", "Count",
-      "Time (ns)",      "DeviceId",     "DeviceType",
+      "start_time (ns)", "end_time (ns)", "count",
+      "time (ns)",      "device_id",     "device_type",
   };
 };
 
@@ -195,26 +195,26 @@ public:
 
 private:
   const static inline std::string VALUE_NAMES[PCSamplingMetricKind::Count] = {
-      "NumSamples",
-      "NumStalledSamples",
-      "StalledBranchResolving",
-      "StalledNoInstruction",
-      "StalledShortScoreboard",
-      "StalledWait",
-      "StalledLongScoreboard",
-      "StalledTexThrottle",
-      "StalledBarrier",
-      "StalledMembar",
-      "StalledIMCMiss",
-      "StalledMIOThrottle",
-      "StalledMathPipeThrottle",
-      "StalledDrain",
-      "StalledLGThrottle",
-      "StalledNotSelected",
-      "StalledMisc",
-      "StalledDispatchStall",
-      "StalledSleeping",
-      "StalledSelected",
+      "num_samples",
+      "num_stalled_samples",
+      "stalled_branch_resolving",
+      "stalled_no_instruction",
+      "stalled_short_scoreboard",
+      "stalled_wait",
+      "stalled_long_scoreboard",
+      "stalled_tex_throttle",
+      "stalled_barrier",
+      "stalled_membar",
+      "stalled_imc_miss",
+      "stalled_mio_throttle",
+      "stalled_math_pipe_throttle",
+      "stalled_drain",
+      "stalled_lg_throttle",
+      "stalled_not_Selected",
+      "stalled_misc",
+      "stalled_dispatch_stall",
+      "stalled_sleeping",
+      "stalled_selected",
   };
 };
 
