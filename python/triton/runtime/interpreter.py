@@ -81,6 +81,7 @@ class InterpreterOptions:
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
+    backend_name: str = "interpreter"
 
 
 def _get_signed_np_dtype(dtype):
@@ -240,6 +241,7 @@ class InterpreterBuilder:
         self.options = InterpreterOptions()
         self.codegen_fns = {}
         self.codegen_fns["convert_custom_types"] = ExtraFunctions._convert_custom_types
+        self.codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (16, 16, 16)
 
     def set_grid_idx(self, x, y, z):
         if not x < self.grid_dim[0]:
@@ -626,7 +628,10 @@ class InterpreterBuilder:
     def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
         raise NotImplementedError("inline_asm not supported in interpreter mode")
 
-    def create_print(self, prefix, hex, values):
+    def create_print(self, prefix, hex, values, isSigned):
+        # NOTE: the `isSigned` variable is not really used here; because Signness is already known
+        # by `values` themselves in python interpreter, thus not really needed here;
+        # it is only used for triton PrintOpToLLVM to correctly construct the format specifier.
         # Interpreter's device_print function has a different format than Triton's device_print
         msg = f"({self.grid_idx[0]}, {self.grid_idx[1]}, {self.grid_idx[2]})"
         if prefix:
@@ -988,14 +993,15 @@ def _patch_lang_core(lang):
 
 
 def _patch_lang(fn):
-    lang = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
-    assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-    _patch_builtin(lang[0], interpreter_builder)
-    _patch_builtin(lang[0].tensor, interpreter_builder)
-    if lang[0] == tl:
-        _patch_builtin(lang[0].math, interpreter_builder)
-    _patch_lang_tensor(lang[0].tensor)
-    _patch_lang_core(lang[0])
+    langs = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
+    assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
+    for lang in langs:
+        _patch_builtin(lang, interpreter_builder)
+        _patch_builtin(lang.tensor, interpreter_builder)
+        if lang == tl:
+            _patch_builtin(lang.math, interpreter_builder)
+        _patch_lang_tensor(lang.tensor)
+        _patch_lang_core(lang)
 
 
 # TODO: wrap everything in triton tensors
@@ -1098,9 +1104,6 @@ class GridExecutor:
 
 class ASTTransformer(ast.NodeTransformer):
 
-    def __init__(self) -> None:
-        self.offset = 0
-
     def visit_Assign(self, node):
         names = []
         for target in node.targets:
@@ -1118,71 +1121,110 @@ class ASTTransformer(ast.NodeTransformer):
                   ast.Constant(value=False)], keywords=[])
         return node
 
-    def generic_visit(self, node):
-        # Adjust the begin line number of the node
-        if hasattr(node, 'lineno') and node.lineno is not None:
-            node.lineno += self.offset
-        if hasattr(node, 'end_lineno') and node.end_lineno is not None:
-            node.end_lineno += self.offset
-        return super().generic_visit(node)
 
-
-class InterpretedFunction:
-    rewritted_fn = {}
+class FunctionRewriter:
     ast_transformer = ASTTransformer()
 
-    def __init__(self, fn, **kwargs) -> None:
+    def __init__(self, fn, **kwargs):
         self.fn = fn
-
-        def run(*args, **kwargs):
-            grid = kwargs["grid"]
-            fn = self._rewrite_ast()
-            return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
-
-        self.run = run
         self.kwargs = kwargs
-        signature = inspect.signature(fn)
-        self.arg_names = [v.name for v in signature.parameters.values()]
+        self.filename: str = ""
+        # Absolute line number in the file
+        self.def_file_lineno: int = 0
 
-    def _rewrite_ast(self):
-        if self.fn in self.rewritted_fn:
-            return self.rewritted_fn[self.fn]
+    def rewrite_ast(self):
         # If exception is raise, it means the function does not have source code available,
         # e.g., dynamically generated functions, we cannot rewrite it so just return the original function
         try:
-            lines, lineno = inspect.getsourcelines(self.fn)
+            lines, _ = inspect.getsourcelines(self.fn)
         except Exception:
-            self.rewritted_fn[self.fn] = self.fn
             return self.fn
+
+        # truncate lines before def
+        # @triton.autotune(...)
+        # ...
+        # @triton.jit
+        # ...
+        # def foo(...): <- this line is the function definition
+        self.filename, self.def_file_lineno = self._get_jit_fn_file_line()
+        self.def_lineno = self._find_def(lines)
+        src = self._prepare_source(lines)
+        transformed_ast = self._transform_ast(src)
+        return self._compile_and_exec(transformed_ast)
+
+    def _get_jit_fn_file_line(self):
         from .jit import get_jit_fn_file_line, JITFunction
-        filename, lineno = get_jit_fn_file_line(JITFunction(self.fn))
+        return get_jit_fn_file_line(JITFunction(self.fn))
+
+    def _find_def(self, lines):
+        def_lineno = 0
+        # Line numbers start from 1
+        for i, line in enumerate(lines):
+            if line.strip().startswith("def "):
+                def_lineno = i + 1
+        return def_lineno
+
+    def _prepare_source(self, lines):
+        lines = lines[self.def_lineno - 1:]
         src = ''.join(lines)
-        src = textwrap.dedent(src)
+        return textwrap.dedent(src)
+
+    def _transform_ast(self, src):
+        # src is like:
+        # 1: def foo(...):
+        # 2:  ...
         parsed_ast = ast.parse(src)
-        self.ast_transformer.offset = lineno
         transformed_ast = self.ast_transformer.visit(parsed_ast)
-        transformed_ast = ast.fix_missing_locations(transformed_ast)
-        compiled_code = compile(transformed_ast, filename=filename, mode='exec')
+        ast.fix_missing_locations(transformed_ast)
+        inc_lineno = self.def_file_lineno - 1
+        ast.increment_lineno(transformed_ast, inc_lineno)
+        return transformed_ast
+
+    def _compile_and_exec(self, transformed_ast):
+        compiled_code = compile(transformed_ast, filename=self.filename, mode='exec')
         local_namespace = {**self.kwargs}
-        if self.fn.__name__ in local_namespace:
-            raise ValueError(f"Function name {self.fn.__name__} is reserved")
-        exec(compiled_code, globals(), local_namespace)
-        fn = local_namespace[self.fn.__name__].fn
-        self.rewritted_fn[self.fn] = fn
-        return fn
+        fn_globals = self.fn.__globals__
+        for key, value in globals().items():
+            if key not in fn_globals:
+                fn_globals[key] = value
+        exec(compiled_code, fn_globals, local_namespace)
+        return local_namespace[self.fn.__name__]
+
+
+class InterpretedFunction:
+    # Cache all rewritten functions
+    rewritten_fn = {}
+
+    def __init__(self, fn, **kwargs) -> None:
+        self.fn = fn
+        self.rewriter = FunctionRewriter(fn, **kwargs)
+
+        def run(*args, **kwargs):
+            grid = kwargs["grid"]
+            fn = self.rewrite()
+            return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
+
+        self.run = run
+        signature = inspect.signature(fn)
+        self.arg_names = [v.name for v in signature.parameters.values()]
+
+    def rewrite(self):
+        if self.fn not in self.rewritten_fn:
+            self.rewritten_fn[self.fn] = self.rewriter.rewrite_ast()
+        return self.rewritten_fn[self.fn]
 
     @property
     def __name__(self):
         return self.fn.__name__
 
     def __getitem__(self, grid):
-        fn = self._rewrite_ast()
+        fn = self.rewrite()
         return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
         _patch_lang(self.fn)
-        fn = self._rewrite_ast()
+        fn = self.rewrite()
         try:
             return fn(*args, **kwargs)
         except Exception as e:

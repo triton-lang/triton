@@ -8,7 +8,7 @@
           "type": "function"
         },
         "metrics": {
-          "count": 1,
+          "count": 10,
           "device_id": "1",
           "device_type": "CUDA",
           "time (ns)": 204800,

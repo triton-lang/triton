@@ -405,7 +405,8 @@ void LoopPipeliner::createBufferTypes() {
         ttg::getOrder(ty.getEncoding()), CTALayout, eType);
     loadsBufferType[loadOp] = triton::MemDescType::get(
         bufferShape, eType, sharedEnc,
-        triton::gpu::SharedMemorySpaceAttr::get(ty.getContext()));
+        triton::gpu::SharedMemorySpaceAttr::get(ty.getContext()),
+        /*mutableMemory=*/true);
   }
 }
 

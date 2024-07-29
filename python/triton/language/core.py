@@ -558,14 +558,14 @@ _DtypeClass = dtype
 
 class pointer_type(dtype):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1):
+    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False):
         element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
         self.address_space = address_space
-
-        self.name = f'pointer<{element_ty}>'
+        self.const = const
+        self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
@@ -579,10 +579,13 @@ class pointer_type(dtype):
     def is_ptr(self):
         return True
 
+    def is_const(self):
+        return self.const
+
     def __eq__(self, other: pointer_type) -> bool:
         if not isinstance(other, pointer_type):
             return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space
+        return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
 
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
@@ -590,23 +593,6 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
-
-
-class const_pointer_type(pointer_type):
-
-    def __init__(self, element_ty: dtype, address_space: int = 1):
-        super().__init__(element_ty, address_space)
-
-    def __str__(self):
-        return f'const_pointer<{self.element_ty}>'
-
-    def is_const(self):
-        return True
-
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, const_pointer_type):
-            return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space
 
 
 class block_type(dtype):
@@ -1167,7 +1153,7 @@ def program_id(axis, _builder=None):
     #     pid1 = program_id(1, _builder)
     #     pid2 = program_id(2, _builder)
     #     npg0 = num_programs(0, _builder)
-    #     npg1 = num_programs(0, _builder)
+    #     npg1 = num_programs(1, _builder)
     #     return pid0 + pid1*npg0 + pid2*npg0*npg1
     axis = _constexpr_to_value(axis)
     return semantic.program_id(axis, _builder)
@@ -1233,8 +1219,8 @@ def full(shape, value, dtype, _builder=None):
     :type shape: tuple of ints
     :param value: A scalar value to fill the array with
     :type value: scalar
-    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
-    :type dtype: DType
+    :param dtype: Data type of the new array, e.g., :code:`tl.float16`
+    :type dtype: tl.dtype
     """
     shape = _shape_check_impl(shape)
     value = _constexpr_to_value(value)
@@ -1446,7 +1432,7 @@ def reshape(input, *shape, can_reorder=False, _builder=None):
     :type input: Block
     :param shape: The new shape.
 
-    :code:`shape ` can be passed as a tuple or as individual parameters: ::
+    :code:`shape` can be passed as a tuple or as individual parameters: ::
 
         # These are equivalent
         reshape(x, (32, 32))
@@ -1500,13 +1486,16 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
     Casts a tensor to the given :code:`dtype`.
 
     :param dtype: The target data type.
+    :type dtype: tl.dtype
     :param fp_downcast_rounding: The rounding mode for downcasting
-        floating-point values.  This parameter is only used when self is a
+        floating-point values. This parameter is only used when self is a
         floating-point tensor and dtype is a floating-point type with a
         smaller bitwidth. Supported values are :code:`"rtne"` (round to
         nearest, ties to even) and :code:`"rtz"` (round towards zero).
+    :type fp_downcast_rounding: str, optional
     :param bitcast: If true, the tensor is bitcasted to the given
         :code:`dtype`, instead of being numerically casted.
+    :type bitcast: bool, optional
     """
     input = _to_tensor(input, _builder)
     if isinstance(bitcast, constexpr):
@@ -1598,7 +1587,7 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type other: Block, optional
     :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
     :type boundary_check: tuple of ints, optional
-    :param padding_option: should be one of {"", "zero", "nan"}, do padding while out of bound
+    :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
         cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
@@ -2494,17 +2483,17 @@ class static_range:
     """
 
     def __init__(self, arg1, arg2=None, step=None):
-        assert isinstance(arg1, constexpr)
+        assert isinstance(arg1, constexpr), f"{arg1} used as tl.static_range start value is not a constexpr"
         if step is None:
             self.step = constexpr(1)
         else:
-            assert isinstance(step, constexpr)
+            assert isinstance(step, constexpr), f"{step} used as tl.static_range step value is not a constexpr"
             self.step = step
         if arg2 is None:
             self.start = constexpr(0)
             self.end = arg1
         else:
-            assert isinstance(arg2, constexpr)
+            assert isinstance(arg2, constexpr), f"{arg2} used as tl.static_range end value is not a constexpr"
             self.start = arg1
             self.end = arg2
 

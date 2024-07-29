@@ -67,7 +67,7 @@ processActivityKernel(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     }
   } else {
     // Graph kernels
-    // A single grpah launch can trigger multiple kernels.
+    // A single graph launch can trigger multiple kernels.
     // Our solution is to construct the following maps:
     // --- Application threads ---
     // 1. graphId -> numKernels
@@ -379,7 +379,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   // This is a blocking call but it doesn’t issue any CUDA synchronization calls
   // implicitly thus it’s not guaranteed that all activities are completed on
   // the underlying devices.
-  // We do an "oppurtunistic" synchronization here to try to ensure that all
+  // We do an "opportunistic" synchronization here to try to ensure that all
   // activities are completed on the current context.
   // If the current context is not set, we don't do any synchronization.
   CUcontext cuContext = nullptr;

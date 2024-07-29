@@ -143,7 +143,7 @@ $ python3 -m pytest python/test/unit
 $ cd python/build/cmake<...>
 
 # Run C++ unit tests.
-$ ninja test
+$ ctest -j32
 
 # Run lit tests.
 $ lit test
@@ -228,4 +228,5 @@ Supported Platforms:
 
 Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
-  * Under development: AMD GPUs, CPUs
+  * AMD GPUs (ROCm 5.2+)
+  * Under development: CPUs

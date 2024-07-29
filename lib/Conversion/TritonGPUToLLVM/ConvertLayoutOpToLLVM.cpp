@@ -433,14 +433,21 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 } // namespace
 } // namespace mlir::triton::gpu
 
+void mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
+    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(typeConverter,
+                                                                 benefit);
+}
+
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // We prefer using the linear layout conversion, so it gets a higher benefit.
   // Eventually the LL conversion will subsume all of the others and be the only
   // one left.
-  patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, benefit.getBenefit() + 1);
+  mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
+      typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
                                                benefit);
   patterns.add<gpu::LocalLoadOpConversion>(typeConverter, targetInfo, benefit);

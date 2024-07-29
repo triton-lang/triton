@@ -13,6 +13,10 @@ import subprocess
 from pathlib import Path
 
 
+def min_dot_size(target: GPUTarget):
+    return lambda lhsType, rhsType: (16, 32, 16) if lhsType.is_int8() else (16, 16, 16)
+
+
 @functools.lru_cache()
 def _path_to_binary(binary: str):
     paths = [
@@ -50,6 +54,23 @@ def ptx_get_version(cuda_version) -> int:
     if major == 10:
         return 63 + minor
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
+
+
+@functools.lru_cache()
+def get_features(options):
+    ptx_version = options.ptx_version
+    if ptx_version is None:
+        _, cuda_version = _path_to_binary("ptxas")
+        ptx_version = ptx_get_version(cuda_version)
+
+    # PTX 8.3 is the max version supported by llvm 3a83162168.
+    #
+    # To check if a newer PTX version is supported, increase this value
+    # and run a test.  If it's not supported, LLVM will print a warning
+    # like "+ptx8.4 is not a recognized feature for this target".
+    llvm_ptx_version = min(83, ptx_version)
+    features = f'+ptx{llvm_ptx_version}'
+    return features
 
 
 @functools.lru_cache(None)
@@ -129,7 +150,8 @@ class CUDABackend(BaseBackend):
         import triton.language.extra.cuda as cuda
         codegen_fns = {
             "convert_custom_types":
-            cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70
+            cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70,
+            "min_dot_size": min_dot_size(self.target)
         }
         return codegen_fns
 
@@ -224,7 +246,12 @@ class CUDABackend(BaseBackend):
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
+
         llvm_mod = llvm.to_module(mod, context)
+        proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
+        features = get_features(options)
+        triple = 'nvptx64-nvidia-cuda'
+        llvm.attach_datalayout(llvm_mod, triple, proc, features)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
         # Set maxnreg on all kernels, if it was provided.
@@ -253,16 +280,9 @@ class CUDABackend(BaseBackend):
             _, cuda_version = _path_to_binary("ptxas")
             ptx_version = ptx_get_version(cuda_version)
 
-        # PTX 8.3 is the max version supported by llvm 3a83162168.
-        #
-        # To check if a newer PTX version is supported, increase this value
-        # and run a test.  If it's not supported, LLVM will print a warning
-        # like "+ptx8.4 is not a recognized feature for this target".
-        llvm_ptx_version = min(83, ptx_version)
-
         triple = 'nvptx64-nvidia-cuda'
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        features = f'+ptx{llvm_ptx_version}'
+        features = get_features(opt)
         ret = llvm.translate_to_asm(src, triple, proc, features, ['nvptx-short-ptr'], opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
@@ -287,16 +307,15 @@ class CUDABackend(BaseBackend):
             fsrc.flush()
             fbin = fsrc.name + '.o'
 
-            line_info = '' if os.environ.get('TRITON_DISABLE_LINE_INFO') else ' -lineinfo'
-            fmad = '' if opt.enable_fp_fusion else ' --fmad=false'
-            suffix = 'a ' if capability == 90 else ' '
-            if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1":
-                cmd = f'{ptxas}{line_info}{fmad} -v --opt-level 0 --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
-            else:
-                cmd = f'{ptxas}{line_info}{fmad} -v --gpu-name=sm_{capability}{suffix}{fsrc.name} -o {fbin} 2> {flog.name}'
-
+            line_info = [] if os.environ.get('TRITON_DISABLE_LINE_INFO') else ['-lineinfo']
+            fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
+            suffix = 'a' if capability == 90 else ''
+            opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
+            ptxas_cmd = [
+                ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name=sm_{capability}{suffix}', fsrc.name, '-o', fbin
+            ]
             try:
-                subprocess.run(cmd, shell=True, check=True)
+                subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
             except subprocess.CalledProcessError as e:
                 with open(flog.name) as log_file:
                     log = log_file.read()

@@ -220,3 +220,19 @@ def test_pcsampling():
         data = json.load(f)
         assert "foo" in data[0]["children"][0]["children"][0]["frame"]["name"]
         assert data[0]["children"][0]["children"][0]["metrics"]["NumSamples"] > 0
+
+
+def test_deactivate():
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+        session_id = proton.start(f.name.split(".")[0], hook="triton")
+        proton.deactivate(session_id)
+        torch.randn((10, 10), device="cuda")
+        proton.activate(session_id)
+        torch.zeros((10, 10), device="cuda")
+        proton.deactivate(session_id)
+        proton.finalize()
+        data = json.load(f)
+        # Root shouldn't have device id
+        assert "device_id" not in data[0]["metrics"]
+        assert len(data[0]["children"]) == 1
+        assert "device_id" in data[0]["children"][0]["metrics"]

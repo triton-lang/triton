@@ -57,10 +57,12 @@ public:
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args) const override;
+
+  void printf(RewriterBase &rewriter, StringRef msg,
+              ValueRange args) const override;
+
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
-
-  bool enableLinearLayout() const override { return false; }
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,

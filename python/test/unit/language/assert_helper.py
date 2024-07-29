@@ -47,7 +47,7 @@ def kernel_static_assert(X, Y, BLOCK: tl.constexpr):
     tl.store(Y + tl.arange(0, BLOCK), x)
 
 
-def test_assert(func: str):
+def test_assert(func: str, device: str):
     N = 128  # This value should match with test_print in test_subprocess.py.
     num_warps = N // get_current_target_warp_size()
 
@@ -132,12 +132,12 @@ def kernel_device_assert_nested_false(X, Y, BLOCK: tl.constexpr, jit_debug: tl.c
     tl.store(Y + tl.arange(0, BLOCK), x)
 
 
-def test_assert_nested(caller: str, callee: str):
+def test_assert_nested(caller: str, callee: str, device: str):
     N = 128  # This value should match with test_print in test_subprocess.py.
     num_warps = N // get_current_target_warp_size()
 
-    x = torch.arange(0, N, dtype=torch.int32, device='cuda')
-    y = torch.zeros((N, ), dtype=x.dtype, device="cuda")
+    x = torch.arange(0, N, dtype=torch.int32, device=device)
+    y = torch.zeros((N, ), dtype=x.dtype, device=device)
     if caller == "none":
         kernel_device_assert_nested[(1, )](x, y, num_warps=num_warps, BLOCK=N, jit_debug=callee)
     elif caller == "true":
@@ -148,7 +148,5 @@ def test_assert_nested(caller: str, callee: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3:
-        test_assert_nested(sys.argv[1], sys.argv[2])
-    else:
-        test_assert(sys.argv[1])
+    fn = globals()[sys.argv[1]]
+    fn(*sys.argv[2:])

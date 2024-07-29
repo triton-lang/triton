@@ -84,6 +84,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
 ]> {
   let summary = "copy data from global memory to local memory asynchronously";
 
+  let hasVerifier = 1;
   let description = [{
     This operation copies data from global memory to local memory asynchronously.
     This is analogue to tt.load except the data are copied to local memory pointed
@@ -153,6 +154,8 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
   let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 
   let results = (outs TT_MemDescType:$result);
+  let hasFolder = 1;
+  let hasVerifier = 1;
 }
 
 // Deallocate shared memory
@@ -232,6 +235,7 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   }];
   let arguments = (ins TT_Tensor:$src, TT_MemDescType:$dst);
 
+  let hasVerifier = 1;
   // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{
     $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))

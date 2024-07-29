@@ -11,6 +11,19 @@ import functools
 from pathlib import Path
 
 
+def min_dot_size(target: GPUTarget):
+    arch_str = target.arch
+    # CDNA 3.0 supports k==8 in all mfma variants except for int8
+    # (where the smallest `k` supported is 16)
+    if "gfx94" in arch_str:
+        return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.is_int8() or rhsType.is_int8()) else (16, 16, 8)
+    # CDNA 2.0 always supports `k==8`
+    if "gfx9" in arch_str:
+        return lambda lhsType, rhsType: (16, 16, 8)
+    # Other architectures will only support 16,16,16
+    return lambda lhsType, rhsType: (16, 16, 16)
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -79,7 +92,7 @@ class HIPBackend(BaseBackend):
         )
 
     def get_codegen_implementation(self):
-        codegen_fns = dict()
+        codegen_fns = {"min_dot_size": min_dot_size(self.target)}
         return codegen_fns
 
     def load_dialects(self, ctx):
@@ -156,6 +169,13 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm, options.arch)
+        # custom_lds_size is an experimental parameter that defines amount of LDS available
+        # for one thread block. Measured in bytes.
+        #
+        # If custom_lds_size = 0, pass will consider all LDS is available for one threads block,
+        # LDS size is determined by provided arch name.
+        custom_lds_size = 0
+        amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
 
@@ -191,6 +211,7 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
+        amd.attach_target_triple(llvm_mod)
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -214,7 +235,7 @@ class HIPBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, amd.TARGET_TRIPLE)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
