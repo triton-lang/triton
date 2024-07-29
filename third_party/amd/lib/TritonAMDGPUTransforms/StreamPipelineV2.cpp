@@ -397,27 +397,25 @@ static void scheduleDistanceOneDependencies(scf::ForOp forOp,
     if (stage == numStages - 1)
       continue;
     for (Value operand : getNestedOperands(&op)) {
-      if (auto arg = dyn_cast<BlockArgument>(operand)) {
-        if (arg.getArgNumber() > 0 && arg.getOwner() == op.getBlock()) {
-          auto yieldOp = op.getBlock()->getTerminator();
-          Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
-          Operation *defOp = v.getDefiningOp();
-          if (defOp && schedule.count(defOp) == 0) {
-            if (isa<tt::LoadOp>(defOp)) {
-              // Exception: Schedule loads with a distance of 1 together
-              // with the current op.
-              schedule.insertIfAbsent(defOp, stage, cluster);
-              schedule.insertDepsOfOp(defOp, stage, cluster, true);
-            } else {
-              if (dist1Cluster.count(&cluster) == 0) {
-                dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
-              }
-              schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
-              schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster],
-                                      true);
-            }
-          }
+      auto arg = dyn_cast<BlockArgument>(operand);
+      if (!arg || arg.getArgNumber() == 0 || arg.getOwner() != op.getBlock())
+        continue;
+      auto yieldOp = op.getBlock()->getTerminator();
+      Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
+      Operation *defOp = v.getDefiningOp();
+      if (!defOp || schedule.count(defOp) != 0)
+        continue;
+      if (isa<tt::LoadOp>(defOp)) {
+        // Exception: schedule loads with a distance of 1 together with the
+        // current op.
+        schedule.insertIfAbsent(defOp, stage, cluster);
+        schedule.insertDepsOfOp(defOp, stage, cluster, true);
+      } else {
+        if (dist1Cluster.count(&cluster) == 0) {
+          dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
         }
+        schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
+        schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster], true);
       }
     }
   }
