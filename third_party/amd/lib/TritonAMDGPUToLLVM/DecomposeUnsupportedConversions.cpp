@@ -42,7 +42,7 @@ static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
 }
 
 static std::vector<std::pair<int, int>> factorizePowerOf2(int n) {
-  assert(llvm::isPowerOf2_32(n) && "n must be a power of 2");
+  assert(llvm::isPowerOf2_32(n));
   int x = log2(n);
   std::vector<std::pair<int, int>> pairs;
 

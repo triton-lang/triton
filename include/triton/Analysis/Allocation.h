@@ -22,7 +22,7 @@ class AllocationAnalysis;
 // temporary buffer (i.e., scratch buffer) in the shared memory.  We may go
 // through multiple iterations to convert the tensor, and each iteration may
 // have multiple vectorized loads/stores.  The scratch buffer has a shape
-// ("repShape") that is the maximum accessing size of each dimension handled by
+// ("repShape") that is the maximum size accessed in each dimension during
 // each iteration.
 struct ScratchConfig {
   SmallVector<unsigned> repShape;

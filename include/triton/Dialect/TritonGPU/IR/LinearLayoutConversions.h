@@ -52,7 +52,7 @@ bool isCrossCTAConversion(const LinearLayout &layout);
 // <shared memory offset, iteration> -> <tensor element index> mapping for
 // entire `src` and `dst` tensors.  We determine the shape of the intermediate
 // shared memory buffer needed for a register-to-register conversion using the
-// maximum accessing size of each dimension from `src`'s layout and `dst`'s
+// maximum size accessed in each dimension from `src`'s layout and `dst`'s
 // layout.  See the getRepShapeForCvt function in Allocation.cpp for details.
 // Note that the buffer might be smaller than the tensor being converted, so we
 // need multiple "iterations" to move a subregion of the `src` tensor to the

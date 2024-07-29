@@ -71,7 +71,7 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
     return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
   }
 
-  assert(srcLayout && dstLayout && "Unexpected layout in getRepShape()");
+  assert(srcLayout && dstLayout && "Unexpected layout in getRepShapeForCvt()");
 
   auto srcShapePerCTA = getShapePerCTA(srcTy);
   auto dstShapePerCTA = getShapePerCTA(dstTy);

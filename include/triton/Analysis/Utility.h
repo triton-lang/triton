@@ -62,7 +62,8 @@ public:
 
   unsigned getThreadsReductionAxis();
 
-  SmallVector<unsigned> getRepShape();
+  // The shape of the shared memory space needed for the reduction.
+  SmallVector<unsigned> getScratchRepShape();
 
   SmallVector<unsigned> getOrderWithAxisAtBeginning();
 

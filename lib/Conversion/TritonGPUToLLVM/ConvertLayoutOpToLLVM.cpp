@@ -423,7 +423,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                              const LinearLayout &srcLayout,
                              const LinearLayout &dstLayout, OpAdaptor adaptor,
                              ConversionPatternRewriter &rewriter) const {
-    // TODO(Keren): LinearLayout doesn't support cross-CTA conversion yet.
+    // TODO(Keren): LLs support cross-CTA conversions, this function does not
     if (isCrossCTAConversion(conversion))
       return failure();
 
