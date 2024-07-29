@@ -623,7 +623,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         for (int k = 0; k < scratchConfig.inVec; k++)
           inValsVec.push_back(inVals[inRegSlice + k]);
         Value valsVec = packLLVector(loc, inValsVec, rewriter);
-        targetInfo.storeDShared(rewriter, loc, vecAddr, blockId, valsVec,
+        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
                                 /*pred=*/true_val());
       }
 
@@ -633,7 +633,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         auto outRegSlice = outRegs[j];
         auto vecAddr = getVecAddr(shmemLoadLayout, loadBase, outRegSlice);
         Value valsVec =
-            targetInfo.loadDShared(rewriter, loc, vecAddr, blockId,
+            targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
                                    vec_ty(elemTy, scratchConfig.outVec),
                                    /*pred=*/true_val());
         for (Value v : unpackLLVector(loc, valsVec, rewriter))
