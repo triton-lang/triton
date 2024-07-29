@@ -193,9 +193,7 @@ void init_triton_amd(py::module &&m) {
             target->createMCAsmBackend(*sti, *mri, mcOptions));
         mcStreamer.reset(target->createMCObjectStreamer(
             triple, ctx, std::move(mab), mab->createObjectWriter(svos),
-            std::move(ce), *sti, mcOptions.MCRelaxAll,
-            mcOptions.MCIncrementalLinkerCompatible,
-            /*DWARFMustBeAtTheEnd=*/false));
+            std::move(ce), *sti));
 
         std::unique_ptr<llvm::MCAsmParser> parser(
             createMCAsmParser(srcMgr, ctx, *mcStreamer, *mai));
