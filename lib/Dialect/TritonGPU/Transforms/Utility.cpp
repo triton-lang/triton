@@ -627,6 +627,16 @@ scf::IfOp replaceIfOpWithNewSignature(
   return newIf;
 }
 
+void appendToForOpYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
+  Operation *yieldOp = forOp.getBody()->getTerminator();
+  SmallVector<Value> operands(yieldOp->getOperands());
+  operands.append(newOperands.begin(), newOperands.end());
+
+  OpBuilder builder(yieldOp);
+  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
+  yieldOp->erase();
+}
+
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping) {
   Operation *newOp = rewriter.clone(*op, mapping);
