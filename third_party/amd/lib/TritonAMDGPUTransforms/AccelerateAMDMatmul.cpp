@@ -1,3 +1,4 @@
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -5,52 +6,27 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/Support/Debug.h"
 #include <memory>
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace {
-using tt::DotOp;
+using triton::AMD::ISAFamily;
 using ttg::AMDMfmaEncodingAttr;
 using ttg::AMDWmmaEncodingAttr;
-using ttg::BlockedEncodingAttr;
-using ttg::ConvertLayoutOp;
-using ttg::DotOperandEncodingAttr;
-using ttg::SliceEncodingAttr;
 
-enum class MatrixCoreVersion {
-  CDNA_MFMA1,
-  CDNA_MFMA2,
-  CDNA_MFMA3,
-  RDNA_WMMA,
-  UNKNOWN
-};
-
-MatrixCoreVersion getMatrixCoreVersion(StringRef archGen) {
-  if (archGen.contains("gfx11"))
-    return MatrixCoreVersion::RDNA_WMMA;
-  if (archGen.contains("gfx908"))
-    return MatrixCoreVersion::CDNA_MFMA1;
-  if (archGen.contains("gfx90a"))
-    return MatrixCoreVersion::CDNA_MFMA2;
-  if (archGen.contains("gfx940") || archGen.contains("gfx941") ||
-      archGen.contains("gfx942"))
-    return MatrixCoreVersion::CDNA_MFMA3;
-  return MatrixCoreVersion::UNKNOWN;
-}
-
-int getMfmaVersion(MatrixCoreVersion matrixCoreVer) {
-  if (MatrixCoreVersion::CDNA_MFMA1 == matrixCoreVer)
+int getMfmaVersion(ISAFamily isaFamily) {
+  switch (isaFamily) {
+  case ISAFamily::CDNA1:
     return 1;
-  if (MatrixCoreVersion::CDNA_MFMA2 == matrixCoreVer)
+  case ISAFamily::CDNA2:
     return 2;
-  if (MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer)
+  case ISAFamily::CDNA3:
     return 3;
+  default:
+    break;
+  }
   return 0;
 }
 
@@ -687,18 +663,23 @@ public:
     this->kPack = kPack;
   }
   void runOnOperation() override {
+
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    auto matrixCoreVer = getMatrixCoreVersion(archGenerationName);
-    if (MatrixCoreVersion::CDNA_MFMA1 == matrixCoreVer ||
-        MatrixCoreVersion::CDNA_MFMA2 == matrixCoreVer ||
-        MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer) {
-      patterns.add<::BlockedToMFMA>(context, getMfmaVersion(matrixCoreVer),
+    switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
+    case ISAFamily::CDNA1:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA3:
+      patterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
                                     matrixInstructionSize, kPack);
-    } else if (matrixCoreVer == MatrixCoreVersion::RDNA_WMMA) {
+    case ISAFamily::RDNA1:
+    case ISAFamily::RDNA2:
+    case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context);
+    default:
+      break;
     }
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
