@@ -401,6 +401,12 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
+unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
+  if (shape.empty())
+    return 0;
+  return product<unsigned>(shape);
+}
+
 bool maybeSharedAllocationOp(Operation *op) {
   // TODO(Keren): This function can be replaced by adding
   // MemoryEffectOpInterface. We can then use the MemoryEffectOpInterface to

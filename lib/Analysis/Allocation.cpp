@@ -267,7 +267,7 @@ private:
       //       also possible to realize it with other approaches in restricted
       //       conditions, such as warp-shuffle
       auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-      auto elems = getNumElements<unsigned>(scratchConfig.paddedRepShape);
+      auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
       auto bytes =
           isa<triton::PointerType>(srcTy.getElementType())
               ? elems * kPtrBitWidth / 8
@@ -282,7 +282,7 @@ private:
         // nothing to do
       } else {
         auto smemShape = getRepShapeForAtomicRMW(atomicRMWOp);
-        auto elems = getNumElements<unsigned>(smemShape);
+        auto elems = getNumScratchElements(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();
         auto bytes =
@@ -300,7 +300,7 @@ private:
         // nothing to do
       } else {
         auto smemShape = getRepShapeForAtomicCAS(atomicCASOp);
-        auto elems = getNumElements<unsigned>(smemShape);
+        auto elems = getNumScratchElements(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();
         auto bytes = isa<triton::PointerType>(elemTy)

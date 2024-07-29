@@ -52,13 +52,6 @@ template <typename T> T nextPowOf2(T n) {
 
 namespace triton {
 
-template <typename Int> Int getNumElements(ArrayRef<Int> shape) {
-  if (shape.empty()) {
-    return 0;
-  }
-  return product(shape);
-}
-
 // Many functions here have two overloads, fn(ArrayRef<T>) and fn(const VecT&).
 // This is helpful because C++ won't both convert a vector to ArrayRef *and*
 // infer the proper type T in one step.  So without the second overload, we
