@@ -18,7 +18,7 @@ def match_available_metrics(metrics, raw_metrics):
                     ret.append(raw_metric + " (inc)")
                     break
     else:
-        ret = [raw_metrics[0]] + " (inc)"
+        ret = [raw_metrics[0] + " (inc)"]
     if len(ret) == 0:
         raise RuntimeError(f"Metric {metric} is not found. Use the --list flag to list available metrics")
     return ret
@@ -88,6 +88,8 @@ derivable_metrics = {
 }
 
 # FLOPS have a specific width to their metric
+default_flop_factor_dict = {f"flop/s": 1, f"gflop/s": 1e9, f"tflop/s": 1e12}
+derivable_metrics.update({key: FactorDict("flops", default_flop_factor_dict) for key in default_flop_factor_dict.keys()})
 for width in TritonHook.flops_width:
     factor_name = f"flops{width}"
     factor_dict = {f"flop{width}/s": 1, f"gflop{width}/s": 1e9, f"tflop{width}/s": 1e12}
