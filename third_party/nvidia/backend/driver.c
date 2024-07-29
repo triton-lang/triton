@@ -317,7 +317,7 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
       globalStrides, boxDim, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-  assert(result == CUDA_SUCCESS);
+  gpuAssert((result), __FILE__, __LINE__);
   return Py_None;
 }
 
@@ -380,7 +380,7 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
       globalStrides, tensorDims, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-  assert(result == CUDA_SUCCESS);
+  gpuAssert((result), __FILE__, __LINE__);
   return Py_None;
 }
 
