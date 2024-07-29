@@ -1,6 +1,7 @@
 import os
 import hashlib
 import importlib
+import importlib.resources
 import tempfile
 
 import triton._C
