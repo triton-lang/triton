@@ -175,6 +175,7 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
           ret[linearIdx] = generateDotOp(rewriter, loc, selectedOp, aOp, bOp,
                                          ret[linearIdx]);
         }
+        ret[linearIdx] = int_val(32, 123);
       }
 
   auto res = packLLElements(loc, typeConverter, ret, rewriter, dTensorTy);

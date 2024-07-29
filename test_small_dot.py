@@ -119,10 +119,16 @@ def test_gemm(m, n, k):
     with torch.no_grad():
         a, _ = gen_input(m, k, 'int8', False, 1, device='cuda')
         b, _ = gen_input(k, n, 'int8', True, 2, device='cuda')
+        #for i in range(m):
+        #    for j in range(k):
+        #        a[i, j] = 1 if j == 0 else 0
+        #for i in range(n):
+        #    for j in range(k):
+        #        b[j, i] = (i) % 127
 
         out_torch = torch.matmul(a.to(torch.float32), b.to(torch.float32))
         out_triton = torch.empty([a.shape[0], b.shape[1]], dtype=torch.half, device=a.device)
-        gemm_forward(out_triton, a, b, dot3d=True)
+        gemm_forward(out_triton, a, b, dot3d=False)
 
         diff = ~np.isclose(out_triton.half().cpu().numpy(), out_torch.half().cpu().numpy(), rtol=1e-2)
         assert diff.sum() < 10, f"m={m}, n={n}, k={k}"

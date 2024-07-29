@@ -15,15 +15,337 @@ using namespace mlir;
 
 namespace {
 
-class OptimizeLoadLayoutPattern : public mlir::RewritePattern {
+class OptimizeFMADotPattern : public mlir::RewritePattern {
+
+  triton::gpu::ConvertLayoutOp convertDotArg(mlir::PatternRewriter &rewriter,
+                                             triton::DotOp dotOp, Value arg,
+                                             Attribute newLayout) const {
+    Location loc = dotOp.getLoc();
+    rewriter.setInsertionPoint(dotOp);
+    auto cvtTy = llvm::cast<RankedTensorType>(arg.getType());
+    auto newArgTy = RankedTensorType::get(cvtTy.getShape(),
+                                          cvtTy.getElementType(), newLayout);
+    return rewriter.create<triton::gpu::ConvertLayoutOp>(loc, newArgTy, arg);
+  }
+
+  unsigned chooseSplitK(unsigned m, unsigned n, unsigned k, unsigned numWarps,
+                        unsigned numThreads) const {
+    // TODO experiment with this value
+    return std::min(8u, k);
+  }
+
+  triton::gpu::BlockedEncodingAttr
+  generateNewDotLayout(mlir::MLIRContext *ctx, unsigned m, unsigned n,
+                       unsigned splitK, unsigned numWarps,
+                       unsigned numThreads) const {
+    SmallVector<unsigned> order{2, 1, 0};
+    triton::gpu::CTALayoutAttr ctaLayout =
+        triton::gpu::CTALayoutAttr::get(ctx, {1, 1, 1}, {1, 1, 1}, {2, 1, 0});
+    unsigned bWarps = 1;
+    unsigned mWarps = std::min(m, numWarps);
+    unsigned nWarps = numWarps / mWarps;
+    SmallVector<unsigned> warpsPerCTA{bWarps, mWarps, nWarps};
+    unsigned bThreads = numThreads / (n / nWarps);
+    unsigned nThreads = std::min(n / nWarps, numThreads / bThreads);
+    unsigned mThreads = numThreads / bThreads / nThreads;
+    SmallVector<unsigned> threadsPerWarp{bThreads, mThreads, nThreads};
+    unsigned bElems = splitK / bThreads;
+    unsigned mElems = std::max(1u, m / (mThreads * mWarps));
+    unsigned nElems = std::max(1u, n / (nThreads * nWarps));
+    SmallVector<unsigned> elemsPerThread{bElems, mElems, nElems};
+    auto dotLayout = triton::gpu::BlockedEncodingAttr::get(
+        ctx, elemsPerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+    return dotLayout;
+  }
+
+  std::optional<RankedTensorType> splitTypeDim(RankedTensorType ty, int axis,
+                                               int splitSize,
+                                               Location loc) const {
+    auto origShape = ty.getShape();
+    SmallVector<int64_t> shape{origShape};
+    assert(shape[axis] % splitSize == 0);
+    shape.insert(shape.begin() + axis, splitSize);
+    shape[axis + 1] /= splitSize;
+    Attribute splitLayout;
+    auto origEncoding = ty.getEncoding();
+    auto layoutHelper = llvm::cast<triton::DialectInferLayoutInterface>(
+        &origEncoding.getDialect());
+    auto layoutInferResult = layoutHelper->inferReshapeOpNoReorderEncoding(
+        origShape, origEncoding, shape, splitLayout, loc);
+    if (layoutInferResult.failed())
+      return std::nullopt;
+    auto newType =
+        RankedTensorType::get(shape, ty.getElementType(), splitLayout);
+    return newType;
+  }
+
+  triton::gpu::BlockedEncodingAttr
+  transposeLayout(triton::gpu::BlockedEncodingAttr layout,
+                  ArrayRef<int> permOrder) const {
+    auto ctx = layout.getContext();
+    triton::gpu::CTALayoutAttr ctaLayout =
+        triton::gpu::CTALayoutAttr::get(ctx, {1, 1, 1}, {1, 1, 1}, {2, 1, 0});
+    // TODO adjust this if better performance is possible
+    SmallVector<unsigned> order{2, 1, 0};
+    SmallVector<unsigned> sizePerThread;
+    SmallVector<unsigned> threadsPerWarp;
+    SmallVector<unsigned> warpsPerCTA;
+    for (auto idx : permOrder) {
+      sizePerThread.push_back(layout.getSizePerThread()[idx]);
+      threadsPerWarp.push_back(layout.getThreadsPerWarp()[idx]);
+      warpsPerCTA.push_back(layout.getWarpsPerCTA()[idx]);
+    }
+    return triton::gpu::BlockedEncodingAttr::get(
+        ctx, sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+  }
+
+  triton::gpu::BlockedEncodingAttr
+  convertDotOpBToBlockedLayout(triton::gpu::DotOperandEncodingAttr layout,
+                               int kSize) const {
+    auto parentLayout =
+        cast<triton::gpu::BlockedEncodingAttr>(layout.getParent());
+    auto ctx = layout.getContext();
+    SmallVector<unsigned> sizePerThread(parentLayout.getSizePerThread());
+    sizePerThread[1] = kSize;
+    SmallVector<unsigned> threadsPerWarp(parentLayout.getThreadsPerWarp());
+    auto numWarps = triton::gpu::getNumWarpsPerCTA(parentLayout);
+    SmallVector<unsigned> warpsPerCTA{1, 1, numWarps};
+    SmallVector<unsigned> order(parentLayout.getOrder());
+    auto ctaLayout = parentLayout.getCTALayout();
+    return triton::gpu::BlockedEncodingAttr::get(
+        ctx, sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+  }
+
+  triton::gpu::BlockedEncodingAttr
+  mergeSlowDimLayoutToFaster(triton::gpu::BlockedEncodingAttr layout,
+                             int slowDim) const {
+    int rank = layout.getOrder().size();
+    assert(slowDim >= 0 && slowDim < rank - 1);
+    assert(slowDim != layout.getOrder()[0]);
+    auto ctx = layout.getContext();
+    SmallVector<unsigned> order;
+    int fasterDim = -1;
+    for (int i = 0; i < rank; ++i) {
+      int dimIdx = layout.getOrder()[i];
+      if (dimIdx > slowDim)
+        order.push_back(dimIdx - 1);
+      if (dimIdx < slowDim)
+        order.push_back(dimIdx);
+      if (dimIdx == slowDim)
+        fasterDim = layout.getOrder()[i - 1];
+    }
+    SmallVector<unsigned> sizePerThread(layout.getSizePerThread());
+    sizePerThread[fasterDim] *= sizePerThread[slowDim];
+    sizePerThread.erase(sizePerThread.begin() + slowDim);
+
+    SmallVector<unsigned> threadsPerWarp(layout.getThreadsPerWarp());
+    threadsPerWarp[fasterDim] *= threadsPerWarp[slowDim];
+    threadsPerWarp.erase(threadsPerWarp.begin() + slowDim);
+
+    SmallVector<unsigned> warpsPerCTA(layout.getWarpsPerCTA());
+    warpsPerCTA[fasterDim] *= warpsPerCTA[slowDim];
+    warpsPerCTA.erase(warpsPerCTA.begin() + slowDim);
+    assert(rank == 3);
+    auto ctaLayout =
+        triton::gpu::CTALayoutAttr::get(ctx, {1, 1}, {1, 1}, {1, 0});
+    return triton::gpu::BlockedEncodingAttr::get(
+        ctx, sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+  }
+
+  mlir::LogicalResult optimizeLargeBOp(mlir::PatternRewriter &rewriter,
+                                       unsigned m, unsigned n, unsigned k,
+                                       triton::DotOp dotOp,
+                                       triton::gpu::ConvertLayoutOp aCvt,
+                                       triton::gpu::ConvertLayoutOp bCvt,
+                                       triton::LoadOp bLoadOp) const {
+    auto loadTy = llvm::cast<RankedTensorType>(bLoadOp.getResult().getType());
+    auto oldBLoadLayout = loadTy.getEncoding();
+    auto ctx = dotOp.getContext();
+    auto cOrigType = dotOp.getC().getType();
+    auto cOrigLayout = llvm::dyn_cast<triton::gpu::BlockedEncodingAttr>(
+        cOrigType.getEncoding());
+    auto dotLoc = dotOp.getLoc();
+    assert(cOrigLayout &&
+           "non-blocked layouts are filtered outside this pattern");
+    unsigned numWarps = triton::gpu::getNumWarpsPerCTA(cOrigLayout);
+    unsigned numThreads = product(triton::gpu::getThreadsPerWarp(cOrigLayout));
+    auto splitK = chooseSplitK(m, n, k, numWarps, numThreads);
+
+    // create new dot output and argument layouts
+    auto cBatchedOpLayout =
+        generateNewDotLayout(ctx, m, n, splitK, numWarps, numThreads);
+    auto elTy = bCvt.getType().getElementType();
+    auto aBatchedOpLayout = triton::gpu::DotOperandEncodingAttr::get(
+        ctx, 0, cBatchedOpLayout, elTy);
+    auto bBatchedOpLayout = triton::gpu::DotOperandEncodingAttr::get(
+        ctx, 1, cBatchedOpLayout, elTy);
+
+    // create layouts and values related to A operand
+    //
+    // A operand data flow before transformation:
+    //   aOrig (NxK aOrigLayout)   -layout_convert->
+    //         (NxK dot op layout)
+    // After transformation:
+    //   aOrig      (MxK aOrigLayout)         -reshape->
+    //   aExtended  (MxSxK' aExtendedLayout)  -trans->
+    //   aBatched   (SxMxK' aBatchedLayout)   -layout_convert->
+    //   aBatchedOp (SxMxK' aBatchedOpLayout)
+    // "S" in shapes represents splitK value
+    auto aOrig = aCvt.getSrc();
+    auto aCvtLoc = aCvt.getLoc();
+    auto aOrigLayout = dyn_cast<triton::gpu::BlockedEncodingAttr>(
+        aOrig.getType().getEncoding());
+    if (!aOrigLayout)
+      return failure();
+    auto aOrigType = aOrig.getType();
+    auto optAExtendedType = splitTypeDim(aOrigType, 1, splitK, aCvtLoc);
+    if (!optAExtendedType.has_value())
+      return failure();
+    auto aExtendedType = optAExtendedType.value();
+    auto aExtendedLayout = llvm::cast<triton::gpu::BlockedEncodingAttr>(
+        aExtendedType.getEncoding());
+    llvm::errs() << "split tensor: " << aOrig.getType()
+                 << "\nto: " << aExtendedType << "\n";
+    rewriter.setInsertionPoint(aCvt);
+    assert(!triton::gpu::isExpensiveView(aOrig.getType(), aExtendedType));
+    auto aExtended =
+        rewriter.create<triton::ReshapeOp>(aCvtLoc, aExtendedType, aOrig, true);
+    auto aBatchedLayout = transposeLayout(aExtendedLayout, {1, 0, 2});
+    auto aBatchedType =
+        RankedTensorType::get({splitK, m, k / splitK}, elTy, aBatchedLayout);
+    auto aBatched = rewriter.create<triton::TransOp>(
+        aCvtLoc, aExtended, ArrayRef<int32_t>({1, 0, 2}));
+    auto aBatchedOpType =
+        RankedTensorType::get({splitK, m, k / splitK}, elTy, aBatchedOpLayout);
+    auto aBatchedOp = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        dotLoc, aBatchedOpType, aBatched);
+
+    // create layouts and values related to B operand
+    //
+    // B operand data flow before transformation:
+    //   bOrigAddr, bOrigMask (KxN bOrigLoadLayout) -global load->
+    //   bOrigLoad            (KxN bOrigLoadLayout) -layout_convert->
+    //                        (KxN dot op layout)
+    // After transformation:
+    //   bOrigAddr, bOrigMask (KxN bOrigLoadLayout)    -layout_convert->
+    //   bAddr, bMask         (KxN bLoadLayout)        -global load->
+    //   bLoad                (KxN bLoadLayout)        -reshape->
+    //   bBatched             (SxK'xN bBatchedLayout)  -layout_convert->
+    //   bBatchedOp           (SxK'xN bBatchedOpLayout)
+    auto bOrigAddr = bLoadOp.getPtr();
+    auto bOrigMask = bLoadOp.getMask();
+    auto bLoadLoc = bLoadOp.getLoc();
+
+    auto bBatchedLayout =
+        convertDotOpBToBlockedLayout(bBatchedOpLayout, k / splitK);
+    auto bLoadLayout = mergeSlowDimLayoutToFaster(bBatchedLayout, 0);
+    auto bLoadElTy = llvm::cast<RankedTensorType>(bLoadOp.getPtr().getType())
+                         .getElementType();
+    rewriter.setInsertionPoint(bLoadOp);
+    auto bAddrType = RankedTensorType::get({k, n}, bLoadElTy, bLoadLayout);
+    auto bAddr = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        bLoadLoc, bAddrType, bOrigAddr);
+    Value bMask;
+    if (bOrigMask) {
+      auto bOrigMaskElTy =
+          cast<RankedTensorType>(bOrigMask.getType()).getElementType();
+      auto bMaskType =
+          RankedTensorType::get({k, n}, bOrigMaskElTy, bLoadLayout);
+      bMask = rewriter.create<triton::gpu::ConvertLayoutOp>(bLoadLoc, bMaskType,
+                                                            bOrigMask);
+    }
+    auto bLoad = rewriter.create<triton::LoadOp>(
+        bLoadLoc, bAddr, bMask, bLoadOp.getCache(), bLoadOp.getEvict(),
+        bLoadOp.getIsVolatile());
+    auto bBatchedType =
+        RankedTensorType::get({splitK, k / splitK, n}, elTy, bBatchedLayout);
+    assert(!triton::gpu::isExpensiveView(bLoad.getType(), bBatchedType));
+    auto bBatched =
+        rewriter.create<triton::ReshapeOp>(bLoadLoc, bBatchedType, bLoad, true);
+    auto bBatchedOpType =
+        RankedTensorType::get({splitK, k / splitK, n}, elTy, bBatchedOpLayout);
+    auto bBatchedOp = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        dotLoc, bBatchedOpType, bBatched);
+
+    // create layouts and values related to C operand
+    //
+    // C operand data flow before transformation:
+    //   cOrig (MxN cOrigLayout)
+    // After transformation:
+    //   cOrig      (MxN cOrigLayout)   -reshape->
+    //   cShaped    (1xMxN cOrigLayout) -broadcast->
+    //   cBatched   (SxMxN cOrigLayout) -layout_convert->
+    //   cBatchedOp (SxMxN cLayout)
+    auto cOrig = dotOp.getC();
+    auto cElTy = dotOp.getC().getType().getElementType();
+    auto optCShapedType = splitTypeDim(cOrigType, 0, 1, cOrig.getLoc());
+    if (!optCShapedType.has_value())
+      return failure();
+    auto cShapedType = optCShapedType.value();
+    auto cShapedLayout = cShapedType.getEncoding();
+    rewriter.setInsertionPoint(dotOp);
+    assert(!triton::gpu::isExpensiveView(cOrig.getType(), cShapedType));
+    auto cShaped =
+        rewriter.create<triton::ReshapeOp>(dotLoc, cShapedType, cOrig, false);
+    auto cBatchedType =
+        RankedTensorType::get({splitK, m, n}, cElTy, cShapedLayout);
+    auto cBatched =
+        rewriter.create<triton::BroadcastOp>(dotLoc, cBatchedType, cShaped);
+    auto cBatchedOpType =
+        RankedTensorType::get({splitK, m, n}, cElTy, cBatchedOpLayout);
+    auto cBatchedOp = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        dotLoc, cBatchedOpType, cBatched);
+
+    // Create new dot and reduction
+    rewriter.setInsertionPoint(dotOp);
+    // loc(#loc15)
+    auto aPrint = rewriter.create<triton::PrintOp>(
+        dotLoc, ::mlir::StringAttr::get(ctx, "a: "),
+        ::mlir::BoolAttr::get(ctx, false), ::mlir::ValueRange({aBatched}));
+    auto bPrint = rewriter.create<triton::PrintOp>(
+        dotLoc, ::mlir::StringAttr::get(ctx, "b: "),
+        ::mlir::BoolAttr::get(ctx, false), ::mlir::ValueRange({bBatched}));
+
+    auto newDot = rewriter.create<triton::DotOp>(
+        dotLoc, aBatchedOp, bBatchedOp, cBatchedOp, dotOp.getInputPrecision(),
+        dotOp.getMaxNumImpreciseAcc());
+
+    auto dPrint = rewriter.create<triton::PrintOp>(
+        dotLoc, ::mlir::StringAttr::get(ctx, "d: "),
+        ::mlir::BoolAttr::get(ctx, false), ::mlir::ValueRange({newDot.getD()}));
+
+    auto reduceOp = rewriter.create<triton::ReduceOp>(
+        dotLoc, ArrayRef<Value>{newDot.getD()}, 0);
+    auto reduceConvert =
+        rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
+            dotOp, cOrigType, reduceOp.getResult());
+
+    auto reduceBody = rewriter.createBlock(&reduceOp.getRegion(), {},
+                                           {cElTy, cElTy}, {dotLoc, dotLoc});
+    auto blockArgs = reduceBody->getArguments();
+    rewriter.setInsertionPoint(reduceBody, reduceBody->begin());
+    Value reduceOperation;
+    if (elTy.isInteger())
+      reduceOperation =
+          rewriter.create<arith::AddIOp>(dotLoc, blockArgs[0], blockArgs[1]);
+    else
+      reduceOperation =
+          rewriter.create<arith::AddFOp>(dotLoc, blockArgs[0], blockArgs[1]);
+    rewriter.create<triton::ReduceReturnOp>(dotLoc, reduceOperation);
+    return success();
+  }
 
 public:
-  explicit OptimizeLoadLayoutPattern(mlir::MLIRContext *context)
+  explicit OptimizeFMADotPattern(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 1, context) {}
+
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto dotOp = cast<triton::DotOp>(op);
+    auto dEncoding = dotOp.getD().getType().getEncoding();
+    if (!llvm::dyn_cast<triton::gpu::BlockedEncodingAttr>(dEncoding))
+      return failure();
     auto aCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
         dotOp.getA().getDefiningOp());
     auto bCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
@@ -38,112 +360,12 @@ public:
     unsigned m = cShape[0];
     unsigned n = cShape[1];
     unsigned k = aShape[1];
-    if (m <= 4 && n >= 32) {
+    if (m <= 8 && n >= 8) {
       auto loadOp =
           llvm::dyn_cast_or_null<triton::LoadOp>(bCvt.getSrc().getDefiningOp());
       if (!loadOp)
         return mlir::failure();
-      auto loadTy = llvm::cast<RankedTensorType>(loadOp.getResult().getType());
-      auto oldBLoadLayout =
-          dyn_cast<triton::gpu::BlockedEncodingAttr>(loadTy.getEncoding());
-      if (!oldBLoadLayout)
-        return mlir::failure();
-      auto ctx = dotOp.getContext();
-      auto cLayout = llvm::dyn_cast<triton::gpu::BlockedEncodingAttr>(
-          cOp.getType().getEncoding());
-      if (!cLayout)
-        return failure();
-      unsigned numWarps = triton::gpu::getNumWarpsPerCTA(cLayout);
-      unsigned numThreads = product(triton::gpu::getThreadsPerWarp(cLayout));
-      SmallVector<unsigned> cWarpsPerCTA{std::min(m, numWarps),
-                                         numWarps / std::min(m, numWarps)};
-      SmallVector<unsigned> cThreadsPerWarp{m / cWarpsPerCTA[0],
-                                            numThreads / (m / cWarpsPerCTA[0])};
-      SmallVector<unsigned> cElemsPerThread{
-          std::max(1u, m / (cThreadsPerWarp[0] * cWarpsPerCTA[0])),
-          std::max(1u, n / (cThreadsPerWarp[1] * cWarpsPerCTA[1]))};
-      auto order = cLayout.getOrder();
-      auto ctaLayout = cLayout.getCTALayout();
-      auto newCLayout = triton::gpu::BlockedEncodingAttr::get(
-          ctx, cElemsPerThread, cThreadsPerWarp, cWarpsPerCTA, order,
-          ctaLayout);
-      auto elTy = aCvt.getType().getElementType();
-      auto newALayout =
-          triton::gpu::DotOperandEncodingAttr::get(ctx, 0, newCLayout, elTy);
-      auto newBLayout =
-          triton::gpu::DotOperandEncodingAttr::get(ctx, 1, newCLayout, elTy);
-
-      auto bElemsPerThread = {k, cElemsPerThread[1]};
-      auto bThreadsPerWarp = cThreadsPerWarp;
-      auto bWarpsPerCTA = cWarpsPerCTA;
-      auto newBLoadLayout = triton::gpu::BlockedEncodingAttr::get(
-          ctx, bElemsPerThread, bThreadsPerWarp, bWarpsPerCTA, order,
-          ctaLayout);
-
-      if (newCLayout == cLayout && oldBLoadLayout == newBLoadLayout)
-        return failure();
-
-      rewriter.setInsertionPoint(loadOp);
-      auto loadLoc = loadOp.getLoc();
-      auto loadPtrTy = llvm::cast<RankedTensorType>(loadOp.getPtr().getType());
-      auto newLoadPtrTy = RankedTensorType::get(
-          loadPtrTy.getShape(), loadPtrTy.getElementType(), newBLoadLayout);
-      auto newPtr = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          loadLoc, newLoadPtrTy, loadOp.getPtr());
-      Value newMask;
-      if (loadOp.getMask()) {
-        auto loadMaskTy =
-            llvm::cast<RankedTensorType>(loadOp.getMask().getType());
-        auto newLoadMaskTy = RankedTensorType::get(
-            loadMaskTy.getShape(), loadMaskTy.getElementType(), newBLoadLayout);
-        newMask = rewriter.create<triton::gpu::ConvertLayoutOp>(
-            loadLoc, newLoadMaskTy, loadOp.getMask());
-      }
-      auto newLoadOp = rewriter.replaceOpWithNewOp<triton::LoadOp>(
-          loadOp, newPtr, newMask, loadOp.getCache(), loadOp.getEvict(),
-          loadOp.getIsVolatile());
-
-      if (dotOp.getA().getDefiningOp())
-        rewriter.setInsertionPoint(dotOp.getA().getDefiningOp());
-      else
-        rewriter.setInsertionPoint(dotOp);
-      auto aLoc = aCvt.getLoc();
-      auto aCvtTy = dotOp.getA().getType();
-      auto newATy = RankedTensorType::get(aCvtTy.getShape(),
-                                          aCvtTy.getElementType(), newALayout);
-      auto newA = rewriter.create<triton::gpu::ConvertLayoutOp>(aLoc, newATy,
-                                                                aCvt.getSrc());
-
-      if (dotOp.getB().getDefiningOp())
-        rewriter.setInsertionPoint(dotOp.getB().getDefiningOp());
-      else
-        rewriter.setInsertionPoint(dotOp);
-      auto bLoc = aCvt.getLoc();
-      auto bCvtTy = dotOp.getB().getType();
-      auto newBTy = RankedTensorType::get(bCvtTy.getShape(),
-                                          bCvtTy.getElementType(), newBLayout);
-      auto newB = rewriter.create<triton::gpu::ConvertLayoutOp>(bLoc, newBTy,
-                                                                newLoadOp);
-
-      if (dotOp.getC().getDefiningOp())
-        rewriter.setInsertionPoint(dotOp.getC().getDefiningOp());
-      else
-        rewriter.setInsertionPoint(dotOp);
-      auto cLoc = dotOp.getC().getLoc();
-      auto cCvtTy = dotOp.getC().getType();
-      auto newCTy = RankedTensorType::get(cCvtTy.getShape(),
-                                          cCvtTy.getElementType(), newCLayout);
-      auto newC = rewriter.create<triton::gpu::ConvertLayoutOp>(cLoc, newCTy,
-                                                                dotOp.getC());
-
-      rewriter.setInsertionPoint(dotOp);
-      auto dotLoc = dotOp.getLoc();
-      auto newDot = rewriter.create<triton::DotOp>(
-          dotLoc, newA, newB, newC, dotOp.getInputPrecision(),
-          dotOp.getMaxNumImpreciseAcc());
-      auto backCvt = rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
-          dotOp, dotOp.getD().getType(), newDot);
-      return success();
+      return optimizeLargeBOp(rewriter, m, n, k, dotOp, aCvt, bCvt, loadOp);
     }
     return mlir::failure();
   }
@@ -164,10 +386,9 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-
     mlir::RewritePatternSet patterns(context);
 
-    patterns.add<OptimizeLoadLayoutPattern>(context);
+    patterns.add<OptimizeFMADotPattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
