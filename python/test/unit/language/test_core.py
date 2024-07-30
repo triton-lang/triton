@@ -3855,6 +3855,27 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" not in ptx
 
 
+@pytest.mark.interpreter
+def test_assume(device):
+
+    @triton.jit
+    def _kernel(out_ptr, N: tl.constexpr, BLOCK_N: tl.constexpr):
+        current_size = N - tl.program_id(0) * BLOCK_N
+        tl.assume(current_size >= BLOCK_N)
+        if current_size >= 128:
+            tl.store(out_ptr + tl.program_id(0), current_size)
+        else:
+            tl.store(out_ptr + tl.program_id(0), current_size + 101024)
+
+    output = torch.zeros(1024 // 128, device=device)
+    pgm = _kernel[(1024 // 128, )](output, N=1024, BLOCK_N=128)
+
+    if is_interpreter():
+        return
+
+    assert 'llvm.assume' in pgm.asm['llir']
+
+
 # ---------------
 # test store
 # ---------------

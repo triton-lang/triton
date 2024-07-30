@@ -647,6 +647,9 @@ class InterpreterBuilder:
         # Interpreter's device_assert function has a different format than Triton's device_assert
         assert condition, f"{message} in {fileName}:{funcName}:{lineNo}"
 
+    def create_assume(self, condition):
+        assert condition, "Assume failed"
+
     def create_barrier(self):
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
