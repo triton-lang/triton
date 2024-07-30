@@ -234,14 +234,25 @@ There are two modes:
         "--include",
         type=str,
         default=None,
-        help="Include frames(kernels) that match the given regular expression",
+        help=
+        """Find frames that match the given regular expression and return all nodes in the paths that pass through the matching frames.
+For example, the following command will display all paths that contain frames that contains "test":
+```
+proton-viewer -i ".*test.*" path/to/file.json
+```
+""",
     )
     argparser.add_argument(
         "-e",
         "--exclude",
         type=str,
         default=None,
-        help="Exclude frames(kernels) that match the given regular expression",
+        help="""Exclude frames that match the given regular expression and their children.
+For example, the following command will exclude all paths that contain frames that contains "test":
+```
+proton-viewer -e ".*test.*" path/to/file.json
+```
+""",
     )
     argparser.add_argument(
         "-t",
