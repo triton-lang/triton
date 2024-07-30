@@ -62,7 +62,8 @@ public:
 
   unsigned getThreadsReductionAxis();
 
-  SmallVector<unsigned> getScratchConfig();
+  // The shape of the shared memory space needed for the reduction.
+  SmallVector<unsigned> getScratchRepShape();
 
   SmallVector<unsigned> getOrderWithAxisAtBeginning();
 
@@ -175,6 +176,10 @@ private:
 // This function returns the above decomposition.
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
 getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
+
+// Returns the number of elements in the scratch space needed.
+// If shape is empty, it means no shared memory is needed.
+unsigned getNumScratchElements(ArrayRef<unsigned> shape);
 
 bool maybeSharedAllocationOp(Operation *op);
 

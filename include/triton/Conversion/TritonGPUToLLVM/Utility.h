@@ -1239,7 +1239,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   // Tensor indices held by the current thread, as LLVM values
   auto srcIndices = emitIndices(loc, rewriter, target, srcEncoding, srcTy,
                                 /*withCTAOffset=*/false);
-  // Swizzling with leading offsets (e.g. Hopper GMMA)
+  // Swizzling with leading offsets (e.g. Hopper WGMMA)
   unsigned swizzlingByteWidth = 0;
   if (resSharedLayout.getHasLeadingOffset()) {
     if (perPhase == 4 && maxPhase == 2)
@@ -1423,7 +1423,7 @@ inline Value packLLElements(Location loc,
     if (v.value().getType() != elementTypes[v.index()]) {
       LDBG("type " << type << " structType " << structType);
       LDBG("value " << v.value());
-      emitError(loc) << "invalid element type in packLLEElements. Expected "
+      emitError(loc) << "invalid element type in packLLElements. Expected "
                      << elementTypes[v.index()] << " but got "
                      << v.value().getType();
     }

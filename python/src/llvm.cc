@@ -442,7 +442,7 @@ void triton_stacktrace_signal_handler(void *) {
 }
 
 void init_triton_stacktrace_hook(pybind11::module &m) {
-  if (!mlir::triton::tools::getBoolEnv("TRITON_DISABLE_PYTHON_STACKTRACE")) {
+  if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_PYTHON_STACKTRACE")) {
     llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
   }
 }
