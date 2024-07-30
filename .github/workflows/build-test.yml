@@ -80,5 +80,6 @@ jobs:
         run: |
           python -m pytest -s -n 32 --device cpu python/test/unit/language/test_core.py -m cpu
           python -m pytest -s -n 32 --device cpu \
+            python/test/unit/language/test_annotations.py \
             python/test/unit/language/test_block_pointer.py \
             python/test/unit/language/test_conversions.py

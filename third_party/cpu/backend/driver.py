@@ -122,11 +122,10 @@ def make_launcher(constants, signature, ids):
 
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiOKOOOO" + args_format
-    arg_ptrs_list = ', '.join(f"&arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+    arg_ptrs_list = ', '.join(f"&arg{i}" for i, ty in signature.items())
     kernel_fn_args = [i for i in signature.keys() if i not in constants]
-    kernel_fn_args_list = ', '.join(f"arg{i}" for i in kernel_fn_args) if len(kernel_fn_args) > 0 else ''
-    kernel_fn_arg_types = (', '.join(f"{ty_to_cpp(signature[i])}" for i in kernel_fn_args) + ", "
-                           if len(signature) > 0 else '') + "uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t"
+    kernel_fn_args_list = ', '.join(f"arg{i}" for i in kernel_fn_args)
+    kernel_fn_arg_types = ', '.join([f"{ty_to_cpp(signature[i])}" for i in kernel_fn_args] + ["uint32_t"] * 6)
 
     # generate glue code
     src = f"""
