@@ -66,6 +66,11 @@ public:
     //   elemsPerThread = sizeInterWarps * s1 * s2 .. Sn / numThreads
     accumulatePartialReductions(helper, smemBases, rewriter);
 
+    // We could avoid this barrier in some of the layouts, however this is not
+    // the general case.
+    // TODO: optimize the barrier in case the layouts are accepted.
+    sync(rewriter, loc, op);
+
     // set output values
     loadReductionAndPackResult(helper, smemShape, smemBases, rewriter);
 
