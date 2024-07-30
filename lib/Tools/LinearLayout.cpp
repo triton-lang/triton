@@ -429,7 +429,12 @@ int32_t LinearLayout::getNumConsecutiveInOut() const {
       }
     }
   }
+
+#if defined(_MSC_VER)
+  int32_t trailingZeros = otherBits != 0 ? _tzcnt_u32(otherBits) : 31;
+#else
   int32_t trailingZeros = otherBits != 0 ? __builtin_ctz(otherBits) : 31;
+#endif
 
   return 1 << std::min(consec, trailingZeros);
 }

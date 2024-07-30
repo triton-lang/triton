@@ -21,8 +21,29 @@
 namespace mlir {
 namespace {
 
-using namespace triton;
-using namespace triton::gpu;
+// We only "import" the symbols that we need to avoid name conflicts.
+using triton::AdvanceOp;
+using triton::LinearLayout;
+using triton::MakeTensorPtrOp;
+using triton::gpu::getCTALayout;
+using triton::gpu::getCTAsPerCGA;
+using triton::gpu::getCTASplitNum;
+using triton::gpu::MmaEncodingTrait;
+using triton::gpu::getNumCTAs;
+using triton::gpu::getOrder;
+using triton::gpu::getShapePerCTA;
+using triton::gpu::getThreadsPerWarp;
+using triton::gpu::getThreadsPerWarpWithUniqueData;
+using triton::gpu::getUniqueContigPerThread;
+using triton::gpu::getWarpsPerCTA;
+using triton::gpu::getWarpsPerCTAWithUniqueData;
+using triton::gpu::toLinearLayout;
+using triton::gpu::AMDMfmaEncodingAttr;
+using triton::gpu::BlockedEncodingAttr;
+using triton::gpu::DotOperandEncodingAttr;
+using triton::gpu::NvidiaMmaEncodingAttr;
+using triton::gpu::SliceEncodingAttr;
+using triton::gpu::TritonGPUDialect;
 
 int getParentAxis(Attribute layout, int axis) {
   if (auto sliceEncoding = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -514,7 +535,7 @@ bool supportMMA(triton::DotOp op, int version) {
     }
   }
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.getInputPrecision() == InputPrecision::TF32 && version >= 2;
+    return op.getInputPrecision() == triton::InputPrecision::TF32 && version >= 2;
   }
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
