@@ -185,6 +185,10 @@ class OptimizeAMDLDSUsage
     auto liveBuffers = funcAnalysis->getLiveBuffers();
 
     func.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      auto srcTy = cvtOp.getSrc().getType();
+      auto dstTy = cvtOp.getResult().getType();
+      if (!cvtNeedsSharedMemory(srcTy, dstTy))
+        return;
       auto cvtBuffer = funcAnalysis->getBufferId(cvtOp.getOperation());
       assert(cvtBuffer != Allocation::InvalidBufferId);
 
