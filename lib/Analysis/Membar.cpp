@@ -145,7 +145,6 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
-    llvm::errs() << "here\n";
     // Scratch buffer is considered as both shared memory write & read
     auto bufferId = allocation->getBufferId(op);
     if (bufferId != Allocation::InvalidBufferId) {
