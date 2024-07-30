@@ -14,7 +14,6 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
-namespace mlir::triton::gpu {
 namespace {
 
 using ::mlir::isLayoutMmaV1;
@@ -23,6 +22,8 @@ using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
+
+using namespace mlir::triton::gpu;
 
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
@@ -250,9 +251,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     const auto &shape = op.getType().getShape();
     std::optional<LinearLayout> srcLayout =
-        gpu::toLinearLayout(shape, op.getSrc().getType().getEncoding());
+        toLinearLayout(shape, op.getSrc().getType().getEncoding());
     std::optional<LinearLayout> dstLayout =
-        gpu::toLinearLayout(shape, op.getType().getEncoding());
+        toLinearLayout(shape, op.getType().getEncoding());
     if (!srcLayout.has_value() || !dstLayout.has_value()) {
       return failure();
     }
@@ -593,12 +594,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 };
 
 } // namespace
-} // namespace mlir::triton::gpu
 
 void mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
+  patterns.add<ConvertLayoutOpUsingLinearLayoutsConversion>(
       typeConverter, targetInfo, benefit);
 }
 
@@ -610,6 +610,5 @@ void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
   // one left.
   mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
       typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
-  patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
-                                               benefit);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
 }

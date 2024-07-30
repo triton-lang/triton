@@ -217,6 +217,6 @@ void mlir::triton::populateMemoryOpToLLVMPattern(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
-  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
 }
