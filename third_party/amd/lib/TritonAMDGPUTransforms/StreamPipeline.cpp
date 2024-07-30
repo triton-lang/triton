@@ -174,6 +174,9 @@ public:
   /// create the new ForOp (add new args & insert prefetched ops)
   scf::ForOp createNewForOp();
 
+  /// set mapping from forOp results to pplForOp results
+  void setResultMapping(DenseMap<Value, Value> &newResults);
+
   friend struct PipelinePass;
 };
 
@@ -616,6 +619,13 @@ void LoopPipeliner::emitEpilogue(DenseMap<Value, Value> &newResults) {
   }
 }
 
+void LoopPipeliner::setResultMapping(DenseMap<Value, Value> &newResults) {
+  for (unsigned i = 0; i < forOp->getNumResults(); ++i) {
+    auto newIdx = depArgsIdx[forOp.getRegionIterArgs()[i]];
+    newResults[forOp->getResult(i)] = pplForOp->getResult(newIdx);
+  }
+}
+
 SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   // Order of new args:
   //   (original args)
@@ -844,8 +854,7 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
       pipeliner.emitPrologue();
       scf::ForOp pplForOp = pipeliner.createNewForOp();
       DenseMap<Value, Value> newResults;
-      for (unsigned i = 0; i < forOp->getNumResults(); ++i)
-        newResults[forOp->getResult(i)] = pplForOp->getResult(i);
+      pipeliner.setResultMapping(newResults);
       pipeliner.emitEpilogue(newResults);
 
       // Replace the original loop
