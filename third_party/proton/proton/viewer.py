@@ -4,6 +4,7 @@ import json
 import pandas as pd
 from numpy import inf, nan
 import hatchet as ht
+from hatchet.query import NegationQuery
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
 
@@ -148,10 +149,20 @@ def parse(metrics, filename, include, exclude, threshold, depth, format):
         assert len(raw_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
         metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
-        if include or exclude:
+        query = ""
+        if include:
             # make regex do negative match
-            name_filter = f"^(?!{exclude}).*" if exclude else include
-            query = ["*", {"name": name_filter}]
+            query = f"""
+MATCH ("*")->(".", p)->("*")
+WHERE p."name" =~ "{include}"
+"""
+        elif exclude:
+            inclusion_query = f"""
+MATCH (".", p)->("*")
+WHERE p."name" =~ "{exclude}"
+"""
+            query = NegationQuery(inclusion_query)
+        if query:
             gf = gf.filter(query, squash=True)
         # filter out metadata computation
         query = [{"name": f"^(?!{COMPUTE_METADATA_SCOPE_NAME}).*"}]
@@ -186,7 +197,6 @@ def main():
         help="""List available metrics. Metric names are case insensitive and ignore units.
 Derived metrics can be created when source metrics are available.
 - time/s, time/ms, time/us, time/ns: time
-- avg_time/s, avg_time/ms, avg_time/us, avg_time/ns: time / kernel_exec_count
 - flop/s, gflop/s, tflop/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
