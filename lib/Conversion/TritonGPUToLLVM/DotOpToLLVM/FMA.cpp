@@ -124,8 +124,10 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto dTensorTy = cast<RankedTensorType>(D.getType());
   auto dElemTy = dTensorTy.getElementType();
 
-  auto aShapePerCTA = expandMatrixShapeWithBatch(getShapePerCTA(aTensorTy));
-  auto dShapePerCTA = expandMatrixShapeWithBatch(getShapePerCTA(dTensorTy));
+  SmallVector<int64_t> aShapePerCTA =
+      expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(aTensorTy)));
+  auto dShapePerCTA =
+      expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(dTensorTy)));
 
   BlockedEncodingAttr dLayout =
       cast<BlockedEncodingAttr>(dTensorTy.getEncoding());
@@ -135,9 +137,10 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   Value llA = adaptor.getA();
   Value llB = adaptor.getB();
 
-  auto sizePerThread = expandMatrixShapeWithBatch(getSizePerThread(dLayout));
+  auto sizePerThread =
+      expandMatrixShapeWithBatch(ArrayRef(getSizePerThread(dLayout)));
   auto shapePerCTATile =
-      expandMatrixShapeWithBatch(getShapePerCTATile(dLayout));
+      expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(dLayout)));
 
   int K = aShapePerCTA[2];
 

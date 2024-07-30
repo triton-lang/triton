@@ -939,11 +939,12 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                        getKWidth(), getOpIdx());
   }
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
-    auto shapePerCTA = expandMatrixShapeWithBatch(getShapePerCTA(*this, shape));
-    auto shapePerCTATile =
-        expandMatrixShapeWithBatch(::getShapePerCTATile(blockedLayout));
+    auto shapePerCTA =
+        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(*this, shape)));
+    auto shapePerCTATile = expandMatrixShapeWithBatch(
+        ArrayRef(::getShapePerCTATile(blockedLayout)));
     auto sizePerThread =
-        expandMatrixShapeWithBatch(::getSizePerThread(blockedLayout));
+        expandMatrixShapeWithBatch(ArrayRef(::getSizePerThread(blockedLayout)));
 
     int batchDim = 0;
     int kDim = getOpIdx() == 0 ? 2 : 1;

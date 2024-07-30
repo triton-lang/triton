@@ -93,7 +93,8 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
   const int nonKDim = dotOpNo == 0 ? 1 : 2;
   auto opTensorTy = cast<MemDescType>(dotOp.getType());
   auto opLayout = cast<SharedEncodingAttr>(opTensorTy.getEncoding());
-  auto opShapePerCTA = expandMatrixShapeWithBatch(getShapePerCTA(opTensorTy));
+  auto opShapePerCTA =
+      expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(opTensorTy)));
 
   auto order = expandMatrixOrderWithBatch(dLayout.getOrder());
 
@@ -108,8 +109,9 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
   int NonK = opShapePerCTA[nonKDim];
 
   auto shapePerCTATile =
-      expandMatrixShapeWithBatch(getShapePerCTATile(dLayout));
-  auto sizePerThread = expandMatrixShapeWithBatch(getSizePerThread(dLayout));
+      expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(dLayout)));
+  auto sizePerThread =
+      expandMatrixShapeWithBatch(ArrayRef(getSizePerThread(dLayout)));
 
   // threadId in blocked layout
   auto threadIds = getThreadIds(thread, shapePerCTATile, sizePerThread, order,
