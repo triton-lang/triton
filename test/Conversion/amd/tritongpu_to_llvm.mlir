@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file -test-print-membar --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32_scalar
@@ -7,8 +7,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.store
     // CHECK: llvm.br
-    // CHECK: llvm.load
     // CHECK: rocdl.barrier
+    // CHECK: llvm.load
     // CHECK: llvm.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %0 : !tt.ptr<f32>

@@ -470,6 +470,7 @@ struct AtomicCASOpConversion
         GCNBuilder BuilderMemfenceLDS;
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
+        barrier();
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }

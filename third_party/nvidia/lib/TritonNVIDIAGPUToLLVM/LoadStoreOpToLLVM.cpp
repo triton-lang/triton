@@ -740,6 +740,7 @@ struct AtomicRMWOpConversion
         auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
         storeShared(ptrOpr, valOpr).predicate(rmwMask);
         ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
+        createBarrier(rewriter, loc, numCTAs);
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
