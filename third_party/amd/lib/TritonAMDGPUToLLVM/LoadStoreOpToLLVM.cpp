@@ -634,6 +634,7 @@ struct AtomicRMWOpConversion
         }
       } else {
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        barrier();
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
