@@ -38,6 +38,8 @@ def is_interpreter():
                                                       ("device_print_hex", "int32"),
                                                       ("device_print_hex", "int64"),
                                                       ("device_print_pointer", "int32"),
+                                                      ("device_print_negative", "int32"),
+                                                      ("device_print_uint", "uint32"),
                                                   ])
 def test_print(func_type: str, data_type: str, device: str):
     proc = subprocess.run(
@@ -62,9 +64,10 @@ def test_print(func_type: str, data_type: str, device: str):
     # Format is
     #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>
     expected_lines = Counter()
-    if func_type == "print" or func_type == "device_print":
+    if func_type in ("print", "device_print", "device_print_uint"):
         for i in range(N):
-            line = f"pid (0, 0, 0) idx ({i:3}) x: {i}"
+            offset = (1 << 31) if data_type == "uint32" else 0
+            line = f"pid (0, 0, 0) idx ({i:3}) x: {i + offset}"
             if data_type.startswith("float"):
                 line += ".000000"
             expected_lines[line] = 1
@@ -73,6 +76,10 @@ def test_print(func_type: str, data_type: str, device: str):
         if data_type.startswith("float"):
             line += ".000000"
         expected_lines[line] = N
+    elif func_type == "device_print_negative":
+        for i in range(N):
+            line = f"pid (0, 0, 0) idx ({i:3}) x: {-i}"
+            expected_lines[line] = 1
     elif func_type == "device_print_hex":
         for i in range(N):
             line = f"pid (0, 0, 0) idx ({i:3}) x: 0x"

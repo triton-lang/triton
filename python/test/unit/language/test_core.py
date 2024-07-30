@@ -3593,6 +3593,13 @@ def test_const(device, choose_const, constexpr, mode):
     if expect_fail:
         with pytest.raises(triton.CompilationError) as exc_info:
             patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
+        if constexpr:
+            assert "Cannot store to a constant pointer" in str(exc_info.value.__cause__), "Wrong error message!"
+        elif not constexpr and mode == "call":
+            assert "Inconsistent return types" in str(exc_info.value.__cause__), "Wrong error message!"
+        else:
+            # TODO: Add error messages for the other cases
+            pass
     else:
         patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
         assert torch.all(input == output)
@@ -3846,6 +3853,27 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" in ptx
     else:
         assert "ld.global.v4.b32" not in ptx
+
+
+@pytest.mark.interpreter
+def test_assume(device):
+
+    @triton.jit
+    def _kernel(out_ptr, N: tl.constexpr, BLOCK_N: tl.constexpr):
+        current_size = N - tl.program_id(0) * BLOCK_N
+        tl.assume(current_size >= BLOCK_N)
+        if current_size >= 128:
+            tl.store(out_ptr + tl.program_id(0), current_size)
+        else:
+            tl.store(out_ptr + tl.program_id(0), current_size + 101024)
+
+    output = torch.zeros(1024 // 128, device=device)
+    pgm = _kernel[(1024 // 128, )](output, N=1024, BLOCK_N=128)
+
+    if is_interpreter():
+        return
+
+    assert 'llvm.assume' in pgm.asm['llir']
 
 
 # ---------------
@@ -5193,8 +5221,9 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
-                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
+                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)

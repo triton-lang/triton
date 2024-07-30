@@ -103,7 +103,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
         if metric == "util":  # Tensor core only
             min_time_bytes = get_min_time_bytes(gf.dataframe, device_info)
             min_time_flops = get_min_time_flops(gf.dataframe, device_info)
-            time_sec = get_time_seconds(gf.dataframe, time_metric_name, time_unit)
+            time_sec = get_time_seconds(gf.dataframe)
             gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
             derived_metrics.append("util (inc)")
         elif metric in derivable_metrics:
@@ -244,7 +244,7 @@ There are two modes:
     )
     argparser.add_argument(
         "-f", "--format", type=str, choices=["full", "file_function_line", "function_line", "file_function"],
-        default="full", help="""Formating the frame name.
+        default="full", help="""Formatting the frame name.
 - full: include the path, file name, function name and line number.
 - file_function_line: include the file name, function name and line number.
 - function_line: include the function name and line number.
