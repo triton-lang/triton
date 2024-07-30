@@ -563,7 +563,6 @@ struct AtomicCASOpConversion
         }
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
-        createBarrier(rewriter, loc, numCTAs);
         Value atomPtr =
             LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
@@ -578,7 +577,6 @@ struct AtomicCASOpConversion
         ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
         createBarrier(rewriter, loc, numCTAs);
         Value ret = load(valueElemTy, atomPtr);
-        createBarrier(rewriter, loc, numCTAs);
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -742,9 +740,7 @@ struct AtomicRMWOpConversion
         auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
         storeShared(ptrOpr, valOpr).predicate(rmwMask);
         ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
-        createBarrier(rewriter, loc, numCTAs);
         Value ret = load(valueElemTy, atomPtr);
-        createBarrier(rewriter, loc, numCTAs);
         rewriter.replaceOp(op, {ret});
       }
     }

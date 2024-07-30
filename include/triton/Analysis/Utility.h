@@ -181,8 +181,6 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
 // If shape is empty, it means no shared memory is needed.
 unsigned getNumScratchElements(ArrayRef<unsigned> shape);
 
-bool maybeSharedAllocationOp(Operation *op);
-
 bool supportMFMA(triton::DotOp op);
 
 bool supportWMMA(triton::DotOp op);
@@ -190,8 +188,6 @@ bool supportWMMA(triton::DotOp op);
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
-
-bool isSingleValue(Value value);
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 

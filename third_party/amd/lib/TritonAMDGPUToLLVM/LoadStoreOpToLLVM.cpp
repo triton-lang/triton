@@ -470,9 +470,7 @@ struct AtomicCASOpConversion
         GCNBuilder BuilderMemfenceLDS;
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
-        barrier();
         Value ret = load(valueElemTy, atomPtr);
-        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -635,9 +633,7 @@ struct AtomicRMWOpConversion
         }
       } else {
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        barrier();
         Value ret = load(valueElemTy, atomPtr);
-        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
