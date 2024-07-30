@@ -3871,7 +3871,8 @@ def test_assume(has_hints, device):
 
     output = torch.zeros(1024 // 128, device='cuda')
     pgm = _kernel[(1024 // 128, )](output, N=1024, BLOCK_N=128, HINT=has_hints)
-    if not is_cuda():
+
+    if is_interpreter():
         return
 
     if has_hints:
