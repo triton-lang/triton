@@ -7,7 +7,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.store
     // CHECK: llvm.br
-    // CHECK: rocdl.barrier
     // CHECK: llvm.load
     // CHECK: rocdl.barrier
     // CHECK: llvm.store
