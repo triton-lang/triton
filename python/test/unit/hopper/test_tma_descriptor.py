@@ -15,9 +15,9 @@ def test_1d_tma_descriptor_exception(M, BLOCK_M, expect_error):
 
     try:
         create_1d_tma_descriptor(x.data_ptr(), M, BLOCK_M, x.element_size())
-    except SystemError as e:
+    except RuntimeError as e:
         is_error = True
-        assert e.args[0] == "<built-in function fill_1d_tma_descriptor> returned a result with an exception set"
+        assert e.args[0] == "Triton Error [CUDA]: invalid argument"
 
     assert is_error == expect_error
 
@@ -36,8 +36,8 @@ def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error):
 
     try:
         create_2d_tma_descriptor(A.data_ptr(), M, N, BLOCK_M, BLOCK_N, A.element_size())
-    except SystemError as e:
+    except RuntimeError as e:
         is_error = True
-        assert e.args[0] == "<built-in function fill_2d_tma_descriptor> returned a result with an exception set"
+        assert e.args[0] == "Triton Error [CUDA]: invalid argument"
 
     assert is_error == expect_error
