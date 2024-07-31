@@ -1,8 +1,6 @@
 import multiprocessing
 import shutil
 
-import torch
-
 import triton
 import triton.language as tl
 from triton.compiler import ASTSource
@@ -10,7 +8,7 @@ from triton.compiler import ASTSource
 target = triton.runtime.driver.active.get_current_target()
 
 
-def compile_fn(attrs, capability):
+def compile_fn(attrs):
 
     @triton.jit
     def kernel_sub(a, b, o, N: tl.constexpr):
@@ -27,18 +25,15 @@ def compile_fn(attrs, capability):
 
 
 def test_compile_in_subproc() -> None:
-    major, minor = torch.cuda.get_device_capability(0)
-    cc = major * 10 + minor
     config = triton.compiler.AttrsDescriptor(tuple(range(4)), ())
-
     multiprocessing.set_start_method('fork')
-    proc = multiprocessing.Process(target=compile_fn, args=(config, cc))
+    proc = multiprocessing.Process(target=compile_fn, args=(config, ))
     proc.start()
     proc.join()
     assert proc.exitcode == 0
 
 
-def compile_fn_dot(attrs, capability):
+def compile_fn_dot(attrs):
 
     @triton.jit
     def kernel_dot(Z):
@@ -52,12 +47,9 @@ def compile_fn_dot(attrs, capability):
 
 
 def test_compile_in_forked_subproc(fresh_triton_cache) -> None:
-    major, minor = torch.cuda.get_device_capability(0)
-    capability = major * 10 + minor
     config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
-
     assert multiprocessing.get_start_method() == 'fork'
-    proc = multiprocessing.Process(target=compile_fn_dot, args=(config, capability))
+    proc = multiprocessing.Process(target=compile_fn_dot, args=(config, ))
     proc.start()
     proc.join()
     assert proc.exitcode == 0
