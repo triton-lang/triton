@@ -306,12 +306,14 @@ scf::ForOp Prefetcher::createNewForOp() {
     // sinking it (by resetting the insertion point to the end) if we find
     // control flow, or anything that depends on the dot op.
     if (op.getNumRegions() > 0) {
+      // The insertion point should be placed before the yield op
       builder.setInsertionPoint(newForOp.getBody()->getTerminator());
     }
     for (auto operand : op.getOperands()) {
       if (auto def = operand.getDefiningOp()) {
         auto dot = dyn_cast<triton::DotOp>(def);
         if (dot && dots.contains(dot)) {
+          // The insertion point should be placed before the yield op
           builder.setInsertionPoint(newForOp.getBody()->getTerminator());
         }
       }
