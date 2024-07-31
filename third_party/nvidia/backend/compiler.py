@@ -316,21 +316,26 @@ class CUDABackend(BaseBackend):
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
-            except subprocess.CalledProcessError as e:
-                with open(flog.name) as log_file:
-                    log = log_file.read()
-                if e.returncode == 255:
-                    raise RuntimeError(f'Internal Triton PTX codegen error: \n{log}')
-                elif e.returncode == 128 + signal.SIGSEGV:
-                    raise RuntimeError(
-                        f'Please run `ptxas {fsrc.name}` to confirm that this is a bug in `ptxas`\n{log}')
-                else:
-                    raise RuntimeError(f'`ptxas` failed with error code {e.returncode}: \n{log}')
-            finally:
                 if os.path.exists(fsrc.name):
                     os.remove(fsrc.name)
                 if os.path.exists(flog.name):
                     os.remove(flog.name)
+            except subprocess.CalledProcessError as e:
+                with open(flog.name) as log_file:
+                    log = log_file.read()
+                if os.path.exists(flog.name):
+                    os.remove(flog.name)
+
+                if e.returncode == 255:
+                    error = 'Internal Triton PTX codegen error'
+                elif e.returncode == 128 + signal.SIGSEGV:
+                    error = '`ptxas` raised SIGSEGV'
+                else:
+                    error = f'`ptxas` failed with error code {e.returncode}'
+
+                raise RuntimeError(f'{error}\n'
+                                   f'`ptxas` stderr:\n{log}\n'
+                                   f'Repro command: {ptxas_cmd}\n')
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()
