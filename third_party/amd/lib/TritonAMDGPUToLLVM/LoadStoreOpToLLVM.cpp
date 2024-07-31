@@ -472,7 +472,6 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
         Value ret = load(valueElemTy, atomPtr);
-        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -637,7 +636,6 @@ struct AtomicRMWOpConversion
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         barrier();
         Value ret = load(valueElemTy, atomPtr);
-        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
