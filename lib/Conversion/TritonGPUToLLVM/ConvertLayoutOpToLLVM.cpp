@@ -483,9 +483,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(scratchConfig.inVec * iterations <= inVals.size());
     assert(scratchConfig.outVec * iterations <= outSize);
 
+    // There's only one dimension that has been padded
     auto rank = scratchConfig.repShape.size();
-    auto paddedStride = scratchConfig.repShape[rank - 1];
-    auto paddedSize = scratchConfig.paddedRepShape[rank - 1] - paddedStride;
+    auto paddedStride = 1;
+    auto paddedSize = 0;
+    for (size_t i = 0; i < rank; ++i) {
+      if (scratchConfig.repShape[i] != scratchConfig.paddedRepShape[i]) {
+        paddedStride = scratchConfig.repShape[i];
+        paddedSize = scratchConfig.paddedRepShape[i] - paddedStride;
+        break;
+      }
+    }
 
     // Linear layout function is split in two parts below:
     //
