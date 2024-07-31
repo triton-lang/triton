@@ -628,7 +628,10 @@ class InterpreterBuilder:
     def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
         raise NotImplementedError("inline_asm not supported in interpreter mode")
 
-    def create_print(self, prefix, hex, values):
+    def create_print(self, prefix, hex, values, isSigned):
+        # NOTE: the `isSigned` variable is not really used here; because Signness is already known
+        # by `values` themselves in python interpreter, thus not really needed here;
+        # it is only used for triton PrintOpToLLVM to correctly construct the format specifier.
         # Interpreter's device_print function has a different format than Triton's device_print
         msg = f"({self.grid_idx[0]}, {self.grid_idx[1]}, {self.grid_idx[2]})"
         if prefix:
@@ -643,6 +646,9 @@ class InterpreterBuilder:
     def create_assert(self, condition, message, fileName, funcName, lineNo):
         # Interpreter's device_assert function has a different format than Triton's device_assert
         assert condition, f"{message} in {fileName}:{funcName}:{lineNo}"
+
+    def create_assume(self, condition):
+        assert condition, "Assume failed"
 
     def create_barrier(self):
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter

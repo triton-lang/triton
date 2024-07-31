@@ -18,10 +18,37 @@ namespace mlir {
 namespace triton {
 class AllocationAnalysis;
 
-SmallVector<unsigned>
-getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
-                             unsigned &outVec);
-SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op);
+// To convert a tensor from one layout to another, we need to allocate a
+// temporary buffer (i.e., scratch buffer) in the shared memory.  We may go
+// through multiple iterations to convert the tensor, and each iteration may
+// have multiple vectorized loads/stores.  The scratch buffer has a shape
+// ("repShape") that is the maximum size accessed in each dimension during
+// each iteration.
+struct ScratchConfig {
+  SmallVector<unsigned> repShape;
+  SmallVector<unsigned> paddedRepShape;
+  unsigned inVec;
+  unsigned outVec;
+
+  ScratchConfig(SmallVector<unsigned> repShape,
+                SmallVector<unsigned> paddedRepShape, unsigned inVec = 1,
+                unsigned outVec = 1)
+      : repShape(repShape), paddedRepShape(paddedRepShape), inVec(inVec),
+        outVec(outVec) {}
+
+  void print(llvm::raw_ostream &os) const {
+    os << "repShape: [";
+    llvm::interleaveComma(repShape, os);
+    os << "]";
+    os << ", paddedRepShape: [";
+    llvm::interleaveComma(paddedRepShape, os);
+    os << "]";
+    os << ", inVec: " << inVec << ", outVec: " << outVec << "\n";
+  }
+};
+
+ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
+                                     RankedTensorType dstTy);
 
 } // namespace triton
 
@@ -134,6 +161,9 @@ public:
 
   /// Returns the size of total shared memory allocated
   size_t getSharedMemorySize() const { return sharedMemorySize; }
+
+  /// Returns mapping from operation to list of live LDS buffers
+  std::map<Operation *, SmallVector<BufferId>> getLiveBuffers();
 
 private:
   /// A class that represents a shared memory buffer

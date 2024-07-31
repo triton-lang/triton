@@ -25,12 +25,6 @@ template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
 template <typename VecT> auto product(const VecT &vec) {
   return product(llvm::ArrayRef(vec));
 }
-template <typename Int> Int getNumElements(ArrayRef<Int> shape) {
-  if (shape.empty()) {
-    return 0;
-  }
-  return product(shape);
-}
 
 // TODO(jlebar): Rename to ceilOfRatio.
 template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }

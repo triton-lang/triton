@@ -51,18 +51,6 @@ struct LoadInfo {
 
 } // namespace
 
-// Replace the ForOp's yield with a new one with the given operands appended.
-static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
-  // Fix up the yield op.
-  Operation *yieldOp = forOp.getBody()->getTerminator();
-  SmallVector<Value> operands(yieldOp->getOperands());
-  operands.append(newOperands.begin(), newOperands.end());
-
-  OpBuilder builder(yieldOp);
-  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
-  yieldOp->erase();
-}
-
 static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx,
                             tt::CoarseSchedule &schedule,
@@ -1041,7 +1029,7 @@ createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
   if (phase)
     newYieldOperands.push_back(phase);
   // Patch the yield with the updated counters.
-  appendToYield(forOp, newYieldOperands);
+  appendToForOpYield(forOp, newYieldOperands);
 
   return allocs;
 }

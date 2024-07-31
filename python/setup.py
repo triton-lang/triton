@@ -425,6 +425,10 @@ class CMakeBuild(build_ext):
         else:
             cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
 
+        cmake_args_append = os.getenv("TRITON_APPEND_CMAKE_ARGS")
+        if cmake_args_append is not None:
+            cmake_args += cmake_args_append.split(" ")
+
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
@@ -576,11 +580,6 @@ def get_entry_points():
     return entry_points
 
 
-def get_install_requires():
-    install_requires = ["filelock"]
-    return install_requires
-
-
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="3.0.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
@@ -590,7 +589,6 @@ setup(
     long_description="",
     packages=get_packages(),
     entry_points=get_entry_points(),
-    install_requires=get_install_requires(),
     package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],

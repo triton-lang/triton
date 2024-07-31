@@ -557,10 +557,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %tensor = triton_gpu.local_alloc : () -> !tt.memdesc<16x64xf32, #A, #triton_gpu.shared_memory, mutable>
     %index = arith.constant 1 : i32
 
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, 0x10
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, 0x10
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@${{.*}} cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, 0x10;"
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@${{.*}} cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, 0x10;"
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
     // CHECK-SAME: cp.async.commit_group
     %a = triton_gpu.async_copy_global_to_local %a_ptr, %tensor : tensor<16x64x!tt.ptr<f32>, #AL> -> !tt.memdesc<16x64xf32, #A, #triton_gpu.shared_memory, mutable>
@@ -648,8 +646,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: llvm.mlir.constant(16 : i32) : i32
     // CHECK: llvm.mul
     // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@${{.*}} cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4;"
     // CHECK: llvm.inline_asm
     // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
     // CHECK: llvm.inline_asm
@@ -922,7 +919,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice0
   tt.func @convert_blocked1d_to_slice0(%src:tensor<32xi32, #blocked0>) {
-    // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xi32>
+    // CHECK: inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@${{.*}} ld.shared.v4.b32
     %cvt = triton_gpu.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
     tt.return
   }
@@ -935,7 +932,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice1
   tt.func @convert_blocked1d_to_slice1(%src:tensor<32xi32, #blocked0>) {
-    // CHECK-COUNT-8: llvm.load {{.*}} : !llvm.ptr<3>
+    // CHECK-COUNT-8: inline_asm{{.*}}ld.shared.b32
     %cvt = triton_gpu.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
     tt.return
   }
@@ -949,7 +946,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: convert_blocked_to_blocked_ptr
   tt.func @convert_blocked_to_blocked_ptr(%src:tensor<32x!tt.ptr<f32>, #blocked0>) {
     // CHECK: llvm.ptrtoint
-    // CHECK: llvm.store
+    // CHECK: inline_asm{{.*}}st.shared
     // CHECK: nvvm.barrier0
     // CHECK: llvm.inttoptr
     // CHECK-COUNT-4: llvm.insertvalue
@@ -1639,7 +1636,33 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK-LABEL: print_ptr
   // CHECK: llvm.call @vprintf(%{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
   tt.func @print_ptr(%arg0 : tensor<256x!tt.ptr<i32>, #blocked0>) {
-    tt.print "ptr: " {hex = false} : %arg0 : tensor<256x!tt.ptr<i32>, #blocked0>
+    tt.print "ptr: " {hex = false, isSigned = array<i32: 0>} : %arg0 : tensor<256x!tt.ptr<i32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // Test that %u format specifier is used if isSigned is false
+  // CHECK: llvm.mlir.global internal constant @printfFormat_0("{{.*}}int32 tensor: %u{{.*}}")
+  // CHECK-LABEL: print_int32_tensor_issigned_off
+  // CHECK: llvm.call @vprintf(%{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  tt.func @print_int32_tensor_issigned_off(%arg0 : i32) {
+    tt.print "int32 tensor: " {hex = false, isSigned = array<i32: 0>} : %arg0 : i32
+    tt.return
+  }
+}
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // Test that %i format specifier is used if isSigned is true
+  // CHECK: llvm.mlir.global internal constant @printfFormat_0("{{.*}}int32 tensor: %i{{.*}}")
+  // CHECK-LABEL: print_int32_tensor_issigned_on
+  // CHECK: llvm.call @vprintf(%{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr) -> i32
+  tt.func @print_int32_tensor_issigned_on(%arg0 : i32) {
+    tt.print "int32 tensor: " {hex = false, isSigned = array<i32: 1>} : %arg0 : i32
     tt.return
   }
 }

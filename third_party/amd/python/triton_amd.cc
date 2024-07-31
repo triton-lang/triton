@@ -48,6 +48,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addPass(
         mlir::triton::AMD::createDecomposeUnsupportedConversionsPass(arch));
   });
+  ADD_PASS_WRAPPER_2("add_optimize_lds_usage",
+                     mlir::triton::AMD::createOptimizeLDSUsagePass,
+                     const std::string &, int32_t);
   ADD_PASS_WRAPPER_3("add_accelerate_matmul",
                      mlir::createTritonAMDGPUAccelerateMatmulPass,
                      const std::string, int, int);
@@ -57,6 +60,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUReorderInstructionsPass);
   ADD_PASS_WRAPPER_0("add_stream_pipeline",
                      mlir::createTritonAMDGPUStreamPipelinePass);
+  ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
+                     mlir::createTritonAMDGPUStreamPipelineV2Pass, int);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,

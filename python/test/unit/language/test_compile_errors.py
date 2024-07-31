@@ -302,3 +302,20 @@ def test_global_access_in_fn_default_arg():
 
     # No error.
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={0: "i32"}, constants={}))
+
+
+def test_max_num_imprecise_acc_limit():
+
+    @triton.jit
+    def dot_kernel():
+        SIZE: tl.constexpr = 64
+        a = tl.full((SIZE, SIZE), 0.0, tl.float8e5)
+        b = tl.full((SIZE, SIZE), 0.0, tl.float8e5)
+        tl.dot(a, b, max_num_imprecise_acc=128)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=dot_kernel, signature={}, constants={}))
+    try:
+        assert (str(e.value.__cause__) == "max_num_imprecise_acc (128) must be <= K (64)")
+    except AssertionError as assertion_err:
+        raise assertion_err from e.value

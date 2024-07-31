@@ -248,6 +248,23 @@ void init_triton_llvm(py::module &&m) {
       },
       py::keep_alive<0, 2>());
 
+  m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
+                                const std::string proc,
+                                const std::string features) {
+    std::string error;
+    auto target = llvm::TargetRegistry::lookupTarget(triple, error);
+    if (!target) {
+      throw std::runtime_error("target lookup error: " + error);
+    }
+    llvm::TargetOptions opt;
+    // Target machine is only used to create the data layout.
+    std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
+        triple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
+        llvm::CodeGenOptLevel::None)};
+    // set data layout
+    mod->setDataLayout(machine->createDataLayout());
+  });
+
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {
     if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
@@ -425,7 +442,7 @@ void triton_stacktrace_signal_handler(void *) {
 }
 
 void init_triton_stacktrace_hook(pybind11::module &m) {
-  if (!mlir::triton::tools::getBoolEnv("TRITON_DISABLE_PYTHON_STACKTRACE")) {
+  if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_PYTHON_STACKTRACE")) {
     llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
   }
 }
