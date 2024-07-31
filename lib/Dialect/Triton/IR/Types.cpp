@@ -157,6 +157,7 @@ Type getPointerTypeSameShape(Type type) {
   }
 }
 
+// upstream Triton only uses address space 1 for Pointer Type
 Type getPointerType(Type type, int addressSpace) {
   return PointerType::get(type, addressSpace);
 }
