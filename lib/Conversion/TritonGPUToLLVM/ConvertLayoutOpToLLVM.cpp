@@ -593,6 +593,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 };
 
+// XXX(Keren): Remove the define below once the performance issue is resolved
+constexpr bool USE_LL_CONVERSIONS = false;
+
 } // namespace
 
 void mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
@@ -605,10 +608,12 @@ void mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  // We prefer using the linear layout conversion, so it gets a higher benefit.
-  // Eventually the LL conversion will subsume all of the others and be the only
-  // one left.
-  mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
-      typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
+  if (USE_LL_CONVERSIONS) {
+    // We prefer using the linear layout conversion, so it gets a higher
+    // benefit. Eventually the LL conversion will subsume all of the others and
+    // be the only one left.
+    mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
+        typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
+  }
   patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
 }
