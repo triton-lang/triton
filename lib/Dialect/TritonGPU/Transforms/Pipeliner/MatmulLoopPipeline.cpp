@@ -68,7 +68,8 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             tt::CoarseSchedule &schedule,
                             tt::CoarseSchedule::Cluster prefetchCluster,
                             llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-                            int numStages) {
+                            int numStages,
+                            DenseMap<Operation *, Operation *> &TMAUserToWait) {
   OpBuilder builder(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   // Replace the load with insert/extract slice.
@@ -125,6 +126,7 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   loadOffsets[0] = extractIdx;
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+  TMAUserToWait[viewLoad] = wait; // viewLoad will depend on barrierWait
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
     replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
@@ -169,7 +171,8 @@ static void createTMAAsyncCopy(
     scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp, Value alloc,
     Value insertIdx, Value extractIdx, Value barrier, Operation *waitOp,
     Value phase, tt::CoarseSchedule &schedule,
-    llvm::MapVector<Operation *, LoadInfo> &loadToInfo, int numStages) {
+    llvm::MapVector<Operation *, LoadInfo> &loadToInfo, int numStages,
+    DenseMap<Operation *, Operation *> &TMAUserToWait) {
   assert(phase && "Phase value is required for TMA async copy.");
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
@@ -201,6 +204,7 @@ static void createTMAAsyncCopy(
   loadOffsets[0] = extractIdx;
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+  TMAUserToWait[viewLoad] = waitOp; // viewLoad will depend on barrierWait
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
     replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
@@ -664,8 +668,10 @@ schedulePrologueAndEpilogue(scf::ForOp forOp, tt::CoarseSchedule &schedule,
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
-static void scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule,
-                                 int numStages) {
+static void
+scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule,
+                     int numStages,
+                     DenseMap<Operation *, Operation *> &TMAUserToWait) {
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
       opsInOrder = schedule.getOpsInOrder(forOp);
   // Schedule dependencies stage by stage.
@@ -673,7 +679,7 @@ static void scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     for (auto [op, stage_, cluster] : opsInOrder) {
       if (stage_ != stage)
         continue;
-      schedule.insertDepsOfOp(op, stage, cluster, false);
+      schedule.insertDepsOfOp(op, stage, cluster, false, &TMAUserToWait);
     }
   }
 }
@@ -715,14 +721,14 @@ static void scheduleDistanceOneDependencies(scf::ForOp forOp,
               // Exception: Schedule loads with a distance of 1 together
               // with the current op.
               schedule.insertIfAbsent(defOp, stage, cluster);
-              schedule.insertDepsOfOp(defOp, stage, cluster, true);
+              schedule.insertDepsOfOp(defOp, stage, cluster, true, nullptr);
             } else {
               if (dist1Cluster.count(&cluster) == 0) {
                 dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
               }
               schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
               schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster],
-                                      true);
+                                      true, nullptr);
             }
           }
         }
@@ -938,7 +944,8 @@ static void createTMABarrierAndWait(
 static SmallVector<Value>
 createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
                llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-               SmallVector<Value> &barriers, int numStages) {
+               SmallVector<Value> &barriers, int numStages,
+               DenseMap<Operation *, Operation *> &TMAUserToWait) {
   // Calculate the number of buffers needed for each load.
   // TODO pawel: we could do more fine-grained allocation here and
   // allocate only the number of buffers that specific loads need.
@@ -1029,13 +1036,20 @@ createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
   for (AsyncLoad &asyncLoad : asyncLoads) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(asyncLoad.loadOp)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
-                      schedule, prefetchCluster, loadToInfo, numStages);
+                      schedule, prefetchCluster, loadToInfo, numStages,
+                      TMAUserToWait);
     } else {
       auto descLoad = cast<tt::ExperimentalDescriptorLoadOp>(asyncLoad.loadOp);
       createTMAAsyncCopy(forOp, descLoad, asyncLoad.alloc, insertIdx,
                          extractIdx, asyncLoad.barrier, asyncLoad.waitOp, phase,
-                         schedule, loadToInfo, numStages);
+                         schedule, loadToInfo, numStages, TMAUserToWait);
     }
+  }
+  // Make sure each copy has a unique waitOp.
+  DenseSet<Operation *> uniqueWaits;
+  for (auto [copy, wait] : TMAUserToWait) {
+    assert(!uniqueWaits.count(wait));
+    uniqueWaits.insert(wait);
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
   if (phase)
@@ -1083,9 +1097,10 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   });
 
   SmallVector<Value> barriers;
+  DenseMap<Operation *, Operation *> TMAUserToWait;
   // Convert the loads into async loads and create the allocs.
-  SmallVector<Value> allocs =
-      createAsyncOps(forOp, coarseSchedule, loadToInfo, barriers, numStages);
+  SmallVector<Value> allocs = createAsyncOps(
+      forOp, coarseSchedule, loadToInfo, barriers, numStages, TMAUserToWait);
 
   LLVM_DEBUG({
     LDBG("Coarse schedule with async loads:");
@@ -1099,7 +1114,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     coarseSchedule.dump();
   });
 
-  scheduleDependencies(forOp, coarseSchedule, numStages);
+  scheduleDependencies(forOp, coarseSchedule, numStages, TMAUserToWait);
   LLVM_DEBUG({
     LDBG("Coarse schedule with dependencies:");
     coarseSchedule.dump();

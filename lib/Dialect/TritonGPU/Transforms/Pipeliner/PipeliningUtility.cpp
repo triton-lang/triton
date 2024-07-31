@@ -74,6 +74,15 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   }
 
+  // Create if statement around wait_barrier
+  if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op)) {
+    rewriter.setInsertionPoint(wait);
+    auto ifOp =
+        rewriter.create<scf::IfOp>(wait->getLoc(), pred, /*else=*/false);
+    // move wait to ifOp
+    rewriter.moveOpBefore(wait, ifOp.thenBlock(), ifOp.thenBlock()->begin());
+    return ifOp;
+  }
   assert("don't know how to predicate this op" && false);
   return op;
 }
