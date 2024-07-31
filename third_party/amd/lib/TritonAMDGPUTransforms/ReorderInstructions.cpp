@@ -23,51 +23,13 @@ static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
   return false;
 }
 
-// Gather cone of data flow graph (DFG) from the op's basic block.
-// - Collect dfg breadth first to keep relative order and reverse order for
-//   insertion after. An op may be captured multiple times if DFG reconverges
-//   and it will be moved multiple times to keep dominance correctness.
-// - Returns bool if this DFG leads to a load op. This condition is not
-//   desirable for moving ttg.local_store ops early.
-static bool gatherDFG(Operation *seedOp, Block *block,
-                      SmallVector<Operation *> &dfg) {
-  bool leadsToLoad = false;
-
-  std::deque<Operation *> ops = {seedOp};
-  auto checkOperands = [&](Operation *op) {
-    for (auto operand : op->getOperands()) {
-      if (Operation *defOp = operand.getDefiningOp()) {
-        Block *defBlock = defOp->getBlock();
-        if (block->findAncestorOpInBlock(*defOp)) {
-          // We only move ops residing in the same block.
-          if (defBlock == block)
-            dfg.push_back(defOp);
-          ops.push_back(defOp);
-          leadsToLoad |= isa<triton::LoadOp>(defOp);
-        } else {
-          // Otherwise it should always be in the parent block.
-          assert(defBlock->findAncestorOpInBlock(*block->getParentOp()));
-        }
-      }
-    }
-  };
-
-  while (!ops.empty()) {
-    Operation *op = ops.front();
-    ops.pop_front();
-    // check next op and sub-regions
-    op->walk(checkOperands);
-  }
-  return leadsToLoad;
-}
-
 // Search through block to find earliest insertion point for move op. This can
 // be either an atomic op or last usage of source pointer. Search ends when move
 // op is encountered.
 static llvm::ilist<Operation>::iterator
 findEarlyInsertionPoint(Block *block, Operation *move, Value src) {
-  auto loc = block->begin();
-  for (auto bi = block->begin(); bi != block->end(); ++bi) {
+  auto ipnt = block->begin();
+  for (auto bi = ipnt; bi != block->end(); ++bi) {
     auto *op = &*bi;
     if (op == move) // Don't move later than current location
       break;
@@ -75,18 +37,19 @@ findEarlyInsertionPoint(Block *block, Operation *move, Value src) {
       // Check for ops accessing src value.
       for (auto opr : op->getOperands()) {
         if (opr == src)
-          loc = bi;
+          ipnt = bi;
       }
     }
-    // Atomics used for syncronization?
     op->walk([&](Operation *wop) {
+      // Atomics used for global syncronization.
       if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
-        loc = bi;
+        ipnt = bi;
+      // Break at loops.
       if (isa<scf::ForOp, scf::WhileOp>(wop))
-        loc = bi;
+        ipnt = bi;
     });
   }
-  return loc;
+  return ipnt;
 }
 
 class TritonAMDGPUReorderInstructionsPass
@@ -144,21 +107,37 @@ public:
     for (auto op : moveOps) {
       // Gather use-def chain in block.
       Block *block = op->getBlock();
-      SmallVector<Operation *> dfg = {op};
-      bool leadsToLoad = gatherDFG(op, block, dfg);
+      bool leadsToLoad = false;
+      SetVector<Operation *> backwardSet;
+      BackwardSliceOptions options;
+      options.omitBlockArguments = true;
+      options.inclusive = false;
+      options.filter = [&](Operation *dop) -> bool {
+        Block *defBlock = dop->getBlock();
+        if (block->findAncestorOpInBlock(*dop)) {
+          // Check for a `load` dependent path.
+          leadsToLoad |= isa<triton::LoadOp>(dop);
+          // Only move ops residing in the same block.
+          return (defBlock == block);
+        }
+        return false;
+      };
+      mlir::getBackwardSlice(op, &backwardSet, options);
+      backwardSet.insert(op);
       if (!isa<ttg::LocalStoreOp>(op) || !leadsToLoad) {
         Value src;
         if (auto ld = dyn_cast<triton::LoadOp>(op))
           src = ld.getPtr();
-        auto ip = findEarlyInsertionPoint(block, op, src);
+        auto ipoint = findEarlyInsertionPoint(block, op, src);
         // Remove ops that already precede the insertion point. This is done
         // before moves happen to avoid `Operation::isBeforeInBlock` N^2
         // complexity.
-        llvm::erase_if(dfg,
-                       [&](Operation *op) { return !ip->isBeforeInBlock(op); });
+        SmallVector<Operation *> dfg = backwardSet.takeVector();
+        llvm::erase_if(
+            dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
         // Move ops to insertion point.
-        for (auto *op : dfg)
-          op->moveAfter(block, ip);
+        for (auto *op : llvm::reverse(dfg))
+          op->moveAfter(block, ipoint);
       }
     }
   }
