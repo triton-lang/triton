@@ -301,20 +301,28 @@ scf::ForOp Prefetcher::createNewForOp() {
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
+  // The insertion point should be placed before the yield op
+  auto setInsertionPointBeforeYield = [](OpBuilder &builder,
+                                         scf::ForOp newForOp) {
+    if (newForOp.getBody()->mightHaveTerminator()) {
+      builder.setInsertionPoint(newForOp.getBody()->getTerminator());
+    } else {
+      builder.setInsertionPointToEnd(newForOp.getBody());
+    }
+  };
+
   for (Operation &op : forOp.getBody()->without_terminator()) {
     // If we're currently trying to sink a prefetched dot, we need to stop
     // sinking it (by resetting the insertion point to the end) if we find
     // control flow, or anything that depends on the dot op.
     if (op.getNumRegions() > 0) {
-      // The insertion point should be placed before the yield op
-      builder.setInsertionPoint(newForOp.getBody()->getTerminator());
+      setInsertionPointBeforeYield(builder, newForOp);
     }
     for (auto operand : op.getOperands()) {
       if (auto def = operand.getDefiningOp()) {
         auto dot = dyn_cast<triton::DotOp>(def);
         if (dot && dots.contains(dot)) {
-          // The insertion point should be placed before the yield op
-          builder.setInsertionPoint(newForOp.getBody()->getTerminator());
+          setInsertionPointBeforeYield(builder, newForOp);
         }
       }
     }
