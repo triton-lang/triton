@@ -64,6 +64,8 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
     outputBlockInfoMap[block].join(inputBlockInfo);
     // Update the successors
     for (auto *successor : successors) {
+      if (successor == block)
+        continue;
       inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
       blockList.emplace_back(successor);
     }
