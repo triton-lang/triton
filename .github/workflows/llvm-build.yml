@@ -107,6 +107,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ENABLE_ABI_BREAKING_CHECKS=0
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -130,6 +131,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ENABLE_ABI_BREAKING_CHECKS=0
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -175,6 +177,7 @@ jobs:
         -DCMAKE_LINKER=$LINKER \
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
         -DLLVM_ENABLE_ZSTD=OFF \
+        -DLLVM_ENABLE_ABI_BREAKING_CHECKS=0 \
         -DLLVM_INSTALL_UTILS=ON \
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
@@ -225,6 +228,7 @@ jobs:
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
         -DLLVM_USE_HOST_TOOLS=ON
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ENABLE_ABI_BREAKING_CHECKS=0
         llvm-project/llvm
 
         ninja -C llvm-project/build install
