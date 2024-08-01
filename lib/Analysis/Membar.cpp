@@ -43,7 +43,6 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
   while (!blockList.empty()) {
     auto *block = blockList.front();
     blockList.pop_front();
-    // llvm::errs() << "block: " << block << "\n";
     //  Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap[block];
     SmallVector<Block *> successors;
@@ -61,36 +60,10 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
       // the outputBlockInfo, we skip the successors
       continue;
     }
-    //// Update the current block
-    // llvm::errs() << "input writes: " <<
-    // inputBlockInfo.syncWriteIntervals.size() << "\n"; for (auto &interval :
-    // inputBlockInfo.syncWriteIntervals) {
-    //   llvm::errs() << "write: [" << interval.start() << ", " <<
-    //   interval.end() << "]\n";
-    // }
-    // llvm::errs() << "input reads: " <<
-    // inputBlockInfo.syncReadIntervals.size() << "\n"; for (auto &interval :
-    // inputBlockInfo.syncReadIntervals) {
-    //   llvm::errs() << "read: [" << interval.start() << ", " << interval.end()
-    //   << "]\n";
-    // }
+    // Update the current block
     outputBlockInfoMap[block].join(inputBlockInfo);
-    // llvm::errs() << "output reads: " <<
-    // outputBlockInfoMap[block].syncReadIntervals.size() << "\n"; for (auto
-    // &interval : outputBlockInfoMap[block].syncReadIntervals) {
-    //   llvm::errs() << "read: [" << interval.start() << ", " << interval.end()
-    //   << "]\n";
-    // }
-    // llvm::errs() << "output writes: " <<
-    // outputBlockInfoMap[block].syncWriteIntervals.size() << "\n"; for (auto
-    // &interval : outputBlockInfoMap[block].syncWriteIntervals) {
-    //   llvm::errs() << "write: [" << interval.start() << ", " <<
-    //   interval.end() << "]\n";
-    // }
     //  Update the successors
     for (auto *successor : successors) {
-      if (successor == block)
-        continue;
       inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
       blockList.emplace_back(successor);
     }
@@ -127,15 +100,6 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  // llvm::errs() << "op: " << *op << "\n";
-  // for (auto &interval : blockInfo->syncWriteIntervals) {
-  //   llvm::errs() << "write: [" << interval.start() << ", " << interval.end()
-  //   << "]\n";
-  // }
-  // for (auto &interval : blockInfo->syncReadIntervals) {
-  //   llvm::errs() << "read: [" << interval.start() << ", " << interval.end()
-  //   << "]\n";
-  // }
   if (isa<gpu::BarrierOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
