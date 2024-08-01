@@ -1,7 +1,7 @@
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1100 | FileCheck %s
 
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], hasLeadingOffset = false}>
-#mma = #triton_gpu.amd_wmma<{warpsPerCTA = [2, 2]}>
+#mma = #triton_gpu.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   //  CHECK-LABEL: wmma_dot_operand
   tt.func @wmma_dot_operand(%arg0: !tt.memdesc<64x64xf16, #shared>) {
@@ -75,7 +75,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0], hasLeadingOffset = false}>
-#mma = #triton_gpu.amd_wmma<{warpsPerCTA = [2, 1, 4]}>
+#mma = #triton_gpu.amd_wmma<{version = 1, warpsPerCTA = [2, 1, 4]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: wmma_dot_operand3d
   tt.func @wmma_dot_operand3d(%arg0: !tt.memdesc<4x16x32xf16, #shared>) {

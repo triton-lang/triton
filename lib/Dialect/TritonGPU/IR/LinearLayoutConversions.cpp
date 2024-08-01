@@ -519,7 +519,7 @@ LinearLayout wmmaToLinearLayout(ArrayRef<int64_t> shape,
   int nIndex = 1 + hasBatchDim;
   (void)mIndex, (void)nIndex;
 
-  SmallVector<unsigned> mnkDim = wmma.getMNKDimPerWMMAInstr();
+  SmallVector<unsigned> mnkDim = wmma.getMNKDimPerInstr();
   unsigned mDim = mnkDim[0], nDim = mnkDim[1];
   (void)mDim, (void)nDim;
 
