@@ -443,8 +443,6 @@ struct AtomicCASOpConversion
 
         // Fill entry block with global memory barrier and conditional branch.
         rewriter.setInsertionPointToEnd(curBlock);
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(rewriter.getContext(), 3));
         auto tid = tid_val();
         Value pred = icmp_eq(tid, i32_val(i));
         rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
@@ -460,8 +458,12 @@ struct AtomicCASOpConversion
         // Extract the new_loaded value from the pair.
         Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
 
-        if (atomicNeedsSharedMemory(op.getResult()))
+        Value atomPtr;
+        if (atomicNeedsSharedMemory(op.getResult())) {
+          atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          atomPtr = bitcast(atomPtr, ptr_ty(rewriter.getContext(), 3));
           store(newLoaded, atomPtr);
+        }
 
         rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
 
