@@ -465,13 +465,13 @@ struct AtomicCASOpConversion
 
         rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
 
+        // Build the last block: synced load from shared memory, exit.
+        rewriter.setInsertionPointToStart(endBlock);
+
         if (!atomicNeedsSharedMemory(op.getResult())) {
           rewriter.eraseOp(op);
           return success();
         }
-
-        // Build the last block: synced load from shared memory, exit.
-        rewriter.setInsertionPointToStart(endBlock);
 
         GCNBuilder BuilderMemfenceLDS;
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
