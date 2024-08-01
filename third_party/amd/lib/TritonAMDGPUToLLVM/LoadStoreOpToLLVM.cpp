@@ -627,8 +627,10 @@ struct AtomicRMWOpConversion
         atom = insert_element(vecTy, tmp, atom2, i32_val(1)).getResult();
       }
       if (!tensorTy) {
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        store(atom, atomPtr);
+        if (atomicNeedsSharedMemory(op.getResult())) {
+          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          store(atom, atomPtr);
+        }
       }
       rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
 
