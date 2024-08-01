@@ -43,7 +43,7 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
   while (!blockList.empty()) {
     auto *block = blockList.front();
     blockList.pop_front();
-    //  Make a copy of the inputblockInfo but not update
+    // Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap[block];
     SmallVector<Block *> successors;
     for (auto &op : block->getOperations()) {
@@ -62,7 +62,7 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
     }
     // Update the current block
     outputBlockInfoMap[block].join(inputBlockInfo);
-    //  Update the successors
+    // Update the successors
     for (auto *successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
       blockList.emplace_back(successor);
