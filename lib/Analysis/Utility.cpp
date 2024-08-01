@@ -610,6 +610,13 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
          !isMfmaToDotShortcut(srcTy, dstTy);
 }
 
+bool atomicNeedsSharedMemory(Value value) {
+  auto type = value.getType();
+  if (isa<RankedTensorType>(type) || value.use_empty())
+    return false;
+  return true;
+}
+
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (matchMmaV3AndDotOperandLayout(srcTy, dstTy))
     return true;

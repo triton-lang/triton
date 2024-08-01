@@ -460,9 +460,15 @@ struct AtomicCASOpConversion
         // Extract the new_loaded value from the pair.
         Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
 
-        store(newLoaded, atomPtr);
+        if (atomicNeedsSharedMemory(op.getResult()))
+          store(newLoaded, atomPtr);
 
         rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
+
+        if (!atomicNeedsSharedMemory(op.getResult())) {
+          rewriter.eraseOp(op);
+          return success();
+        }
 
         // Build the last block: synced load from shared memory, exit.
         rewriter.setInsertionPointToStart(endBlock);
@@ -633,6 +639,10 @@ struct AtomicRMWOpConversion
                        : extract_element(valueElemTy, retVal, i32_val(ii));
         }
       } else {
+        if (!atomicNeedsSharedMemory(op.getResult())) {
+          rewriter.eraseOp(op);
+          return success();
+        }
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         barrier();
         Value ret = load(valueElemTy, atomPtr);
