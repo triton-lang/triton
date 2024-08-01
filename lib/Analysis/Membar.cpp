@@ -43,7 +43,8 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
   while (!blockList.empty()) {
     auto *block = blockList.front();
     blockList.pop_front();
-    // Make a copy of the inputblockInfo but not update
+    // llvm::errs() << "block: " << block << "\n";
+    //  Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap[block];
     SmallVector<Block *> successors;
     for (auto &op : block->getOperations()) {
@@ -60,9 +61,33 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
       // the outputBlockInfo, we skip the successors
       continue;
     }
-    // Update the current block
+    //// Update the current block
+    // llvm::errs() << "input writes: " <<
+    // inputBlockInfo.syncWriteIntervals.size() << "\n"; for (auto &interval :
+    // inputBlockInfo.syncWriteIntervals) {
+    //   llvm::errs() << "write: [" << interval.start() << ", " <<
+    //   interval.end() << "]\n";
+    // }
+    // llvm::errs() << "input reads: " <<
+    // inputBlockInfo.syncReadIntervals.size() << "\n"; for (auto &interval :
+    // inputBlockInfo.syncReadIntervals) {
+    //   llvm::errs() << "read: [" << interval.start() << ", " << interval.end()
+    //   << "]\n";
+    // }
     outputBlockInfoMap[block].join(inputBlockInfo);
-    // Update the successors
+    // llvm::errs() << "output reads: " <<
+    // outputBlockInfoMap[block].syncReadIntervals.size() << "\n"; for (auto
+    // &interval : outputBlockInfoMap[block].syncReadIntervals) {
+    //   llvm::errs() << "read: [" << interval.start() << ", " << interval.end()
+    //   << "]\n";
+    // }
+    // llvm::errs() << "output writes: " <<
+    // outputBlockInfoMap[block].syncWriteIntervals.size() << "\n"; for (auto
+    // &interval : outputBlockInfoMap[block].syncWriteIntervals) {
+    //   llvm::errs() << "write: [" << interval.start() << ", " <<
+    //   interval.end() << "]\n";
+    // }
+    //  Update the successors
     for (auto *successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
       blockList.emplace_back(successor);
@@ -100,6 +125,15 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
+  // llvm::errs() << "op: " << *op << "\n";
+  // for (auto &interval : blockInfo->syncWriteIntervals) {
+  //   llvm::errs() << "write: [" << interval.start() << ", " << interval.end()
+  //   << "]\n";
+  // }
+  // for (auto &interval : blockInfo->syncReadIntervals) {
+  //   llvm::errs() << "read: [" << interval.start() << ", " << interval.end()
+  //   << "]\n";
+  // }
   if (isa<gpu::BarrierOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
@@ -117,6 +151,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   BlockInfo curBlockInfo;
+  auto scratchBufferId = Allocation::InvalidBufferId;
   if (isa<triton::CallOp>(op)) {
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
@@ -145,17 +180,23 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
-    // Scratch buffer is considered as both shared memory write & read
-    auto bufferId = allocation->getBufferId(op);
-    if (bufferId != Allocation::InvalidBufferId) {
-      curBlockInfo.syncWriteIntervals.insert(
-          allocation->getAllocatedInterval(bufferId));
-      curBlockInfo.syncReadIntervals.insert(
-          allocation->getAllocatedInterval(bufferId));
-    }
+    scratchBufferId = allocation->getBufferId(op);
   }
 
-  if (blockInfo->isIntersected(curBlockInfo)) {
+  // Scratch buffer operations consist of a series of shared memory operations
+  // starting from a shared memory write, followed by a series of shared memory
+  // read/write operations, and ending with a shared memory read, i.e., shared
+  // memory write -> ... -> shared memory read.
+  if (scratchBufferId != Allocation::InvalidBufferId) {
+    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    curBlockInfo.syncWriteIntervals.insert(interval);
+    if (blockInfo->isIntersected(curBlockInfo)) {
+      builder->setInsertionPoint(op);
+      insertBarrier(op, builder);
+    }
+    blockInfo->sync();
+    curBlockInfo.syncReadIntervals.insert(interval);
+  } else if (blockInfo->isIntersected(curBlockInfo)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();
