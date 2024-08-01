@@ -54,7 +54,7 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
         ipnt = bi;
     });
   }
-  return ++ipnt;
+  return ipnt;
 }
 
 class TritonAMDGPUReorderInstructionsPass
@@ -144,8 +144,8 @@ public:
       llvm::erase_if(
           dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
       // Move ops to insertion point.
-      for (auto *op : dfg)
-        op->moveBefore(block, ipoint);
+      for (auto *op : llvm::reverse(dfg))
+        op->moveAfter(block, ipoint);
     }
   }
 };
