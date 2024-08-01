@@ -426,7 +426,6 @@ public:
 
   int32_t getBasis(StringAttr inDim, int32_t pos, StringAttr outDim) const {
     return getBasis(inDim, pos)[getOutDimIndex(outDim)];
-    ;
   }
 
   // These are in minor-to-major order, although if you don't flatten the dims
@@ -454,7 +453,7 @@ public:
   int32_t getTotalInDimSize() const { return 1 << getTotalInDimSizeLog2(); }
 
   // getOutDimSize(dim) == s means that there exists an input value that will
-  // produce each output value in [0,s).
+  // produce each output value in [0,s) (if the layout is surjective).
   //
   // For example, if our bases are
   //
@@ -664,6 +663,14 @@ public:
   // ambiguity in which offset we choose for a given (lane, warp).  For now we
   // don't place any guarantees on the choices made by this function.
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
+
+  // For each in-dim, returns a bitmask of the "free variables" in the layout
+  // function.
+  //
+  // These are the bits in the input that can be changed without changing the
+  // output.  If all of the free variables are 0, then the layout is injective
+  // (i.e. every input bit affects the output).
+  llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
 
   std::string toString() const;
 

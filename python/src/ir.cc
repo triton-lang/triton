@@ -1540,6 +1540,10 @@ void init_triton_ir(py::module &&m) {
              self.create<AssertOp>(condition, messageAttr, fileNameAttr,
                                    funcNameAttr, lineNoAttr);
            })
+      .def("create_assume",
+           [](TritonOpBuilder &self, Value &condition) {
+             self.create<LLVM::AssumeOp>(condition);
+           })
       // Undef
       .def("create_undef",
            [](TritonOpBuilder &self, Type &type) -> Value {

@@ -157,7 +157,16 @@ Type getPointerTypeSameShape(Type type) {
   }
 }
 
-Type getPointerType(Type type) { return PointerType::get(type, 1); }
+// upstream Triton only uses address space 1 for Pointer Type
+Type getPointerType(Type type, int addressSpace) {
+  return PointerType::get(type, addressSpace);
+}
+
+int getAddressSpace(Type type) {
+  if (auto ptrType = dyn_cast<PointerType>(type))
+    return ptrType.getAddressSpace();
+  return 1;
+}
 
 bool isTensorPointerType(Type type) {
   if (auto ptrType = dyn_cast<PointerType>(type))

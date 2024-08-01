@@ -732,6 +732,36 @@ TEST_F(LinearLayoutTest, SublayoutIsIdentity) {
       l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1"), S("out2")}));
 }
 
+TEST_F(LinearLayoutTest, FreeVariableMasks) {
+  using llvm::to_vector;
+  using AR = llvm::ArrayRef<std::pair<StringAttr, int32_t>>;
+
+  EXPECT_EQ(AR(to_vector(LinearLayout::identity1D(4, S("in"), S("out"))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0}}));
+  EXPECT_EQ(
+      AR(to_vector(
+          LinearLayout::zeros1D(16, S("in"), S("out")).getFreeVariableMasks())),
+      AR({{S("in"), 0b1111}}));
+  EXPECT_EQ(AR(to_vector((LinearLayout::identity1D(2, S("in"), S("out")) *
+                          LinearLayout::zeros1D(4, S("in"), S("out")) *
+                          LinearLayout::identity1D(4, S("in"), S("out")) *
+                          LinearLayout::zeros1D(2, S("in"), S("out")))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0b100110}}));
+  EXPECT_EQ(AR(to_vector((LinearLayout::identity1D(2, S("in"), S("out")) *
+                          LinearLayout::zeros1D(4, S("in"), S("out")) *
+                          LinearLayout::identity1D(4, S("in"), S("out")) *
+                          LinearLayout::zeros1D(2, S("in"), S("out")))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0b100110}}));
+  EXPECT_EQ(AR(to_vector(LinearLayout({{S("in1"), {{1, 1}, {2, 2}, {0, 0}}},
+                                       {S("in2"), {{1, 0}, {0, 1}, {2, 0}}}},
+                                      {S("out1"), S("out2")})
+                             .getFreeVariableMasks())),
+            AR({{S("in1"), 0b100}, {S("in2"), 0b10}}));
+}
+
 } // anonymous namespace
 } // namespace mlir::triton
 

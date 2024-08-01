@@ -2203,6 +2203,14 @@ def max_constancy(input, values, _builder=None):
     return semantic.max_constancy(input, values)
 
 
+@builtin
+def assume(cond, _builder=None):
+    '''
+    Allow compiler to assume the :code:`cond` is True.
+    '''
+    return semantic.assume(_to_tensor(cond, _builder), _builder)
+
+
 # -----------------------
 # Debugging functions
 # -----------------------
