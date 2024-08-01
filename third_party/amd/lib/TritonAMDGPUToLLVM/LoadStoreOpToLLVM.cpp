@@ -455,12 +455,11 @@ struct AtomicCASOpConversion
         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
             StringRef("agent"));
-        // Extract the new_loaded value from the pair.
-        Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
 
-        Value atomPtr;
         if (atomicNeedsSharedMemory(op.getResult())) {
-          atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          // Extract the new_loaded value from the pair.
+          Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
+          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
           atomPtr = bitcast(atomPtr, ptr_ty(rewriter.getContext(), 3));
           store(newLoaded, atomPtr);
         }
@@ -479,6 +478,7 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
+        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
