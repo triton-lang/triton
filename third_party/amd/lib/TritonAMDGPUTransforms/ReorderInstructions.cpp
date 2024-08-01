@@ -29,7 +29,7 @@ static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
 static llvm::ilist<Operation>::iterator
 findEarlyInsertionPoint(Block *block, Operation *move) {
   Value src;
-  if (auto ld = dyn_cast<triton::LoadOp>(op))
+  if (auto ld = dyn_cast<triton::LoadOp>(move))
     src = ld.getPtr();
 
   auto ipnt = block->begin();
@@ -37,10 +37,11 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
     auto *op = &*bi;
     if (op == move) // Don't move later than current location
       break;
+
     op->walk([&](Operation *wop) {
       if (src) {
         // Check for ops accessing src value.
-        for (auto opr : op->getOperands()) {
+        for (auto opr : wop->getOperands()) {
           if (opr == src)
             ipnt = bi;
         }
