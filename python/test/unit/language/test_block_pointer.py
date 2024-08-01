@@ -3,7 +3,7 @@ import torch
 
 import triton
 import triton.language as tl
-from test_core import check_type_supported
+from test_core import check_type_supported, is_cpu
 
 
 @triton.jit
@@ -101,6 +101,9 @@ def matmul_no_scf_with_advance_kernel(  #
 ])
 def test_block_ptr_matmul_no_scf(shape, num_warps, device):
     m, n, k = shape
+    if is_cpu():
+        # FIXME: fix compilation time for bigger shapes on CPU
+        m = n = 16
     a = torch.randn((m, k), device=device, dtype=torch.float16)
     b = torch.randn((k, n), device=device, dtype=torch.float16)
     c = torch.empty((m, n), device=device, dtype=torch.float32)
@@ -114,5 +117,9 @@ def test_block_ptr_matmul_no_scf(shape, num_warps, device):
         stride_cm=c.stride(0), stride_cn=c.stride(1),  #
         BLOCK_M=m, BLOCK_N=n, BLOCK_K=k,  #
         num_warps=num_warps)
-    golden = torch.matmul(a, b)
+    if is_cpu():
+        # torch.matmul not implemented for Half float (float16) cpu
+        golden = torch.matmul(a.to(torch.float32), b.to(torch.float32))
+    else:
+        golden = torch.matmul(a, b)
     torch.testing.assert_close(c, golden, check_dtype=False)

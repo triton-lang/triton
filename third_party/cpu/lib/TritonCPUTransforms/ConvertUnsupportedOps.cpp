@@ -87,18 +87,24 @@ struct ConvertIToBf16ToFp32 : public OpRewritePattern<OpT> {
 };
 
 Value convertMemRefToI16(Value memRef, PatternRewriter &rewriter) {
-  // Memory references for masked operations are always built
-  // with PtrToMemRefOp.
-  auto def = memRef.getDefiningOp<PtrToMemRefOp>();
-  assert(def);
-  auto insPoint = rewriter.saveInsertionPoint();
-  rewriter.setInsertionPointAfter(def);
+  Value res;
   MemRefType memRefTy = cast<MemRefType>(memRef.getType());
   Type newMemRefTy =
       MemRefType::get(memRefTy.getShape(), rewriter.getI16Type(),
                       memRefTy.getLayout(), memRefTy.getMemorySpace());
-  Value res = rewriter.create<PtrToMemRefOp>(memRef.getLoc(), newMemRefTy,
-                                             def.getSrc());
+  auto insPoint = rewriter.saveInsertionPoint();
+  rewriter.setInsertionPointAfter(memRef.getDefiningOp());
+  // Memory references for masked operations and transfers are always built
+  // with PtrToMemRefOp or ExtractMemRefOp.
+  if (auto castOp = memRef.getDefiningOp<PtrToMemRefOp>()) {
+    res = rewriter.create<PtrToMemRefOp>(memRef.getLoc(), newMemRefTy,
+                                         castOp.getSrc());
+  } else {
+    auto extractOp = memRef.getDefiningOp<ExtractMemRefOp>();
+    assert(extractOp && "Unexpected memref producer");
+    res = rewriter.create<ExtractMemRefOp>(memRef.getLoc(), newMemRefTy,
+                                           extractOp.getSrc());
+  }
   rewriter.restoreInsertionPoint(insPoint);
   return res;
 }
@@ -139,6 +145,52 @@ struct ConvertBf16MaskedStoreOp
         loc, toInt16(op.getValueToStore().getType()), op.getValueToStore());
     rewriter.replaceOpWithNewOp<vector::MaskedStoreOp>(
         op, newBase, op.getIndices(), op.getMask(), intVal);
+    return success();
+  }
+};
+
+struct ConvertBf16TransferReadOp
+    : public OpRewritePattern<vector::TransferReadOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::TransferReadOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isBf16(op.getType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    Value newSource = convertMemRefToI16(op.getSource(), rewriter);
+    Value newPadding =
+        op.getPadding()
+            ? rewriter.create<arith::BitcastOp>(
+                  loc, toInt16(op.getPadding().getType()), op.getPadding())
+            : nullptr;
+    Value intVal = rewriter.create<vector::TransferReadOp>(
+        loc, toInt16(op.getType()), newSource, op.getIndices(),
+        op.getPermutationMapAttr(), newPadding, op.getMask(),
+        op.getInBoundsAttr());
+    Value res = rewriter.create<arith::BitcastOp>(loc, op.getType(), intVal);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+struct ConvertBf16TransferWriteOp
+    : public OpRewritePattern<vector::TransferWriteOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::TransferWriteOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isBf16(op.getVector().getType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    Value newSource = convertMemRefToI16(op.getSource(), rewriter);
+    Value intVal = rewriter.create<arith::BitcastOp>(
+        loc, toInt16(op.getVector().getType()), op.getVector());
+    rewriter.replaceOpWithNewOp<vector::TransferWriteOp>(
+        op, intVal, newSource, op.getIndices(), op.getPermutationMapAttr(),
+        op.getMask(), op.getInBoundsAttr());
     return success();
   }
 };
@@ -273,6 +325,8 @@ struct ConvertUnsupportedOps
       patterns.add<ConvertIToBf16ToFp32<arith::UIToFPOp>>(context);
       patterns.add<ConvertBf16MaskedLoadOp>(context);
       patterns.add<ConvertBf16MaskedStoreOp>(context);
+      patterns.add<ConvertBf16TransferReadOp>(context);
+      patterns.add<ConvertBf16TransferWriteOp>(context);
       patterns.add<ConvertBf16Abs>(context);
     }
     patterns.add<ConvertF8Abs>(context);
