@@ -27,20 +27,24 @@ static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
 // be either an atomic op or last usage of source pointer. Search ends when move
 // op is encountered.
 static llvm::ilist<Operation>::iterator
-findEarlyInsertionPoint(Block *block, Operation *move, Value src) {
+findEarlyInsertionPoint(Block *block, Operation *move) {
+  Value src;
+  if (auto ld = dyn_cast<triton::LoadOp>(op))
+    src = ld.getPtr();
+
   auto ipnt = block->begin();
   for (auto bi = ipnt; bi != block->end(); ++bi) {
     auto *op = &*bi;
     if (op == move) // Don't move later than current location
       break;
-    if (src) {
-      // Check for ops accessing src value.
-      for (auto opr : op->getOperands()) {
-        if (opr == src)
-          ipnt = bi;
-      }
-    }
     op->walk([&](Operation *wop) {
+      if (src) {
+        // Check for ops accessing src value.
+        for (auto opr : op->getOperands()) {
+          if (opr == src)
+            ipnt = bi;
+        }
+      }
       // Atomics used for global syncronization.
       if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
         ipnt = bi;
@@ -49,7 +53,7 @@ findEarlyInsertionPoint(Block *block, Operation *move, Value src) {
         ipnt = bi;
     });
   }
-  return ipnt;
+  return ++ipnt;
 }
 
 class TritonAMDGPUReorderInstructionsPass
@@ -101,7 +105,8 @@ public:
     // but it enables issuing global loads early.
     m.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
     // Move local_stores early if dependence distance greater than
-    // one iteration. Best perf on GEMM when these precede global loads.
+    // one iteration.
+    // Best perf on GEMM when these precede global loads.
     m.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
 
     for (auto op : moveOps) {
@@ -109,36 +114,37 @@ public:
       Block *block = op->getBlock();
       bool leadsToLoad = false;
       SetVector<Operation *> backwardSet;
+
       BackwardSliceOptions options;
       options.omitBlockArguments = true;
       options.inclusive = false;
-      options.filter = [&](Operation *dop) -> bool {
-        Block *defBlock = dop->getBlock();
-        if (block->findAncestorOpInBlock(*dop)) {
-          // Check for a `load` dependent path.
-          leadsToLoad |= isa<triton::LoadOp>(dop);
-          // Only move ops residing in the same block.
-          return (defBlock == block);
-        }
-        return false;
+      options.filter = [&](Operation *defOp) -> bool {
+        Block *defBlock = defOp->getBlock();
+        if (!block->findAncestorOpInBlock(*defOp))
+          return false;
+        // Check for a `load` dependent path.
+        leadsToLoad |= isa<triton::LoadOp>(defOp);
+        // Only move ops residing in the same block.
+        return defBlock == block;
       };
       mlir::getBackwardSlice(op, &backwardSet, options);
       backwardSet.insert(op);
-      if (!isa<ttg::LocalStoreOp>(op) || !leadsToLoad) {
-        Value src;
-        if (auto ld = dyn_cast<triton::LoadOp>(op))
-          src = ld.getPtr();
-        auto ipoint = findEarlyInsertionPoint(block, op, src);
-        // Remove ops that already precede the insertion point. This is done
-        // before moves happen to avoid `Operation::isBeforeInBlock` N^2
-        // complexity.
-        SmallVector<Operation *> dfg = backwardSet.takeVector();
-        llvm::erase_if(
-            dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
-        // Move ops to insertion point.
-        for (auto *op : llvm::reverse(dfg))
-          op->moveAfter(block, ipoint);
-      }
+
+      // Don't move a local_store if it's source is a load from
+      // the same iteration.
+      if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
+        continue;
+
+      auto ipoint = findEarlyInsertionPoint(block, op);
+      // Remove ops that already precede the insertion point. This is done
+      // before moves happen to avoid `Operation::isBeforeInBlock` N^2
+      // complexity.
+      SmallVector<Operation *> dfg = backwardSet.takeVector();
+      llvm::erase_if(
+          dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
+      // Move ops to insertion point.
+      for (auto *op : dfg)
+        op->moveBefore(block, ipoint);
     }
   }
 };
