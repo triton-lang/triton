@@ -21,14 +21,6 @@
 
 namespace mlir {
 
-// We only "import" the symbols that we need to avoid name conflicts.
-using triton::AxisInfo;
-using triton::DialectInferLayoutInterface;
-using triton::JoinOp;
-using triton::ModuleAxisInfoAnalysis;
-using triton::PointerType;
-using triton::SplitOp;
-
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 RankedTensorType type,
@@ -109,18 +101,19 @@ Value getMemAccessPtr(Operation *op) {
 
 unsigned getElementBitWidth(RankedTensorType type) {
   auto typeForMem =
-      isa<PointerType>(type.getElementType())
-          ? cast<PointerType>(type.getElementType()).getPointeeType()
+      isa<triton::PointerType>(type.getElementType())
+          ? cast<triton::PointerType>(type.getElementType()).getPointeeType()
           : type.getElementType();
   return typeForMem.getIntOrFloatBitWidth();
 }
 
-unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+unsigned
+getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
+                        triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
+  triton::AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
   unsigned elemNumBits = getElementBitWidth(ty);
   unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
   unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
@@ -308,10 +301,11 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   return sliceEncoding.getParent();
 }
 
-static std::optional<Attribute> inferDstEncoding(JoinOp op, Attribute srcEnc) {
+static std::optional<Attribute> inferDstEncoding(triton::JoinOp op,
+                                                 Attribute srcEnc) {
   Attribute dstEnc;
   if (srcEnc.getDialect()
-          .getRegisteredInterface<DialectInferLayoutInterface>()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferJoinOpEncoding(srcEnc, dstEnc,
                                 /*loc=*/std::nullopt)
           .succeeded()) {
@@ -320,10 +314,11 @@ static std::optional<Attribute> inferDstEncoding(JoinOp op, Attribute srcEnc) {
   return std::nullopt;
 }
 
-static std::optional<Attribute> inferDstEncoding(SplitOp op, Attribute srcEnc) {
+static std::optional<Attribute> inferDstEncoding(triton::SplitOp op,
+                                                 Attribute srcEnc) {
   Attribute dstEnc;
   if (srcEnc.getDialect()
-          .getRegisteredInterface<DialectInferLayoutInterface>()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferSplitOpEncoding(srcEnc, dstEnc,
                                  /*loc=*/std::nullopt)
           .succeeded()) {
@@ -348,11 +343,12 @@ static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
                                              encoding);
 }
 
-static std::optional<Attribute> inferSrcEncoding(JoinOp op, Attribute dstEnc) {
+static std::optional<Attribute> inferSrcEncoding(triton::JoinOp op,
+                                                 Attribute dstEnc) {
   // Split is the inverse of join.
   Attribute srcEnc;
   if (dstEnc.getDialect()
-          .getRegisteredInterface<DialectInferLayoutInterface>()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferSplitOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
@@ -360,11 +356,12 @@ static std::optional<Attribute> inferSrcEncoding(JoinOp op, Attribute dstEnc) {
   return std::nullopt;
 }
 
-static std::optional<Attribute> inferSrcEncoding(SplitOp op, Attribute dstEnc) {
+static std::optional<Attribute> inferSrcEncoding(triton::SplitOp op,
+                                                 Attribute dstEnc) {
   // Join is the inverse of split.
   Attribute srcEnc;
   if (dstEnc.getDialect()
-          .getRegisteredInterface<DialectInferLayoutInterface>()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferJoinOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
