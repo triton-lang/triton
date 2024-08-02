@@ -2,6 +2,7 @@ import os
 import platform
 import re
 import contextlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -451,7 +452,7 @@ class CMakeBuild(build_ext):
 
         cmake_args_append = os.getenv("TRITON_APPEND_CMAKE_ARGS")
         if cmake_args_append is not None:
-            cmake_args += cmake_args_append.split(" ")
+            cmake_args += shlex.split(cmake_args_append)
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
