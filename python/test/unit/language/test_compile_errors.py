@@ -304,6 +304,15 @@ def test_global_access_in_fn_default_arg():
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={0: "i32"}, constants={}))
 
 
+def test_defaults_assign_no_err():
+
+    @triton.jit
+    def kernel(a=1, B: tl.constexpr = ""):
+        pass
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
+
+
 def test_max_num_imprecise_acc_limit():
 
     @triton.jit
