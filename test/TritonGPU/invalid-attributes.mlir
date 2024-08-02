@@ -36,15 +36,25 @@
 
 // -----
 
-// expected-error@+2 {{triton_gpu.dot_op kWidth parameter supports only 16 for WMMA parent}}
+// expected-error@+2 {{triton_gpu.dot_op kWidth parameter must be 16 for gfx11 and 8 for gfx12}}
 #wmma = #triton_gpu.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
 #dot_op = #triton_gpu.dot_op<{opIdx = 1, parent = #wmma}>
 
 // -----
 
-// expected-error@+2 {{triton_gpu.dot_op kWidth parameter supports only 16 for WMMA parent}}
+// expected-error@+2 {{triton_gpu.dot_op kWidth parameter must be 16 for gfx11 and 8 for gfx12}}
 #wmma = #triton_gpu.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
 #dot_op = #triton_gpu.dot_op<{opIdx = 1, parent = #wmma, kWidth = 8}>
+
+// -----
+// expected-error@+2 {{triton_gpu.dot_op kWidth parameter must be 16 for gfx11 and 8 for gfx12}}
+#wmma = #triton_gpu.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
+#dot_op = #triton_gpu.dot_op<{opIdx = 1, parent = #wmma, kWidth = 16}>
+
+// -----
+// expected-error@+2 {{triton_gpu.dot_op kWidth parameter must be 16 for gfx11 and 8 for gfx12}}
+#wmma = #triton_gpu.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
+#dot_op = #triton_gpu.dot_op<{opIdx = 1, parent = #wmma, kWidth = 4}>
 
 // -----
 
