@@ -568,7 +568,7 @@ class pointer_type(dtype):
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
 
     def __str__(self):
         return self.name
@@ -593,6 +593,10 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+        
+class nv_tma_desc_type(pointer_type):
+    def __init__(self):
+        super().__init__(uint8, const = True, address_space = 0)
 
 
 class block_type(dtype):
@@ -2661,3 +2665,11 @@ def binary_op_type_legalization(lhs, rhs, builder):
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
+    
+class NvTmaDesc:
+    def __init__(self, data):
+        self.data = data
+        self.dtype = uint8
+        
+    def tma_desc_ptr(self):
+        return self.data.data_ptr()

@@ -84,6 +84,7 @@ from .core import (
     permute,
     pi32_t,
     pointer_type,
+    nv_tma_desc_type,
     program_id,
     range,
     reduce,
@@ -102,6 +103,7 @@ from .core import (
     view,
     void,
     where,
+    NvTmaDesc,
 )
 from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor,
                    ceil)
@@ -207,6 +209,7 @@ __all__ = [
     "philox_impl",
     "pi32_t",
     "pointer_type",
+    "nv_tma_desc_type",
     "program_id",
     "rand",
     "rand4x",
@@ -247,6 +250,7 @@ __all__ = [
     "xor_sum",
     "zeros",
     "zeros_like",
+    "NvTmaDesc",
 ]
 
 
@@ -259,6 +263,10 @@ def str_to_ty(name):
             const = True
         ty = str_to_ty(name)
         return pointer_type(element_ty=ty, const=const)
+    
+    if name == "nvTmaDesc":
+        return nv_tma_desc_type()
+
     tys = {
         "fp8e4nv": float8e4nv,
         "fp8e4b8": float8e4b8,

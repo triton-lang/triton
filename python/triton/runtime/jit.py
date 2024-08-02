@@ -292,7 +292,6 @@ dtype2str = {}
 
 
 def mangle_type(arg, is_const=False):
-
     if arg is None:
         return "none"
     elif isinstance(arg, bool):
@@ -306,6 +305,8 @@ def mangle_type(arg, is_const=False):
             return "i64"
     elif isinstance(arg, float):
         return "fp32"
+    elif "NvTmaDesc" in type(arg).__name__:
+        return "nvTmaDesc"
     else:
         # dtypes are hashable so we can memoize this mapping:
         dsk = (arg.dtype, is_const)

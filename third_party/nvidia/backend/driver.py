@@ -110,6 +110,7 @@ def ty_to_cpp(ty):
         "fp32": "float",
         "f32": "float",
         "fp64": "double",
+        "nvTmaDesc": "CUtensorMap",
     }[ty]
 
 
@@ -121,6 +122,9 @@ def make_launcher(constants, signature, ids):
     def _extracted_type(ty):
         if ty[0] == '*':
             return "PyObject*"
+        if ty == "nvTmaDesc":
+            return "PyObject*"
+
         return ty_to_cpp(ty)
 
     def format_of(ty):
@@ -142,6 +146,16 @@ def make_launcher(constants, signature, ids):
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiKKOOOO" + args_format
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+
+    internal_args_list = []
+    for i, ty in signature.items():
+      if ty[0] == "*":
+        internal_args_list.append(f"ptr_info{i}.dev_ptr")
+      elif ty == "nvTmaDesc":
+        # Note: we have to dereference the pointer
+        internal_args_list.append(f"*tma_ptr{i}")
+      else:
+        internal_args_list.append(f"_arg{i}")
 
     # generate glue code
     params = [i for i in signature.keys() if i not in constants]
@@ -271,6 +285,45 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   return ptr_info;
 }}
 
+static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
+  if (sizeof(CUtensorMap*) != 8) {{
+    PyErr_SetString(PyExc_SystemError, "getTmaDesc() requires 64-bit compilation");
+    return NULL;
+  }}
+  
+  PyObject *method_handle = PyObject_GetAttrString(obj, "tma_desc_ptr");
+  if (!method_handle) {{
+    PyErr_SetString(PyExc_TypeError, "tma_desc_ptr() method does not exist");
+    return NULL;
+  }}
+
+  PyObject *empty_tuple = PyTuple_New(0);
+  if (!empty_tuple) goto python_internal_error;
+  PyObject *method_ret = PyObject_Call(method_handle, empty_tuple, NULL);
+  Py_DECREF(empty_tuple);
+  Py_DECREF(method_handle);
+  if (!method_ret) goto python_internal_error;
+
+  if (!PyLong_Check(method_ret)) {{
+    PyErr_SetString(PyExc_TypeError, "tma_desc_ptr() must return 64-bit int");
+    Py_DECREF(method_ret);
+    return NULL;
+  }}
+
+  uint64_t ptr_as_uint = PyLong_AsUnsignedLongLong(method_ret);
+  if (ptr_as_uint % 64 != 0) {{
+    PyErr_SetString(PyExc_ValueError, "tma_desc_ptr() must be 64-byte aligned");
+    Py_DECREF(method_ret);
+    return NULL;
+  }}
+
+  return (CUtensorMap*)(ptr_as_uint);
+  
+python_internal_error:
+  PyErr_SetString(PyExc_SystemError, "Internal Python error!");
+  return NULL;
+}}
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
   uint64_t _stream;
@@ -302,9 +355,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   // raise exception asap
-  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  {"".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  {"".join([f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" if ty == "nvTmaDesc" else "" for i, ty in signature.items()])};
   Py_BEGIN_ALLOW_THREADS;
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
     return NULL;

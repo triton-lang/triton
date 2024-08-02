@@ -87,6 +87,21 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto ctx = funcOp->getContext();
 
     if (LLVM::isKernel(funcOp)) {
+      for (unsigned i = 0; i < newFuncOp.getNumArguments(); ++i) {
+        const auto attrs = newFuncOp.getArgAttrDict(i);
+        for (const auto& attr : attrs) {
+          if (attr.getName() == "tt.nv_tma_desc") {
+            mlir::BlockArgument arg = newFuncOp.getArgument(i);
+            const auto byteType = mlir::IntegerType::get(newFuncOp.getContext(), 8);
+            const auto arrayType = mlir::LLVM::LLVMArrayType::get(newFuncOp.getContext(), byteType, 128);
+            newFuncOp.setArgAttr(i, "llvm.byval", mlir::TypeAttr::get(arrayType));
+            newFuncOp.setArgAttr(i, "nvvm.grid_constant", mlir::UnitAttr::get(newFuncOp.getContext()));
+            newFuncOp.setArgAttr(i, "llvm.align", mlir::IntegerAttr::get(
+                                                    mlir::IntegerType::get(newFuncOp.getContext(), 32), 64));
+          }
+        }
+      }
+      
       // Set an attribute to indicate this function is a kernel entry.
       newFuncOp->setAttr("nvvm.kernel",
                          rewriter.getIntegerAttr(type::u1Ty(ctx), 1));

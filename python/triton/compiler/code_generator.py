@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor, str_to_ty
-from ..language.core import _unwrap_if_constexpr
+from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type
 from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
@@ -409,6 +409,11 @@ class CodeGenerator(ast.NodeVisitor):
                 if i in self.attributes:
                     for name, value in self.attributes[i]:
                         self.fn.set_arg_attr(idx, name, value)
+                        
+                # TMA
+                if isinstance(self.prototype.param_types[idx], nv_tma_desc_type):
+                    self.fn.set_arg_attr(idx, "tt.nv_tma_desc", 1)
+
                 arg_values.append(tensor(self.fn.args(idx), self.prototype.param_types[idx]))
                 idx += 1
 
