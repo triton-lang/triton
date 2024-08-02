@@ -2,7 +2,7 @@
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
 
-We're hiring! If you are interested in working on Triton at OpenAI, we have roles open for [Compiler Engineers](https://openai.com/careers/software-engineer-triton-compiler) and [Kernel Engineers](https://openai.com/careers/kernel-engineer).
+The Triton Conference is happening again on September 17th, 2024 in Fremont (CA)! If you are interested in attending, please fill up [this form](https://docs.google.com/forms/d/e/1FAIpQLSecHC1lkalcm0h3JDUbspekDX5bmBvMxgVTLaK3e-61bzDDbg/viewform).
 
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
