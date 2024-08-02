@@ -74,9 +74,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto amendedFuncOp = funcOp;
     if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
-    
-    FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp = mlir::convertFuncOpToLLVMFuncOp(
-        amendedFuncOp, rewriter, *getTypeConverter());
+
+    FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
+        mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
+                                        *getTypeConverter());
     if (failed(maybeNewFuncOp)) {
       return failure();
     }
