@@ -240,9 +240,13 @@ void processLoopBody(scf::ForOp forOp, Operation *op, Value localAllocVal) {
   builder.setInsertionPoint(op);
   Location loc = forOp.getLoc();
   // step 1: bufOff = i * BLOCK_K
+  auto loadOp = dyn_cast<tt::LoadOp>(op);
+  auto subviewShape = dyn_cast<RankedTensorType>(loadOp.getType()).getShape();
+
+  Value BLOCK_K =
+      builder.create<arith::ConstantIntOp>(loc, subviewShape[1], 32);
   auto forOpIV = forOp.getInductionVar();
-  auto forOpStep = forOp.getStep();
-  auto bufOffVal = builder.create<arith::MulIOp>(loc, forOpIV, forOpStep);
+  auto bufOffVal = builder.create<arith::MulIOp>(loc, forOpIV, BLOCK_K);
 
   // step 2: localBuf = memdesc_subview ldsBuffer[0, bufOff]
   SmallVector<Value> localBufOff(2);
@@ -250,8 +254,6 @@ void processLoopBody(scf::ForOp forOp, Operation *op, Value localAllocVal) {
   localBufOff[0] = zero;      // along M dim
   localBufOff[1] = bufOffVal; // along K dim
 
-  auto loadOp = dyn_cast<tt::LoadOp>(op);
-  auto subviewShape = dyn_cast<RankedTensorType>(loadOp.getType()).getShape();
   tt::MemDescType allocTy = cast<tt::MemDescType>(localAllocVal.getType());
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
