@@ -3,6 +3,20 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonAMDGPUAggregateLoad : Pass<"tritonamdgpu-aggregate-load", "mlir::ModuleOp"> {
+  let summary = "Hoist load out of the loop and load data from all iterations at once";
+
+  let description = [{
+    Hoist load out of the loop and load data of all iterations at once.
+    Store data into LDS. Therefore, users of the load inside the loop can load from
+    LDS at each iteration.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUAggregateLoadPass()";
+
+  let dependentDialects = [];
+}
+
 def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
