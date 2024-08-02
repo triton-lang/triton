@@ -373,7 +373,7 @@ class CodeGenerator(ast.NodeVisitor):
         if self.fn:
             raise self._unsupported(node, "nested function definition is not supported.")
         # initialize defaults
-        for i, default_value in enumerate(node.args.defaults):
+        for i, default_value in enumerate(node.args.defaults[::-1]):
             arg_node = node.args.args[-i - 1]
             annotation = arg_node.annotation
             name = arg_node.arg
