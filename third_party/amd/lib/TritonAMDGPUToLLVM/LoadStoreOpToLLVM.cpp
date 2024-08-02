@@ -460,7 +460,6 @@ struct AtomicCASOpConversion
           // Extract the new_loaded value from the pair.
           Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
           Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-          atomPtr = bitcast(atomPtr, ptr_ty(rewriter.getContext(), 3));
           store(newLoaded, atomPtr);
         }
 
