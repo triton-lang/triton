@@ -77,8 +77,11 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
                                        srcType.getElementType(), newMfmaEnc);
   } else if (auto srcWmma = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(
                  srcType.getEncoding())) {
+    // TODO: support 2nd gen of WMMA
+    assert(srcWmma.getVersion() == 1);
     auto newWmmaEnc = triton::gpu::AMDWmmaEncodingAttr::get(
-        mod.getContext(), {warpsPerCtaX, warpsPerCtaY}, srcWmma.getCTALayout());
+        mod.getContext(), srcWmma.getVersion(), {warpsPerCtaX, warpsPerCtaY},
+        srcWmma.getCTALayout());
 
     newSrcType = RankedTensorType::get(srcType.getShape(),
                                        srcType.getElementType(), newWmmaEnc);

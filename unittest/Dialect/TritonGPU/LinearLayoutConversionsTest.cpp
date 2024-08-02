@@ -57,7 +57,8 @@ public:
     SmallVector<unsigned> cOrd(warps.size());
     std::iota(cOrd.begin(), cOrd.end(), 0);
     return AMDWmmaEncodingAttr::get(
-        &ctx, warps, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+        &ctx, /*version=*/1, warps,
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   SliceEncodingAttr slice(Attribute parent, int dim) {
