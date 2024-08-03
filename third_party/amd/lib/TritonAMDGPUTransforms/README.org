@@ -1,0 +1,243 @@
+* Aggregate Load Pass
+** Design Idea
+The general idea of this pass is to load all buffers together in front of the
+loop instead of loading each buffer at each iteration of the loop. The loaded
+buffer by this aggregated load will be stored to LDS. Therefore, at every iteration
+of the loop, we load one buffer from LDS.
+The motivation of this pass is to "separate" the global load requests from operand
+A and B, which is beneficial when A is small and can be cached in L1.
+
+** IR Manipulation (version 1: hoist all of tensor A at once)
+
+We put this pass somewhere before the stream-piepline pass. The relevant IR is
+as follows
+#+BEGIN_SRC llvm
+%25 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+%26 = tt.expand_dims %25 {axis = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
+%28 = tt.broadcast %26 : tensor<1x128xi32, #blocked> -> tensor<16x128xi32, #blocked>
+%27 = tt.broadcast %24 : tensor<16x1x!tt.ptr<f16>, #blocked> -> tensor<16x128x!tt.ptr<f16>, #blocked>
+%29 = tt.addptr %27, %28 : tensor<16x128x!tt.ptr<f16>, #blocked>, tensor<16x128xi32, #blocked>
+%41:3 = scf.for %arg9 = %c0_i32 to %c16_i32 step %c1_i32
+    iter_args(%arg10 = %cst_1, %arg11 = %29, %arg12 = %40)
+    -> (tensor<16x64xf32, #mma>, tensor<16x128x!tt.ptr<f16>, #blocked>, tensor<128x64x!tt.ptr<f16>, #blocked1>)  : i32 {
+  %59 = tt.load %arg11 : tensor<16x128x!tt.ptr<f16>, #blocked>
+  %60 = tt.load %arg12 : tensor<128x64x!tt.ptr<f16>, #blocked1>
+  %61 = triton_gpu.convert_layout %59 : tensor<16x128xf16, #blocked> -> tensor<16x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+  %62 = triton_gpu.convert_layout %60 : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+  %63 = tt.dot %61, %62, %arg10 : tensor<16x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<16x64xf32, #mma>
+  %64 = tt.addptr %arg11, %cst : tensor<16x128x!tt.ptr<f16>, #blocked>, tensor<16x128xi32, #blocked>
+  %65 = tt.addptr %arg12, %cst_0 : tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xi32, #blocked1>
+  scf.yield %63, %64, %65 : tensor<16x64xf32, #mma>, tensor<16x128x!tt.ptr<f16>, #blocked>, tensor<128x64x!tt.ptr<f16>, #blocked1>
+}
+#+END_SRC
+
+In this example, we have BLOCK_M=16, BLOCK_K=128, K=2048, BLOCK_N=64. Instead of
+loading =BLOCK_M x BLOCK_K= buffer at each iteration of the loop, we want to load
+the whole A tensor =BLOCK_M x K= out of the loop and store it to LDS.
+The desired IR is as follows
+#+BEGIN_SRC llvm
+%25 = tt.make_range {end = 2048 : i32, start = 0 : i32} : tensor<2048xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+%26 = tt.expand_dims %25 {axis = 0 : i32} : tensor<2048xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x2048xi32, #blocked>
+%28 = tt.broadcast %26 : tensor<1x2048xi32, #blocked> -> tensor<16x2048xi32, #blocked>
+%27 = tt.broadcast %24 : tensor<16x1x!tt.ptr<f16>, #blocked> -> tensor<16x2048x!tt.ptr<f16>, #blocked>
+%29 = tt.addptr %27, %28 : tensor<16x2048x!tt.ptr<f16>, #blocked>, tensor<16x2048xi32, #blocked>
+%30 = tt.load %29 : tensor<16x2048x!tt.ptr<f16>, #blocked>
+%31 = triton_gpu.local_alloc %30 : (tensor<16x2048xf16, #blocked>) -> !tt.memdesc<16x2048xf16, #shared, #triton_gpu.shared_memory, mutable>
+%41:3 = scf.for %arg9 = %c0_i32 to %c16_i32 step %c1_i32
+    iter_args(%arg10 = %cst_1, %arg11 = %29, %arg12 = %40)
+    -> (tensor<16x64xf32, #mma>, tensor<16x128x!tt.ptr<f16>, #blocked>, tensor<128x64x!tt.ptr<f16>, #blocked1>)  : i32 {
+  %66 = arith.muli %arg9, %c128_i32 : i32
+  %c0_i32 = arith.constant 0 : i32
+  %67 = triton_gpu.memdesc_subview %31[%c0_i32, %66] : !tt.memdesc<16x2048xf16, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<16x128xf16, #shared, #triton_gpu.shared_memory, mutable>
+  %68 = triton_gpu.local_load %67 : !tt.memdesc<16x128xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<16x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+  %60 = tt.load %arg12 : tensor<128x64x!tt.ptr<f16>, #blocked1>
+  %62 = triton_gpu.convert_layout %60 : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+  %63 = tt.dot %68, %62, %arg10 : tensor<16x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<16x64xf32, #mma>
+  %65 = tt.addptr %arg12, %cst_0 : tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xi32, #blocked1>
+  scf.yield %63, %arg11, %65 : tensor<16x64xf32, #mma>, tensor<16x128x!tt.ptr<f16>, #blocked>, tensor<128x64x!tt.ptr<f16>, #blocked1>
+}
+#+END_SRC
+*** Hoist the load
+We only hoist the load for operand A. Later we'll figure out a more robust condition
+to determine which operand to hoist.
+
+We need to extend the "k" dim of the tensors related to =a_ptrs= calculation.
+Let's take a look at the address calculation at python level
+#+BEGIN_SRC python
+a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
+#+END_SRC
+=offs_k= covers addresses along the K dim and =offs_am= covers M dim.
+We need to extend these addresses
+- =offs_am= will be broadcasted before participating in the final address
+  calculation. We only need to modify the broadcast from
+  <BLOCK_M x 1> --> <BLOCK_M x 128> to <BLOCK_M x 1> --> <BLOCK_M x 2048>.
+- =offs_k= is more complicated. It starts with =make_range{end=128}=, followed
+  by one =expand_dim= and one =broadcast=. We need to extend the BLOCK_K dim
+  of the tensors in all of these three ops.
+
+After the extension, we can insert the new =%29 = addptr= and the new =%30 = load=.
+At last, we store the loaded value into LDS by =%31 = local_alloc=.
+
+Note that =%31= is the aggregated LDS buffer that contains all elements from A tensor.
+
+*** Modify loop body
+Now we need load one tile BLOCK_M x BLOCK_K from the aggregated LDS buffer (=%31=).
+This is done by
+1. taking a subview of the LDS buffer using =memdesc_subview %31[0, i * BLOCK_K]=,
+   where =i= is the loop induction variable
+2. loading the buffer from LDS using =local_load=.
+
+*** Assumptions
+To pattern match and manipulate the IR to the desired form, we need to make the
+following assumptions for now
+1. K dim of the A tensor must be a constant, i.e. =tl.constexpr=. This is necessary
+   to figure out the shape of the aggregated load.
+2. The address calculation must be done in the form of
+   #+BEGIN_SRC python
+   a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
+   #+END_SRC
+   - Do not compute the offsets first, i.e. no parenthesis
+   - Do not reorder the offsets of offs_am and offs_k. Otherwise offs_k will be added
+     to the pointer (a_ptr) first, which makes the pattern more complicated to match
+3. No mask for the load. We can handle masked load later, but not in this version.
+
+*** Debug correctness issue ([[https://github.com/ROCm/triton/tree/f2bf2abfd6d4f5cfb9e801c6a1722aff51993aec][commit]])
+**** Observation 1: different swizzling patterns
+When I use different swizzling patterns (vec, perPhase, and maxPhase),
+triton produces different results, which is not expected.
+
+**** Observation 2: duplicate the first buffer
+In this experiment, the following config is used:
+#+BEGIN_SRC yaml
+- {'M': 32, 'N': 32, 'K': 32, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'SPLIT_K': 1, 'num_warps': 1, 'num_stages': 1, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 32, 'kpack': 2}
+#+END_SRC
+In this experiment, I set buffer offset = 0 in both iterations of the loop,
+which leads the following computation
+#+BEGIN_SRC python
+C = A[:, 0:16] x B[0:16, :] + A[:, 0:16] x B[16:32, :]
+#+END_SRC
+And it works. i.e. triton's results match torch's if torch is doing the same thing.
+
+This implies:
+1. LDS access for operand B is fine
+2. LDS access for operand A regarding the first slice is fine.
+3. Starting from the second slice, things are not fine
+   - But we don't know if write or read or both is not working
+
+**** Observation 3: duplicate the second buffer
+Same experiment setting as observation 2.
+
+In this experiment, I set buffer offset = 16 in both iterations of the loop.
+And B is set to be an identity tensor.
+Therefore, the computation becomes
+#+BEGIN_SRC python
+C = A[:, 16:32] x B[0:16, :] + A[:, 16:32] x B[16:32, :]
+#+END_SRC
+Since B is identity, the result tensor is expected to be
+=C[i, j] = A[i, j%16 + 16]=, i.e.
+C tensor is two duplicates of the *right* half of the A tensor, which corresponds to
+the second slice of the LDS buffer.
+The torch result is saved into =tensor_cache_32x32x32_right-half-A.pt=.
+
+The result is very interesting.
+We observed that =C[i, j] = A[i-1, j%16]=, which means
+- It is reading elements on the *left* half of A tensor.
+- It is reading elements from the previous row
+#+BEGIN_SRC python
+  A = [
+      0   ... 15   |  16   ... 31
+      32  ... 47   |  48   ... 63
+      ..
+      992 ... 1007 |  1008 ... 1023
+  ]
+  C = [
+      0   ... 0    | 0   ... 0
+      0   ... 15   | 0   ... 15
+      32  ... 47   | 32  ... 47
+      ...
+      960 ... 975  | 960 ... 975
+  ]
+#+END_SRC
+To put it another way, when each thread accesses element in LDS, it's
+using a wrong offset (off by 48) so it's accessing the wrong elements.
+
+Therefore, I manually add 48 to the offsets used by each thread when
+accessing LDS, and it works.
+
+This implies
+- The A tensor is stored to LDS in the correct layout.
+- Something is wrong when calculating LDS addresses
+  - smemBase
+  - offsets
+
+**** Solution ([[https://github.com/ROCm/triton/commit/91f77fb5f37a74a6bd63c920081f9b6a2b2b8a62][commit]])
+It turns out that something is wrong the smemBase calculation.
+The correctness issue was fixed by replacing
+#+BEGIN_SRC cpp
+smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
+#+END_SRC
+with
+#+BEGIN_SRC cpp
+smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
+#+END_SRC
+
+*** ToDo
+- [ ] Enable masked load (both K and BLOCK_M dims)
+- [ ] Update #blocked layout for the aggregated load. The blocked layout
+  for A load is figured according to the tile size BLOCK_M x BLOCK_K.
+  We need to figure out the new blocked layout for the aggregated load,
+  especially in the case of large num_warps.
+- [ ] When the aggregated load is too large to fit into LDS (we need to
+  reserve some space for operand B as well), we need to break the load
+  into a for loop.
+
+** IR Manipulation (Version 1.1 Add mask along M dim [[https://github.com/ROCm/triton/commit/8b367607797fd5b0f657d7ea037a066d8fcc4f9b][commit@84b1159]])
+
+In this version, we try to support masked load along the M dim when loading opA.
+Here is the python code.
+#+BEGIN_SRC python
+offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)
+token_mask = offs_token < num_valid_tokens
+a_ptrs = a_ptr + offs_token[:, None] * stride_am + offs_k[None, :] * stride_ak
+for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
+  a = tl.load(a_ptrs, mask=token_mask[:, None], other=0.0)
+  ...
+#+END_SRC
+There are two key differences from a vanilla matmul kernel:
+1. =sorted_token_ids_ptr= is used to indicate which tokens (rows) to load as operand A.
+2. =num_valid_tokens= is used to guarantee that only valid tokens (rows) are loaded.
+
+In the IR, the load before aggregation becomes
+#+BEGIN_SRC llvm
+%cst_1 = arith.constant dense<0.000000e+00> : tensor<16x128xf16, #blocked>
+%58 = tt.broadcast %57 : tensor<16x1xi1, #blocked> -> tensor<16x128xi1, #blocked>
+%59:3 = scf.for %arg10 = %c0_i32 to %c16_i32 step %c1_i32
+    iter_args(%arg11 = %cst_2, %arg12 = %45, %arg13 = %56)
+    -> (tensor<16x64xf32, #mma>, tensor<16x128x!tt.ptr<f16>, #blocked>, tensor<128x64x!tt.ptr<f16>, #blocked1>)  : i32 {
+  %76 = tt.load %arg12, %58, %cst_1 : tensor<16x128x!tt.ptr<f16>, #blocked>
+  ...
+#+END_SRC
+
+Before inserting the aggregated load, we also need to extend the broadcast op (=%58=)
+and the other value (=%cst_1=).
+
+*** Experiment setup
+I did not test with the original MoE kernel since LDS is not large enough for the K dim.
+Therefore, I prepared a branch ([[https://github.com/ROCm/triton/tree/play_moe][play_moe]]) which includes
+- Modified matmul_kernel.py to include dependent load
+- Modified tune_gemm.py as the driver to check correctness
+- gemm_config.yaml that contains the gemm config
+- A cached torch result to accelerate the experiment speed
+
+Here are the commands to check correctness of this commit.
+#+BEGIN_SRC bash
+git clone https://github.com/ROCm/triton.git
+git checkout play_moe
+cd triton/scripts/amd/gemm
+./tune_gemm.py --gemm_size_file gemm_config.yaml --compare_wo_tuning
+#+END_SRC
+
+*** Assumptions
+- Mask is used only for M dim
+- The mask is a loop invariant tensor
