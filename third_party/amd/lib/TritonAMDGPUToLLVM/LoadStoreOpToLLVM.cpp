@@ -224,7 +224,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         falseVal = v;
       }
 
-      auto loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal);
+      bool nt = op.getCache() == triton::CacheModifier::CG;
+      auto loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal, nt);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -471,7 +472,6 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
         Value ret = load(valueElemTy, atomPtr);
-        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -636,7 +636,6 @@ struct AtomicRMWOpConversion
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         barrier();
         Value ret = load(valueElemTy, atomPtr);
-        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }

@@ -3,6 +3,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Signals.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -56,7 +57,8 @@ public:
     SmallVector<unsigned> cOrd(warps.size());
     std::iota(cOrd.begin(), cOrd.end(), 0);
     return AMDWmmaEncodingAttr::get(
-        &ctx, warps, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+        &ctx, /*version=*/1, warps,
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   SliceEncodingAttr slice(Attribute parent, int dim) {
@@ -364,16 +366,21 @@ TEST_F(LinearLayoutConversionsTest, MMAv2_Small3D) {
 }
 
 TEST_F(LinearLayoutConversionsTest, MMAv3_64x16) {
-  EXPECT_EQ(toLinearLayout({64, 16}, mma(3, 0, {16, 16, 8}, {4, 1}, {1, 1},
-                                         {1, 1}, {1, 0})),
-            LinearLayout(
-                {
-                    {S("register"), {{0, 1}, {8, 0}, {0, 8}}},
-                    {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
-                    {S("warp"), {{16, 0}, {32, 0}}},
-                    {S("block"), {}},
-                },
-                {S("dim0"), S("dim1")}));
+  SmallVector<SmallVector<unsigned>, 4> instrShapes = {
+      {16, 16, 8}, {16, 16, 8}, {16, 8, 8}};
+  for (auto instrShape : instrShapes) {
+    SCOPED_TRACE(triton::join(instrShape, ","));
+    EXPECT_EQ(toLinearLayout({64, 16}, mma(3, 0, instrShape, {4, 1}, {1, 1},
+                                           {1, 1}, {1, 0})),
+              LinearLayout(
+                  {
+                      {S("register"), {{0, 1}, {8, 0}, {0, 8}}},
+                      {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                      {S("warp"), {{16, 0}, {32, 0}}},
+                      {S("block"), {}},
+                  },
+                  {S("dim0"), S("dim1")}));
+  }
 }
 
 TEST_F(LinearLayoutConversionsTest, MMAv3_128x16) {
@@ -991,6 +998,52 @@ TEST_F(LinearLayoutConversionsTest, Shared1DSwizzle) {
             LinearLayout::identity1D(64, S("offset"), S("dim0")) *
                 LinearLayout::identity1D(1, S("offset"), S("dim1")) *
                 LinearLayout::identity1D(1, S("block"), S("dim0")));
+}
+
+TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout) {
+  LinearLayout ll = LinearLayout({{S("register"), {{1}, {2}, {2}, {8}}},
+                                  {S("lane"), {{8}, {4}, {1}}},
+                                  {S("warp"), {{16}, {32}, {0}}},
+                                  {S("block"), {{0}}}},
+                                 {S("dim0")});
+  EXPECT_EQ(chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{64},
+                                                  /*repShape=*/{64}),
+            LinearLayout({{S("offset"), {{1}, {2}, {4}, {8}, {16}, {32}}},
+                          {S("iteration"), {}},
+                          {S("block"), {}}},
+                         {S("dim0")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout_Empty) {
+  LinearLayout ll = LinearLayout({{S("register"), {{0}}},
+                                  {S("lane"), {{0}}},
+                                  {S("warp"), {{0}}},
+                                  {S("block"), {}}},
+                                 {S("dim0")});
+  EXPECT_EQ(
+      chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{},
+                                            /*repShape=*/{}),
+      LinearLayout({{S("offset"), {}}, {S("iteration"), {}}, {S("block"), {}}},
+                   {}));
+}
+
+TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout_Multidim) {
+  LinearLayout src(
+      {{S("register"), {}},
+       {S("lane"),
+        {{0, 0, 1, 0}, {0, 0, 2, 0}, {1, 0, 0, 0}, {2, 0, 0, 0}, {0, 0, 0, 1}}},
+       {S("warp"), {{0, 0, 0, 2}, {0, 1, 0, 0}, {0, 2, 0, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1"), S("dim2"), S("dim3")});
+  EXPECT_EQ(
+      chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{4, 4, 4, 4},
+                                            /*repShape=*/{2, 2, 2, 2}),
+      LinearLayout({{S("offset"),
+                     {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}},
+                    {S("iteration"),
+                     {{2, 0, 0, 0}, {0, 2, 0, 0}, {0, 0, 2, 0}, {0, 0, 0, 2}}},
+                    {S("block"), {}}},
+                   {S("dim3"), S("dim2"), S("dim1"), S("dim0")}));
 }
 
 } // anonymous namespace

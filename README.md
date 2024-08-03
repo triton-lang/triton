@@ -1,8 +1,11 @@
 <div align="center">
-  <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
+  <img src="https://lh5.googleusercontent.com/wzQKEsTFkrgNQO9JjhGH5wFvslJr1saLtLaJ_a6Fp_gNENpvt3VG7BmztwngU9hFJaU4CPwGiw1opQtDvTkLrxWRbO_a12Q-pdESWHgtmheIHcPbOL5ZMC4TSiJVe5ty1w=w3517" alt="Triton logo">
 </div>
 
-We're hiring! If you are interested in working on Triton at OpenAI, we have roles open for [Compiler Engineers](https://openai.com/careers/software-engineer-triton-compiler) and [Kernel Engineers](https://openai.com/careers/kernel-engineer).
+The Triton Conference is happening again on September 17th, 2024 in Fremont (CA)!
+
+If you are interested in attending, please fill up [this form](https://docs.google.com/forms/d/e/1FAIpQLSecHC1lkalcm0h3JDUbspekDX5bmBvMxgVTLaK3e-61bzDDbg/viewform).
+
 
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
@@ -143,7 +146,7 @@ $ python3 -m pytest python/test/unit
 $ cd python/build/cmake<...>
 
 # Run C++ unit tests.
-$ ninja test
+$ ctest -j32
 
 # Run lit tests.
 $ lit test
@@ -228,4 +231,5 @@ Supported Platforms:
 
 Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
-  * Under development: AMD GPUs, CPUs
+  * AMD GPUs (ROCm 5.2+)
+  * Under development: CPUs

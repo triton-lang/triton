@@ -1,3 +1,4 @@
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -5,52 +6,33 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/Support/Debug.h"
 #include <memory>
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace {
-using tt::DotOp;
-using ttg::AMDMfmaEncodingAttr;
-using ttg::AMDWmmaEncodingAttr;
-using ttg::BlockedEncodingAttr;
-using ttg::ConvertLayoutOp;
-using ttg::DotOperandEncodingAttr;
-using ttg::SliceEncodingAttr;
+using triton::AMD::ISAFamily;
 
-enum class MatrixCoreVersion {
-  CDNA_MFMA1,
-  CDNA_MFMA2,
-  CDNA_MFMA3,
-  RDNA_WMMA,
-  UNKNOWN
-};
-
-MatrixCoreVersion getMatrixCoreVersion(StringRef archGen) {
-  if (archGen.contains("gfx11"))
-    return MatrixCoreVersion::RDNA_WMMA;
-  if (archGen.contains("gfx908"))
-    return MatrixCoreVersion::CDNA_MFMA1;
-  if (archGen.contains("gfx90a"))
-    return MatrixCoreVersion::CDNA_MFMA2;
-  if (archGen.contains("gfx940") || archGen.contains("gfx941") ||
-      archGen.contains("gfx942"))
-    return MatrixCoreVersion::CDNA_MFMA3;
-  return MatrixCoreVersion::UNKNOWN;
+int getMfmaVersion(ISAFamily isaFamily) {
+  switch (isaFamily) {
+  case ISAFamily::CDNA1:
+    return 1;
+  case ISAFamily::CDNA2:
+    return 2;
+  case ISAFamily::CDNA3:
+    return 3;
+  default:
+    break;
+  }
+  return 0;
 }
 
-int getMfmaVersion(MatrixCoreVersion matrixCoreVer) {
-  if (MatrixCoreVersion::CDNA_MFMA1 == matrixCoreVer)
+int getWmmaVersion(StringRef archGen) {
+  if (archGen.contains("gfx11"))
     return 1;
-  if (MatrixCoreVersion::CDNA_MFMA2 == matrixCoreVer)
+  if (archGen.contains("gfx12"))
     return 2;
-  if (MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer)
-    return 3;
   return 0;
 }
 
@@ -66,12 +48,12 @@ SmallVector<unsigned, 2> warpsPerTile(tt::DotOp dotOp,
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
-  mlir::ForwardSliceOptions fwdOpt;
+  ForwardSliceOptions fwdOpt;
   fwdOpt.filter = filter;
-  mlir::BackwardSliceOptions bwdOpt;
+  BackwardSliceOptions bwdOpt;
   bwdOpt.omitBlockArguments = true;
   bwdOpt.filter = filter;
-  auto slices = mlir::getSlice(dotOp, bwdOpt, fwdOpt);
+  auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
   for (Operation *op : slices)
     if (isa<tt::DotOp>(op) && (op != dotOp))
       return {(unsigned)numWarps, 1};
@@ -108,8 +90,8 @@ warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
 SmallVector<unsigned, 2>
 warpsPerTileWMMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   return warpsPerTile(dotOp, shape, numWarps,
-                      {AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[0],
-                       AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[1]});
+                      {ttg::AMDWmmaEncodingAttr::getMNKDimPerInstr()[0],
+                       ttg::AMDWmmaEncodingAttr::getMNKDimPerInstr()[1]});
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
@@ -172,8 +154,8 @@ selectMatrixCoreOperandTypes(tt::DotOp dot,
   return optTypes;
 }
 
-OperandTypesVector getOperandTypesForWmmaOp(mlir::PatternRewriter &rewriter,
-                                            tt::DotOp dot) {
+OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
+                                            tt::DotOp dot, int version) {
   Type f16 = rewriter.getF16Type();
   Type f32 = rewriter.getF32Type();
   Type bf16 = rewriter.getBF16Type();
@@ -190,6 +172,20 @@ OperandTypesVector getOperandTypesForWmmaOp(mlir::PatternRewriter &rewriter,
       // by WMMA instruction, but not supported by triton
       // clang-format on
   };
+  // TODO: support fp8 configurations for WMMAv2. The code should be as
+  // following:
+  // if (version == 2) {
+  //   Type fp8 = rewriter.getFp8Type();
+  //   Type bf8 = rewriter.getBF8Type();
+  //   applicableTypes.append({
+  //       // clang-format off
+  //       {fp8, fp8, f32, f32},
+  //       {fp8, bf8, f32, f32},
+  //       {bf8, fp8, f32, f32},
+  //       {bf8, bf8, f32, f32},
+  //       // clang-format on
+  //   });
+  // }
   return selectMatrixCoreOperandTypes(dot, applicableTypes);
 }
 
@@ -210,8 +206,8 @@ OperandTypesVector getOperandTypesForWmmaOp(mlir::PatternRewriter &rewriter,
  * @param newElemType new element type for the tensor
  * @return converted and optionaly casted tensor value
  */
-Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
-                           ::mlir::Attribute newEncoding, Type newElemType) {
+Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
+                           Attribute newEncoding, Type newElemType) {
   assert(newElemType.isIntOrFloat());
 
   auto loc = value.getLoc();
@@ -238,24 +234,24 @@ Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
     unsigned oldWidth = oldElemType.getIntOrFloatBitWidth();
     unsigned newWidth = newElemType.getIntOrFloatBitWidth();
     if (oldWidth == newWidth)
-      castedTensor = rewriter.create<mlir::arith::BitcastOp>(loc, convertedType,
-                                                             convertedTensor);
+      castedTensor = rewriter.create<arith::BitcastOp>(loc, convertedType,
+                                                       convertedTensor);
     else if (oldWidth > newWidth)
-      castedTensor = rewriter.create<mlir::arith::TruncIOp>(loc, castedType,
-                                                            convertedTensor);
+      castedTensor =
+          rewriter.create<arith::TruncIOp>(loc, castedType, convertedTensor);
     else if (oldElemType.isSignedInteger())
-      castedTensor = rewriter.create<mlir::arith::ExtSIOp>(loc, castedType,
-                                                           convertedTensor);
+      castedTensor =
+          rewriter.create<arith::ExtSIOp>(loc, castedType, convertedTensor);
     else
-      castedTensor = rewriter.create<mlir::arith::ExtUIOp>(loc, castedType,
-                                                           convertedTensor);
+      castedTensor =
+          rewriter.create<arith::ExtUIOp>(loc, castedType, convertedTensor);
   } else {
     if (oldElemType.isF16() && newElemType.isF32())
-      castedTensor = rewriter.create<mlir::arith::ExtFOp>(loc, castedType,
-                                                          convertedTensor);
+      castedTensor =
+          rewriter.create<arith::ExtFOp>(loc, castedType, convertedTensor);
     else if (oldElemType.isF32() && newElemType.isF16())
-      castedTensor = rewriter.create<mlir::arith::TruncFOp>(loc, castedType,
-                                                            convertedTensor);
+      castedTensor =
+          rewriter.create<arith::TruncFOp>(loc, castedType, convertedTensor);
     else
       castedTensor =
           rewriter.create<tt::FpToFpOp>(loc, castedType, convertedTensor);
@@ -263,27 +259,26 @@ Value convertAndCastTensor(mlir::PatternRewriter &rewriter, Value value,
   return castedTensor;
 }
 
-class BlockedToMFMA : public mlir::RewritePattern {
+class BlockedToMFMA : public RewritePattern {
   int mfmaVersion;
   int enforcedNonKDim;
   int kPack;
 
 public:
-  BlockedToMFMA(mlir::MLIRContext *context, int mfmaVersion, int nonKDim,
-                int kPack)
-      : mlir::RewritePattern(tt::DotOp::getOperationName(), 2, context),
+  BlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim, int kPack)
+      : RewritePattern(tt::DotOp::getOperationName(), 2, context),
         mfmaVersion(mfmaVersion), enforcedNonKDim(nonKDim), kPack(kPack) {}
 
   bool isChainDot(tt::DotOp &dotOp) const {
     auto filter = [&dotOp](Operation *op) {
       return op->getParentRegion() == dotOp->getParentRegion();
     };
-    mlir::ForwardSliceOptions fwdOpt;
+    ForwardSliceOptions fwdOpt;
     fwdOpt.filter = filter;
-    mlir::BackwardSliceOptions bwdOpt;
+    BackwardSliceOptions bwdOpt;
     bwdOpt.omitBlockArguments = true;
     bwdOpt.filter = filter;
-    auto slices = mlir::getSlice(dotOp, bwdOpt, fwdOpt);
+    auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
     for (Operation *op : slices) {
       if (isa<tt::DotOp>(op) && (op != dotOp))
         return true;
@@ -295,11 +290,11 @@ public:
     auto filter = [&dotOp](Operation *op) {
       return op->getParentRegion() == dotOp->getParentRegion();
     };
-    mlir::BackwardSliceOptions bwdOpt;
+    BackwardSliceOptions bwdOpt;
     bwdOpt.omitBlockArguments = true;
     bwdOpt.filter = filter;
     SetVector<Operation *> slices;
-    mlir::getBackwardSlice(dotOp.getResult(), &slices, bwdOpt);
+    getBackwardSlice(dotOp.getResult(), &slices, bwdOpt);
     if (llvm::find_if(slices, [](Operation *op) {
           return isa<tt::DotOp>(op);
         }) != slices.end())
@@ -373,9 +368,8 @@ public:
     return {mDim, nDim, kDim, kBase};
   }
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
     auto dotOp = cast<tt::DotOp>(op);
 
     RankedTensorType oldRetType = dotOp.getType();
@@ -390,7 +384,7 @@ public:
 
     // get MFMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
-    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
 
     // operands
@@ -499,7 +493,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     OpBuilder builder(dotOp);
     Type AElType = dotOp.getA().getType().getElementType();
     Type promoteType;
-    if (isa<AMDMfmaEncodingAttr>(D.getType().getEncoding())) {
+    if (isa<ttg::AMDMfmaEncodingAttr>(D.getType().getEncoding())) {
       Type BElType = dotOp.getB().getType().getElementType();
 
       auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
@@ -516,7 +510,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
         promoteType = builder.getF16Type();
       else if (maxBitWidth <= 32)
         promoteType = builder.getF32Type();
-    } else if (isa<AMDWmmaEncodingAttr>(D.getType().getEncoding())) {
+    } else if (isa<ttg::AMDWmmaEncodingAttr>(D.getType().getEncoding())) {
       Type BElType = dotOp.getB().getType().getElementType();
 
       if (AElType == BElType)
@@ -546,12 +540,10 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
           Type srcElType = vTy.getElementType();
           return !srcElType.isUnsignedInteger()
                      ? builder
-                           .create<mlir::arith::SIToFPOp>(dotOp.getLoc(),
-                                                          dstType, v)
+                           .create<arith::SIToFPOp>(dotOp.getLoc(), dstType, v)
                            .getResult()
                      : builder
-                           .create<mlir::arith::UIToFPOp>(dotOp.getLoc(),
-                                                          dstType, v)
+                           .create<arith::UIToFPOp>(dotOp.getLoc(), dstType, v)
                            .getResult();
         };
         auto convertTensorFPToI = [&](Type dstElType, Value v) -> Value {
@@ -559,12 +551,10 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
           Type dstType = vTy.cloneWith(std::nullopt, dstElType);
           return !dstElType.isUnsignedInteger()
                      ? builder
-                           .create<mlir::arith::FPToSIOp>(dotOp.getLoc(),
-                                                          dstType, v)
+                           .create<arith::FPToSIOp>(dotOp.getLoc(), dstType, v)
                            .getResult()
                      : builder
-                           .create<mlir::arith::FPToUIOp>(dotOp.getLoc(),
-                                                          dstType, v)
+                           .create<arith::FPToUIOp>(dotOp.getLoc(), dstType, v)
                            .getResult();
         };
 
@@ -593,14 +583,16 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
-class BlockedToWMMA : public mlir::RewritePattern {
-public:
-  BlockedToWMMA(mlir::MLIRContext *context)
-      : mlir::RewritePattern(tt::DotOp::getOperationName(), 2, context) {}
+class BlockedToWMMA : public RewritePattern {
+  int wmmaVersion;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
+public:
+  BlockedToWMMA(MLIRContext *context, int wmmaVersion)
+      : RewritePattern(tt::DotOp::getOperationName(), 2, context),
+        wmmaVersion(wmmaVersion) {}
+
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
     auto ctx = op->getContext();
     auto dotOp = cast<tt::DotOp>(op);
 
@@ -619,28 +611,34 @@ public:
     auto bShape = oldBType.getShape();
 
     // check shape
-    auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+    auto mnkDim = ttg::AMDWmmaEncodingAttr::getMNKDimPerInstr();
     auto rank = aShape.size();
     if (aShape[rank - 2] % mnkDim[0] != 0 || // m
         bShape[rank - 1] % mnkDim[1] != 0 || // n
         aShape[rank - 1] % mnkDim[2] != 0)   // k
       return failure();
 
+    if (wmmaVersion == 2 && llvm::isa<FloatType>(oldAType) &&
+        oldAType.getIntOrFloatBitWidth() == 8) {
+      return rewriter.notifyMatchFailure(op, "not supported yet");
+    }
+
     // get operand types
-    auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp);
+    auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion);
     if (operandTypes.empty())
       return failure();
 
     // get WMMA encoding for the given number of warps
-    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
 
-    AMDWmmaEncodingAttr wmmaEnc;
+    ttg::AMDWmmaEncodingAttr wmmaEnc;
 
     auto warpsPerTile = warpsPerTileWMMA(dotOp, retShape, numWarps);
 
     auto CTALayout = ttg::getCTALayout(oldRetEncoding);
-    wmmaEnc = AMDWmmaEncodingAttr::get(ctx, warpsPerTile, CTALayout);
+    wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, warpsPerTile,
+                                            CTALayout);
 
     auto newRetType = RankedTensorType::get(retShape, operandTypes[3], wmmaEnc);
 
@@ -651,10 +649,12 @@ public:
 
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
-        ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, mnkDim[2]));
+        ttg::DotOperandEncodingAttr::get(
+            ctx, 0, wmmaEnc, wmmaEnc.getSizePerThreadForOperands(0)[rank - 1]));
     auto newBType = RankedTensorType::get(
         bShape, operandTypes[1],
-        ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEnc, mnkDim[2]));
+        ttg::DotOperandEncodingAttr::get(
+            ctx, 1, wmmaEnc, wmmaEnc.getSizePerThreadForOperands(1)[rank - 2]));
 
     Value castedA = convertAndCastTensor(rewriter, a, newAType.getEncoding(),
                                          operandTypes[0]);
@@ -687,18 +687,24 @@ public:
     this->kPack = kPack;
   }
   void runOnOperation() override {
+
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
-    mlir::RewritePatternSet patterns(context);
-    auto matrixCoreVer = getMatrixCoreVersion(archGenerationName);
-    if (MatrixCoreVersion::CDNA_MFMA1 == matrixCoreVer ||
-        MatrixCoreVersion::CDNA_MFMA2 == matrixCoreVer ||
-        MatrixCoreVersion::CDNA_MFMA3 == matrixCoreVer) {
-      patterns.add<::BlockedToMFMA>(context, getMfmaVersion(matrixCoreVer),
+    RewritePatternSet patterns(context);
+    switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
+    case ISAFamily::CDNA1:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA3:
+      patterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
                                     matrixInstructionSize, kPack);
-    } else if (matrixCoreVer == MatrixCoreVersion::RDNA_WMMA) {
-      patterns.add<::BlockedToWMMA>(context);
+      break;
+    case ISAFamily::RDNA3:
+      patterns.add<::BlockedToWMMA>(context,
+                                    getWmmaVersion(archGenerationName));
+      break;
+    default:
+      break;
     }
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();

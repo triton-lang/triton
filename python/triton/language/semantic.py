@@ -1370,13 +1370,13 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
     assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
     assert lhs.shape[-1].value == rhs.shape[
         -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
-    assert lhs.shape[-2].value >= 16 and lhs.shape[-1].value >= 16 \
-        and rhs.shape[-1].value >= 16, \
-        f"All non-batch values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
+    assert builder.codegen_fns.get("min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+    min_dot_size = builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+        and rhs.shape[-1].value >= min_dot_size[1], \
+            f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
-        # TODO: This is CUDA specific, check if ROCm has the same limitation
-        assert lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     elif out_dtype.is_bf16():
@@ -1391,6 +1391,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
     M = lhs.type.shape[-2]
     N = rhs.type.shape[-1]
+    K = lhs.type.shape[-1]
     B = lhs.type.shape[0] if lhs_rank == 3 else None
     ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
     if acc is None:
@@ -1405,6 +1406,9 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
             max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
         else:
             max_num_imprecise_acc = 0
+    else:
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc > K:
+            raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
 
     return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc),
                      ret_ty)
@@ -1535,7 +1539,8 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
         prefix = " " + prefix
 
     new_args = [arg.handle for arg in args]
-    return tl.tensor(builder.create_print(prefix, hex, new_args), tl.void)
+    is_signed = [arg.dtype in (tl.int1, tl.int8, tl.int16, tl.int32, tl.int64) for arg in args]
+    return tl.tensor(builder.create_print(prefix, hex, new_args, is_signed), tl.void)
 
 
 def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: int, builder: ir.builder) -> tl.tensor:
@@ -1544,6 +1549,10 @@ def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: 
         cond_ty = tl.block_type(cond_ty.scalar, (1, ))
         cond = tl.tensor(builder.create_splat(cond.handle, (1, )), cond_ty)
     return tl.tensor(builder.create_assert(cond.handle, msg, file_name, func_name, lineno), tl.void)
+
+
+def assume(cond, builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_assume(cond.handle), tl.void)
 
 
 def _convert_elem_to_ir_value(builder, elem, require_i64):

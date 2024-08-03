@@ -433,6 +433,19 @@ static std::optional<Attribute> inferSrcEncoding(triton::ReshapeOp op,
                                    op.getAllowReorder());
 }
 
+static bool isSingleValue(Value value) {
+  // Don't consider load as expensive if it is loading a scalar.
+  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
+    return tensorTy.getNumElements() == 1;
+  // TODO: Handle other cases.
+  // For example, when ptr is a tensor of single value.
+  // It means that ptr is a resultant of broadcast or generated through
+  // a chain of broadcast and other operations.
+  // Rematerialize it without considering contiguous memory access pattern is
+  // fine.
+  return true;
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (isa<triton::ScanOp>(op)) {
     // Scan only supports blocked encoding at the moment.
@@ -488,19 +501,6 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reshape, encoding);
 
   return std::nullopt;
-}
-
-bool isSingleValue(Value value) {
-  // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
-    return tensorTy.getNumElements() == 1;
-  // TODO: Handle other cases.
-  // For example, when ptr is a tensor of single value.
-  // It means that ptr is a resultant of broadcast or generated through
-  // a chain of broadcast and other operations.
-  // Rematerialize it without considering contiguous memory access pattern is
-  // fine.
-  return true;
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
@@ -627,6 +627,16 @@ scf::IfOp replaceIfOpWithNewSignature(
   return newIf;
 }
 
+void appendToForOpYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
+  Operation *yieldOp = forOp.getBody()->getTerminator();
+  SmallVector<Value> operands(yieldOp->getOperands());
+  operands.append(newOperands.begin(), newOperands.end());
+
+  OpBuilder builder(yieldOp);
+  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
+  yieldOp->erase();
+}
+
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping) {
   Operation *newOp = rewriter.clone(*op, mapping);
@@ -676,13 +686,21 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
                         Attribute rootEncoding,
                         DenseMap<Value, Attribute> &layout,
                         std::function<bool(Operation *)> stopPropagation) {
-  DenseSet<Value> visited;
-  SmallVector<std::pair<Value, Attribute>> queue = {{root, rootEncoding}};
+  DenseSet<std::pair<Value, Attribute>> seen;
+  SmallVector<std::pair<Value, Attribute>> queue;
+
+  auto enqueue = [&](Value operand, Attribute encoding) {
+    auto x = std::make_pair(operand, encoding);
+    if (!seen.insert(x).second) {
+      return; // Already enqueued, skip
+    }
+    queue.push_back(x);
+  };
+  enqueue(root, rootEncoding);
+
   while (!queue.empty()) {
     auto [currentValue, encoding] = queue.back();
     queue.pop_back();
-    if (!visited.insert(currentValue).second)
-      continue;
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
     // Skip propagating through for op results for now.
@@ -703,8 +721,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
 
-      queue.push_back({thenValue, encoding});
-      queue.push_back({elseValue, encoding});
+      enqueue(thenValue, encoding);
+      enqueue(elseValue, encoding);
 
       continue;
     }
@@ -713,12 +731,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       for (Value result : definingOp->getResults()) {
         if (result == currentValue || !isa<RankedTensorType>(result.getType()))
           continue;
-        if (layout.find(result) != layout.end()) {
-          if (layout[result] != encoding)
-            return failure();
-          continue;
-        }
-        layout[result] = encoding;
+        enqueue(result, encoding);
       }
       if (!isFreeConvert(definingOp) &&
           canFoldIntoConversion(definingOp, encoding))
@@ -731,8 +744,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
-        if (slice.count(operand) == 0)
-          queue.push_back({operand, *srcEncoding});
+        enqueue(operand, *srcEncoding);
       }
       continue;
     }
@@ -743,8 +755,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand->get(), encoding});
-      queue.push_back({yieldOperand, encoding});
+      enqueue(initOperand->get(), encoding);
+      enqueue(yieldOperand, encoding);
       continue;
     }
     // TODO: add support for WhileOp and other region types.
@@ -894,6 +906,8 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       }
       if (auto nestedIf = value.getDefiningOp<scf::IfOp>()) {
         auto result = mlir::cast<OpResult>(value);
+        // mark condition as live.
+        markLive(nestedIf.getCondition());
         for (scf::YieldOp nestedYieldOp :
              {nestedIf.thenYield(), nestedIf.elseYield()}) {
           Value nestedYieldOperand =

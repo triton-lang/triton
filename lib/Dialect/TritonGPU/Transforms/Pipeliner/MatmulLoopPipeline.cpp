@@ -51,18 +51,6 @@ struct LoadInfo {
 
 } // namespace
 
-// Replace the ForOp's yield with a new one with the given operands appended.
-static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
-  // Fix up the yield op.
-  Operation *yieldOp = forOp.getBody()->getTerminator();
-  SmallVector<Value> operands(yieldOp->getOperands());
-  operands.append(newOperands.begin(), newOperands.end());
-
-  OpBuilder builder(yieldOp);
-  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
-  yieldOp->erase();
-}
-
 static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             Value insertIdx, Value extractIdx,
                             tt::CoarseSchedule &schedule,
@@ -127,13 +115,13 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
-    alloc.replaceAllUsesWith(viewLoad.getResult());
+    replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
     SmallVector<ttg::LocalAllocOp> allocsToErase;
     for (Operation *user : loadOp->getUsers()) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-        alloc.replaceAllUsesWith(viewLoad.getResult());
+        replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
         allocsToErase.push_back(alloc);
       }
     }
@@ -203,13 +191,13 @@ static void createTMAAsyncCopy(
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
-    alloc.replaceAllUsesWith(viewLoad.getResult());
+    replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
     SmallVector<ttg::LocalAllocOp> allocsToErase;
     for (Operation *user : loadOp->getUsers()) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-        alloc.replaceAllUsesWith(viewLoad.getResult());
+        replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
         allocsToErase.push_back(alloc);
       }
     }
@@ -757,7 +745,11 @@ scheduleRemainingToLastStage(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     for (auto user : op->getUsers()) {
       if (opToCluster.count(user)) {
         tt::CoarseSchedule::Cluster userCluster = opToCluster[user];
-        tt::CoarseSchedule::Cluster opCluster = schedule[op].second;
+        tt::CoarseSchedule::Cluster opCluster;
+        if (schedule.count(op))
+          opCluster = schedule[op].second;
+        else
+          opCluster = opToCluster[op];
         if (*userCluster < *opCluster) {
           opToCluster[user] = opCluster;
           queue.push_back(user);
@@ -1037,7 +1029,7 @@ createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
   if (phase)
     newYieldOperands.push_back(phase);
   // Patch the yield with the updated counters.
-  appendToYield(forOp, newYieldOperands);
+  appendToForOpYield(forOp, newYieldOperands);
 
   return allocs;
 }

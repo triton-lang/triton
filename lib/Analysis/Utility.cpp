@@ -172,7 +172,7 @@ bool ReduceOpHelper::isWarpSynchronous() {
   return getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] == 1;
 }
 
-SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
+SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
   SmallVector<unsigned> smemShape;
   // that case doesn't need inter-warp communication
   if (isWarpSynchronous())
@@ -185,7 +185,7 @@ SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
 }
 
 unsigned ReduceOpHelper::getScratchSizeInBytes() {
-  auto smemShape = getScratchConfig();
+  auto smemShape = getScratchRepShape();
   auto elems = product<unsigned>(smemShape);
 
   unsigned bytesPerElem = 0;
@@ -401,18 +401,10 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
-bool maybeSharedAllocationOp(Operation *op) {
-  // TODO(Keren): This function can be replaced by adding
-  // MemoryEffectOpInterface. We can then use the MemoryEffectOpInterface to
-  // query the memory effects of the op.
-  auto *dialect = op->getDialect();
-  return dialect &&
-         (dialect->getTypeID() == TypeID::get<TritonGPUDialect>() ||
-          dialect->getTypeID() ==
-              TypeID::get<triton::nvidia_gpu::TritonNvidiaGPUDialect>() ||
-          dialect->getTypeID() == TypeID::get<triton::TritonDialect>() ||
-          dialect->getTypeID() == TypeID::get<arith::ArithDialect>() ||
-          dialect->getTypeID() == TypeID::get<tensor::TensorDialect>());
+unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
+  if (shape.empty())
+    return 0;
+  return product<unsigned>(shape);
 }
 
 static bool supportMFMAGranularity(int m, int n, int k) {
@@ -496,6 +488,9 @@ bool supportMMA(triton::DotOp op, int version) {
     auto rank = retShapePerCTA.size();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = TritonGPUDialect::getNumWarps(mod);
+    // TODO(Keren): for now, fallback to MMAv2 if handling batch matmul.
+    if (rank == 3)
+      return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
           retShapePerCTA[rank - 1] % 8 == 0 &&
           (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||

@@ -137,8 +137,11 @@ When profiling in the command line mode, the `proton.start` and `proton.finalize
 By default, proton profiles are in the *json* format and can be read by *Hatchet*. The following command visualizes the profile data on terminal.
 
 ```bash
+pip install llnl-hatchet
 proton-viewer -m time/s <profile.hatchet>
 ```
+
+NOTE: `pip install hatchet` does not work because the API is slightly different.
 
 More options can be found by running the following command.
 
