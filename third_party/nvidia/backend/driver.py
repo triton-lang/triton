@@ -311,9 +311,13 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   }}
 
   uint64_t ptr_as_uint = PyLong_AsUnsignedLongLong(method_ret);
+  Py_DECREF(method_ret);
+  if (!ptr_as_uint) {{
+    PyErr_SetString(PyExc_ValueError, "received NULL ptr from tma_desc_ptr()");
+    return NULL;
+  }}
   if (ptr_as_uint % 64 != 0) {{
     PyErr_SetString(PyExc_ValueError, "tma_desc_ptr() must be 64-byte aligned");
-    Py_DECREF(method_ret);
     return NULL;
   }}
 
