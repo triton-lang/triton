@@ -127,7 +127,7 @@ def is_offline_build() -> bool:
 
     Note that this flag isn't tested by the CI and does not provide any guarantees.
     """
-    return os.environ.get("TRITON_OFFLINE_BUILD", "") != ""
+    return check_env_flag("TRITON_OFFLINE_BUILD", "")
 
 
 # --- third party packages -----
@@ -449,6 +449,10 @@ class CMakeBuild(build_ext):
             cmake_args += self.get_proton_cmake_args()
         else:
             cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
+
+        if is_offline_build():
+            # unit test builds fetch googletests from GitHub
+            cmake_args += ["-DTRITON_BUILD_UT=OFF"]
 
         cmake_args_append = os.getenv("TRITON_APPEND_CMAKE_ARGS")
         if cmake_args_append is not None:
