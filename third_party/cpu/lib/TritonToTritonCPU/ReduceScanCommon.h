@@ -221,24 +221,22 @@ struct ReduceScanOpConversionBase : public OpConversionPattern<OpT> {
 
   // Dummy vectors are required for shuffles that cannot work on a single
   // vector.
-  ArrayRef<Value>
+  SmallVector<Value>
   createShuffleDummies(Location loc, ValueRange inputs,
                        ConversionPatternRewriter &rewriter) const {
-    if (shuffleDummies.empty()) {
-      SmallVector<int64_t, 1> dummyShape({1});
-      for (auto val : inputs) {
-        auto ty = cast<VectorType>(val.getType());
-        shuffleDummies.push_back(rewriter.create<arith::ConstantOp>(
-            loc, rewriter.getZeroAttr(
-                     ty.cloneWith(dummyShape, ty.getElementType()))));
-      }
+    SmallVector<Value> shuffleDummies;
+    SmallVector<int64_t, 1> dummyShape({1});
+    for (auto val : inputs) {
+      auto ty = cast<VectorType>(val.getType());
+      shuffleDummies.push_back(rewriter.create<arith::ConstantOp>(
+          loc,
+          rewriter.getZeroAttr(ty.cloneWith(dummyShape, ty.getElementType()))));
     }
     return shuffleDummies;
   }
 
 private:
   mutable IRMapping invariantsMap;
-  mutable SmallVector<Value> shuffleDummies;
 };
 
 } // namespace cpu

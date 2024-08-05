@@ -66,7 +66,7 @@ struct ReduceOpConversion
     SmallVector<int64_t> range(vecSize);
     std::iota(range.begin(), range.end(), 0);
 
-    ArrayRef<Value> dummies = createShuffleDummies(loc, inputs, rewriter);
+    SmallVector<Value> dummies = createShuffleDummies(loc, inputs, rewriter);
     SmallVector<Value> res = inputs;
     for (int64_t stride = vecSize / 2; stride > 0; stride = stride / 2) {
       SmallVector<int64_t> shuffleIndices = range;

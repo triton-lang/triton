@@ -52,7 +52,7 @@ struct ScanOpConversion
     int64_t vecSize = cast<VectorType>(inputs[0].getType()).getShape()[0];
     Type maskTy = VectorType::get(vecSize, rewriter.getI1Type());
 
-    ArrayRef<Value> dummies = createShuffleDummies(loc, inputs, rewriter);
+    SmallVector<Value> dummies = createShuffleDummies(loc, inputs, rewriter);
     SmallVector<Value> res = inputs;
     for (int64_t stride = 1; stride < vecSize; stride *= 2) {
       SmallVector<int64_t> shuffleIndices(vecSize, 0);

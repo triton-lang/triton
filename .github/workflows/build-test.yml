@@ -83,3 +83,12 @@ jobs:
             python/test/unit/language/test_annotations.py \
             python/test/unit/language/test_block_pointer.py \
             python/test/unit/language/test_conversions.py
+
+      - name: Run lit tests
+        run: |
+          cd python
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Could not find '${LIT_TEST_DIR}'" ; exit -1
+          fi
+          lit -v "${LIT_TEST_DIR}/TritonCPU"
