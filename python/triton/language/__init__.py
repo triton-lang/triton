@@ -103,7 +103,6 @@ from .core import (
     view,
     void,
     where,
-    NvTmaDesc,
 )
 from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor,
                    ceil)
@@ -250,7 +249,6 @@ __all__ = [
     "xor_sum",
     "zeros",
     "zeros_like",
-    "NvTmaDesc",
 ]
 
 

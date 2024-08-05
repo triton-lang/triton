@@ -2665,11 +2665,3 @@ def binary_op_type_legalization(lhs, rhs, builder):
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
-    
-class NvTmaDesc:
-    def __init__(self, data):
-        self.data = data
-        self.dtype = uint8
-        
-    def tma_desc_ptr(self):
-        return self.data.data_ptr()
