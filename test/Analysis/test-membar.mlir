@@ -471,6 +471,7 @@ tt.func @cf_if(%i1 : i1) {
   tt.return
 }
 
+// CHECK-LABEL: cf_if_else
 tt.func @cf_if_else(%i1 : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %a = triton_gpu.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
@@ -498,6 +499,7 @@ tt.func @cf_if_else(%i1 : i1) {
   tt.return
 }
 
+// CHECK-LABEL: cf_if_else_return
 tt.func @cf_if_else_return(%i1 : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %a = triton_gpu.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory>
@@ -514,6 +516,29 @@ tt.func @cf_if_else_return(%i1 : i1) {
   // CHECK-NEXT: triton_gpu.local_load
   %2 = triton_gpu.local_load %a : !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<16x16xf16, #AL>
   %3 = triton_gpu.local_load %b : !tt.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<16x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: atomic_scalar
+tt.func @atomic_scalar(%arg3: !tt.ptr<i32>) -> i32 {
+  // CHECK-NOT: gpu.barrier
+  %c0_i32 = arith.constant 0 : i32
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+  %4 = tt.atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return %4 : i32
+}
+
+// CHECK-LABEL: atomic_scalar_no_use
+tt.func @atomic_scalar_no_use(%arg3: !tt.ptr<i32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+  %4 = tt.atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  // CHECK: gpu.barrier
+  // CHECK-NEXT: triton_gpu.local_load
+  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
 }
 
