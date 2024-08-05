@@ -79,7 +79,7 @@ def test_assert(func: str, device: str):
         kernel_device_assert[(1, )](x, y, num_warps=num_warps, BLOCK=N)
         kernel_assert_passes[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     assert_close(y, x)
-    # To guarantee driver completes all the jobs for
+    # GPU/host synchronization before exiting the test.
     torch.cuda.synchronize()
 
 
