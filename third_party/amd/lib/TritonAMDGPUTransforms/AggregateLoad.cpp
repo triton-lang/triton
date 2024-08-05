@@ -155,12 +155,44 @@ Value createLocalAlloc(OpBuilder &builder, Location loc, Value loadVal) {
 Value hoistLoad(scf::ForOp forOp, Operation *op, int ub) {
   triton::LoadOp loadOp = dyn_cast<triton::LoadOp>(op);
   // Here I assume
-  // 1. There is no mask in the loadOp
+  // 1. There is no mask along k dim in the loadOp
   // 2. The ptr of loadOp comes from a block arg of the loop
-  IRMapping prologueMap;
   OpBuilder builder(forOp);
-  auto numOperands = loadOp.getNumOperands();
-  assert(numOperands == 1 && "Does not assume to have mask for now");
+  builder.setInsertionPoint(forOp);
+
+  // Dealing with mask
+  Value maskM = loadOp.getMask();
+  Value newMaskVal, newOtherVal;
+  if (maskM) {
+    // We assume the mask along the M dim is NOT loop carried
+    assert(maskM.getParentRegion() != forOp.getRegion() &&
+           "load mask should not be loop carried");
+    Operation *maskOp = maskM.getDefiningOp();
+    auto bcastMask = dyn_cast<tt::BroadcastOp>(maskOp);
+    assert(bcastMask && "load mask does not come from a broadcast op");
+
+    newMaskVal = extendBroadcast(builder, maskOp, /*dim*/ 1, /*factor*/ ub,
+                                 bcastMask.getSrc());
+
+    // Dealing with other
+    Value other = loadOp.getOther();
+    auto otherConstant = dyn_cast<arith::ConstantOp>(other.getDefiningOp());
+    // auto attr = otherConstant.getValue();
+    auto denseAttr =
+        dyn_cast<DenseFPElementsAttr>(otherConstant.getValueAttr());
+    auto ty = dyn_cast<RankedTensorType>(denseAttr.getType());
+    SmallVector<int64_t> newShape(ty.getShape().begin(), ty.getShape().end());
+    newShape[1] *= ub;
+    auto newTy =
+        RankedTensorType::get(newShape, ty.getElementType(), ty.getEncoding());
+    assert(denseAttr.isSplat() &&
+           "The attribute of the constantOp is not a splat");
+    auto reshapedAttr = denseAttr.resizeSplat(newTy);
+    newOtherVal =
+        builder.create<arith::ConstantOp>(forOp.getLoc(), newTy, reshapedAttr);
+  }
+
+  // Dealing with ptr
   auto blockArg = dyn_cast<BlockArgument>(loadOp.getOperand(0));
   assert(blockArg && "ptr is not a block arg");
 
@@ -196,8 +228,6 @@ Value hoistLoad(scf::ForOp forOp, Operation *op, int ub) {
   // For bcastK, we only need to extend the broadcast to be
   // <BLOCK_M x 1> --> <BLOCK_M x {BLOCK_K*ub}>
 
-  builder.setInsertionPoint(aPtrs);
-
   auto newBcastMVal = expandPathBcastM(bcastM, builder, ub);
   auto newBcastKVal =
       extendBroadcast(builder, bcastK, /*which dim to extend*/ 1, ub,
@@ -210,9 +240,15 @@ Value hoistLoad(scf::ForOp forOp, Operation *op, int ub) {
 
   // The we create the aggregated load with the "fat" pointer
   // create: load newPtr
-  auto aggregatedLoadVal = builder.create<triton::LoadOp>(
-      forOp.getLoc(), newPtrVal, loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
+  Value aggregatedLoadVal;
+  if (maskM)
+    aggregatedLoadVal = builder.create<triton::LoadOp>(
+        forOp.getLoc(), newPtrVal, newMaskVal, newOtherVal, loadOp.getCache(),
+        loadOp.getEvict(), loadOp.getIsVolatile());
+  else
+    aggregatedLoadVal = builder.create<triton::LoadOp>(
+        forOp.getLoc(), newPtrVal, loadOp.getCache(), loadOp.getEvict(),
+        loadOp.getIsVolatile());
 
   // Store loaded tensor into LDS
   auto localAllocVal =
