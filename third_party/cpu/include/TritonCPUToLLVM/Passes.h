@@ -26,6 +26,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createGetProgramIdOpToLLVMPass();
 std::unique_ptr<OperationPass<triton::FuncOp>> createLowerMultiReductionPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAtomicOpsToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>> createDebugOpsToLLVMPass();
+std::unique_ptr<OperationPass<ModuleOp>> createMathToLibmvecPass();
 
 void tritonCPUToLLVMPipelineBuilder(OpPassManager &pm);
 void registerTritonCPUToLLVMPipeline();

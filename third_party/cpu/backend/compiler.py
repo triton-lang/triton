@@ -106,7 +106,10 @@ class CPUBackend(BaseBackend):
         promote_bf16_to_fp32 = self.cpu_arch == "x86_64" and "avx512bf16" not in self.cpu_features
         # We don't have any lowering for mixed precision matmuls, so always use casts for now
         convert_mixed_precision_matmul = True
-        cpu.passes.ttcpuir.add_convert_unsupported_ops(pm, promote_bf16_to_fp32, convert_mixed_precision_matmul)
+        # We don't have math lib functions for FP8, FP16, BF16. Promote such operations to FP32.
+        promote_lib_math_to_fp32 = True
+        cpu.passes.ttcpuir.add_convert_unsupported_ops(pm, promote_bf16_to_fp32, convert_mixed_precision_matmul,
+                                                       promote_lib_math_to_fp32)
         decompose_bf16_conv = self.cpu_arch == "x86_64" and "avx512bf16" not in self.cpu_features
         decompose_fp8_conv = True
         cpu.passes.ttcpuir.add_decompose_fp_conversions(pm, decompose_bf16_conv, decompose_fp8_conv)
@@ -116,8 +119,7 @@ class CPUBackend(BaseBackend):
         pm.run(mod)
         return mod
 
-    @staticmethod
-    def make_llir(src, metadata, options):
+    def make_llir(self, src, metadata, options):
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
@@ -133,6 +135,8 @@ class CPUBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         cpu.passes.ttcpuir.add_triton_cpu_to_llvmir_pipeline(pm)
+        if self.cpu_arch == "x86_64" and "avx512f" in self.cpu_features:
+            cpu.passes.ttcpuir.add_math_to_libmvec(pm)
         passes.convert.add_math_to_llvmir(pm)
         cpu.passes.ttcpuir.add_math_to_libm(pm)
         cpu.passes.ttcpuir.add_vector_to_llvmir(pm, options.enable_fast_math)

@@ -82,7 +82,9 @@ jobs:
           python -m pytest -s -n 32 --device cpu \
             python/test/unit/language/test_annotations.py \
             python/test/unit/language/test_block_pointer.py \
-            python/test/unit/language/test_conversions.py
+            python/test/unit/language/test_conversions.py \
+            python/test/unit/cpu/test_libdevice.py \
+            python/test/unit/cpu/test_libmvec.py
 
       - name: Run lit tests
         run: |

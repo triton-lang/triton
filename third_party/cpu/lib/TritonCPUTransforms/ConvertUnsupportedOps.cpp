@@ -301,15 +301,40 @@ struct ConvertMixedPrecisionMatmul
   }
 };
 
+template <typename OpT> struct PromoteOpToFp32 : public OpRewritePattern<OpT> {
+public:
+  using OpRewritePattern<OpT>::OpRewritePattern;
+
+  PromoteOpToFp32(MLIRContext *context) : OpRewritePattern<OpT>(context) {}
+
+  LogicalResult matchAndRewrite(OpT op, PatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    Type opTy = op.getType();
+
+    if (!isFp8(opTy) && !isFp16(opTy) && !isBf16(opTy))
+      return failure();
+
+    Type fp32Ty = toFp32(opTy);
+    SmallVector<Value> fp32Ops;
+    for (auto operand : op->getOperands())
+      fp32Ops.push_back(rewriter.create<arith::ExtFOp>(loc, fp32Ty, operand));
+    auto newOp = rewriter.create<OpT>(loc, fp32Ty, fp32Ops);
+    rewriter.replaceOpWithNewOp<arith::TruncFOp>(op, opTy, newOp);
+    return success();
+  }
+};
+
 struct ConvertUnsupportedOps
     : public triton::cpu::impl::ConvertUnsupportedOpsBase<
           ConvertUnsupportedOps> {
   ConvertUnsupportedOps() = default;
 
   ConvertUnsupportedOps(bool promoteBf16ToFp32,
-                        bool convertMixedPrecisionMatmul) {
+                        bool convertMixedPrecisionMatmul,
+                        bool promoteLibMathToFp32) {
     this->promoteBf16ToFp32 = promoteBf16ToFp32;
     this->convertMixedPrecisionMatmul = convertMixedPrecisionMatmul;
+    this->promoteLibMathToFp32 = promoteLibMathToFp32;
   }
 
   void runOnOperation() override {
@@ -333,6 +358,35 @@ struct ConvertUnsupportedOps
     if (convertMixedPrecisionMatmul) {
       patterns.add<ConvertMixedPrecisionMatmul>(context);
     }
+    if (promoteLibMathToFp32) {
+      patterns.add<PromoteOpToFp32<math::AcosOp>>(context);
+      patterns.add<PromoteOpToFp32<math::AcoshOp>>(context);
+      patterns.add<PromoteOpToFp32<math::AsinOp>>(context);
+      patterns.add<PromoteOpToFp32<math::AsinhOp>>(context);
+      patterns.add<PromoteOpToFp32<math::Atan2Op>>(context);
+      patterns.add<PromoteOpToFp32<math::AtanOp>>(context);
+      patterns.add<PromoteOpToFp32<math::AtanhOp>>(context);
+      patterns.add<PromoteOpToFp32<math::CbrtOp>>(context);
+      patterns.add<PromoteOpToFp32<math::CeilOp>>(context);
+      patterns.add<PromoteOpToFp32<math::CosOp>>(context);
+      patterns.add<PromoteOpToFp32<math::CoshOp>>(context);
+      patterns.add<PromoteOpToFp32<math::ErfOp>>(context);
+      patterns.add<PromoteOpToFp32<math::ExpOp>>(context);
+      patterns.add<PromoteOpToFp32<math::Exp2Op>>(context);
+      patterns.add<PromoteOpToFp32<math::ExpM1Op>>(context);
+      patterns.add<PromoteOpToFp32<math::FloorOp>>(context);
+      patterns.add<PromoteOpToFp32<math::FmaOp>>(context);
+      patterns.add<PromoteOpToFp32<math::LogOp>>(context);
+      patterns.add<PromoteOpToFp32<math::Log2Op>>(context);
+      patterns.add<PromoteOpToFp32<math::Log10Op>>(context);
+      patterns.add<PromoteOpToFp32<math::Log1pOp>>(context);
+      patterns.add<PromoteOpToFp32<math::PowFOp>>(context);
+      patterns.add<PromoteOpToFp32<math::SinOp>>(context);
+      patterns.add<PromoteOpToFp32<math::SinhOp>>(context);
+      patterns.add<PromoteOpToFp32<math::SqrtOp>>(context);
+      patterns.add<PromoteOpToFp32<math::TanOp>>(context);
+      patterns.add<PromoteOpToFp32<math::TanhOp>>(context);
+    }
 
     if (failed(mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns))))
       return signalPassFailure();
@@ -351,9 +405,10 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertUnsupportedOps() {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertUnsupportedOps(bool promoteBf16ToFp32,
-                            bool convertMixedPrecisionMatmul) {
-  return std::make_unique<ConvertUnsupportedOps>(promoteBf16ToFp32,
-                                                 convertMixedPrecisionMatmul);
+                            bool convertMixedPrecisionMatmul,
+                            bool promoteLibMathToFp32) {
+  return std::make_unique<ConvertUnsupportedOps>(
+      promoteBf16ToFp32, convertMixedPrecisionMatmul, promoteLibMathToFp32);
 }
 
 } // namespace cpu

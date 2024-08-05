@@ -32,9 +32,10 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   });
   m.def("add_convert_unsupported_ops",
         [](mlir::PassManager &pm, bool promote_bf16_to_fp32,
-           bool convert_mixed_precision_matmul) {
+           bool convert_mixed_precision_matmul, bool promote_lib_math_to_fp32) {
           pm.addPass(mlir::triton::cpu::createConvertUnsupportedOps(
-              promote_bf16_to_fp32, convert_mixed_precision_matmul));
+              promote_bf16_to_fp32, convert_mixed_precision_matmul,
+              promote_lib_math_to_fp32));
         });
   m.def("add_decompose_fp_conversions",
         [](mlir::PassManager &pm, bool decomposeBf16Conversions,
@@ -70,6 +71,9 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   });
   m.def("add_memref_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  });
+  m.def("add_math_to_libmvec", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createMathToLibmvecPass());
   });
   m.def("add_math_to_libm", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createConvertMathToLibmPass());

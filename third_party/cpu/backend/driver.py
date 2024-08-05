@@ -10,6 +10,8 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import DriverBase
 from triton.backends.compiler import GPUTarget
 
+from triton._C.libtriton import llvm
+
 _dirname = os.getenv("TRITON_SYS_PATH", default="/usr/local")
 # for locating libTritonCPURuntime
 _triton_C_dir = importlib.resources.files(triton).joinpath("_C")
@@ -359,7 +361,8 @@ class CPUDriver(DriverBase):
     def get_current_target(self):
         # Capability and warp size are zeros for CPU.
         # TODO: GPUTarget naming isn't obviously good.
-        return GPUTarget("cpu", 0, 0)
+        cpu_arch = llvm.get_cpu_tripple().split("-")[0]
+        return GPUTarget("cpu", cpu_arch, 0)
 
     @staticmethod
     def is_active():

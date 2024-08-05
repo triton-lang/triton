@@ -18,6 +18,9 @@ def ConvertUnsupportedOps : Pass<"triton-cpu-add-casts-for-unsupported-ops", "ml
         Option<"convertMixedPrecisionMatmul", "convert-mixed-precision-matmul",
                "bool", /*default*/"false",
                "Convert inputs of a mixed-precision matmul to a destination type.">,
+        Option<"promoteLibMathToFp32", "promote-lib-math-to-fp32",
+               "bool", /*default*/"true",
+               "Promote FP8, FP16, BF16 math operations mapped to libm function to FP32.">,
     ];
 
     let constructor = "mlir::triton::cpu::createConvertUnsupportedOps()";

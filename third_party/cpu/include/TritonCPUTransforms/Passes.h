@@ -21,7 +21,8 @@ namespace cpu {
 std::unique_ptr<OperationPass<ModuleOp>> createConvertUnsupportedOps();
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertUnsupportedOps(bool promoteBf16ToFp32,
-                            bool convertMixedPrecisionMatmul);
+                            bool convertMixedPrecisionMatmul,
+                            bool promoteLibMathToFp32);
 std::unique_ptr<OperationPass<ModuleOp>> createDecomposeFpConversions();
 std::unique_ptr<OperationPass<ModuleOp>>
 createDecomposeFpConversions(bool decomposeBf16Conversions,
