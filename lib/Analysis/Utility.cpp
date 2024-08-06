@@ -407,20 +407,6 @@ unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   return product<unsigned>(shape);
 }
 
-bool maybeSharedAllocationOp(Operation *op) {
-  // TODO(Keren): This function can be replaced by adding
-  // MemoryEffectOpInterface. We can then use the MemoryEffectOpInterface to
-  // query the memory effects of the op.
-  auto *dialect = op->getDialect();
-  return dialect &&
-         (dialect->getTypeID() == TypeID::get<TritonGPUDialect>() ||
-          dialect->getTypeID() ==
-              TypeID::get<triton::nvidia_gpu::TritonNvidiaGPUDialect>() ||
-          dialect->getTypeID() == TypeID::get<triton::TritonDialect>() ||
-          dialect->getTypeID() == TypeID::get<arith::ArithDialect>() ||
-          dialect->getTypeID() == TypeID::get<tensor::TensorDialect>());
-}
-
 static bool supportMFMAGranularity(int m, int n, int k) {
   // these limitations are dtype dependent, in future we may relax them
   const static std::pair<int, int> mfmaTypes[2] = {{32, 8}, {16, 16}};
@@ -622,6 +608,13 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   return !isMmaToMmaShortcut(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
+}
+
+bool atomicNeedsSharedMemory(Value value) {
+  auto type = value.getType();
+  if (isa<RankedTensorType>(type) || value.use_empty())
+    return false;
+  return true;
 }
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {

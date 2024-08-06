@@ -158,8 +158,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                          const LLVMTypeConverter *typeConverter) {
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
+  // TODO: support 2nd gen of WMMA
+  assert(wmmaLayout.getVersion() == 1);
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
   auto wmmaInstrType = getWMMAInstrTypeFromDot(op);
 
   auto loc = op.getLoc();
@@ -176,9 +178,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   int kWidth = aEncoding.getKWidth();
 
   auto repA =
-      wmmaLayout.getWMMARepForOperands(aTensorTy.getShape(), elemTy, kWidth, 0);
+      wmmaLayout.getRepForOperands(aTensorTy.getShape(), elemTy, kWidth, 0);
   auto repB =
-      wmmaLayout.getWMMARepForOperands(bTensorTy.getShape(), elemTy, kWidth, 1);
+      wmmaLayout.getRepForOperands(bTensorTy.getShape(), elemTy, kWidth, 1);
 
   assert(repA[2] == repB[1]);
 

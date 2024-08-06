@@ -8,6 +8,8 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
@@ -793,7 +795,7 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
 
-//
+// Wmma encoding
 
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
@@ -802,7 +804,7 @@ AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   assert((rank == 2 || rank == 3) && "Unexpected rank of wmma layout");
 
   SmallVector<unsigned> elemsPerThread(rank);
-  auto mnkDim = getMNKDimPerWMMAInstr();
+  auto mnkDim = getMNKDimPerInstr();
   auto elemsPerThreadPerTile = getSizePerThread();
   auto warpsPerCTA = getWarpsPerCTA();
 
@@ -821,8 +823,6 @@ unsigned AMDWmmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                      Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
-
-//
 
 SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
@@ -1036,10 +1036,10 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    // TODO: remove this condition if new values are supported
-    if (kWidth != 16)
-      return emitError() << "triton_gpu.dot_op kWidth parameter supports "
-                            "only 16 for WMMA parent";
+    if (kWidth != 16 && parentAttr.getVersion() == 1 ||
+        kWidth != 8 && parentAttr.getVersion() == 2)
+      return emitError() << "triton_gpu.dot_op kWidth parameter must be 16 for "
+                            "gfx11 and 8 for gfx12";
     return success();
   }
 
@@ -1355,12 +1355,17 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
+  unsigned version = 0;
   SmallVector<unsigned> warpsPerCTA;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
 
   for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "version") {
+      if (parseUInt(parser, attr, version, "version").failed())
+        return {};
+    }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
@@ -1387,13 +1392,14 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(),
+  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
                                                 warpsPerCTA, *CTALayout);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+          << "version = " << getVersion() << ", warpsPerCTA = ["
+          << ArrayRef(getWarpsPerCTA()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
   printer << "}>";
@@ -1664,13 +1670,17 @@ AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
   llvm_unreachable("DotOperandEncodingAttr opIdx must be 0 or 1");
 }
 
+//===----------------------------------------------------------------------===//
+// Wmma encoding
+//===----------------------------------------------------------------------===//
+
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   auto warpsPerCTA = getWarpsPerCTA();
   auto rank = warpsPerCTA.size();
   SmallVector<unsigned> shapePerCTATile(warpsPerCTA.begin(), warpsPerCTA.end());
 
-  auto mnkDim = getMNKDimPerWMMAInstr();
+  auto mnkDim = getMNKDimPerInstr();
   shapePerCTATile[rank - 2] *= mnkDim[0];
   shapePerCTATile[rank - 1] *= mnkDim[1];
   return shapePerCTATile;
@@ -1696,7 +1706,7 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadOrder() const {
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadsPerWarp() const {
   auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> threads(rank, 1);
-  auto mnkInstr = getMNKDimPerWMMAInstr();
+  auto mnkInstr = getMNKDimPerInstr();
   threads[rank - 2] = mnkInstr[0] / getSizePerThread()[rank - 2];
   threads[rank - 1] = mnkInstr[1] / getSizePerThread()[rank - 1];
   return threads;
@@ -1713,11 +1723,14 @@ SmallVector<unsigned>
 AMDWmmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> sizePerThread(rank, 1);
+  auto numReplicated = getVersion() == 1 ? 2 : 1;
+  auto elemsPerInstr = numReplicated * product(getElemsPerInstrForOperands()) /
+                       product(getThreadsPerWarp());
   if (opIdx == 0) {
     sizePerThread[rank - 2] = 1;
-    sizePerThread[rank - 1] = 16;
+    sizePerThread[rank - 1] = elemsPerInstr;
   } else if (opIdx == 1) {
-    sizePerThread[rank - 2] = 16;
+    sizePerThread[rank - 2] = elemsPerInstr;
     sizePerThread[rank - 1] = 1;
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
@@ -1730,7 +1743,7 @@ AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
                                                       int opIdx) const {
   auto parentShapePerCTA = getShapePerCTATile(shape);
   auto rank = shape.size();
-  assert(rank = 2);
+  assert(rank == 2);
   if (opIdx == 0) {
     return {parentShapePerCTA[0], static_cast<unsigned>(shape[1])};
   } else if (opIdx == 1) {
@@ -1742,20 +1755,19 @@ AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 
 unsigned AMDWmmaEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  auto rep = getWMMARepForOperands(shape, eltTy, kWidth, opIdx);
+  auto rep = getRepForOperands(shape, eltTy, kWidth, opIdx);
   return product(rep) * kWidth;
 }
 
-SmallVector<int64_t>
-AMDWmmaEncodingAttr::getWMMAElemsPerInstrForOperands() const {
+SmallVector<int64_t> AMDWmmaEncodingAttr::getElemsPerInstrForOperands() const {
   return {16, 16};
 }
 
 SmallVector<int64_t>
-AMDWmmaEncodingAttr::getWMMARepForOperands(ArrayRef<int64_t> operandShape,
-                                           Type elemType, int kWidth,
-                                           int opIdx) const {
-  auto operandTileShape = getWMMAElemsPerInstrForOperands();
+AMDWmmaEncodingAttr::getRepForOperands(ArrayRef<int64_t> operandShape,
+                                       Type elemType, int kWidth,
+                                       int opIdx) const {
+  auto operandTileShape = getElemsPerInstrForOperands();
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
   auto rank = operandShape.size();
@@ -1778,7 +1790,7 @@ AMDWmmaEncodingAttr::getWMMARepForOperands(ArrayRef<int64_t> operandShape,
   }
 }
 
-SmallVector<unsigned> AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr() {
+SmallVector<unsigned> AMDWmmaEncodingAttr::getMNKDimPerInstr() {
   // TODO: move magic numbers out of the code
   return {16, 16, 16};
 }
@@ -2995,6 +3007,170 @@ LogicalResult MemDescSubviewOp::verify() {
   // resulting code ultimately works.
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Layout debug printing
+//===----------------------------------------------------------------------===//
+
+// Return N-D delinearized indices from a linear index.
+static SmallVector<int64_t> delinearize(int64_t idx, ArrayRef<int64_t> shape) {
+  SmallVector<int64_t> ret(shape.size());
+  for (int i = shape.size() - 1; i >= 0; i--) {
+    ret[i] = idx % shape[i];
+    idx /= shape[i];
+  }
+  return ret;
+}
+
+// Returns how many padding characters are needed for the string representation
+// of value to be the same as max.
+static int numCharacterPadding(int value, int max) {
+  return std::to_string(max).size() - std::to_string(value).size();
+}
+
+// return the string padded to have the same length as max.
+static std::string paddedString(int value, int max) {
+  int nbChar = numCharacterPadding(value, max);
+  std::string str;
+  for (int i = 0; i < nbChar; i++)
+    str += " ";
+  str += std::to_string(value);
+  return str;
+}
+
+std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
+                                            bool useHWPointOfView) {
+  auto layout = tensorType.getEncoding();
+  if (!layout)
+    return "";
+
+  unsigned threadsPerWarp = getWarpSize(layout);
+  unsigned numWarpsPerCTA = getNumWarpsPerCTA(layout);
+  unsigned numBlocks = getNumCTAs(layout);
+  int numElementsPerThreads = getTotalElemsPerThread(tensorType);
+  StringAttr kRegister = StringAttr::get(tensorType.getContext(), "register");
+  StringAttr kLane = StringAttr::get(tensorType.getContext(), "lane");
+  StringAttr kWarp = StringAttr::get(tensorType.getContext(), "warp");
+  StringAttr kBlock = StringAttr::get(tensorType.getContext(), "block");
+
+  std::optional<LinearLayout> ll =
+      triton::gpu::toLinearLayout(tensorType.getShape(), layout);
+  if (!ll.has_value())
+    llvm::report_fatal_error("Failed to convert layout to linear layout");
+  int64_t tensorSize = product(tensorType.getShape());
+  std::vector<std::string> elementMapping(tensorSize);
+  std::vector<std::string> threadMapping;
+  for (int blockId = 0; blockId < numBlocks; ++blockId) {
+    for (int warpId = 0; warpId < numWarpsPerCTA; warpId++) {
+      for (int tid = 0; tid < threadsPerWarp; ++tid) {
+        for (int idx = 0; idx < numElementsPerThreads; ++idx) {
+          SmallVector<std::pair<StringAttr, int32_t>> inputs = {
+              {kBlock, blockId},
+              {kWarp, warpId},
+              {kLane, tid},
+              {kRegister, idx}};
+          SmallVector<std::pair<StringAttr, int32_t>> outputs =
+              ll->apply(inputs);
+          int32_t linearizedIdx = 0;
+          int stride = 1;
+          for (int i = outputs.size() - 1; i >= 0; i--) {
+            linearizedIdx += outputs[i].second * stride;
+            stride *= tensorType.getDimSize(i);
+          }
+          std::string &value = elementMapping[linearizedIdx];
+          if (!value.empty())
+            value += "|";
+          int padding = numCharacterPadding(blockId, numBlocks) +
+                        numCharacterPadding(tid + warpId * threadsPerWarp,
+                                            numWarpsPerCTA * threadsPerWarp) +
+                        numCharacterPadding(idx, numElementsPerThreads);
+          for (int i = 0; i < padding; i++)
+            value += " ";
+          if (numBlocks > 1)
+            value += "B" + std::to_string(blockId) + ":";
+          value += "T" + std::to_string(tid + warpId * threadsPerWarp) + ":" +
+                   std::to_string(idx);
+          // Now also compute the thread mapping.
+          std::string threadInfo = "(";
+          for (int i = 0; i < outputs.size(); i++) {
+            if (i > 0)
+              threadInfo += ",";
+            threadInfo +=
+                paddedString(outputs[i].second, tensorType.getDimSize(i));
+          }
+          threadInfo += ")";
+          threadMapping.push_back(threadInfo);
+        }
+      }
+    }
+  }
+  std::string layoutStr;
+  if (!useHWPointOfView) {
+    // Printing the threads containning each elements of the tensor.
+    int rank = tensorType.getRank();
+    bool newLine = true;
+    for (int i = 0; i < tensorSize; i++) {
+      auto indices = delinearize(i, tensorType.getShape());
+      int numOpenBracket = 0;
+      for (int j = rank - 1; j >= 0; j--) {
+        if (indices[j] % tensorType.getDimSize(j) != 0)
+          break;
+        layoutStr += "[";
+        numOpenBracket++;
+      }
+      if (newLine) {
+        for (int j = 0; j < rank - numOpenBracket; j++)
+          layoutStr += " ";
+        newLine = false;
+      }
+
+      layoutStr += elementMapping[i];
+      auto nextIndices = delinearize(i + 1, tensorType.getShape());
+      for (int j = rank - 1; j >= 0; j--) {
+        if (nextIndices[j] % tensorType.getDimSize(j) != 0)
+          break;
+        layoutStr += "]";
+      }
+      if (nextIndices.back() % tensorType.getShape().back() == 0) {
+        layoutStr += "\n";
+        newLine = true;
+      } else {
+        layoutStr += ", ";
+      }
+    }
+  } else {
+    // Printing the elements in each physical reg/warps/threads.
+    for (int blockId = 0; blockId < numBlocks; blockId++) {
+      if (numBlocks > 1)
+        layoutStr += "Block" + std::to_string(blockId) + ":\n";
+      for (int warpId = 0; warpId < numWarpsPerCTA; warpId++) {
+        layoutStr += "Warp" + std::to_string(warpId) + ":\n";
+        for (int idx = 0; idx < numElementsPerThreads; ++idx) {
+          for (int tid = 0; tid < threadsPerWarp; ++tid) {
+            int linearizedIdx =
+                blockId * numWarpsPerCTA * threadsPerWarp *
+                    numElementsPerThreads +
+                warpId * threadsPerWarp * numElementsPerThreads +
+                tid * numElementsPerThreads + idx;
+            layoutStr += threadMapping[linearizedIdx];
+            if (tid < threadsPerWarp - 1)
+              layoutStr += ", ";
+          }
+          layoutStr += "\n";
+        }
+      }
+    }
+  }
+  return layoutStr;
+}
+
+void mlir::triton::gpu::dumpLayout(RankedTensorType tensorType) {
+  llvm::errs() << getLayoutStr(tensorType, /*useHWPointOfView=*/false);
+}
+
+void mlir::triton::gpu::dumpHWLayout(RankedTensorType tensorType) {
+  llvm::errs() << getLayoutStr(tensorType, /*useHWPointOfView=*/true);
 }
 
 void TritonGPUDialect::initialize() {

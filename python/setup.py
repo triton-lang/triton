@@ -2,6 +2,7 @@ import os
 import platform
 import re
 import contextlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -113,6 +114,22 @@ def get_env_with_keys(key: list):
     return ""
 
 
+def is_offline_build() -> bool:
+    """
+    Downstream projects and distributions which bootstrap their own dependencies from scratch
+    and run builds in offline sandboxes
+    may set `TRITON_OFFLINE_BUILD` in the build environment to prevent any attempts at downloading
+    pinned dependencies from the internet or at using dependencies vendored in-tree.
+
+    Dependencies must be defined using respective search paths (cf. `syspath_var_name` in `Package`).
+    Missing dependencies lead to an early abortion.
+    Dependencies' compatibility is not verified.
+
+    Note that this flag isn't tested by the CI and does not provide any guarantees.
+    """
+    return check_env_flag("TRITON_OFFLINE_BUILD", "")
+
+
 # --- third party packages -----
 
 
@@ -220,8 +237,14 @@ def get_thirdparty_packages(packages: list):
         if os.environ.get(p.syspath_var_name):
             package_dir = os.environ[p.syspath_var_name]
         version_file_path = os.path.join(package_dir, "version.txt")
-        if p.syspath_var_name not in os.environ and\
-           (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url):
+
+        input_defined = p.syspath_var_name in os.environ
+        input_exists = os.path.exists(version_file_path)
+        input_compatible = input_exists and Path(version_file_path).read_text() == p.url
+
+        if is_offline_build() and not input_defined:
+            raise RuntimeError(f"Requested an offline build but {p.syspath_var_name} is not set")
+        if not is_offline_build() and not input_defined and not input_compatible:
             with contextlib.suppress(Exception):
                 shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
@@ -245,6 +268,8 @@ def get_thirdparty_packages(packages: list):
 
 
 def download_and_copy(name, src_path, variable, version, url_func):
+    if is_offline_build():
+        return
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
@@ -425,9 +450,13 @@ class CMakeBuild(build_ext):
         else:
             cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
 
+        if is_offline_build():
+            # unit test builds fetch googletests from GitHub
+            cmake_args += ["-DTRITON_BUILD_UT=OFF"]
+
         cmake_args_append = os.getenv("TRITON_APPEND_CMAKE_ARGS")
         if cmake_args_append is not None:
-            cmake_args += cmake_args_append.split(" ")
+            cmake_args += shlex.split(cmake_args_append)
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
@@ -566,7 +595,8 @@ def get_packages():
         "triton/tools",
     ]
     packages += [f'triton/backends/{backend.name}' for backend in backends]
-    packages += ["triton/profiler"]
+    if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
+        packages += ["triton/profiler"]
     return packages
 
 

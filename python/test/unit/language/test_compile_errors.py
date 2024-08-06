@@ -155,6 +155,15 @@ def test_two_returns_no_err():
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
 
 
+def test_not_const_annotate_no_err():
+
+    @triton.jit
+    def kernel(N: int = 1):
+        pass
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'N': 'i32'}, constants={}))
+
+
 @triton.jit
 def returns_branched_on_constexpr(N: tl.constexpr):
     if N == 0:
@@ -302,6 +311,15 @@ def test_global_access_in_fn_default_arg():
 
     # No error.
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={0: "i32"}, constants={}))
+
+
+def test_defaults_assign_no_err():
+
+    @triton.jit
+    def kernel(a=1, B: tl.constexpr = ""):
+        pass
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
 
 
 def test_max_num_imprecise_acc_limit():

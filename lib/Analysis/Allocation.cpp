@@ -88,22 +88,16 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
   return repShape;
 }
 
-// TODO: extend beyond scalars
-static SmallVector<unsigned> getRepShapeForAtomicRMW(triton::AtomicRMWOp op) {
+// Both `atomic_cas` and `atomic_rmw need a single scratch element if returning
+// a scalar value because Triton's block-based programming model ensures that
+// all threads in each block see the same return value, even those threads that
+// do not participate in the atomic operation
+static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   SmallVector<unsigned> smemShape;
-  if (isa<RankedTensorType>(op.getPtr().getType())) {
-    // do nothing or just assert because shared memory is not used in tensor up
-    // to now
-  } else {
-    // need only bytes for scalar
-    // always vec = 1 and elemsPerThread = 1 for scalar?
+  if (atomicNeedsSharedMemory(result)) {
     smemShape.push_back(1);
   }
   return smemShape;
-}
-
-static SmallVector<unsigned> getRepShapeForAtomicCAS(triton::AtomicCASOp op) {
-  return SmallVector<unsigned>{1};
 }
 
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
@@ -185,14 +179,6 @@ private:
 
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
-    // Values returned from scf.yield will not be allocated even though they
-    // have the shared encoding.
-    // For example: %a = scf.if -> yield
-    // %a must be allocated elsewhere by other operations.
-    // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op))
-      return;
-
     // XXX(Keren): Why this hard-coded alignment?
     size_t kAlignment = 8;
     for (Value result : op->getResults()) {
@@ -274,14 +260,14 @@ private:
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
-    } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
+    } else if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(op)) {
       auto value = op->getOperand(0);
       // only scalar requires scratch memory
       // make it explicit for readability
       if (dyn_cast<RankedTensorType>(value.getType())) {
         // nothing to do
       } else {
-        auto smemShape = getRepShapeForAtomicRMW(atomicRMWOp);
+        auto smemShape = getRepShapeForAtomic(op->getResult(0));
         auto elems = getNumScratchElements(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();
@@ -289,23 +275,6 @@ private:
             isa<triton::PointerType>(elemTy)
                 ? elems * kPtrBitWidth / 8
                 : elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
-        maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                            scratchAlignment);
-      }
-    } else if (auto atomicCASOp = dyn_cast<triton::AtomicCASOp>(op)) {
-      // only scalar requires scratch memory
-      // make it explicit for readability
-      auto value = op->getOperand(0);
-      if (dyn_cast<RankedTensorType>(value.getType())) {
-        // nothing to do
-      } else {
-        auto smemShape = getRepShapeForAtomicCAS(atomicCASOp);
-        auto elems = getNumScratchElements(smemShape);
-        auto elemTy =
-            cast<triton::PointerType>(value.getType()).getPointeeType();
-        auto bytes = isa<triton::PointerType>(elemTy)
-                         ? elems * kPtrBitWidth / 8
-                         : elems * elemTy.getIntOrFloatBitWidth() / 8;
         maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                             scratchAlignment);
       }

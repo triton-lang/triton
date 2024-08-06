@@ -106,7 +106,7 @@ jobs:
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["a100-runner-set"], ["h100-runner-set"]]'
-            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"]]'
+            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"], ["self-hosted", "gfx942"]]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
@@ -381,11 +381,8 @@ jobs:
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
-          ## test_subprocess.py is flaky on the AMD CI.
-          ## TODO (lixun) find a solution and re-enable it.
           pytest --capture=tee-sys -rfs -n 16 language runtime \
-                 --ignore=language/test_line_info.py \
-                 --ignore=language/test_subprocess.py
+                 --ignore=language/test_line_info.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 

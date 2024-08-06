@@ -11,7 +11,6 @@ namespace mlir {
 class OpBuilder;
 
 struct BlockInfo {
-  using BufferIdSetT = Allocation::BufferIdSetT;
   using IntervalSetT = std::set<Interval<size_t>>;
 
   IntervalSetT syncReadIntervals;
