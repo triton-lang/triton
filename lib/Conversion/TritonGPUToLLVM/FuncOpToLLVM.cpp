@@ -72,6 +72,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     const bool isKernel = LLVM::isKernel(llvmFuncOp);
     for (unsigned i = 0; i < llvmFuncOp.getNumArguments(); ++i) {
       const auto attrs = llvmFuncOp.getArgAttrDict(i);
+      if (!attrs) { continue; }
+
       for (const auto& attr : attrs) {
         if (attr.getName() == "tt.nv_tma_desc") {
           const auto i32_type = mlir::IntegerType::get(llvmFuncOp.getContext(), 32);
