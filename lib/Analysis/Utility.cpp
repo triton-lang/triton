@@ -561,14 +561,18 @@ bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   if (parentLayout == nullptr)
     return false;
   auto opShape = srcTy.getShape();
-  if (opShape.size() != 2)
-    return false;
-  int kDim = dotOperandLayout.getOpIdx() == 0 ? 1 : 0;
-  int nonKDim = dotOperandLayout.getOpIdx() == 0 ? 0 : 1;
+  auto rank = opShape.size();
+
+  int kDim = dotOperandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  int nonKDim = dotOperandLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
+  auto ctaLayout = blockedLayout.getCTALayout();
+
+  bool ctaLayoutCompatible =
+      ctaLayout.getCTASplitNum()[kDim] == 1 &&
+      blockedLayout.getCTALayout() == parentLayout.getCTALayout();
   bool threadHoldsWholeKDim =
       blockedLayout.getSizePerThread()[kDim] == opShape[kDim];
   bool nonKDimCompatible =
-      blockedLayout.getCTALayout() == parentLayout.getCTALayout() &&
       blockedLayout.getOrder() == parentLayout.getOrder() &&
       blockedLayout.getSizePerThread()[nonKDim] ==
           parentLayout.getSizePerThread()[nonKDim] &&
@@ -576,7 +580,19 @@ bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
           parentLayout.getThreadsPerWarp()[nonKDim] &&
       blockedLayout.getWarpsPerCTA()[nonKDim] ==
           parentLayout.getWarpsPerCTA()[nonKDim];
-  return threadHoldsWholeKDim && nonKDimCompatible;
+  bool matrixDimsCompatible =
+      ctaLayoutCompatible && threadHoldsWholeKDim && nonKDimCompatible;
+  if (rank == 2)
+    return matrixDimsCompatible;
+  // additional check for batch dimension
+  assert(rank == 3);
+  bool bDimCompatible =
+      blockedLayout.getSizePerThread()[0] ==
+          parentLayout.getSizePerThread()[0] &&
+      blockedLayout.getThreadsPerWarp()[0] ==
+          parentLayout.getThreadsPerWarp()[0] &&
+      blockedLayout.getWarpsPerCTA()[0] == parentLayout.getWarpsPerCTA()[0];
+  return matrixDimsCompatible && bDimCompatible;
 }
 
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
