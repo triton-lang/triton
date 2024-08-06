@@ -233,41 +233,36 @@ struct LoadOpConversion : public MemoryOpConversion<triton::LoadOp> {
     auto cache = loadOp.getCache();
     auto evict = loadOp.getEvict();
     auto isVolatile = loadOp.getIsVolatile();
+
+    auto loadOne = [=, &rewriter](ArrayRef<int64_t> indices, Value dst) {
+      Value ptr = rewriter.create<vector::ExtractOp>(loc, ptrs, indices);
+      ptr = rewriter.create<IntToPtrOp>(loc, ptrTy, ptr);
+      Value val =
+          rewriter.create<triton::LoadOp>(loc, ptr, cache, evict, isVolatile);
+      return rewriter.create<vector::InsertOp>(loc, val, dst, indices);
+    };
+
     Value dst = convertOtherVal(loadOp, rewriter);
     int64_t numElems = vecTy.getNumElements();
     auto strides = computeStrides(vecTy.getShape());
     for (auto idx = 0; idx < numElems; ++idx) {
       auto indices = delinearize(idx, strides);
-      Block *headerBlock = rewriter.getBlock();
-      Block *condBlock = nullptr;
-      Value origDst = dst;
+      if (!mask) {
+        dst = loadOne(indices, dst);
+        continue;
+      }
       // Create a conditional block for load if there is a mask.
-      if (mask) {
-        condBlock =
-            rewriter.splitBlock(headerBlock, rewriter.getInsertionPoint());
-        rewriter.setInsertionPointToStart(condBlock);
-      }
-
-      Value ptr = rewriter.create<vector::ExtractOp>(loc, ptrs, indices);
-      ptr = rewriter.create<IntToPtrOp>(loc, ptrTy, ptr);
-      Value val =
-          rewriter.create<triton::LoadOp>(loc, ptr, cache, evict, isVolatile);
-      dst = rewriter.create<vector::InsertOp>(loc, val, dst, indices);
-
-      // Add predicate and branches.
-      if (mask) {
-        Block *footerBlock =
-            rewriter.splitBlock(condBlock, rewriter.getInsertionPoint());
-        Value resDst = dst;
-        dst = footerBlock->addArgument(dst.getType(), dst.getLoc());
-        rewriter.setInsertionPointToEnd(headerBlock);
-        auto predicate = rewriter.create<vector::ExtractOp>(loc, mask, indices);
-        rewriter.create<cf::CondBranchOp>(loc, predicate, condBlock,
-                                          footerBlock, origDst);
-        rewriter.setInsertionPointToEnd(condBlock);
-        rewriter.create<cf::BranchOp>(loc, footerBlock, resDst);
-        rewriter.setInsertionPointToStart(footerBlock);
-      }
+      auto predicate = rewriter.create<vector::ExtractOp>(loc, mask, indices);
+      auto ifOp = rewriter.create<scf::IfOp>(
+          loc, predicate,
+          [&](OpBuilder &builder, Location loc) {
+            auto result = loadOne(indices, dst).getResult();
+            rewriter.create<scf::YieldOp>(loc, result);
+          },
+          [&](OpBuilder &builder, Location loc) {
+            rewriter.create<scf::YieldOp>(loc, dst);
+          });
+      dst = ifOp.getResult(0);
     }
 
     rewriter.replaceOp(loadOp, dst);
@@ -381,36 +376,28 @@ struct StoreOpConversion : public MemoryOpConversion<triton::StoreOp> {
     auto cache = storeOp.getCache();
     auto evict = storeOp.getEvict();
 
-    int64_t numElems = tensorTy.getNumElements();
-    auto strides = computeStrides(tensorTy.getShape());
-    for (auto idx = 0; idx < numElems; ++idx) {
-      auto indices = delinearize(idx, strides);
-      Block *headerBlock = rewriter.getBlock();
-      Block *condBlock = nullptr;
-      // Create a conditional block for store if there is a mask.
-      if (mask) {
-        condBlock =
-            rewriter.splitBlock(headerBlock, rewriter.getInsertionPoint());
-        rewriter.setInsertionPointToStart(condBlock);
-      }
-
+    auto storeOne = [=, &rewriter](ArrayRef<int64_t> indices) {
       Value ptr = rewriter.create<vector::ExtractOp>(loc, ptrs, indices);
       ptr = rewriter.create<IntToPtrOp>(loc, ptrTy, ptr);
       Value val = rewriter.create<vector::ExtractOp>(loc, vals, indices);
       rewriter.create<triton::StoreOp>(loc, ptr, val, cache, evict);
+    };
 
-      // Add predicate and branches.
-      if (mask) {
-        Block *footerBlock =
-            rewriter.splitBlock(condBlock, rewriter.getInsertionPoint());
-        rewriter.setInsertionPointToEnd(headerBlock);
-        auto predicate = rewriter.create<vector::ExtractOp>(loc, mask, indices);
-        rewriter.create<cf::CondBranchOp>(loc, predicate, condBlock,
-                                          footerBlock);
-        rewriter.setInsertionPointToEnd(condBlock);
-        rewriter.create<cf::BranchOp>(loc, footerBlock);
-        rewriter.setInsertionPointToStart(footerBlock);
+    int64_t numElems = tensorTy.getNumElements();
+    auto strides = computeStrides(tensorTy.getShape());
+    for (auto idx = 0; idx < numElems; ++idx) {
+      auto indices = delinearize(idx, strides);
+      if (!mask) {
+        storeOne(indices);
+        continue;
       }
+      // Create a conditional block for store if there is a mask.
+      auto predicate = rewriter.create<vector::ExtractOp>(loc, mask, indices);
+      rewriter.create<scf::IfOp>(loc, predicate,
+                                 [&](OpBuilder &builder, Location loc) {
+                                   storeOne(indices);
+                                   rewriter.create<scf::YieldOp>(loc);
+                                 });
     }
 
     rewriter.eraseOp(storeOp);
@@ -425,7 +412,6 @@ public:
     addLegalDialect<vector::VectorDialect>();
     addLegalDialect<arith::ArithDialect>();
     addLegalDialect<scf::SCFDialect>();
-    addLegalDialect<cf::ControlFlowDialect>();
     addLegalDialect<TritonDialect>();
     addLegalDialect<TritonCPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
