@@ -38,21 +38,27 @@ class OptimizeFMADotPattern : public mlir::RewritePattern {
   generateNewDotLayout(mlir::MLIRContext *ctx, unsigned m, unsigned n,
                        unsigned splitK, unsigned numWarps,
                        unsigned numThreads) const {
+    assert(splitK > 0 && splitK <= numThreads);
     SmallVector<unsigned> order{2, 1, 0};
     triton::gpu::CTALayoutAttr ctaLayout =
         triton::gpu::CTALayoutAttr::get(ctx, {1, 1, 1}, {1, 1, 1}, {2, 1, 0});
+
+    // TODO experiment with M/N first distribution of warps
     unsigned bWarps = 1;
     unsigned mWarps = std::min(m, numWarps);
     unsigned nWarps = numWarps / mWarps;
     SmallVector<unsigned> warpsPerCTA{bWarps, mWarps, nWarps};
-    unsigned bThreads = numThreads / (n / nWarps);
+
+    unsigned bThreads = splitK;
     unsigned nThreads = std::min(n / nWarps, numThreads / bThreads);
     unsigned mThreads = numThreads / bThreads / nThreads;
     SmallVector<unsigned> threadsPerWarp{bThreads, mThreads, nThreads};
-    unsigned bElems = splitK / bThreads;
+
+    unsigned bElems = 1;
     unsigned mElems = std::max(1u, m / (mThreads * mWarps));
     unsigned nElems = std::max(1u, n / (nThreads * nWarps));
     SmallVector<unsigned> elemsPerThread{bElems, mElems, nElems};
+
     auto dotLayout = triton::gpu::BlockedEncodingAttr::get(
         ctx, elemsPerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
     return dotLayout;
@@ -204,8 +210,6 @@ class OptimizeFMADotPattern : public mlir::RewritePattern {
     auto aExtendedType = optAExtendedType.value();
     auto aExtendedLayout = llvm::cast<triton::gpu::BlockedEncodingAttr>(
         aExtendedType.getEncoding());
-    llvm::errs() << "split tensor: " << aOrig.getType()
-                 << "\nto: " << aExtendedType << "\n";
     rewriter.setInsertionPoint(aCvt);
     assert(!triton::gpu::isExpensiveView(aOrig.getType(), aExtendedType));
     auto aExtended =
@@ -298,21 +302,10 @@ class OptimizeFMADotPattern : public mlir::RewritePattern {
 
     // Create new dot and reduction
     rewriter.setInsertionPoint(dotOp);
-    // loc(#loc15)
-    auto aPrint = rewriter.create<triton::PrintOp>(
-        dotLoc, ::mlir::StringAttr::get(ctx, "a: "),
-        ::mlir::BoolAttr::get(ctx, false), ::mlir::ValueRange({aBatched}));
-    auto bPrint = rewriter.create<triton::PrintOp>(
-        dotLoc, ::mlir::StringAttr::get(ctx, "b: "),
-        ::mlir::BoolAttr::get(ctx, false), ::mlir::ValueRange({bBatched}));
 
     auto newDot = rewriter.create<triton::DotOp>(
         dotLoc, aBatchedOp, bBatchedOp, cBatchedOp, dotOp.getInputPrecision(),
         dotOp.getMaxNumImpreciseAcc());
-
-    auto dPrint = rewriter.create<triton::PrintOp>(
-        dotLoc, ::mlir::StringAttr::get(ctx, "d: "),
-        ::mlir::BoolAttr::get(ctx, false), ::mlir::ValueRange({newDot.getD()}));
 
     auto reduceOp = rewriter.create<triton::ReduceOp>(
         dotLoc, ArrayRef<Value>{newDot.getD()}, 0);

@@ -18,23 +18,6 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
-SmallVector<Value>
-getThreadIds(Value threadId, ArrayRef<unsigned int> shapePerCTATile,
-             ArrayRef<unsigned int> sizePerThread, ArrayRef<unsigned int> order,
-             ConversionPatternRewriter &rewriter, Location loc) {
-  int dim = order.size();
-  SmallVector<Value> threadIds(dim);
-  for (unsigned k = 0; k < dim - 1; k++) {
-    Value dimK = i32_val(shapePerCTATile[order[k]] / sizePerThread[order[k]]);
-    Value rem = urem(threadId, dimK);
-    threadId = udiv(threadId, dimK);
-    threadIds[order[k]] = rem;
-  }
-  Value dimK = i32_val(shapePerCTATile[order[dim - 1]]);
-  threadIds[order[dim - 1]] = urem(threadId, dimK);
-  return threadIds;
-}
-
 Value getStructFromValueTable(ArrayRef<Value> vals,
                               ConversionPatternRewriter &rewriter, Location loc,
                               const LLVMTypeConverter *typeConverter,
@@ -112,14 +95,25 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
       expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(dLayout)));
   auto sizePerThread =
       expandMatrixShapeWithBatch(ArrayRef(getSizePerThread(dLayout)));
+  auto threadsPerWarp = expandMatrixShapeWithBatch(dLayout.getThreadsPerWarp());
+  auto warpsPerCTA = expandMatrixShapeWithBatch(dLayout.getWarpsPerCTA());
 
   // threadId in blocked layout
-  auto threadIds = getThreadIds(thread, shapePerCTATile, sizePerThread, order,
-                                rewriter, loc);
+  auto warpSize = i32_val(triton::gpu::getWarpSize(dLayout));
+  auto laneId = urem(thread, warpSize);
+  auto warpId = udiv(thread, warpSize);
+  auto laneIds =
+      mlir::LLVM::delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+  auto warpIds =
+      mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+  auto sizePerWarpB = sizePerThread[bDim] * threadsPerWarp[bDim];
+  auto sizePerWarpNonK = sizePerThread[nonKDim] * threadsPerWarp[nonKDim];
 
-  Value bTileOffset = mul(threadIds[bDim], i32_val(sizePerThread[bDim]));
-  Value nonKTileOffset =
-      mul(threadIds[nonKDim], i32_val(sizePerThread[nonKDim]));
+  Value bTileOffset = mul(laneIds[bDim], i32_val(sizePerThread[bDim]));
+  bTileOffset = add(bTileOffset, mul(warpIds[bDim], i32_val(sizePerWarpB)));
+  Value nonKTileOffset = mul(laneIds[nonKDim], i32_val(sizePerThread[nonKDim]));
+  nonKTileOffset =
+      add(nonKTileOffset, mul(warpIds[nonKDim], i32_val(sizePerWarpNonK)));
 
   auto elemTy = typeConverter->convertType(opTensorTy.getElementType());
   Type ptrTy = ptr_ty(ctx, 3);
@@ -128,7 +122,6 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
   if (opLayout.getMaxPhase() > 0)
     vectorSize = std::min(vectorSize, opLayout.getVec());
   auto vecTy = vec_ty(elemTy, vectorSize);
-  ;
 
   unsigned dimStep[3] = {1, 1, 1};
   dimStep[order[0]] = vectorSize;
