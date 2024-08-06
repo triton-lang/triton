@@ -44,7 +44,8 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   auto dstMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout);
   auto dstDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(dstLayout);
 
-  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere()) &&
+  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere() &&
+           !srcMmaLayout.isHopper()) &&
          "mma -> mma layout conversion is only supported on Ampere");
 
   // mma or dot layout does not have an order, so the order depends on the

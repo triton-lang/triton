@@ -673,12 +673,13 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   return newOp;
 }
 
-// Check if the convert will be a no-op in codegen.
+// Check if the convert will be performed without shared memory.
 static bool isFreeConvert(Operation *op) {
   auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!convertOp)
     return false;
-  return isMmaToMmaShortcut(convertOp.getSrc().getType(), convertOp.getType());
+  return !cvtNeedsSharedMemory(convertOp.getSrc().getType(),
+                               convertOp.getType());
 }
 
 LogicalResult
