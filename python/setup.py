@@ -95,10 +95,8 @@ def check_env_flag(name: str, default: str = "") -> bool:
 
 def get_build_type():
     if check_env_flag("DEBUG"):
-        print("DEBUG BUILD!")
         return "Debug"
     elif check_env_flag("REL_WITH_DEB_INFO"):
-        print("REL_WITH_DEB_INFO!")
         return "RelWithDebInfo"
     elif check_env_flag("TRITON_REL_BUILD_WITH_ASSERTS"):
         return "TritonRelBuildWithAsserts"

@@ -597,6 +597,7 @@ class pointer_type(dtype):
 class nv_tma_desc_type(pointer_type):
     def __init__(self):
         super().__init__(uint8, const = True, address_space = 0)
+        self.name = 'nv_tma_desc_type'
 
 
 class block_type(dtype):
