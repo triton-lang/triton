@@ -95,8 +95,10 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
       expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(dLayout)));
   auto sizePerThread =
       expandMatrixShapeWithBatch(ArrayRef(getSizePerThread(dLayout)));
-  auto threadsPerWarp = expandMatrixShapeWithBatch(dLayout.getThreadsPerWarp());
-  auto warpsPerCTA = expandMatrixShapeWithBatch(dLayout.getWarpsPerCTA());
+  auto threadsPerWarp =
+      expandMatrixShapeWithBatch(ArrayRef(dLayout.getThreadsPerWarp()));
+  auto warpsPerCTA =
+      expandMatrixShapeWithBatch(ArrayRef(dLayout.getWarpsPerCTA()));
 
   // threadId in blocked layout
   auto warpSize = i32_val(triton::gpu::getWarpSize(dLayout));
