@@ -30,7 +30,6 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<vector::VectorDialect>();
     addLegalDialect<arith::ArithDialect>();
-    addLegalDialect<cf::ControlFlowDialect>();
     addLegalDialect<scf::SCFDialect>();
     addLegalDialect<TritonDialect>();
     addLegalDialect<TritonCPUDialect>();
@@ -121,24 +120,19 @@ struct AtomicRMWOpConversion : public OpConversionPattern<triton::AtomicRMWOp> {
       }
     }
 
-    Block *headerBlock = rewriter.getBlock();
-    Value zero = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getZeroAttr(val.getType()));
-    Block *condBlock =
-        rewriter.splitBlock(headerBlock, rewriter.getInsertionPoint());
-    rewriter.setInsertionPointToStart(condBlock);
-    Value resVal = rewriter.create<triton::AtomicRMWOp>(
-        loc, val.getType(), rmwOp, ptr, val, nullptr, sem, scope);
-    Block *footerBlock =
-        rewriter.splitBlock(condBlock, rewriter.getInsertionPoint());
-    Value res = footerBlock->addArgument(resVal.getType(), resVal.getLoc());
-    rewriter.setInsertionPointToEnd(headerBlock);
-    rewriter.create<cf::CondBranchOp>(loc, mask, condBlock, footerBlock, zero);
-    rewriter.setInsertionPointToEnd(condBlock);
-    rewriter.create<cf::BranchOp>(loc, footerBlock, resVal);
-    rewriter.setInsertionPointToStart(footerBlock);
-
-    return res;
+    auto ifOp = rewriter.create<scf::IfOp>(
+        loc, mask,
+        [&](OpBuilder &builder, Location loc) {
+          Value resVal = rewriter.create<triton::AtomicRMWOp>(
+              loc, val.getType(), rmwOp, ptr, val, nullptr, sem, scope);
+          rewriter.create<scf::YieldOp>(loc, resVal);
+        },
+        [&](OpBuilder &builder, Location loc) {
+          Value zero = rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getZeroAttr(val.getType()));
+          rewriter.create<scf::YieldOp>(loc, zero);
+        });
+    return ifOp.getResult(0);
   }
 
   arith::ConstantOp getConstMaskDef(Value mask) const {
