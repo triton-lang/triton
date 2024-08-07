@@ -69,3 +69,26 @@ module {
     tt.return
   }
 }
+
+// -----
+
+// Check that pointer for vector load/store is not extracted from a vector
+
+// CHECK-LABEL: @scalar_ptrs
+// CHECK-NOT:   vector.extract {{.+}} : i64 from vector<128xi64>
+// CHECK:       {{.+}} = vector.load {{.+}} : memref<128xf32>, vector<128xf32>
+// CHECK-NOT:   vector.extract {{.+}} : i64 from vector<128xi64>
+// CHECK:       vector.store {{.+}}, {{.+}} : memref<128xf32>, vector<128xf32>
+
+module {
+  tt.func public @scalar_ptrs(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+    %2 = tt.addptr %1, %0 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+    %3 = tt.load %2 : tensor<128x!tt.ptr<f32>>
+    %4 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+    %5 = tt.addptr %4, %0 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+    tt.store %5, %3 : tensor<128x!tt.ptr<f32>>
+    tt.return
+  }
+}

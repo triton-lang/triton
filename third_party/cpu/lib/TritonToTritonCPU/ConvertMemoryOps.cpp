@@ -48,12 +48,68 @@ struct MemoryOpConversion : public OpConversionPattern<OpT> {
   Value extractScalarPointer(Location loc, Value ptrs,
                              ArrayRef<int64_t> indices,
                              ConversionPatternRewriter &rewriter) const {
-    // TODO: Analyze data flow and build scalar pointer computation code.
+    // If we build a vector of pointers and the extract a pointer from it, then
+    // compiler doesn't always optimize it to a simple scalar pointer
+    // computation. Here we try to follow a data flow of the tensor to rebuild a
+    // scalar pointer for more efficient resulting code.
+    if (canComputeScalarValue(ptrs))
+      return computeScalarValue(ptrs, indices, rewriter);
+
+    // Fall back to a scalar pointer extraction from the vector.
     Value ptr = rewriter.create<vector::ExtractOp>(
         loc, rewriter.getRemappedValue(ptrs), indices);
     auto ptrTy = dyn_cast<RankedTensorType>(ptrs.getType()).getElementType();
     ptr = rewriter.create<IntToPtrOp>(loc, ptrTy, ptr);
     return ptr;
+  }
+
+  bool canComputeScalarValue(Value vals) const {
+    if (auto def = vals.getDefiningOp<AddPtrOp>()) {
+      return canComputeScalarValue(def.getPtr()) &&
+             canComputeScalarValue(def.getOffset());
+    }
+
+    if (auto def = vals.getDefiningOp<arith::AddIOp>()) {
+      return canComputeScalarValue(def.getLhs()) &&
+             canComputeScalarValue(def.getRhs());
+    }
+
+    if (vals.getDefiningOp<SplatOp>() || vals.getDefiningOp<MakeRangeOp>()) {
+      return true;
+    }
+
+    return false;
+  }
+
+  Value computeScalarValue(Value vals, ArrayRef<int64_t> indices,
+                           ConversionPatternRewriter &rewriter) const {
+    if (auto def = vals.getDefiningOp<AddPtrOp>()) {
+      Value ptr = computeScalarValue(def.getPtr(), indices, rewriter);
+      Value offs = computeScalarValue(def.getOffset(), indices, rewriter);
+      return rewriter.create<AddPtrOp>(def.getLoc(), ptr.getType(), ptr, offs);
+    }
+
+    if (auto def = vals.getDefiningOp<arith::AddIOp>()) {
+      Value lhs = computeScalarValue(def.getLhs(), indices, rewriter);
+      Value rhs = computeScalarValue(def.getRhs(), indices, rewriter);
+      return rewriter.create<arith::AddIOp>(def.getLoc(), lhs.getType(), lhs,
+                                            rhs);
+    }
+
+    if (auto def = vals.getDefiningOp<SplatOp>()) {
+      return def.getSrc();
+    }
+
+    if (auto def = vals.getDefiningOp<MakeRangeOp>()) {
+      int32_t start = static_cast<int32_t>(def.getStart());
+      assert(indices.size() == 1);
+      Type elemTy = cast<RankedTensorType>(def.getType()).getElementType();
+      return rewriter.create<arith::ConstantOp>(
+          def.getLoc(), elemTy,
+          rewriter.getIntegerAttr(elemTy, start + indices[0]));
+    }
+
+    return Value();
   }
 
   Value extractMemRef(Location loc, Value ptr,
