@@ -57,4 +57,22 @@ def DecomposeFpConversions : Pass<"triton-cpu-decompose-fp-conversions", "mlir::
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def OptimizeMasks : Pass<"triton-cpu-optimize-masks", "mlir::ModuleOp"> {
+    let summary = "Optimize masked memory accesses.";
+    let description = [{
+        This pass tries to detect masked memory accesses with mask values that
+        can be proven to be all-ones or all-zeros.
+    }];
+
+    let options = [
+    ];
+
+    let constructor = "mlir::triton::cpu::createOptimizeMasks()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::vector::VectorDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 #endif

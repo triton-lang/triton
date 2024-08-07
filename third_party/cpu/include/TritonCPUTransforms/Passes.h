@@ -27,6 +27,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createDecomposeFpConversions();
 std::unique_ptr<OperationPass<ModuleOp>>
 createDecomposeFpConversions(bool decomposeBf16Conversions,
                              bool decomposeFp8Conversions);
+std::unique_ptr<OperationPass<ModuleOp>> createOptimizeMasks();
 
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonCPUTransforms/Passes.h.inc"

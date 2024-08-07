@@ -1,4 +1,5 @@
 import os
+import pytest
 import torch
 
 import triton
@@ -35,3 +36,32 @@ def test_scalar_pointer_arith(device):
     # Check TTCIR doesn't have pointer extraction from a tensor.
     ttcir = meta.asm["ttcir"]
     assert ttcir.count("extract") == 0
+
+
+@pytest.mark.parametrize("size", [32, 128, 135])
+@pytest.mark.parametrize("tile_size", [16])
+def test_optimize_tile_mask(size, tile_size, device):
+
+    @triton.jit
+    def kernel(src, dst, size, TILE_SIZE: tl.constexpr):
+        for i in range(0, tl.cdiv(size, TILE_SIZE)):
+            offs = tl.arange(0, TILE_SIZE) + i * TILE_SIZE
+            mask = offs < size
+            x = tl.load(src + offs, mask=mask, other=0)
+            tl.store(dst + offs, x, mask=mask)
+
+    src = torch.rand((size, ), dtype=torch.float32, device='cpu')
+    res = torch.empty_like(src)
+    meta = kernel[(1, )](src, res, size, TILE_SIZE=tile_size)
+    assert (src == res).all()
+
+    # Check number of masked loads and stores.
+    tttcir = meta.asm["tttcir"]
+    masked_loads = tttcir.count("maskedload")
+    masked_stores = tttcir.count("maskedstore")
+    if size % tile_size == 0:
+        assert masked_loads == 0
+        assert masked_stores == 0
+    else:
+        assert masked_loads == 1
+        assert masked_stores == 1
