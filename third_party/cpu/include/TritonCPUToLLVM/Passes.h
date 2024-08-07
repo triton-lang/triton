@@ -28,9 +28,6 @@ std::unique_ptr<OperationPass<ModuleOp>> createAtomicOpsToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>> createDebugOpsToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>> createMathToLibmvecPass();
 
-void tritonCPUToLLVMPipelineBuilder(OpPassManager &pm);
-void registerTritonCPUToLLVMPipeline();
-
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonCPUToLLVM/Passes.h.inc"
 

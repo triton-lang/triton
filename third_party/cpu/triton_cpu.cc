@@ -24,11 +24,35 @@ namespace py = pybind11;
 
 void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   using namespace mlir::triton;
-  m.def("add_triton_to_triton_cpu_pipeline", [](mlir::PassManager &pm) {
-    mlir::triton::cpu::tritonToTritonCPUPipelineBuilder(pm);
+  m.def("add_convert_memory_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertMemoryOps());
   });
-  m.def("add_triton_cpu_to_llvmir_pipeline", [](mlir::PassManager &pm) {
-    mlir::triton::cpu::tritonCPUToLLVMPipelineBuilder(pm);
+  m.def("add_convert_ptr_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertPtrOps());
+  });
+  m.def("add_convert_elementwise_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertElementwiseOps());
+  });
+  m.def("add_convert_elem_manip_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertElemManipOps());
+  });
+  m.def("add_convert_dot_op", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertDotOp());
+  });
+  m.def("add_convert_histogram_op", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertHistogramOp());
+  });
+  m.def("add_convert_reduction_op", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertReductionOp());
+  });
+  m.def("add_convert_scan_op", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertScanOp());
+  });
+  m.def("add_convert_cf_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertControlFlowOps());
+  });
+  m.def("add_convert_atomic_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertAtomicOps());
   });
   m.def("add_convert_unsupported_ops",
         [](mlir::PassManager &pm, bool promote_bf16_to_fp32,
@@ -54,6 +78,21 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   m.def("add_lower_vector_multi_dim", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::triton::cpu::createLowerMultiReductionPass());
+  });
+  m.def("add_func_op_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createFuncOpToLLVMPass());
+  });
+  m.def("add_program_id_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createGetProgramIdOpToLLVMPass());
+  });
+  m.def("add_memory_op_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createMemoryOpToLLVMPass());
+  });
+  m.def("add_atomic_ops_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createAtomicOpsToLLVMPass());
+  });
+  m.def("add_debug_ops_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createDebugOpsToLLVMPass());
   });
   m.def("add_vector_to_llvmir",
         [](mlir::PassManager &pm, bool reassoc_fp_reduction) {

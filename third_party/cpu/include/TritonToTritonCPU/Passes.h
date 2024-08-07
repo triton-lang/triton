@@ -29,9 +29,6 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertReductionOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertScanOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertAtomicOps();
 
-void tritonToTritonCPUPipelineBuilder(OpPassManager &pm);
-void registerTritonToTritonCPUPipeline();
-
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonToTritonCPU/Passes.h.inc"
 

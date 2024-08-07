@@ -74,10 +74,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   // CPU passes
   mlir::triton::cpu::registerTritonToTritonCPUPasses();
-  mlir::triton::cpu::registerTritonToTritonCPUPipeline();
   mlir::triton::cpu::registerTritonCPUTransformsPasses();
   mlir::triton::cpu::registerTritonCPUToLLVMPasses();
-  mlir::triton::cpu::registerTritonCPUToLLVMPipeline();
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,

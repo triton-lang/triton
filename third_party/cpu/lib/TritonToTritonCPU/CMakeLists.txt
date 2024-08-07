@@ -9,7 +9,6 @@ add_triton_library(TritonToTritonCPU
     ConvertPtrOps.cpp
     ConvertReductionOp.cpp
     ConvertScanOp.cpp
-    Pipeline.cpp
     TypeConverter.cpp
 
     DEPENDS

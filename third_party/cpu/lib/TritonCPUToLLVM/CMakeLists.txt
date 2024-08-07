@@ -6,7 +6,6 @@ add_triton_library(TritonCPUToLLVM
     LowerMultiReduction.cpp
     MathToLibmvec.cpp
     MemoryOpToLLVM.cpp
-    Pipeline.cpp
     TypeConverter.cpp
     Utility.cpp
 
