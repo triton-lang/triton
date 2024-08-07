@@ -90,3 +90,12 @@ target_link_libraries(triton-llvm-opt PRIVATE
   LLVMCodeGen
   )
 export_executable_symbols_for_plugins(triton-llvm-opt)
+
+
+add_llvm_executable(triton-tensor-layout triton-tensor-layout.cpp PARTIAL_SOURCES_INTENDED)
+target_link_libraries(triton-tensor-layout PRIVATE
+  TritonGPUIR
+  ${triton_libs}
+  # MLIR core
+  MLIROptLib
+  )
