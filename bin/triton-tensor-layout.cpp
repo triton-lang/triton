@@ -14,6 +14,24 @@
 using namespace llvm;
 using namespace mlir;
 
+// A CLI tool to print the layout of a tensor.
+//
+// clang-format off
+// Example usage:
+//
+// triton-tensor-layout -l "#triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 256, 32]}>" -t "tensor<128x256xf16>"
+//
+// triton-tensor-layout -i input.mlir -t "tensor<1x128x128xf16>" -o output.mlir
+//
+// triton-tensor-layout -i input.mlir -t "tensor<1x128x128xf16>" -o output.mlir -alias-names="blocked,mma" -use-hw-view
+//
+// An input file usually looks like:
+// '''
+// #mma = #triton_gpu.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 8], instrShape = [32, 32], isTransposed = false}>
+// #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8, 1], threadsPerWarp = [1, 16, 4], warpsPerCTA = [1, 1, 8], order = [0, 1, 2]}>
+// '''
+// clang-format on
+
 //===--------------------------------------------------------------------===//
 // CLI options
 //===--------------------------------------------------------------------===//
@@ -22,11 +40,11 @@ cl::OptionCategory PrinterCategory("Available Print Options",
                                    "Options for the tensor layout printing.");
 
 static cl::opt<std::string> InputFile(
-    "i", cl::desc("File name that contains the tensor data layout attribute"),
+    "i", cl::desc("File that contains the tensor data layout attributes"),
     cl::init(""), cl::value_desc("filename"), cl::cat(PrinterCategory));
 
 static cl::opt<std::string>
-    OutputFile("o", cl::desc("Output filename to write the layout"),
+    OutputFile("o", cl::desc("Output file to write the layout into"),
                cl::init(""), cl::value_desc("filename"),
                cl::cat(PrinterCategory));
 
@@ -39,7 +57,8 @@ static cl::list<std::string>
     AliasName("alias-names",
               cl::desc("A list of alias names (separated by comma) of the "
                        "layout attributes in the input file"),
-              cl::value_desc("names"), cl::cat(PrinterCategory));
+              cl::value_desc("name1,name2,name3,..."), cl::CommaSeparated,
+              cl::ZeroOrMore, cl::cat(PrinterCategory));
 
 static cl::opt<bool> useHWPointOfView(
     "use-hw-view", llvm::cl::desc("Print the layout in hardware point of view"),
@@ -56,7 +75,7 @@ static cl::opt<std::string> TensorStr(
 LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
   StringRef dialectName = tensorType.getEncoding().getDialect().getNamespace();
 
-  // Dispatch to the corresponding dialect helper to print the layout.
+  // Dispatch to the corresponding dialect helper function to print the layout.
   if (dialectName == "triton_gpu") {
     os << triton::gpu::getLayoutStr(tensorType, useHWPointOfView);
     return success();
@@ -77,6 +96,7 @@ LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
       llvm::MemoryBuffer::getFileOrSTDIN(filename);
   if (std::error_code ec = fileOrErr.getError()) {
     llvm::errs() << "Could not open input file: " << ec.message() << "\n";
+    return failure();
   }
 
   llvm::SourceMgr sourceMgr;
@@ -86,7 +106,7 @@ LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
 
   Block parsedIR;
   if (failed(parseAsmSourceFile(sourceMgr, &parsedIR, config, &asmState))) {
-    llvm::errs() << "Fail to parse the file: " << filename << "\n";
+    llvm::errs() << "Fail to parse the input file: " << filename << "\n";
     return failure();
   }
 
@@ -116,6 +136,8 @@ LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
 
       if (failed(printLambda(alias, def->value)))
         return failure();
+
+      ss << "\n";
     }
   }
 
@@ -138,7 +160,7 @@ LogicalResult printLayoutFromString(MLIRContext *context,
   auto rankedTensorTy = RankedTensorType::get(
       tensorTy.getShape(), tensorTy.getElementType(), layout);
 
-  ss << "Print layout attribute: #" << layout << "\n";
+  ss << "Print layout attribute: " << layout << "\n";
 
   return layoutPrint(rankedTensorTy, ss);
 }
@@ -159,11 +181,18 @@ int main(int argc, char **argv) {
   ctx.loadAllAvailableDialects();
 
   if (TensorStr.empty()) {
-    llvm::errs() << "Must specify tensor type argument\n";
+    llvm::errs() << "Must specify the tensor type argument\n";
     return 1;
   }
 
-  TensorType tensorType = dyn_cast<TensorType>(parseType(TensorStr, &ctx));
+  Type parsedTy = parseType(TensorStr, &ctx);
+  if (!parsedTy) {
+    llvm::errs() << "Fail to parse the tensor type argument: " << TensorStr
+                 << "\n";
+    return 1;
+  }
+
+  TensorType tensorType = dyn_cast<TensorType>(parsedTy);
   if (!tensorType) {
     llvm::errs() << "Invalid tensor type argument: " << TensorStr << "\n";
     return 1;
@@ -172,10 +201,10 @@ int main(int argc, char **argv) {
   std::string storage;
   raw_string_ostream ss(storage);
 
-  if (failed(printLayoutFromString(&ctx, DataLayoutStr, tensorType, ss)))
+  if (failed(printLayoutFromFile(&ctx, InputFile, AliasName, tensorType, ss)))
     return 1;
 
-  if (failed(printLayoutFromFile(&ctx, InputFile, AliasName, tensorType, ss)))
+  if (failed(printLayoutFromString(&ctx, DataLayoutStr, tensorType, ss)))
     return 1;
 
   if (OutputFile.empty()) {

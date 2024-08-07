@@ -96,6 +96,4 @@ add_llvm_executable(triton-tensor-layout triton-tensor-layout.cpp PARTIAL_SOURCE
 target_link_libraries(triton-tensor-layout PRIVATE
   TritonGPUIR
   ${triton_libs}
-  # MLIR core
-  MLIROptLib
   )
