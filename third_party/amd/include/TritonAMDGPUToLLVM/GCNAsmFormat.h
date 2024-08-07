@@ -116,7 +116,7 @@ struct GCNBuilder {
     Operand() = default;
     Operand(const Operation &) = delete;
     Operand(Value value, StringRef constraint)
-        : value(value), constraint(constraint) {}
+        : constraint(constraint), value(value) {}
 
     bool isList() const { return !value && constraint.empty(); }
 
@@ -342,7 +342,7 @@ struct GCNInstrExecution {
   explicit GCNInstrExecution(GCNInstrCommon *instr,
                              llvm::ArrayRef<Operand *> oprs,
                              llvm::ArrayRef<Modifier *> modifiers)
-      : instr(instr), argsInOrder(oprs.begin(), oprs.end()),
+      : argsInOrder(oprs.begin(), oprs.end()), instr(instr),
         mods(modifiers.begin(), modifiers.end()) {}
 
   std::string dump() const;
