@@ -72,7 +72,7 @@ struct AtomicRMWOpConversion : public OpConversionPattern<triton::AtomicRMWOp> {
     auto ptrTy = cast<RankedTensorType>(op.getPtr().getType()).getElementType();
     auto vecTy = cast<VectorType>(vals.getType());
     auto strides = computeStrides(vecTy.getShape());
-    auto res =
+    Value res =
         rewriter.create<arith::ConstantOp>(loc, rewriter.getZeroAttr(vecTy));
     int64_t numElems = vecTy.getNumElements();
     for (int64_t idx = 0; idx < numElems; ++idx) {
@@ -97,7 +97,7 @@ struct AtomicRMWOpConversion : public OpConversionPattern<triton::AtomicRMWOp> {
 
       // Elements with const false mask are skipped.
       if (resElem) {
-        rewriter.create<vector::InsertOp>(loc, resElem, res, indices);
+        res = rewriter.create<vector::InsertOp>(loc, resElem, res, indices);
       }
     }
 
