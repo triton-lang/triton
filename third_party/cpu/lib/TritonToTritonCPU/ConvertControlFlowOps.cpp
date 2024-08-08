@@ -70,6 +70,34 @@ struct ForOpConversion : public OpConversionPattern<scf::ForOp> {
   }
 };
 
+// This is borrowed from SCFWhilePattern in
+//    lib/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.cpp
+class WhileOpConversion : public OpConversionPattern<scf::WhileOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scf::WhileOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *converter = getTypeConverter();
+    assert(converter);
+    SmallVector<Type> newResultTypes;
+    if (failed(converter->convertTypes(op.getResultTypes(), newResultTypes)))
+      return failure();
+
+    auto newOp = rewriter.create<scf::WhileOp>(op.getLoc(), newResultTypes,
+                                               adaptor.getOperands());
+    for (auto i : {0u, 1u}) {
+      auto &dstRegion = newOp.getRegion(i);
+      rewriter.inlineRegionBefore(op.getRegion(i), dstRegion, dstRegion.end());
+      if (failed(rewriter.convertRegionTypes(&dstRegion, *converter)))
+        return rewriter.notifyMatchFailure(op, "could not convert body types");
+    }
+    rewriter.replaceOp(op, newOp.getResults());
+    return success();
+  }
+};
+
 // This is borrowed from ConvertFIfOpTypes in
 //    SCF/Transforms/StructuralTypeConversions.cpp
 //    and
@@ -132,9 +160,14 @@ struct ConvertControlFlowOps
         [&](Operation *op) -> std::optional<bool> {
           return typeConverter.isLegal(op);
         });
+    convTarget.addDynamicallyLegalOp<scf::ConditionOp>(
+        [&](Operation *op) -> std::optional<bool> {
+          return typeConverter.isLegal(op);
+        });
     {
       RewritePatternSet patterns(context);
       patterns.add<OpTypeConversion<scf::YieldOp>>(typeConverter, context);
+      patterns.add<OpTypeConversion<scf::ConditionOp>>(typeConverter, context);
       if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
         return signalPassFailure();
     }
@@ -154,9 +187,14 @@ struct ConvertControlFlowOps
         [&](Operation *op) -> std::optional<bool> {
           return typeConverter.isLegal(op);
         });
+    convTarget.addDynamicallyLegalOp<scf::WhileOp>(
+        [&](Operation *op) -> std::optional<bool> {
+          return typeConverter.isLegal(op);
+        });
     {
       RewritePatternSet patterns(context);
       patterns.add<ForOpConversion>(typeConverter, context);
+      patterns.add<WhileOpConversion>(typeConverter, context);
       if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
         return signalPassFailure();
     }

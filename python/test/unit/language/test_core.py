@@ -5258,27 +5258,29 @@ def test_nested_if_else_return(_cond1, _cond2, _cond3, device):
 def test_while(device):
 
     @triton.jit
-    def kernel(InitI, Bound, CutOff, OutI, OutInitI, OutJ):
-        init_i = tl.load(InitI)
+    def kernel(InitI, Bound, CutOff, OutI, OutInitI, OutJ, BLOCKSIZE: tl.constexpr):
+        range = tl.arange(0, BLOCKSIZE)
+        init_i = tl.load(InitI + range)
         curr_i = init_i
         j = 0
         # Check that init_i is not updated by the loop
         while j < tl.load(Bound):
             curr_i = curr_i + (j == tl.load(CutOff))
             j += 1
-            tl.store(OutInitI, init_i)
-        tl.store(OutI, curr_i)
+            tl.store(OutInitI + range, init_i)
+        tl.store(OutI + range, curr_i)
         tl.store(OutJ, j)
 
-    out_i = to_triton(np.zeros((1, ), dtype=np.int32), device=device)
-    out_j = to_triton(np.zeros((1, ), dtype=np.int32), device=device)
-    init_i = to_triton(np.full((1, ), 1, dtype=np.int32), device=device)
-    out_init_i = to_triton(np.full((1, ), 0, dtype=np.int32), device=device)
+    size = 16
+    out_i = to_triton(np.zeros((size, ), dtype=np.int32), device=device)
+    out_j = to_triton(np.zeros((size, ), dtype=np.int32), device=device)
+    init_i = to_triton(np.full((size, ), 1, dtype=np.int32), device=device)
+    out_init_i = to_triton(np.full((size, ), 0, dtype=np.int32), device=device)
     bound = to_triton(np.full((1, ), 10, dtype=np.int32), device=device)
     cut_off = to_triton(np.full((1, ), 5, dtype=np.int32), device=device)
-    kernel[(1, )](init_i, bound, cut_off, out_i, out_init_i, out_j)
-    assert out_init_i[0] == init_i[0]
-    assert out_i[0] == init_i[0] + 1
+    kernel[(1, )](init_i, bound, cut_off, out_i, out_init_i, out_j, size)
+    np.testing.assert_equal(to_numpy(out_init_i), to_numpy(init_i))
+    np.testing.assert_equal(to_numpy(out_i), to_numpy(init_i + 1))
     assert out_j[0] == bound[0]
 
 
