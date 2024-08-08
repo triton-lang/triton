@@ -46,15 +46,17 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
     # warmup
     fn()
-    # step 1 - we estimate the amount of time the kernel call takes
-    # NOTE: this estimate isn't super accurate because the GPU isn't warmed up at this point
-    #       but it is probably good enough
     if grad_to_none is not None:
         for x in grad_to_none:
             x.detach_()
             x.requires_grad_(True)
             x.grad = None
-    # Estimate the runtime of the function
+    # step 1 - we estimate the amount of time the kernel call takes
+    # NOTE: this estimate isn't super accurate because the GPU isn't warmed up at this point
+    #       but it is probably good enough
+    # NOTE: we don't use a graph to estimate the runtime because creating a graph is expensive,
+    #       ~300ms on A100, so we default to the same method used in `do_bench` (minus the L2
+    #       cache flush).
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
     start_event.record()
