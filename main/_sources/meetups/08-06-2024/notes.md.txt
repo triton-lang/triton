@@ -1,7 +1,7 @@
 #### Agenda:
 1. Triton-CPU Update
 2. Intel GPU backend update
-   
+
 ##### Items:
 Meeting notes:
 1. Triton-CPU Update: Intel and Meta jointly presented the work on Triton-CPU, highlighting good progress on coverage and performance improvements. They also covered some of the optimizations they leveraged to get performance comparable to torch-native and torch-inductor. More details are in their slides.
