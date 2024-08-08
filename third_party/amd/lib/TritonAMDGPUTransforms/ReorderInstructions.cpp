@@ -46,7 +46,7 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
             ipnt = bi;
         }
       }
-      // Atomics used for global syncronization.
+      // Atomics used for global synchronization.
       if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
         ipnt = bi;
       // Break at loops.
@@ -131,7 +131,7 @@ public:
       mlir::getBackwardSlice(op, &backwardSet, options);
       backwardSet.insert(op);
 
-      // Don't move a local_store if it's source is a load from
+      // Don't move a local_store if its source is a load from
       // the same iteration.
       if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
         continue;
