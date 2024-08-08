@@ -65,3 +65,18 @@ def test_optimize_tile_mask(size, tile_size, device):
     else:
         assert masked_loads == 1
         assert masked_stores == 1
+
+
+# Regression test for compilation failure in masks optimization
+def test_vec_cdiv(device):
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr):
+        offs = tl.arange(0, 16)
+        x = tl.load(in_ptr + offs)
+        res = (x + 15) // 16
+        tl.store(out_ptr + offs, res)
+
+    arg0 = torch.zeros((16, ), dtype=torch.int32)
+    arg1 = torch.empty_like(arg0)
+    kernel[(1, )](arg0, arg1)

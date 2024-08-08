@@ -71,6 +71,11 @@ struct CdivToDiv : public OpRewritePattern<arith::DivSIOp> {
   LogicalResult matchAndRewrite(arith::DivSIOp op,
                                 PatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+
+    // Looking for a scalar op only.
+    if (isa<VectorType>(op.getType()))
+      return failure();
+
     Value lhs = op.getLhs();
     Value rhs = op.getRhs();
     auto addOpDef = lhs.getDefiningOp<arith::AddIOp>();
