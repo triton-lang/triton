@@ -13,6 +13,52 @@ dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
 
 
+def _linux_find_already_mmapped_dylib(lib_name):
+    import platform;
+    if platform.system() != 'Linux':
+        return ''
+    from ctypes import (
+        Structure,
+        c_char,
+        c_void_p,
+        c_char_p,
+        c_int,
+        c_size_t,
+        POINTER,
+        CFUNCTYPE,
+        CDLL,
+        memmove,
+    )
+    from ctypes.util import find_library
+    import ctypes
+    class dl_phdr_info(Structure):
+        _fields_ = [
+                ('dlpi_addr', c_void_p),
+                ('dlpi_name', c_char_p),
+                # Don't care the remaining fields
+        ]
+    # callback_t must use POINTER(c_char) to avoid copying
+    callback_t = CFUNCTYPE(c_int, POINTER(dl_phdr_info), POINTER(c_size_t), POINTER(c_char))
+    dl_iterate_phdr = CDLL('libc.so.6').dl_iterate_phdr
+    # argtypes must use c_char_p to accept ctypes.create_string_buffer
+    dl_iterate_phdr.argtypes = [callback_t, c_char_p]
+    dl_iterate_phdr.restype = c_int
+
+    MAX_PATH = 4096
+    path = ctypes.create_string_buffer(MAX_PATH + 1)
+    def callback(info, size, data):
+        dlpi_name = info.contents.dlpi_name
+        p = Path(os.fsdecode(dlpi_name))
+        if lib_name in p.name:
+            memmove(data, dlpi_name, min(MAX_PATH, len(dlpi_name)))
+            return 1
+        return 0
+    found = dl_iterate_phdr(callback_t(callback), path)
+    if found:
+        filepath = os.fsdecode(ctypes.string_at(path))
+        return filepath
+    return ''
+
 @functools.lru_cache()
 def _get_path_to_hip_runtime_dylib():
     lib_name = "libamdhip64.so"
@@ -23,6 +69,13 @@ def _get_path_to_hip_runtime_dylib():
         if env_libhip_path.endswith(lib_name) and os.path.exists(env_libhip_path):
             return env_libhip_path
         raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")
+
+    # If the shared object is already mmapped to address space, use it.
+    mmapped_libhip = _linux_find_already_mmapped_dylib(lib_name)
+    if mmapped_libhip:
+        if os.path.exists(mmapped_libhip):
+            return mmapped_libhip
+        raise RuntimeError(f"Memory Mapped '{mmapped_libhip}' does not point to a valid {lib_name}")
 
     paths = []
 
