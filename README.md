@@ -193,10 +193,11 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   separated values to be specified (eg
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
-- `USE_TTGIR_LOC=1` reparses the ttgir such that the location information will
-  be the line number of the ttgir instead of line number of the python file.
-  This can provide a direct mapping from ttgir to llir/ptx. When used with
-  performance tools, it can provide a breakdown on ttgir instructions.
+- `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
+  will be the line number of the IR file with that particular extension,
+  instead of line number of the python file. This can provide a direct mapping
+  from the IR to llir/ptx. When used with performance tools, it can provide a
+  breakdown on IR instructions.
 - `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
   spent for each kernel after autotuning is complete.
 - `DISABLE_LLVM_OPT` will disable llvm optimizations for make_llir and make_ptx
