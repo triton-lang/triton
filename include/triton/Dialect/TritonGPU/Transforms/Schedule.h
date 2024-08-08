@@ -85,7 +85,8 @@ public:
   }
 
   void insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
-                      bool includeArg);
+                      bool includeArg,
+                      DenseMap<Operation *, Operation *> *additionalDep);
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
