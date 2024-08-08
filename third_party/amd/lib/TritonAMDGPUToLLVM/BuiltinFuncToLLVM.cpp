@@ -128,7 +128,7 @@ private:
     auto operands = callOp.getOperands();
     auto result = callOp.getResult();
 
-    LLVM::LLVMFunctionType calleeType = callOp.getCalleeType().value();
+    LLVM::LLVMFunctionType calleeType = callOp.getCalleeFunctionType();
     Type returnType = calleeType.getReturnType();
 
     auto loc = callOp.getLoc();
