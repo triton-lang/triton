@@ -261,7 +261,7 @@ def str_to_ty(name):
             const = True
         ty = str_to_ty(name)
         return pointer_type(element_ty=ty, const=const)
-    
+
     if name == "nvTmaDesc":
         return nv_tma_desc_type()
 

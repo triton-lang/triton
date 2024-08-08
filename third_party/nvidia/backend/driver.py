@@ -149,13 +149,13 @@ def make_launcher(constants, signature, ids):
 
     internal_args_list = []
     for i, ty in signature.items():
-      if ty[0] == "*":
-        internal_args_list.append(f"ptr_info{i}.dev_ptr")
-      elif ty == "nvTmaDesc":
-        # Note: we have to dereference the pointer
-        internal_args_list.append(f"*tma_ptr{i}")
-      else:
-        internal_args_list.append(f"_arg{i}")
+        if ty[0] == "*":
+            internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        elif ty == "nvTmaDesc":
+            # Note: we have to dereference the pointer
+            internal_args_list.append(f"*tma_ptr{i}")
+        else:
+            internal_args_list.append(f"_arg{i}")
 
     # generate glue code
     params = [i for i in signature.keys() if i not in constants]
@@ -290,7 +290,7 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
     PyErr_SetString(PyExc_SystemError, "getTmaDesc() requires 64-bit compilation");
     return NULL;
   }}
-  
+
   PyObject *method_handle = PyObject_GetAttrString(obj, "tma_desc_ptr");
   if (!method_handle) {{
     PyErr_SetString(PyExc_TypeError, "tma_desc_ptr() method does not exist");
@@ -322,7 +322,7 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   }}
 
   return (CUtensorMap*)(ptr_as_uint);
-  
+
 python_internal_error:
   PyErr_SetString(PyExc_SystemError, "Internal Python error!");
   return NULL;

@@ -409,7 +409,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if i in self.attributes:
                     for name, value in self.attributes[i]:
                         self.fn.set_arg_attr(idx, name, value)
-                        
+
                 # Mark this argument as a pass-by-value TMA descriptor (nvidia)
                 if isinstance(self.prototype.param_types[idx], nv_tma_desc_type):
                     self.fn.set_arg_attr(idx, "tt.nv_tma_desc", 1)
