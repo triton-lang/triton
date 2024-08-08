@@ -25,10 +25,8 @@ public:
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto callOp = cast<LLVM::CallOp>(op);
-    if (isPredicatedLoadNT(callOp)) {
-      return convertPredicatedLoad(callOp, rewriter, /*nt=*/true);
-    } else if (isPredicatedLoad(callOp)) {
-      return convertPredicatedLoad(callOp, rewriter, /*nt=*/false);
+    if (isPredicatedLoad(callOp)) {
+      return convertPredicatedLoad(callOp, rewriter);
     } else if (isPredicatedStore(callOp)) {
       return convertPredicatedStore(callOp, rewriter);
     } else if (isWrappedLLVMIntrinsic(callOp)) {
@@ -44,14 +42,34 @@ private:
            llvm::StringRef::npos;
   }
 
-  bool isPredicatedLoadNT(LLVM::CallOp callOp) const {
+  bool isPredicatedLoadCA(LLVM::CallOp callOp) const {
     return callOp.getCallee().value().find(
-               mlir::LLVM::AMD::Predicated_Load_NT) != llvm::StringRef::npos;
+               mlir::LLVM::AMD::Predicated_Load_CA) != llvm::StringRef::npos;
+  }
+
+  bool isPredicatedLoadCG(LLVM::CallOp callOp) const {
+    return callOp.getCallee().value().find(
+               mlir::LLVM::AMD::Predicated_Load_CG) != llvm::StringRef::npos;
   }
 
   bool isPredicatedStore(LLVM::CallOp callOp) const {
     return callOp.getCallee().value().find(mlir::LLVM::AMD::Predicated_Store) !=
            llvm::StringRef::npos;
+  }
+
+  bool isPredicatedStoreCS(LLVM::CallOp callOp) const {
+    return callOp.getCallee().value().find(
+               mlir::LLVM::AMD::Predicated_Store_CS) != llvm::StringRef::npos;
+  }
+
+  bool isPredicatedStoreCG(LLVM::CallOp callOp) const {
+    return callOp.getCallee().value().find(
+               mlir::LLVM::AMD::Predicated_Store_CG) != llvm::StringRef::npos;
+  }
+
+  bool isPredicatedStoreWT(LLVM::CallOp callOp) const {
+    return callOp.getCallee().value().find(
+               mlir::LLVM::AMD::Predicated_Store_WT) != llvm::StringRef::npos;
   }
 
   bool isWrappedLLVMIntrinsic(LLVM::CallOp callOp) const {
@@ -79,7 +97,16 @@ private:
     rewriter.setInsertionPointToEnd(currentBlock);
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, afterStore);
     rewriter.setInsertionPointToStart(trueBlock);
-    auto storeOp = rewriter.create<LLVM::StoreOp>(loc, val, ptr);
+    /*
+                  | vialatile | non-tmp | gcn instr gfx94
+    LLVM::StoreOp | 0         | 0       | (cg) global store
+                  | 0         | 1       | (cs) global store nt
+                  | 1         | 0/1     | (wt) global store sc0 sc1
+    */
+    bool vialatileFlag = isPredicatedStoreWT(callOp);
+    bool nonTmpFlag = isPredicatedStoreCS(callOp);
+    auto storeOp = rewriter.create<LLVM::StoreOp>(
+        loc, val, ptr, /*alignment=*/0, vialatileFlag, nonTmpFlag);
     rewriter.create<LLVM::BrOp>(loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
     rewriter.eraseOp(callOp);
@@ -87,8 +114,7 @@ private:
   }
 
   LogicalResult convertPredicatedLoad(LLVM::CallOp callOp,
-                                      mlir::PatternRewriter &rewriter,
-                                      bool nt) const {
+                                      mlir::PatternRewriter &rewriter) const {
     auto operands = callOp.getOperands();
     auto result = callOp.getResult();
 
@@ -108,10 +134,15 @@ private:
     rewriter.setInsertionPointToEnd(currentBlock);
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
     rewriter.setInsertionPointToStart(trueBlock);
-    auto loadOp = nt ? rewriter.create<LLVM::LoadOp>(
-                           loc, elemTy, ptr, /*alignment=*/0,
-                           /*isVolatile=*/false, /*isNonTemporal=*/true)
-                     : rewriter.create<LLVM::LoadOp>(loc, elemTy, ptr);
+    /*
+                 | vialatile | non-tmp | gcn instr gfx94
+    LLVM::LoadOp | 0         | 0       | (ca) global load
+                 | 0/1       | 1       | (cg) global load nt
+    */
+    bool vialatileFlag = false;
+    bool nonTmpFlag = isPredicatedLoadCG(callOp);
+    auto loadOp = rewriter.create<LLVM::LoadOp>(
+        loc, elemTy, ptr, /*alignment=*/0, vialatileFlag, nonTmpFlag);
     rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
     rewriter.setInsertionPointToStart(falseBlock);
     rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);

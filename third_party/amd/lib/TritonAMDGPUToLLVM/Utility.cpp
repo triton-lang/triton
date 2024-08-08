@@ -156,12 +156,23 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, bool nt) {
+             Value pred, Value falseVal, triton::CacheModifier cm) {
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto funcNameRaw = nt ? mlir::LLVM::AMD::Predicated_Load_NT
-                        : mlir::LLVM::AMD::Predicated_Load;
-  auto funcName = mangleFunc(funcNameRaw, funcType);
+  auto getLoadNameRaw = [](triton::CacheModifier cm) {
+    switch (cm) {
+    case triton::CacheModifier::CA:
+      return Predicated_Load_CA;
+    case triton::CacheModifier::CG:
+      return Predicated_Load_CG;
+    default:
+      // Do not fail in compile time in the case of unsupported modifier.
+      // Just apply default config.
+      return Predicated_Load;
+    }
+  };
+
+  auto funcName = mangleFunc(getLoadNameRaw(cm), funcType);
 
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
@@ -173,11 +184,25 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred) {
+             Value pred, triton::CacheModifier cm) {
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Store, funcType);
+  auto getStoreNameRaw = [](triton::CacheModifier cm) {
+    switch (cm) {
+    case triton::CacheModifier::WT:
+      return Predicated_Store_WT;
+    case triton::CacheModifier::CG:
+      return Predicated_Store_CG;
+    case triton::CacheModifier::CS:
+      return Predicated_Store_CS;
+    default:
+      // Do not fail in compile time in the case of unsupported modifier.
+      // Just apply default config.
+      return Predicated_Store;
+    }
+  };
+  auto funcName = mangleFunc(getStoreNameRaw(cm), funcType);
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
   rewriter.create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, val, pred}));
