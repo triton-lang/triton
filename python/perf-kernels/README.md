@@ -69,3 +69,7 @@ small block sizes aren't natively supported by `tl.dot` operator.
 
 Despite being numerically correct, this kernel performed worse than a corresponding GEMM kernel that
 used `tl.dot` with minimum block size equal to $16$.
+
+## `softmax.py`
+
+Kernel that implements Softmax over a row of tensor.

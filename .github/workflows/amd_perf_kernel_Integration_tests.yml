@@ -126,6 +126,8 @@ jobs:
       - name: Run Perf Kernels Unit Tests
         run: |
           pytest -vvv ./python/perf-kernels/flash-attention.py
+          pytest -vvvv ./python/perf-kernels/softmax.py
       - name: Run Perf Kernels Benchmark
         run: |
           python ./python/perf-kernels/flash-attention.py
+          python ./python/perf-kernels/softmax.py
