@@ -109,7 +109,7 @@ arbitrary LLVM version.
   during the build. By default, this is the user's home directory. It
   can be changed anytime.
 
-- Pass `--no-build-isolation` to `pip install` to make nop builds faster.
+- Pass `--no-build-isolation` to `pip install` to make no-op builds faster.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
 
