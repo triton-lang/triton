@@ -42,7 +42,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type return_mode: str
     """
     import torch
-    assert return_mode in ["min", "max", "mean", "median", "full"]
+    assert return_mode in ["min", "max", "mean", "median", "all"]
 
     if torch.cuda.current_stream() == torch.cuda.default_stream():
         raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
