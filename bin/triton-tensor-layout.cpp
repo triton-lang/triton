@@ -21,9 +21,9 @@ using namespace mlir;
 //
 // triton-tensor-layout -l "#triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 256, 32]}>" -t "tensor<128x256xf16>"
 //
-// triton-tensor-layout -i input.mlir -t "tensor<1x128x128xf16>" -o output.mlir
+// triton-tensor-layout -i input.mlir -t "tensor<1x128x128xf16>" -o output.txt
 //
-// triton-tensor-layout -i input.mlir -t "tensor<1x128x128xf16>" -o output.mlir -alias-names="blocked,mma" -use-hw-view
+// triton-tensor-layout -i input.mlir -t "tensor<1x128x128xf16>" -o output.txt -alias-names="blocked,mma" -use-hw-view
 //
 // An input file usually looks like:
 // '''
@@ -60,8 +60,12 @@ static cl::list<std::string>
               cl::value_desc("name1,name2,name3,..."), cl::CommaSeparated,
               cl::ZeroOrMore, cl::cat(PrinterCategory));
 
-static cl::opt<bool> useHWPointOfView(
-    "use-hw-view", llvm::cl::desc("Print the layout in hardware point of view"),
+static cl::opt<bool> UseHWPointOfView(
+    "use-hw-view",
+    llvm::cl::desc(
+        "Print the layout in hardware point of view. This means the output is "
+        "from the warp's perspective. Otherwise, the output is from the "
+        "tensor's perspective (e.g., each element maps to xxx thread)."),
     cl::init(false), cl::cat(PrinterCategory));
 
 static cl::opt<std::string> TensorStr(
@@ -77,7 +81,7 @@ LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
 
   // Dispatch to the corresponding dialect helper function to print the layout.
   if (dialectName == "triton_gpu") {
-    os << triton::gpu::getLayoutStr(tensorType, useHWPointOfView);
+    os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
     return success();
   }
 
