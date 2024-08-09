@@ -38,8 +38,10 @@ def test_experimetal_descriptor_load(byval_tma):
     else:
         desc = create_tma_desc_gmem_ptr(x.data_ptr(), [SIZE], [SIZE], x.element_size())
     z_tri = torch.empty_like(x)
-    kernel[(1, )](z_tri, desc, SIZE=SIZE, num_warps=4)
+    compiled_kernel = kernel[(1, )](z_tri, desc, SIZE=SIZE, num_warps=4)
     assert torch.equal(x, z_tri)
+    if byval_tma:
+        assert ".param .align 64 .b8" in compiled_kernel.asm["ptx"]
 
 
 @triton.jit
@@ -90,3 +92,5 @@ def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tm
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if BLOCK_M >= 64 and BLOCK_N >= 64:
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
+    if byval_tma:
+        assert ".param .align 64 .b8" in kernel.asm["ptx"]
