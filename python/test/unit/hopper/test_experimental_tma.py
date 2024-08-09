@@ -1,6 +1,5 @@
 import pytest
 import torch
-import tempfile
 
 import triton
 import triton.language as tl
@@ -10,9 +9,11 @@ from triton.tools.experimental_descriptor import create_1d_tma_descriptor, creat
 def create_tma_desc_gmem_ptr(ptr, dims, block_dims, element_size):
     cpu_desc = torch.empty(128, device="cpu")
     if len(dims) == 1:
-        triton.runtime.driver.active.utils.fill_1d_tma_descriptor(ptr, dims[0], block_dims[0], element_size, cpu_desc.data_ptr())
+        triton.runtime.driver.active.utils.fill_1d_tma_descriptor(ptr, dims[0], block_dims[0], element_size,
+                                                                  cpu_desc.data_ptr())
     else:
-        triton.runtime.driver.active.utils.fill_2d_tma_descriptor(ptr, dims[0], dims[1], block_dims[0], block_dims[1], element_size, cpu_desc.data_ptr())
+        triton.runtime.driver.active.utils.fill_2d_tma_descriptor(ptr, dims[0], dims[1], block_dims[0], block_dims[1],
+                                                                  element_size, cpu_desc.data_ptr())
     return cpu_desc.cuda()
 
 
