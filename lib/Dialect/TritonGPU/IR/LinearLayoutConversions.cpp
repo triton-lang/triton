@@ -116,7 +116,7 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
 // because bases that map to a location larger the shape[d]
 // effectively duplicate along that dimension.  For example, consider a layout
 // with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
-// shrink its output dimension size to 8:
+// shrink the output dimension size to 8:
 //
 // L(register=1) = 8
 // L(register=2) = 4
