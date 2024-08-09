@@ -28,7 +28,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE",
     "TRITON_ENABLE_LLVM_DEBUG",
     "TRITON_LLVM_DEBUG_ONLY",
-    "USE_TTGIR_LOC",
+    "USE_IR_LOC",
     "NVPTX_ENABLE_DUMP",
     // clang-format on
 };

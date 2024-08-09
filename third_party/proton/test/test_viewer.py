@@ -1,6 +1,6 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames
 import numpy as np
 
 file_path = __file__
@@ -28,6 +28,23 @@ def test_format_frames(option):
             idx = gf.dataframe["name"] == "foo@1"
         elif option == "file_function":
             idx = gf.dataframe["name"] == "test.py:foo"
+        assert idx.sum() == 1
+
+
+@pytest.mark.parametrize("option", ["include", "exclude"])
+def test_filter_frames(option):
+    include = ""
+    exclude = ""
+    with open(frame_example_file, "r") as f:
+        gf, _, _ = get_raw_metrics(f)
+        if option == "include":
+            include = ".*test0.*"
+        elif option == "exclude":
+            exclude = ".*test1.*"
+        gf = filter_frames(gf, include=include, exclude=exclude)
+        idx = gf.dataframe["name"] == "test1"
+        assert idx.sum() == 0
+        idx = gf.dataframe["name"] == "test0"
         assert idx.sum() == 1
 
 
