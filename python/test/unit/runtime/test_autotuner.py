@@ -5,15 +5,18 @@ import triton.language as tl
 import pytest
 
 
-@pytest.mark.parametrize('use_cuda_graph', [False, True])
-def test_kwargs(use_cuda_graph: bool, device: str):
+def do_bench(kernel_call, quantiles):
+    return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
+
+
+def test_kwargs(device: str):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
-    @triton.autotune(configs=configs, key=['N'], warmup=1, rep=1, use_cuda_graph=use_cuda_graph)
+    @triton.autotune(configs=configs, key=['N'], do_bench=do_bench)
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -31,7 +34,7 @@ def test_restore(device):
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
-    @triton.autotune(configs=configs, key=['N'], restore_value=['src'], warmup=1, rep=1)
+    @triton.autotune(configs=configs, key=['N'], restore_value=['src'], do_bench=do_bench)
     @triton.jit
     def _kernel(src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -61,7 +64,7 @@ def test_hooks(device):
             values["has_exception"] = True
         assert values["counter"] == 0
 
-    @triton.autotune(configs=configs, key=['N'], warmup=1, rep=1, pre_hook=_pre_hook, post_hook=_post_hook)
+    @triton.autotune(configs=configs, key=['N'], do_bench=do_bench, pre_hook=_pre_hook, post_hook=_post_hook)
     @triton.heuristics({"N_STAGES": lambda nargs: 100 if nargs['N'] == 4096 else 4})
     @triton.jit
     def _kernel(src, N, N_STAGES: tl.constexpr, BLOCK_SIZE: tl.constexpr):
@@ -112,7 +115,7 @@ def test_prune_configs(with_perf_model: bool, device: str):
     else:
         prune_configs_by = {'early_config_prune': early_config_prune}
 
-    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by, warmup=1, rep=1)
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by, do_bench=do_bench)
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)

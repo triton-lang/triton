@@ -6,9 +6,9 @@ import time
 import inspect
 from typing import Dict
 
-from ..testing import do_bench, do_bench_cudagraph
 from .jit import KernelInterface
 from .errors import OutOfResources
+from .driver import driver
 
 
 class Autotuner(KernelInterface):
@@ -24,9 +24,10 @@ class Autotuner(KernelInterface):
         pre_hook=None,
         post_hook=None,
         prune_configs_by: Dict = None,
-        warmup=25,
-        rep=100,
+        warmup=None,
+        rep=None,
         use_cuda_graph=False,
+        do_bench=None,
     ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
@@ -88,10 +89,35 @@ class Autotuner(KernelInterface):
         self.base_fn = fn
         while not inspect.isfunction(self.base_fn):
             self.base_fn = self.base_fn.fn
-        self.num_warmups = warmup
-        self.num_reps = rep
-        import torch
-        self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
+
+        # If we got explicitly called via the old interface, raise a warning
+        # and proceed with the old behavior.
+        if warmup is not None or rep is not None or use_cuda_graph:
+            import warnings
+            warnings.warn("warmup, rep, and use_cuda_graph parameters are deprecated. See _ for details.",
+                          DeprecationWarning)
+            import torch
+            if use_cuda_graph and torch.cuda.is_available():
+                from ..testing import do_bench_cudagraph
+                self.do_bench = lambda kernel_call, quantiles: do_bench_cudagraph(
+                    kernel_call,
+                    rep=rep if rep is not None else 100,
+                    quantiles=quantiles,
+                )
+                return
+
+            import triton.testing
+            self.do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
+                kernel_call,
+                warmup=warmup if warmup is not None else 25,
+                rep=rep if rep is not None else 100,
+                quantiles=quantiles,
+            )
+
+        if do_bench is None:
+            self.do_bench = driver.active.get_benchmarker()
+        else:
+            self.do_bench = do_bench
 
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
@@ -125,9 +151,7 @@ class Autotuner(KernelInterface):
             self.post_hook(args, exception=None)
 
         try:
-            if self.use_cuda_graph:
-                return do_bench_cudagraph(kernel_call, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
-            return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
+            return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
         except (OutOfResources, CompileTimeAssertionFailure):
             return [float("inf"), float("inf"), float("inf")]
 
@@ -260,7 +284,7 @@ class Config:
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
-             warmup=25, rep=100, use_cuda_graph=False):
+             warmup=None, rep=None, use_cuda_graph=False, do_bench=None):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 

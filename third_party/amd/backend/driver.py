@@ -495,3 +495,7 @@ class HIPDriver(GPUDriver):
         arch = device_properties['arch']
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench
