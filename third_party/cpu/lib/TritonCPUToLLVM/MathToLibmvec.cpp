@@ -140,10 +140,11 @@ public:
   using OpRewritePattern<OpT>::OpRewritePattern;
 
   VecOpToLibmvecCall(MLIRContext *context, StringRef fp32FnBaseName,
-                     StringRef fp64FnBaseName)
+                     StringRef fp64FnBaseName, bool use_sleef)
       : OpRewritePattern<OpT>(context) {
     this->fp32FnBaseName = fp32FnBaseName;
     this->fp64FnBaseName = fp64FnBaseName;
+    this->use_sleef = use_sleef;
   }
 
   LogicalResult matchAndRewrite(OpT op, PatternRewriter &rewriter) const {
@@ -155,23 +156,12 @@ public:
     if (!elemTy.isF32() && !elemTy.isF64())
       return failure();
 
-    auto baseName = elemTy.isF32() ? fp32FnBaseName : fp64FnBaseName;
-    int64_t vecSize = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
-    std::string isaPrefix;
-    if (vecSize == 128) {
-      isaPrefix = "b";
-    } else if (vecSize == 256) {
-      isaPrefix = "d";
-    } else if (vecSize == 512) {
-      isaPrefix = "e";
-    } else {
+    auto fnName = use_sleef
+                      ? getSleefName(elemTy.isF32(), vecTy.getNumElements())
+                      : getLibmvecName(elemTy.isF32(), vecTy.getNumElements(),
+                                       op->getOperands());
+    if (fnName.empty())
       return failure();
-    }
-    std::string fnName =
-        "_ZGV" + isaPrefix + "N" + std::to_string(vecTy.getNumElements());
-    for (auto operand : op->getOperands())
-      fnName += "v";
-    fnName += "_" + baseName;
 
     auto module = SymbolTable::getNearestSymbolTable(op);
     auto opFunc = dyn_cast_or_null<SymbolOpInterface>(
@@ -194,49 +184,86 @@ public:
     return success();
   }
 
+  std::string getLibmvecName(bool isFp32, int64_t numElems,
+                             ValueRange ops) const {
+    auto baseName = isFp32 ? fp32FnBaseName : fp64FnBaseName;
+    int64_t vecSize = numElems * (isFp32 ? 32 : 64);
+    std::string isaPrefix;
+    if (vecSize == 128) {
+      isaPrefix = "b";
+    } else if (vecSize == 256) {
+      isaPrefix = "d";
+    } else if (vecSize == 512) {
+      isaPrefix = "e";
+    } else {
+      return "";
+    }
+    std::string fnName = "_ZGV" + isaPrefix + "N" + std::to_string(numElems);
+    for (auto operand : ops)
+      fnName += "v";
+    fnName += "_" + baseName;
+    return fnName;
+  }
+
+  std::string getSleefName(bool isFp32, int64_t numElems) const {
+    int64_t vecSize = numElems * (isFp32 ? 32 : 64);
+    if (vecSize < 128)
+      return "";
+    auto baseName = isFp32 ? fp32FnBaseName : (fp64FnBaseName + "d");
+    return "Sleef_" + baseName + std::to_string(numElems) + "_u10";
+  }
+
 private:
   std::string fp32FnBaseName;
   std::string fp64FnBaseName;
+  bool use_sleef;
 };
 
 template <typename OpTy>
 void populatePatternsForOp(RewritePatternSet &patterns, StringRef fp32FnName,
-                           StringRef fp64FnName) {
+                           StringRef fp64FnName, bool use_sleef) {
   patterns.add<VecOpToFp32<OpTy>>(patterns.getContext());
   patterns.add<DecomposeToNativeVecs<OpTy>>(patterns.getContext());
   patterns.add<VecOpToLibmvecCall<OpTy>>(patterns.getContext(), fp32FnName,
-                                         fp64FnName);
+                                         fp64FnName, use_sleef);
 }
 
 struct MathToLibmvecPass
     : public mlir::triton::cpu::impl::MathToLibmvecBase<MathToLibmvecPass> {
-  using MathToLibmvecBase::MathToLibmvecBase;
+  MathToLibmvecPass() = default;
+
+  MathToLibmvecPass(bool use_sleef) { this->use_sleef = use_sleef; }
 
   void runOnOperation() override {
     Operation *op = getOperation();
     MLIRContext *context = op->getContext();
 
     RewritePatternSet patterns(context);
-    populatePatternsForOp<math::AcosOp>(patterns, "acosf", "acos");
-    populatePatternsForOp<math::AcoshOp>(patterns, "acoshf", "acosh");
-    populatePatternsForOp<math::AsinOp>(patterns, "asinf", "asin");
-    populatePatternsForOp<math::AsinhOp>(patterns, "asinhf", "asinh");
-    populatePatternsForOp<math::AtanOp>(patterns, "atanf", "atan");
-    populatePatternsForOp<math::AtanhOp>(patterns, "atanhf", "atanh");
-    populatePatternsForOp<math::CbrtOp>(patterns, "cbrtf", "cbrt");
-    populatePatternsForOp<math::CosOp>(patterns, "cosf", "cos");
-    populatePatternsForOp<math::CoshOp>(patterns, "coshf", "cosh");
-    populatePatternsForOp<math::ErfOp>(patterns, "erff", "erf");
-    populatePatternsForOp<math::ExpOp>(patterns, "expf", "exp");
-    populatePatternsForOp<math::Exp2Op>(patterns, "exp2f", "exp2");
-    populatePatternsForOp<math::LogOp>(patterns, "logf", "log");
-    populatePatternsForOp<math::Log2Op>(patterns, "log2f", "log2");
-    populatePatternsForOp<math::Log10Op>(patterns, "log10f", "log10");
-    populatePatternsForOp<math::Log1pOp>(patterns, "log1pf", "log1p");
-    populatePatternsForOp<math::SinOp>(patterns, "sinf", "sin");
-    populatePatternsForOp<math::SinhOp>(patterns, "sinhf", "sinh");
-    populatePatternsForOp<math::TanOp>(patterns, "tanf", "tan");
-    populatePatternsForOp<math::TanhOp>(patterns, "tanhf", "tanh");
+    populatePatternsForOp<math::AcosOp>(patterns, "acosf", "acos", use_sleef);
+    populatePatternsForOp<math::AcoshOp>(patterns, "acoshf", "acosh",
+                                         use_sleef);
+    populatePatternsForOp<math::AsinOp>(patterns, "asinf", "asin", use_sleef);
+    populatePatternsForOp<math::AsinhOp>(patterns, "asinhf", "asinh",
+                                         use_sleef);
+    populatePatternsForOp<math::AtanOp>(patterns, "atanf", "atan", use_sleef);
+    populatePatternsForOp<math::AtanhOp>(patterns, "atanhf", "atanh",
+                                         use_sleef);
+    populatePatternsForOp<math::CbrtOp>(patterns, "cbrtf", "cbrt", use_sleef);
+    populatePatternsForOp<math::CosOp>(patterns, "cosf", "cos", use_sleef);
+    populatePatternsForOp<math::CoshOp>(patterns, "coshf", "cosh", use_sleef);
+    populatePatternsForOp<math::ErfOp>(patterns, "erff", "erf", use_sleef);
+    populatePatternsForOp<math::ExpOp>(patterns, "expf", "exp", use_sleef);
+    populatePatternsForOp<math::Exp2Op>(patterns, "exp2f", "exp2", use_sleef);
+    populatePatternsForOp<math::LogOp>(patterns, "logf", "log", use_sleef);
+    populatePatternsForOp<math::Log2Op>(patterns, "log2f", "log2", use_sleef);
+    populatePatternsForOp<math::Log10Op>(patterns, "log10f", "log10",
+                                         use_sleef);
+    populatePatternsForOp<math::Log1pOp>(patterns, "log1pf", "log1p",
+                                         use_sleef);
+    populatePatternsForOp<math::SinOp>(patterns, "sinf", "sin", use_sleef);
+    populatePatternsForOp<math::SinhOp>(patterns, "sinhf", "sinh", use_sleef);
+    populatePatternsForOp<math::TanOp>(patterns, "tanf", "tan", use_sleef);
+    populatePatternsForOp<math::TanhOp>(patterns, "tanhf", "tanh", use_sleef);
 
     if (failed(applyPatternsAndFoldGreedily(op, std::move(patterns))))
       signalPassFailure();
@@ -251,6 +278,11 @@ namespace cpu {
 
 std::unique_ptr<OperationPass<ModuleOp>> createMathToLibmvecPass() {
   return std::make_unique<MathToLibmvecPass>();
+}
+
+std::unique_ptr<OperationPass<ModuleOp>>
+createMathToLibmvecPass(bool use_sleef) {
+  return std::make_unique<MathToLibmvecPass>(use_sleef);
 }
 
 } // namespace cpu

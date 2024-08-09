@@ -53,7 +53,8 @@ def test_tensor_math_fn(dtype_str, math_fn, size, device):
         num_vec_calls = 1
     if data_size > 64:
         num_vec_calls = data_size / 64
-    assert meta.asm["asm"].count("_ZGV") == num_vec_calls
+    prefix = "Sleef" if os.environ.get("TRITON_CPU_USE_SLEEF", "0") != "0" else "_ZGV"
+    assert meta.asm["asm"].count(prefix) == num_vec_calls
 
 
 @pytest.mark.parametrize("dtype_str", float_dtypes)
@@ -93,4 +94,5 @@ def test_libdevice_math_fn(dtype_str, math_fn, size, device):
         num_vec_calls = 1
     if data_size > 64:
         num_vec_calls = data_size / 64
-    assert meta.asm["asm"].count("_ZGV") == num_vec_calls
+    prefix = "Sleef" if os.environ.get("TRITON_CPU_USE_SLEEF", "0") != "0" else "_ZGV"
+    assert meta.asm["asm"].count(prefix) == num_vec_calls

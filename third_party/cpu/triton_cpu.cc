@@ -114,8 +114,8 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   m.def("add_memref_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
   });
-  m.def("add_math_to_libmvec", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::cpu::createMathToLibmvecPass());
+  m.def("add_math_to_libmvec", [](mlir::PassManager &pm, bool use_sleef) {
+    pm.addPass(mlir::triton::cpu::createMathToLibmvecPass(use_sleef));
   });
   m.def("add_math_to_libm", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createConvertMathToLibmPass());
