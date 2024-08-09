@@ -220,9 +220,11 @@ struct ConvertElementwiseOps
     patterns.add<OpTypeConversion<math::AbsIOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::ExpOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::Exp2Op>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::ExpM1Op>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::LogOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::Log2Op>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::Log10Op>>(typeConverter, context);
+    patterns.add<OpTypeConversion<math::Log1pOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::SinOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::SinhOp>>(typeConverter, context);
     patterns.add<OpTypeConversion<math::CosOp>>(typeConverter, context);

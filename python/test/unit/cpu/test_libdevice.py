@@ -21,13 +21,17 @@ float_dtypes = ['bfloat16', 'float16', 'float32', 'float64']
 
 @pytest.mark.parametrize("dtype_str", float_dtypes)
 @pytest.mark.parametrize("math_fn", [
-    "acos", "acosh", "asin", "asinh", "atan", "atanh", "cbrt", "cos", "cosh", "erf", "exp", "exp2", "log", "log2",
-    "log10", "sin", "sinh", "tan", "tanh"
+    "acos", "acosh", "asin", "asinh", "atan", "atanh", "cbrt", "cos", "cosh", "erf", "exp", "exp2", "expm1", "floor",
+    "log", "log1p", "log2", "log10", "rsqrt", "sin", "sinh", "sqrt", "tan", "tanh"
 ])
 @pytest.mark.parametrize("size", [1, 4, 16, 64])
 def test_libdevice(dtype_str, math_fn, size, device):
     if not is_cpu():
         pytest.skip("This test is CPU-specific")
+
+    if dtype_str == "bfloat16":
+        if math_fn == "floor" or math_fn == "rsqrt":
+            pytest.skip("libgcc < 13 does not define __truncsfbf2, which this op needs")
 
     @triton.jit
     def kernel(src, dst, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr):

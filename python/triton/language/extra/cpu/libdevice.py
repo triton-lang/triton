@@ -62,6 +62,16 @@ def exp2(arg0, _builder=None):
 
 
 @core.extern
+def expm1(arg0, _builder=None):
+    return core.tensor(_builder.create_expm1(arg0.handle), arg0.type)
+
+
+@core.extern
+def floor(arg0, _builder=None):
+    return core.tensor(_builder.create_floor(arg0.handle), arg0.type)
+
+
+@core.extern
 def log(arg0, _builder=None):
     return core.tensor(_builder.create_log(arg0.handle), arg0.type)
 
@@ -77,8 +87,23 @@ def log10(arg0, _builder=None):
 
 
 @core.extern
+def log1p(arg0, _builder=None):
+    return core.tensor(_builder.create_log1p(arg0.handle), arg0.type)
+
+
+@core.extern
 def sin(arg0, _builder=None):
     return core.tensor(_builder.create_sin(arg0.handle), arg0.type)
+
+
+@core.extern
+def rsqrt(arg0, _builder=None):
+    return core.tensor(_builder.create_rsqrt(arg0.handle), arg0.type)
+
+
+@core.extern
+def sqrt(arg0, _builder=None):
+    return core.tensor(_builder.create_sqrt(arg0.handle), arg0.type)
 
 
 @core.extern
