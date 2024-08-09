@@ -261,9 +261,6 @@ def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
     quantiles = [0.5, 0.2, 0.8]
-    if args.cudagraph:
-        stream = torch.cuda.Stream()
-        torch.cuda.set_stream(stream)
     with proton.scope(f"matmul_{M}_{N}_{K}"):
         if provider == "cublas":
 
