@@ -193,13 +193,9 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool atomicNeedsSharedMemory(Value result);
 
-bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
+bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
-
-// TODO(jlebar): Remove this function; it's subsumed by the linear-layout case
-// in cvtNeedsSharedMemory.
-bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 // Return true if the src and dst layout match.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,

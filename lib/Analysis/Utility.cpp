@@ -527,7 +527,7 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
@@ -543,21 +543,6 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 
-static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
-  auto src = dyn_cast<NvidiaMmaEncodingAttr>(srcEncoding);
-  auto dst = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding);
-  if (!src || !dst)
-    return false;
-  // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
-  return src && dst && src.getVersionMajor() == 3 &&
-         src.getWarpsPerCTA()[1] == 1 && dst.getVersionMajor() == 3 &&
-         dst.getWarpsPerCTA()[1] == 1;
-}
-
-bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  return isMmaToMmaShortcut(srcTy.getEncoding(), dstTy.getEncoding());
-}
-
 // For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
@@ -567,10 +552,12 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
     return false;
   }
   int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
-  auto ans =
-      mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
-      isMmaToMmaShortcut(dotOperandLayout.getParent(), srcTy.getEncoding()) &&
-      (elementTypeSize == 16 || elementTypeSize == 8);
+  auto parentTy = RankedTensorType::get(
+      srcTy.getShape(), srcTy.getElementType(), dotOperandLayout.getParent());
+  auto ans = mmaLayout.getVersionMajor() == 3 &&
+             dotOperandLayout.getOpIdx() == 0 &&
+             !cvtNeedsSharedMemory(parentTy, srcTy) &&
+             (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
 }
 
@@ -605,8 +592,7 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
 
   // TODO(jlebar): Remove these special cases once they're fully subsumed by the
   // linear-layout check above.
-  return !isMmaToMmaShortcut(srcTy, dstTy) &&
-         !isMmaToDotShortcut(srcTy, dstTy) &&
+  return !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
 }
 
