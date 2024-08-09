@@ -105,45 +105,48 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
   return ret.transposeOuts(outDimNames);
 }
 
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// larger than shape[d].  Do this without changing the size of the layout's
-// inputs (i.e. leave its domain unchanged).
+// For each output dimension d, ensure that the layout's output size (i.e., its
+// codomain) does not exceed shape[d]. Do this without changing the size of the
+// layout's inputs (i.e., leave its domain unchanged).
 //
 // This function is invariant to the order of the layout's input and output
 // dimensions.
 //
-// We do this by making the largest value each output dimension 0 because
-// bases that map to a location larger than the input dimension is essentially
-// duplicating along that dimension.
-// For example, this layout has out-dim size 32, and suppose the shape is [8]:
+// We achieve this by setting the largest value in each output dimension to 0
+// because bases that map to a location larger than the input dimension
+// effectively duplicate along that dimension. For example, consider a layout
+// with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
+// shrink its output dimension size to 8:
+
+// L(register=1) = 8
+// L(register=2) = 4
+// L(register=4) = 1
+// L(lane=1) = 2
+// L(lane=2) = 16
 //
-//   L(register=1) = 8
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 16.
-//
-// First we shrink it to size 16 by setting L(lane=2) to 0:
-//
-//   L(register=1) = 8
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 0.
+// In the first step, we shrink it to size 16 by setting L(lane=2) to 0:
+
+// L(register=1) = 8
+// L(register=2) = 4
+// L(register=4) = 1
+// L(lane=1) = 2
+// L(lane=2) = 0
 //
 // This means that lane=2 has the same data as lane=0.
+
+// Now the output dimension of this layout has a size of 16, which is still
+// larger than 8. Next, we find the next largest value in the output dimension,
+// which is L(register=1) = 8, and we set L(register=1) to 0:
 //
-// Next, we shrink to size 8 along the lane dimension, we set L(lane=1) = 0 as
-// well.
+// L(register=1) = 4
+// L(register=2) = 2
+// L(register=4) = 1
+// L(lane=1) = 0
+// L(lane=2) = 0
 //
-//   L(register=1) = 4
-//   L(register=2) = 2
-//   L(register=1) = 1
-//   L(lane=1) = 0
-//   L(lane=2) = 0.
-//
-// Note this only works because the bases are powers of two.  I don't quite know
-// what to do when they're not.
+// Now the output dimension of this layout has a size of 8, which is the desired
+// size. Note that this method works only because the bases are powers of two.
+// It is unclear what to do when they are not.
 LinearLayout ensureLayoutNotLargerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
@@ -162,16 +165,16 @@ LinearLayout ensureLayoutNotLargerThan(
       continue;
     }
     assert(actualSize % desiredSize == 0);
-    // <inDimName, baseIdx, outValue>
+    // <inDimName, basisIdx, outValue>
     std::vector<std::tuple<StringAttr, int, int>> sortedBases;
     for (auto [inDimName, basis] : bases) {
-      for (size_t baseIdx = 0; baseIdx < basis.size(); baseIdx++) {
-        auto outValue = basis[baseIdx][outDim.index()];
+      for (size_t basisIdx = 0; basisIdx < basis.size(); basisIdx++) {
+        auto outValue = basis[basisIdx][outDim.index()];
         if (outValue == 0) {
           continue;
         }
         assert(llvm::isPowerOf2_32(outValue));
-        sortedBases.emplace_back(inDimName, baseIdx, outValue);
+        sortedBases.emplace_back(inDimName, basisIdx, outValue);
       }
     }
     // From the largest basis to the smallest.

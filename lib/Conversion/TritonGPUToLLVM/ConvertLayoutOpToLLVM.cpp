@@ -250,10 +250,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     MLIRContext *ctx = op.getContext();
 
     const auto &shape = op.getType().getShape();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
     std::optional<LinearLayout> srcLayout =
-        toLinearLayout(shape, op.getSrc().getType().getEncoding());
+        toLinearLayout(shape, srcTy.getEncoding());
     std::optional<LinearLayout> dstLayout =
-        toLinearLayout(shape, op.getType().getEncoding());
+        toLinearLayout(shape, dstTy.getEncoding());
     if (!srcLayout.has_value() || !dstLayout.has_value()) {
       return failure();
     }
@@ -290,37 +292,23 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // stronger than this, checking also that the choice of lane/warp/block does
     // not affect the permutation of registers.  If we allow different
     // lane/warp/blocks to have different permutations, we can generalize this.
-
-    // There are two three possible cases
-    // 1. The `src_layout` has the same number of registers as the `dst_layout`.
-    // 2. The `src_layout` has fewer registers than the `dst_layout`.
-    // 3. The `src_layout` has more registers than the `dst_layout`.
-    // In the second case, we may generate a conversion that is not surjective
-    // because not all lanes are covered.  Instead, we could use the inverse of
-    // the conversion, mapping from `dst_layout` to `src_layout`, which is
-    // surjective.  This inverse layout indicates that multiple destination
-    // registers may come from the same source register.
-    //
-    if (std::optional<LinearLayout> srcToDst = conversion.divideRight(
-            LinearLayout::identity1D(numLanes, kLane, kLane) *
-            LinearLayout::identity1D(numWarps, kWarp, kWarp) *
-            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
-        srcToDst.has_value()) {
-      auto inRegSize = srcLayout->getInDimSize(kRegister);
-      auto outRegSize = dstLayout->getInDimSize(kRegister);
-      if (inRegSize <= outRegSize) {
-        LinearLayout inverseConversion =
-            dstLayout->invertAndCompose(*srcLayout);
-        auto dstToSrc = inverseConversion.divideRight(
-            LinearLayout::identity1D(numLanes, kLane, kLane) *
-            LinearLayout::identity1D(numWarps, kWarp, kWarp) *
-            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
-        return transferWithinThread(*dstToSrc, op, adaptor, rewriter,
-                                    /*srcToDst=*/false);
-      } else {
-        return transferWithinThread(*srcToDst, op, adaptor, rewriter,
-                                    /*srcToDst=*/true);
-      }
+    if (cvtThroughRegisters(srcTy, dstTy)) {
+      // There are three possible cases
+      // 1. The `src_layout` has the same number of registers as the
+      // `dst_layout`.
+      // 2. The `src_layout` has fewer registers than the `dst_layout`.
+      // 3. The `src_layout` has more registers than the `dst_layout`.
+      // In the second case, `conversion`, which is `src_layout .
+      // dst_layout^-1`, is not surjective as not all output registers are
+      // covered.  Because the whole point is to cover all of the destination
+      // registers, we can always use the inverse conversion, namely `dst_layout
+      // . src_layout^-1` instead.
+      LinearLayout inverseConversion = dstLayout->invertAndCompose(*srcLayout);
+      auto dstToSrc = inverseConversion.divideRight(
+          LinearLayout::identity1D(numLanes, kLane, kLane) *
+          LinearLayout::identity1D(numWarps, kWarp, kWarp) *
+          LinearLayout::identity1D(numBlocks, kBlock, kBlock));
+      return transferWithinThread(*dstToSrc, op, adaptor, rewriter);
     }
 
     if (std::optional<LinearLayout> c = conversion.divideRight(
@@ -334,10 +322,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                       adaptor, rewriter);
   }
 
-  LogicalResult transferWithinThread(const LinearLayout &conversion,
-                                     ConvertLayoutOp op, OpAdaptor adaptor,
-                                     ConversionPatternRewriter &rewriter,
-                                     bool srcToDst) const {
+  LogicalResult
+  transferWithinThread(const LinearLayout &conversion, ConvertLayoutOp op,
+                       OpAdaptor adaptor,
+                       ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
@@ -350,18 +338,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals;
-    if (srcToDst) {
-      outVals.resize(conversion.getOutDimSize(kRegister));
-      for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
-        auto dstIdx = conversion.apply({{kRegister, i}});
-        outVals[dstIdx.begin()->second] = inVals[i];
-      }
-    } else {
-      outVals.resize(conversion.getInDimSize(kRegister));
-      for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
-        auto srcIdx = conversion.apply({{kRegister, i}});
-        outVals[i] = inVals[srcIdx.begin()->second];
-      }
+    outVals.resize(conversion.getInDimSize(kRegister));
+    for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
+      auto srcIdx = conversion.apply({{kRegister, i}});
+      outVals[i] = inVals[srcIdx.begin()->second];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());

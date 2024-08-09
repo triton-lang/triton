@@ -561,7 +561,7 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   return ans;
 }
 
-bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
+bool cvtThroughRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   MLIRContext *ctx = srcTy.getContext();
   std::optional<LinearLayout> srcLayout =
       toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
@@ -586,13 +586,18 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
                          LinearLayout::identity1D(comp.getInDimSize(kBlock),
                                                   kBlock, kBlock))
             .has_value()) {
-      return false;
+      return true;
     }
   }
+  return false;
+}
 
-  // TODO(jlebar): Remove these special cases once they're fully subsumed by the
-  // linear-layout check above.
-  return !isMmaToDotShortcut(srcTy, dstTy) &&
+bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
+  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut` and
+  // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
+  // checks.
+  return !cvtThroughRegisters(srcTy, dstTy) &&
+         !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
 }
 

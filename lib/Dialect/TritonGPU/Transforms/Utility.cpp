@@ -673,13 +673,12 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   return newOp;
 }
 
-// Check if the convert will be performed without shared memory.
+// Check if the convert will be performed by reordering registers.
 static bool isFreeConvert(Operation *op) {
   auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!convertOp)
     return false;
-  return !cvtNeedsSharedMemory(convertOp.getSrc().getType(),
-                               convertOp.getType());
+  return cvtThroughRegisters(convertOp.getSrc().getType(), convertOp.getType());
 }
 
 LogicalResult

@@ -1936,7 +1936,7 @@ tt.func public @yield_outside_loop2(%arg0: i32, %arg1: i32) -> (i32, i32) {
 
 // -----
 
-// Check that we handle corner cases when hoisting convert on top of extf because convert ops on a smaller type which is faster.
+// Check that we handle corner cases when hoisting conversions on top of extf because conversion operations on a smaller type are faster.
 // For complex slices we may hoist convert on top of extf while the source of extf has multiple uses in the slice.
 // In this case we want to make sure we don't replace other uses of extf source.
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
