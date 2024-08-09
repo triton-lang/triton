@@ -112,8 +112,8 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
 // This function is invariant to the order of the layout's input and output
 // dimensions.
 //
-// We achieve this by setting the largest value in each output dimension to 0
-// because bases that map to a location larger than the input dimension
+// We achieve this by setting the largest value in each output dimension d to 0
+// because bases that map to a location larger the shape[d]
 // effectively duplicate along that dimension.  For example, consider a layout
 // with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
 // shrink its output dimension size to 8:
