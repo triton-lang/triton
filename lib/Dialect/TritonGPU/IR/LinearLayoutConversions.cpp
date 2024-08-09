@@ -123,7 +123,7 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
 //   L(lane=1) = 2
 //   L(lane=2) = 16.
 //
-// If we shrink it to size 16, we set L(lane=2) to 0:
+// First we shrink it to size 16 by setting L(lane=2) to 0:
 //
 //   L(register=1) = 8
 //   L(register=2) = 4
