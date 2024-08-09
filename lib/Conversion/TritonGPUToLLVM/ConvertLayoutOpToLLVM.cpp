@@ -295,16 +295,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     if (cvtReordersRegisters(srcTy, dstTy)) {
       // There are three possible cases:
       //
-      // 1. The `src_layout` has the same number of registers as the
-      // `dst_layout`.
-      // 2. The `src_layout` has fewer registers than the `dst_layout`.
-      // 3. The `src_layout` has more registers than the `dst_layout`.
+      // 1. `src_layout` has the same number of registers as `dst_layout`.
+      // 2. `src_layout` has fewer registers than `dst_layout`.
+      // 3. `src_layout` has more registers than `dst_layout`.
       //
       // In the second case, `conversion`, which is `src_layout .
-      // dst_layout^-1`, is not surjective because not all output registers are
-      // covered.  Since the goal is to cover all of the destination registers,
-      // we can instead use the inverse conversion, namely `dst_layout .
-      // src_layout^-1`.
+      // dst_layout^-1`, is not surjective because not all destination registers
+      // are covered.  Since the goal is to cover all of the destination
+      // registers, we can instead use the inverse conversion, which is
+      // `dst_layout . src_layout^-1`.
       LinearLayout inverseConversion = dstLayout->invertAndCompose(*srcLayout);
       auto dstToSrc = inverseConversion.divideRight(
           LinearLayout::identity1D(numLanes, kLane, kLane) *
