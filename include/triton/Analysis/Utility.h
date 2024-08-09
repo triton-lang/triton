@@ -189,7 +189,7 @@ bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
-bool cvtThroughRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
+bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 

@@ -678,7 +678,8 @@ static bool isFreeConvert(Operation *op) {
   auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!convertOp)
     return false;
-  return cvtThroughRegisters(convertOp.getSrc().getType(), convertOp.getType());
+  return cvtReordersRegisters(convertOp.getSrc().getType(),
+                              convertOp.getType());
 }
 
 LogicalResult

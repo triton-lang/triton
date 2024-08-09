@@ -114,18 +114,19 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
 //
 // We achieve this by setting the largest value in each output dimension to 0
 // because bases that map to a location larger than the input dimension
-// effectively duplicate along that dimension. For example, consider a layout
+// effectively duplicate along that dimension.  For example, consider a layout
 // with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
 // shrink its output dimension size to 8:
-
+//
 // L(register=1) = 8
 // L(register=2) = 4
 // L(register=4) = 1
 // L(lane=1) = 2
 // L(lane=2) = 16
 //
-// In the first step, we shrink it to size 16 by setting L(lane=2) to 0:
-
+// In the first step, we shrink the output dimension size to 16 by setting
+// L(lane=2) to 0:
+//
 // L(register=1) = 8
 // L(register=2) = 4
 // L(register=4) = 1
@@ -133,19 +134,19 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
 // L(lane=2) = 0
 //
 // This means that lane=2 has the same data as lane=0.
-
+//
 // Now the output dimension of this layout has a size of 16, which is still
-// larger than 8. Next, we find the next largest value in the output dimension,
+// larger than 8.  We find the current largest value in the output dimension,
 // which is L(register=1) = 8, and we set L(register=1) to 0:
 //
-// L(register=1) = 4
-// L(register=2) = 2
+// L(register=1) = 0
+// L(register=2) = 4
 // L(register=4) = 1
-// L(lane=1) = 0
+// L(lane=1) = 2
 // L(lane=2) = 0
 //
 // Now the output dimension of this layout has a size of 8, which is the desired
-// size. Note that this method works only because the bases are powers of two.
+// size.  Note that this method works only because the bases are powers of two.
 // It is unclear what to do when they are not.
 LinearLayout ensureLayoutNotLargerThan(
     const LinearLayout &layout,

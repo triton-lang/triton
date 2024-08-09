@@ -292,17 +292,19 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // stronger than this, checking also that the choice of lane/warp/block does
     // not affect the permutation of registers.  If we allow different
     // lane/warp/blocks to have different permutations, we can generalize this.
-    if (cvtThroughRegisters(srcTy, dstTy)) {
-      // There are three possible cases
+    if (cvtReordersRegisters(srcTy, dstTy)) {
+      // There are three possible cases:
+      //
       // 1. The `src_layout` has the same number of registers as the
       // `dst_layout`.
       // 2. The `src_layout` has fewer registers than the `dst_layout`.
       // 3. The `src_layout` has more registers than the `dst_layout`.
+      //
       // In the second case, `conversion`, which is `src_layout .
-      // dst_layout^-1`, is not surjective as not all output registers are
-      // covered.  Because the whole point is to cover all of the destination
-      // registers, we can always use the inverse conversion, namely `dst_layout
-      // . src_layout^-1` instead.
+      // dst_layout^-1`, is not surjective because not all output registers are
+      // covered.  Since the goal is to cover all of the destination registers,
+      // we can instead use the inverse conversion, namely `dst_layout .
+      // src_layout^-1`.
       LinearLayout inverseConversion = dstLayout->invertAndCompose(*srcLayout);
       auto dstToSrc = inverseConversion.divideRight(
           LinearLayout::identity1D(numLanes, kLane, kLane) *
