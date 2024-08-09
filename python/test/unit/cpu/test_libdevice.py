@@ -29,10 +29,6 @@ def test_libdevice(dtype_str, math_fn, size, device):
     if not is_cpu():
         pytest.skip("This test is CPU-specific")
 
-    if dtype_str == "bfloat16":
-        if math_fn == "floor" or math_fn == "rsqrt":
-            pytest.skip("libgcc < 13 does not define __truncsfbf2, which this op needs")
-
     @triton.jit
     def kernel(src, dst, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr):
         idxs = tl.arange(0, BLOCK_SIZE)

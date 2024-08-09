@@ -43,6 +43,25 @@ struct Fp32ToBf16Conversion : public OpRewritePattern<arith::TruncFOp> {
   }
 };
 
+struct Bf16ToFp32Conversion : public OpRewritePattern<arith::ExtFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::ExtFOp op,
+                                PatternRewriter &rewriter) const override {
+    Value src = op.getIn();
+    if (!isFp32(op.getType()) || !isBf16(src.getType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    Value i16Src = op_bitcast(toInt16(src.getType()), src);
+    Value i32Src = op_zext(toInt32(src.getType()), i16Src);
+    Value i32Res = op_shl(i32Src, cst_like(i32Src, 16));
+    Value res = op_bitcast(op.getType(), i32Res);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
 typedef std::function<Value(Location, Value, PatternRewriter &)> FpToFpConvFn;
 
 // Convert FP8 to FP16/FP32.
@@ -501,8 +520,10 @@ struct DecomposeFpConversions
     ModuleOp mod = getOperation();
 
     RewritePatternSet patterns(context);
-    if (decomposeBf16Conversions)
+    if (decomposeBf16Conversions) {
       patterns.add<Fp32ToBf16Conversion>(context);
+      patterns.add<Bf16ToFp32Conversion>(context);
+    }
     if (decomposeFp8Conversions) {
       patterns.add<RewriteTruncFp8>(context);
       patterns.add<RewriteExtFp8>(context);

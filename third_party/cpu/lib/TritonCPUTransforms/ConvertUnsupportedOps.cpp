@@ -381,6 +381,7 @@ struct ConvertUnsupportedOps
       patterns.add<PromoteOpToFp32<math::Log10Op>>(context);
       patterns.add<PromoteOpToFp32<math::Log1pOp>>(context);
       patterns.add<PromoteOpToFp32<math::PowFOp>>(context);
+      patterns.add<PromoteOpToFp32<math::RsqrtOp>>(context);
       patterns.add<PromoteOpToFp32<math::SinOp>>(context);
       patterns.add<PromoteOpToFp32<math::SinhOp>>(context);
       patterns.add<PromoteOpToFp32<math::SqrtOp>>(context);
