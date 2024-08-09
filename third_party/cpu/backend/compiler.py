@@ -29,7 +29,7 @@ class CPUOptions:
     allow_fp8e4b15: bool = True
     enable_fp_fusion: bool = True
     max_num_imprecise_acc_default: int = 0
-    enable_fast_math: bool = False
+    enable_fast_math: bool = True
 
     # TODO: We may introduce CPU-specific options like # of cores.
 
@@ -58,7 +58,7 @@ class CPUBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts}
         if not "enable_fast_math" in args:
-            args["enable_fast_math"] = os.getenv("TRITON_CPU_FAST_MATH", "0") == "1"
+            args["enable_fast_math"] = os.getenv("TRITON_CPU_FAST_MATH", "1") != "0"
         return CPUOptions(**args)
 
     def pack_metadata(self, metadata):
