@@ -50,7 +50,7 @@ void assertIsRegisterLayout(const LinearLayout &layout) {
 
   const auto &ins = layout.getInDimNames();
   assert(llvm::SmallVector<StringAttr>(ins.begin(), ins.end()) ==
-         llvm::SmallVector({kRegister, kLane, kWarp, kBlock}));
+         llvm::SmallVector<StringAttr>({kRegister, kLane, kWarp, kBlock}));
 
   const auto &outs = layout.getOutDimNames();
   const auto &expectedOuts = standardOutDimNames(ctx, layout.getNumOutDims());
