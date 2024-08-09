@@ -1,11 +1,17 @@
 #include "TritonAMDGPUTransforms/PointerCanonicalizer.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::triton::AMD;
@@ -20,27 +26,70 @@ static Type getElementType(Value val) {
   return elementType;
 }
 
-// Extend a 32bit `offset` into a 64bit `offset` using a arith.extsi operation
-static LogicalResult extend32bitOffsetTo64Bits(IRRewriter &rewriter,
-                                               Location loc, Value &offset) {
+// Extend a 32bit `offset` into 64bit using a arith.extsi operation
+static Value extend32bitOffsetTo64Bits(IRRewriter &rewriter, Location loc,
+                                       Value offset) {
   Type elementType = getElementType(offset);
-
-  // Cannot extend anything other than 32 bits
-  if (!elementType.isInteger(32))
-    return failure();
 
   if (auto tensorType = dyn_cast<RankedTensorType>(offset.getType())) {
     auto shape = tensorType.getShape();
     auto newTensorType = RankedTensorType::get(shape, rewriter.getI64Type(),
                                                tensorType.getEncoding());
-    offset = rewriter.create<arith::ExtSIOp>(loc, newTensorType, offset);
-  } else {
-    offset =
-        rewriter.create<arith::ExtSIOp>(loc, rewriter.getI64Type(), offset);
+    return rewriter.create<arith::ExtSIOp>(loc, newTensorType, offset);
   }
-  return success();
+  return rewriter.create<arith::ExtSIOp>(loc, rewriter.getI64Type(), offset);
+}
+
+// Narrow a 64bit `offset` into 32bit using a arith.trunci operation
+static Value narrow64bitOffsetTo32bits(IRRewriter &rewriter, Location loc,
+                                       Value offset) {
+  Type elementType = getElementType(offset);
+  if (elementType.isInteger(32))
+    return offset;
+
+  if (auto tensorType = dyn_cast<RankedTensorType>(offset.getType())) {
+    auto shape = tensorType.getShape();
+    auto newTensorType = RankedTensorType::get(shape, rewriter.getI32Type(),
+                                               tensorType.getEncoding());
+    return rewriter.create<arith::TruncIOp>(loc, newTensorType, offset);
+  }
+  return rewriter.create<arith::TruncIOp>(loc, rewriter.getI32Type(), offset);
+}
+
+// Try to extract a scalar `offset` by a (possibly) tensor offset
+Value getScalarOffset(IRRewriter &rewriter, Location loc, Value offset) {
+  if (!isa<RankedTensorType>(offset.getType()))
+    return offset;
+
+  if (auto splatOp = dyn_cast<triton::SplatOp>(offset.getDefiningOp()))
+    return splatOp.getSrc();
+
+  if (auto constOp = dyn_cast<arith::ConstantOp>(offset.getDefiningOp())) {
+    auto denseAttr = dyn_cast<DenseIntElementsAttr>(constOp.getValueAttr());
+    if (denseAttr && denseAttr.isSplat())
+      return rewriter.create<arith::ConstantOp>(
+          loc, denseAttr.getSplatValue<IntegerAttr>());
+  }
+
+  return Value();
 }
 } // namespace
+
+// Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
+// obtained by splatting the scalar pointer using the `fatPtr.offset` shape.
+Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
+  Value basePtr = fatPtr.basePtr;
+  Value offset = fatPtr.offset;
+  // Get the offset shape
+  auto offsetType = dyn_cast<RankedTensorType>(offset.getType());
+  ArrayRef<int64_t> offsetShape = offsetType.getShape();
+  // Splat the scalar pointer
+  auto tensorPtrType = RankedTensorType::get(offsetShape, basePtr.getType(),
+                                             offsetType.getEncoding());
+  Value tensorPtr =
+      rewriter.create<triton::SplatOp>(loc, tensorPtrType, basePtr);
+  return tensorPtr;
+}
 
 // Rewrite a memory operation
 LogicalResult PointerCanonicalizer::materializeFatPointer(Operation *op,
@@ -49,9 +98,18 @@ LogicalResult PointerCanonicalizer::materializeFatPointer(Operation *op,
   auto fatPtr = pointers[ptr];
   Value basePtr = fatPtr.basePtr;
   Value offset = fatPtr.offset;
-  // This is creating `tt.addptr(%fatPtr.bastPtr, %fatPtr.offset)
-  Value newPtr = rewriter.create<triton::AddPtrOp>(loc, basePtr.getType(),
-                                                   basePtr, offset);
+  if (fatPtr.canNarrow)
+    offset = narrow64bitOffsetTo32bits(rewriter, loc, offset);
+
+  Value newPtr = basePtr;
+  if (isa<RankedTensorType>(ptr.getType())) {
+    // Splat the base pointer
+    Value tensorPtr = createTensorPointer(fatPtr, loc);
+    // This is creating `tt.addptr(%tensorBasePtr, %fatPtr.offset)
+    newPtr = rewriter.create<triton::AddPtrOp>(loc, tensorPtr.getType(),
+                                               tensorPtr, offset);
+  }
+
   // Map and replace the load
   IRMapping mapper;
   mapper.map(ptr, newPtr);
@@ -92,8 +150,10 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
           ptrShape, fatPtr.offset.getType(), outType.getEncoding());
       Value offset = rewriter.create<triton::SplatOp>(curLoc, newOffsetType,
                                                       fatPtr.offset);
-      curOperand->set(fatPtr.basePtr);
-      pointers[nextPtr] = FatPtr{nextPtr, offset};
+      // The shape of the fat pointer is contained within the offset. We don't
+      // need to keep the `splat` operation here.
+      opToDelete.insert(splatOp);
+      pointers[nextPtr] = FatPtr{splatOp.getSrc(), offset, fatPtr.canNarrow};
     } else if (auto broadcastOp = dyn_cast<triton::BroadcastOp>(curOp)) {
       nextPtr = broadcastOp.getResult();
       auto fatPtr = pointers[broadcastOp.getSrc()];
@@ -101,47 +161,50 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
           dyn_cast<RankedTensorType>(broadcastOp.getResult().getType());
       auto ptrShape = outType.getShape();
       auto offsetType = dyn_cast<RankedTensorType>(fatPtr.offset.getType());
-      curOperand->set(fatPtr.basePtr);
       if (!offsetType)
         return failure();
+
+      opToDelete.insert(broadcastOp);
 
       auto newOffsetType = RankedTensorType::get(
           ptrShape, offsetType.getElementType(), outType.getEncoding());
       Value offset = rewriter.create<triton::BroadcastOp>(curLoc, newOffsetType,
                                                           fatPtr.offset);
-      pointers[nextPtr] = FatPtr{nextPtr, offset};
+      pointers[nextPtr] = FatPtr{fatPtr.basePtr, offset, fatPtr.canNarrow};
 
     } else if (auto addPtr = dyn_cast<triton::AddPtrOp>(curOp)) {
       nextPtr = addPtr.getResult();
       auto fatPtr = pointers[addPtr.getPtr()];
       Value fatPtrOffset = fatPtr.offset;
-      Value offset = addPtr.getOffset();
+      Value addPtrOffset = addPtr.getOffset();
 
       Type fatPtrOffsetType = getElementType(fatPtrOffset);
-      Type offsetType = getElementType(offset);
+      Type addPtrOffsetType = getElementType(addPtrOffset);
+      Value newOffset = fatPtrOffset;
+      Value newPtr = fatPtr.basePtr;
+      bool canNarrow = fatPtr.canNarrow;
+      if (Value scalarOffset =
+              getScalarOffset(rewriter, curLoc, addPtrOffset)) {
+        // Scalar pointer update
+        newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(),
+                                                   newPtr, scalarOffset);
+      } else {
+        // Extension logic:
+        // - If we the offsets in the IR are 32 bits, then we have to cast to 64
+        if (addPtrOffsetType.isInteger(32))
+          addPtrOffset =
+              extend32bitOffsetTo64Bits(rewriter, curLoc, addPtrOffset);
 
-      // We are dealing with 64 bit offsets and we need to flag this
-      if (offsetType.isInteger(64))
-        offset64 = true;
+        newOffset =
+            rewriter.create<arith::AddIOp>(curLoc, addPtrOffset, fatPtrOffset);
 
-      Value newOffset = offset;
-      Value newFatPtrOffset = fatPtrOffset;
-      // If the bitness is different (32 vs 64) we need to extend the 32-bit
-      // offset into a 64-bit offset
-      if (offsetType.getIntOrFloatBitWidth() >
-          fatPtrOffsetType.getIntOrFloatBitWidth()) {
-        if (failed(
-                extend32bitOffsetTo64Bits(rewriter, curLoc, newFatPtrOffset)))
-          return failure();
-      } else if (offsetType.getIntOrFloatBitWidth() <
-                 fatPtrOffsetType.getIntOrFloatBitWidth()) {
-        if (failed(extend32bitOffsetTo64Bits(rewriter, curLoc, newOffset)))
-          return failure();
+        // If we do : %newOffset = %offset(32-bit) + %zero(64-bit) the user of
+        // %newOffset should always be able to narrow it down to 32 bits
+        bool isFatPtrZero = fatPtrOffset.getDefiningOp() &&
+                            isa<triton::SplatOp>(fatPtrOffset.getDefiningOp());
+        canNarrow = canNarrow && addPtrOffsetType.isInteger(32) && isFatPtrZero;
       }
-
-      Value addOffset =
-          rewriter.create<arith::AddIOp>(curLoc, newFatPtrOffset, newOffset);
-      pointers[nextPtr] = FatPtr{fatPtr.basePtr, addOffset};
+      pointers[nextPtr] = FatPtr{newPtr, newOffset, canNarrow};
       opToDelete.insert(addPtr);
     } else if (auto loadOp = dyn_cast<triton::LoadOp>(curOp)) {
       if (failed(materializeFatPointer(curOp, curLoc, loadOp.getPtr())))
@@ -164,25 +227,33 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
       Value offset = fatPtr.offset;
       Value basePtr = fatPtr.basePtr;
 
-      // Replace the forOp with an additional argument (i.e., the curOperand's
-      // offset)
-      auto newForOp = replaceForOpWithNewSignature(rewriter, forOp, offset);
+      // Replace the forOp with two additional argument (i.e., the curOperand's
+      // scalar pointer and the offset)
+      Value tensorPtr = createTensorPointer(fatPtr, curLoc);
+      auto newForOp =
+          replaceForOpWithNewSignature(rewriter, forOp, {basePtr, offset});
       rewriteOpMap[forOp] = newForOp;
 
-      newForOp->setOperand(operandNum, basePtr);
+      newForOp->setOperand(operandNum, tensorPtr);
       OpOperand *forOperand = &newForOp->getOpOperand(operandNum);
       // This is making sure we propagate the visit from the forOp result
       nextPtr = newForOp.getTiedLoopResult(forOperand);
 
       // This is making sure we visit the uses withint the forOp region
       Value arg = newForOp.getTiedLoopRegionIterArg(forOperand);
-      pointers[arg] = FatPtr{arg, newForOp.getRegionIterArgs().back()};
+      size_t numIterArgs = newForOp.getNumRegionIterArgs();
+      pointers[arg] =
+          FatPtr{newForOp.getRegionIterArg(numIterArgs - 2),
+                 newForOp.getRegionIterArg(numIterArgs - 1), fatPtr.canNarrow};
       for (OpOperand &use : arg.getUses())
         queue.push_back(&use);
 
       // This is setting the fat pointer for the users of the loop
       // and then propagatin the result
-      pointers[nextPtr] = FatPtr{nextPtr, newForOp.getResults().back()};
+      size_t numResults = newForOp->getNumResults();
+      pointers[nextPtr] =
+          FatPtr{newForOp->getResult(numResults - 2),
+                 newForOp.getResult(numResults - 1), fatPtr.canNarrow};
 
       opToDelete.insert(forOp);
     } else if (auto yieldOp = dyn_cast<scf::YieldOp>(curOp)) {
@@ -191,20 +262,31 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
       // IfOp
       size_t operandNum = curOperand->getOperandNumber();
       FatPtr fatPtr = pointers[curOperand->get()];
+      yieldOp.getResultsMutable().append(fatPtr.basePtr);
       yieldOp.getResultsMutable().append(fatPtr.offset);
-      yieldOp->setOperand(operandNum, fatPtr.basePtr);
 
-      if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+      if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
+        auto v = forOp.getRegionIterArg(operandNum);
+        yieldOp->setOperand(operandNum, forOp.getRegionIterArg(operandNum));
+      } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
         // Case 1: the yieldOp is contained within an IfOp. One of the
         // two branches is responsible to rewrite the operation. The other
         // branch only update the yieldOp with the right parameters
+        Value tensorPtr = createTensorPointer(fatPtr, curLoc);
+        yieldOp->setOperand(operandNum, tensorPtr);
+
         if (yieldOp->getBlock() == &ifOp.getThenRegion().front()) {
-          auto newIfOp = replaceIfOpWithNewSignature(rewriter, ifOp,
-                                                     fatPtr.offset.getType());
+          auto newIfOp = replaceIfOpWithNewSignature(
+              rewriter, ifOp,
+              {fatPtr.basePtr.getType(), fatPtr.offset.getType()});
           nextPtr = newIfOp.getResult(operandNum);
-          pointers[nextPtr] = FatPtr{nextPtr, newIfOp.getResults().back()};
+          size_t numResults = newIfOp->getNumResults();
+          pointers[nextPtr] =
+              FatPtr{newIfOp->getResult(numResults - 2),
+                     newIfOp.getResult(numResults - 1), fatPtr.canNarrow};
           opToDelete.insert(ifOp);
         }
+
       } else if (auto whileOp = resolveOp<scf::WhileOp>(yieldOp->getParentOp(),
                                                         rewriteOpMap)) {
         // Case 2: the yieldOp is contained within the AfterRegion of a
@@ -213,11 +295,17 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
         // simply replace the WhileOp with a new AfterRegion (and hance a new
         // set of return types)
         auto newWhileOp = replaceWhileOpWithNewSignature(
-            rewriter, whileOp, {}, fatPtr.offset.getType());
+            rewriter, whileOp, {},
+            {fatPtr.basePtr.getType(), fatPtr.offset.getType()});
         nextPtr = newWhileOp.getResult(operandNum);
-        pointers[nextPtr] = FatPtr{nextPtr, newWhileOp.getResults().back()};
+        size_t numResults = newWhileOp->getNumResults();
+        pointers[nextPtr] =
+            FatPtr{newWhileOp->getResult(numResults - 2),
+                   newWhileOp->getResult(numResults - 1), fatPtr.canNarrow};
         rewriteOpMap[whileOp] = newWhileOp;
         opToDelete.insert(whileOp.getOperation());
+        yieldOp.setOperand(operandNum,
+                           newWhileOp.getAfterArguments()[operandNum]);
       }
     } else if (auto whileOp = resolveOp<scf::WhileOp>(curOp, rewriteOpMap)) {
       // WhileOp rewrite happens in two phases: first rewrite the operand list
@@ -228,13 +316,17 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
       Value basePtr = fatPtr.basePtr;
       // Rewrite the while op with a new set of operands (but with the same
       // set of return types)
-      auto newWhileOp =
-          replaceWhileOpWithNewSignature(rewriter, whileOp, offset, {});
-      newWhileOp->setOperand(operandNum, fatPtr.basePtr);
+      Value tensorPtr = createTensorPointer(fatPtr, curLoc);
+      auto newWhileOp = replaceWhileOpWithNewSignature(rewriter, whileOp,
+                                                       {basePtr, offset}, {});
+      newWhileOp->setOperand(operandNum, tensorPtr);
       Value arg = newWhileOp.getBeforeBody()->getArgument(operandNum);
       // Propagate inside the BeforeRegion
+      size_t numArguments = newWhileOp.getBeforeBody()->getNumArguments();
       pointers[arg] =
-          FatPtr{arg, newWhileOp.getBeforeBody()->getArguments().back()};
+          FatPtr{newWhileOp.getBeforeBody()->getArgument(numArguments - 2),
+                 newWhileOp.getBeforeBody()->getArgument(numArguments - 1),
+                 fatPtr.canNarrow};
       nextPtr = arg;
       rewriteOpMap[whileOp] = newWhileOp;
       opToDelete.insert(curOp);
@@ -253,17 +345,22 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
 
       // Update the condition op
       auto afterBlock = whileOp.getAfterBody();
-      conditionOp.getArgsMutable().append(offset);
+      conditionOp.getArgsMutable().append({basePtr, offset});
 
       // Propagate through the after region
+      afterBlock->addArgument(basePtr.getType(), curLoc);
       afterBlock->addArgument(offset.getType(), curLoc);
       nextPtr = afterBlock->getArgument(operandNum - 1);
-      pointers[nextPtr] = FatPtr{nextPtr, afterBlock->getArguments().back()};
+      size_t numArguments = afterBlock->getNumArguments();
+      conditionOp.setOperand(operandNum,
+                             whileOp.getRegionIterArgs()[operandNum - 1]);
+      pointers[nextPtr] =
+          FatPtr{afterBlock->getArgument(numArguments - 2),
+                 afterBlock->getArgument(numArguments - 1), fatPtr.canNarrow};
     } else if (auto condBrOp = dyn_cast<cf::CondBranchOp>(curOp)) {
       // CondBranchOp is a bit tricky to handle. Because we might be inserting
-      // the offset as a TrueDestOperand, which is not the end of
+      // the basePtr+offset as a TrueDestOperand(s), which is not the end of
       // `condBrOp.getOperands()`
-
       auto falseOperands = llvm::to_vector(condBrOp.getFalseDestOperands());
       auto trueOperands = llvm::to_vector(condBrOp.getTrueOperands());
       auto it = llvm::find(falseOperands, curOperand->get());
@@ -276,11 +373,12 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
         auto condBranchReplacement =
             dyn_cast<cf::CondBranchOp>(rewriteOpMap[condBrOp]);
         if (isFalseOperand) {
-          // The offset needs to be added if we are on the FalseOperands side,
-          // but the true operands have been rewritten
-          int maybeOffset =
+          // basePtr+offset need to be added if we are on the FalseOperands
+          // side, but the true operands have been rewritten
+          bool needOffset =
               (condBranchReplacement.getTrueDestOperands().size() !=
                condBrOp.getTrueDestOperands().size());
+          int maybeOffset = (needOffset ? 2 : 0);
           operandNum += maybeOffset;
           curOperand = &condBranchReplacement->getOpOperand(operandNum);
         }
@@ -303,32 +401,37 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
       Block *trueDest = condBrOp.getTrueDest();
       // Walk the destination block only if you don't have visited it yet
       if (isFalseOperand) {
+        falseOperands.push_back(basePtr);
         falseOperands.push_back(offset);
         Value falseDestArg = falseDest->getArgument(
             operandNum - condBrOp.getNumTrueOperands() - 1);
         if (!pointers.contains(falseDestArg)) {
           nextPtr = falseDestArg;
-          falseDest->addArgument(offset.getType(), curLoc);
-          pointers[nextPtr] = FatPtr{nextPtr, falseDest->getArguments().back()};
+          Value basePtrArg = falseDest->addArgument(basePtr.getType(), curLoc);
+          Value offsetArg = falseDest->addArgument(offset.getType(), curLoc);
+          pointers[nextPtr] = FatPtr{basePtrArg, offsetArg, fatPtr.canNarrow};
         }
       } else {
+        trueOperands.push_back(basePtr);
         trueOperands.push_back(offset);
         Value trueDestArg = trueDest->getArgument(operandNum - 1);
         if (!pointers.contains(trueDestArg)) {
           nextPtr = trueDestArg;
-          trueDest->addArgument(offset.getType(), curLoc);
-          pointers[nextPtr] = FatPtr{nextPtr, trueDest->getArguments().back()};
+          Value basePtrArg = trueDest->addArgument(basePtr.getType(), curLoc);
+          Value offsetArg = trueDest->addArgument(offset.getType(), curLoc);
+          pointers[nextPtr] = FatPtr{basePtrArg, offsetArg, fatPtr.canNarrow};
         }
       }
 
       // Create a new condBranch. We cannot simply extend the operands,
       // because this would invalidate other operands pointing at the same
       // cond branch
+      Value tensorPtr = createTensorPointer(fatPtr, curLoc);
       auto newCondBranch = rewriter.create<cf::CondBranchOp>(
           curLoc, condBrOp.getCondition(), trueDest, trueOperands, falseDest,
           falseOperands);
 
-      newCondBranch.setOperand(operandNum, basePtr);
+      newCondBranch.setOperand(operandNum, tensorPtr);
       rewriteOpMap[condBrOp] = newCondBranch;
       opToDelete.insert(condBrOp);
     } else if (auto branchOp = dyn_cast<cf::BranchOp>(curOp)) {
@@ -338,17 +441,24 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
       Value offset = fatPtr.offset;
       Value basePtr = fatPtr.basePtr;
 
-      branchOp.getDestOperandsMutable().append(fatPtr.offset);
-      branchOp->setOperand(operandNum, basePtr);
+      branchOp.getDestOperandsMutable().append({basePtr, fatPtr.offset});
+      Value tensorPtr = createTensorPointer(fatPtr, curLoc);
+      branchOp->setOperand(operandNum, tensorPtr);
       Block *dest = branchOp.getDest();
 
       // Walk the destination block only if you don't have visited it yet
       if (!pointers.contains(dest->getArgument(operandNum))) {
-        dest->addArgument(offset.getType(), curLoc);
+        Value basePtrArg = dest->addArgument(basePtr.getType(), curLoc);
+        Value offsetArg = dest->addArgument(offset.getType(), curLoc);
         nextPtr = dest->getArgument(operandNum);
-        pointers[nextPtr] = {nextPtr, dest->getArguments().back()};
+        pointers[nextPtr] = {basePtrArg, offsetArg, fatPtr.canNarrow};
       }
+    } else if (isa<triton::PtrToIntOp>(curOp)) {
+      // Do nothing, just keep going
     } else {
+      // If we meet an unsupported operation, materialize the fat pointer and
+      // continue. We flag that we met unknown usage of the pointer, hence we
+      // cannot ensure that all the pointers have been canonicalized
       unknownOp = true;
       if (failed(materializeFatPointer(curOp, curLoc, curOperand->get())))
         return failure();
@@ -359,32 +469,24 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
       for (OpOperand &use : nextPtr.getUses())
         queue.push_back(&use);
   }
-  for (Operation *op : llvm::reverse(opToDelete))
+  for (Operation *op : llvm::reverse(opToDelete)) {
     op->erase();
+  }
   return success();
 }
 
 LogicalResult PointerCanonicalizer::rewriteRegion(Region &region) {
   for (Value arg : region.getArguments()) {
-
-    auto tensorType = dyn_cast<RankedTensorType>(arg.getType());
-    bool isTensorPointerType =
-        tensorType && isa<triton::PointerType>(tensorType.getElementType());
-
-    if (!isa<triton::PointerType>(arg.getType()) && !isTensorPointerType)
+    // The pointer argument needs to be a scalar
+    if (!isa<triton::PointerType>(arg.getType()))
       continue;
 
     rewriter.setInsertionPointToStart(&region.front());
     Value zeroOffset =
-        rewriter.create<arith::ConstantIntOp>(region.getLoc(), 0, 32);
-    if (isTensorPointerType) {
-      auto newOffsetType =
-          RankedTensorType::get(tensorType.getShape(), zeroOffset.getType(),
-                                tensorType.getEncoding());
-      zeroOffset = rewriter.create<triton::SplatOp>(region.getLoc(),
-                                                    newOffsetType, zeroOffset);
-    }
-    pointers[arg] = FatPtr{arg, zeroOffset};
+        rewriter.create<arith::ConstantIntOp>(region.getLoc(), 0, 64);
+
+    // Take note of the scalar pointer to introduce more optimizations
+    pointers[arg] = FatPtr{arg, zeroOffset, true};
     if (failed(rewritePointer(arg)))
       return failure();
   }

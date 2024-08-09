@@ -55,27 +55,22 @@ private:
 
 public:
   PointerCanonicalizer(ModuleOp moduleOp)
-      : mod(moduleOp), rewriter(moduleOp.getContext()), offset64(false),
-        unknownOp(false) {}
+      : mod(moduleOp), rewriter(moduleOp.getContext()) {}
 
   // Propagate fat pointers in all the functions of the module
   LogicalResult run();
 
-  // Returns if, while propagating any fat pointer,
-  // we met any unkwnown operation that needed a pointer
   bool hasUnknownOps() const { return unknownOp; }
-
-  // Returns if, while propagating any fat pointer, we met any 64
-  // bit offset
-  bool has64BitOffset() const { return offset64; }
 
 private:
   // This is the internal representation of a fat pointer: `fatPtr = basePtr +
-  // offset`
+  // offset`.
   struct FatPtr {
     Value basePtr;
     Value offset;
+    bool canNarrow = false;
   };
+  Value createTensorPointer(FatPtr fatPtr, Location loc);
 
   // Rewriter
   mlir::IRRewriter rewriter;
@@ -87,8 +82,6 @@ private:
   llvm::MapVector<Value, FatPtr> pointers;
 
   bool unknownOp;
-
-  bool offset64;
 };
 
 } // namespace mlir::triton::AMD
