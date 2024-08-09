@@ -298,7 +298,10 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   }}
 
   PyObject *empty_tuple = PyTuple_New(0);
-  if (!empty_tuple) goto python_internal_error;
+  if (!empty_tuple) {{
+    Py_DECREF(method_handle);
+    goto python_internal_error;
+  }}
   PyObject *method_ret = PyObject_Call(method_handle, empty_tuple, NULL);
   Py_DECREF(empty_tuple);
   Py_DECREF(method_handle);
