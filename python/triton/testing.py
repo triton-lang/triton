@@ -23,6 +23,8 @@ def _summarize_statistics(times, quantiles, return_mode):
         if len(ret) == 1:
             ret = ret[0]
         return ret
+    if return_mode == "all":
+        return times.tolist()
     return getattr(torch, return_mode)(times).item()
 
 
@@ -36,11 +38,11 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type rep: int
     :param grad_to_none: Reset the gradient of the provided tensor to None
     :type grad_to_none: torch.tensor, optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", or "median". Default is "mean".
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".
     :type return_mode: str
     """
     import torch
-    assert return_mode in ["min", "max", "mean", "median"]
+    assert return_mode in ["min", "max", "mean", "median", "all"]
 
     with torch.cuda.stream(torch.cuda.Stream()):
         # warmup
@@ -107,10 +109,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :type quantiles: list[float], optional
     :param fast_flush: Use faster kernel to flush L2 cache between measurements
     :type fast_flush: bool, default is True
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", or "median". Default is "mean".
-    :type return_mode: str
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".    :type return_mode: str
     """
-    assert return_mode in ["min", "max", "mean", "median"]
+    assert return_mode in ["min", "max", "mean", "median", "all"]
     import torch
 
     di = torch._dynamo.device_interface.get_interface_for_device(device_type)
