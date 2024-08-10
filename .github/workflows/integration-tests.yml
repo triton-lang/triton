@@ -350,6 +350,7 @@ jobs:
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directory
         run: |
+          rmdir ~/.triton
           mkdir -p ~/.triton
           ls -alh ~/.triton
       - name: Update PATH
