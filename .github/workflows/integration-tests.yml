@@ -298,7 +298,7 @@ jobs:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
     name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
     container:
-      image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.4
+      imagm: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.4
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
@@ -350,7 +350,7 @@ jobs:
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directory
         run: |
-          rmdir ~/.triton
+          rm -rf ~/.triton
           mkdir -p ~/.triton
           ls -alh ~/.triton
       - name: Update PATH
