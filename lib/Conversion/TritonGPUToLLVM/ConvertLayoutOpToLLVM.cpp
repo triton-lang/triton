@@ -276,7 +276,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // For example, if the block -> block mapping is an identity layout: {1, 2,
     // 4, ...}, then there's no movement between data in different CTAs, and we
     // know we're not in case 4.
-
     if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1.
       return transferWithinThread(op, *srcLayout, *dstLayout, adaptor,
                                   rewriter);
@@ -294,6 +293,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   transferWithinThread(ConvertLayoutOp op, const LinearLayout &srcLayout,
                        const LinearLayout &dstLayout, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = op.getContext();
+    auto loc = op.getLoc();
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
     // There are three possible cases:
     //
     // 1. `srcLayout` has the same number of registers as `dstLayout`.
@@ -304,22 +310,24 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // because not all destination registers are covered.
     // Since the goal is to cover all of the destination
     // registers, we can instead use `dstLayout . srcLayout^-1`.
-    MLIRContext *ctx = op.getContext();
-    auto loc = op.getLoc();
-    StringAttr kRegister = str_attr("register");
     LinearLayout conversion = dstLayout.invertAndCompose(srcLayout);
+    auto dstToSrc = conversion.divideRight(
+        LinearLayout::identity1D(conversion.getInDimSize(kLane), kLane, kLane) *
+        LinearLayout::identity1D(conversion.getInDimSize(kWarp), kWarp, kWarp) *
+        LinearLayout::identity1D(conversion.getInDimSize(kBlock), kBlock,
+                                 kBlock));
 
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-    assert(ArrayRef(to_vector(conversion.getInDimNames())) ==
+    assert(ArrayRef(to_vector(dstToSrc->getInDimNames())) ==
            ArrayRef{kRegister});
-    assert(ArrayRef(to_vector(conversion.getOutDimNames())) ==
+    assert(ArrayRef(to_vector(dstToSrc->getOutDimNames())) ==
            ArrayRef{kRegister});
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals;
-    outVals.resize(conversion.getInDimSize(kRegister));
-    for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
-      auto srcIdx = conversion.apply({{kRegister, i}});
+    outVals.resize(dstToSrc->getInDimSize(kRegister));
+    for (int i = 0; i < dstToSrc->getInDimSize(kRegister); i++) {
+      auto srcIdx = dstToSrc->apply({{kRegister, i}});
       outVals[i] = inVals[srcIdx.begin()->second];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
