@@ -3,8 +3,8 @@
 
 // Forward declarations of cuBLAS types and functions.
 
-#include "backend/include/cuda.h"
-#include "backend/include/driver_types.h"
+#include "cuda.h"
+#include "driver_types.h"
 
 /* CUBLAS status type returns */
 typedef enum {
