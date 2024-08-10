@@ -189,8 +189,16 @@ bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
+// Conversion from `srcTy` to `dstTy` only involves reordering of registers.
+// There is no need for data exchange across threads, warps, or blocks.
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 
+// Conversion from `srcTy` to `dstTy` involves data exchange across threads
+// within a warp.  No data exchange across warps or blocks is needed.
+bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
+
+// Conversion from `srcTy` to `dstTy` involves data exchange across threads,
+// warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool atomicNeedsSharedMemory(Value result);

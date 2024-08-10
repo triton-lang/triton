@@ -272,64 +272,42 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     //  4. Transfer between values in different CTAs, in which case we move
     //     values through distributed shared memory.
     //
-    // We can tell which case we're in by examining `conversion`.  If e.g. the
-    // block -> block mapping is {1, 2, 4, ...} then there's no movement between
-    // data in different CTAs and we know we're not in case 4.
-    LinearLayout conversion = srcLayout->invertAndCompose(*dstLayout);
+    // We can tell which case we're in by examining `conversion`.
+    // For example, if the block -> block mapping is an identity layout: {1, 2,
+    // 4, ...}, then there's no movement between data in different CTAs, and we
+    // know we're not in case 4.
 
-    int numLanes = conversion.getInDimSize(str_attr("lane"));
-    int numWarps = conversion.getInDimSize(str_attr("warp"));
-    int numBlocks = conversion.getInDimSize(str_attr("block"));
-
-    StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    // TODO(jlebar): These checks are overly-restrictive.  For example, we can
-    // transfer by shuffling registers (case 1) if and only if all of the bases
-    // for `register` have 0s for lane, warp, and block.  But the check below is
-    // stronger than this, checking also that the choice of lane/warp/block does
-    // not affect the permutation of registers.  If we allow different
-    // lane/warp/blocks to have different permutations, we can generalize this.
-    if (cvtReordersRegisters(srcTy, dstTy)) {
-      // There are three possible cases:
-      //
-      // 1. `src_layout` has the same number of registers as `dst_layout`.
-      // 2. `src_layout` has fewer registers than `dst_layout`.
-      // 3. `src_layout` has more registers than `dst_layout`.
-      //
-      // In the second case, `conversion`, which is `src_layout .
-      // dst_layout^-1`, is not surjective because not all destination registers
-      // are covered.  Since the goal is to cover all of the destination
-      // registers, we can instead use the inverse conversion, which is
-      // `dst_layout . src_layout^-1`.
-      LinearLayout inverseConversion = dstLayout->invertAndCompose(*srcLayout);
-      auto dstToSrc = inverseConversion.divideRight(
-          LinearLayout::identity1D(numLanes, kLane, kLane) *
-          LinearLayout::identity1D(numWarps, kWarp, kWarp) *
-          LinearLayout::identity1D(numBlocks, kBlock, kBlock));
-      return transferWithinThread(*dstToSrc, op, adaptor, rewriter);
+    if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1.
+      return transferWithinThread(op, *srcLayout, *dstLayout, adaptor,
+                                  rewriter);
     }
 
-    if (std::optional<LinearLayout> c = conversion.divideRight(
-            LinearLayout::identity1D(numWarps, kWarp, kWarp) *
-            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
-        c.has_value()) {
-      return transferWithinLane(*c, op, adaptor, rewriter);
+    if (cvtNeedsWarpShuffle(srcTy, dstTy)) { // Case 2.
+      return transferWithinLane(op, *srcLayout, *dstLayout, adaptor, rewriter);
     }
 
-    return transferWithinBlockOrGroup(conversion, op, *srcLayout, *dstLayout,
-                                      adaptor, rewriter);
+    return transferWithinBlockOrGroup(op, *srcLayout, *dstLayout, adaptor,
+                                      rewriter); // Case 3 and 4
   }
 
   LogicalResult
-  transferWithinThread(const LinearLayout &conversion, ConvertLayoutOp op,
-                       OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &srcLayout,
+                       const LinearLayout &dstLayout, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
+    // There are three possible cases:
+    //
+    // 1. `srcLayout` has the same number of registers as `dstLayout`.
+    // 2. `srcLayout` has fewer registers than `dstLayout`.
+    // 3. `srcLayout` has more registers than `dstLayout`.
+    //
+    // In the second case `srcLayout . dstLayout^-1` is not surjective
+    // because not all destination registers are covered.
+    // Since the goal is to cover all of the destination
+    // registers, we can instead use `dstLayout . srcLayout^-1`.
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
+    LinearLayout conversion = dstLayout.invertAndCompose(srcLayout);
 
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
     assert(ArrayRef(to_vector(conversion.getInDimNames())) ==
@@ -350,18 +328,21 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  LogicalResult transferWithinLane(const LinearLayout &conversion,
-                                   ConvertLayoutOp op, OpAdaptor adaptor,
+  LogicalResult transferWithinLane(ConvertLayoutOp op,
+                                   const LinearLayout &srcLayout,
+                                   const LinearLayout &dstLayout,
+                                   OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
     // TODO(jlebar): Implement me.
     return failure();
   }
 
   LogicalResult
-  transferWithinBlockOrGroup(const LinearLayout &conversion, ConvertLayoutOp op,
-                             const LinearLayout &srcLayout,
+  transferWithinBlockOrGroup(ConvertLayoutOp op, const LinearLayout &srcLayout,
                              const LinearLayout &dstLayout, OpAdaptor adaptor,
                              ConversionPatternRewriter &rewriter) const {
+    LinearLayout conversion = srcLayout.invertAndCompose(dstLayout);
+
     // TODO(Keren): LLs support cross-CTA conversions, this function does not
     if (isCrossCTAConversion(conversion))
       return failure();

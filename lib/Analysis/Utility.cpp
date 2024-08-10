@@ -573,15 +573,37 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
     StringAttr kLane = StringAttr::get(ctx, "lane");
     StringAttr kWarp = StringAttr::get(ctx, "warp");
     StringAttr kBlock = StringAttr::get(ctx, "block");
-    // In principle, there's no need for shared memory if there's no
-    // communication between warps.  However, right now we only have implemented
-    // the shortcut case where there's no communication between *threads*.
-    //
-    // TODO(jlebar): Remove the kLane layout once we add support for
-    // shuffle-based layout conversions in ConvertLayoutToLLVM.
+    // TODO(jlebar): These checks are overly-restrictive.  For example, we can
+    // transfer by shuffling registers (case 1) if and only if all of the bases
+    // for `register` have 0s for lane, warp, and block.  But the check below is
+    // stronger than this, checking also that the choice of lane/warp/block does
+    // not affect the permutation of registers.  If we allow different
+    // lane/warp/blocks to have different permutations, we can generalize this.
     if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kLane),
                                                   kLane, kLane) *
                          LinearLayout::identity1D(comp.getInDimSize(kWarp),
+                                                  kWarp, kWarp) *
+                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
+                                                  kBlock, kBlock))
+            .has_value()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
+  MLIRContext *ctx = srcTy.getContext();
+  std::optional<LinearLayout> srcLayout =
+      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+  std::optional<LinearLayout> dstLayout =
+      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+  if (srcLayout.has_value() && dstLayout.has_value()) {
+    // comp describes the layout function for converting from src to dst.
+    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
+    StringAttr kWarp = StringAttr::get(ctx, "warp");
+    StringAttr kBlock = StringAttr::get(ctx, "block");
+    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kWarp),
                                                   kWarp, kWarp) *
                          LinearLayout::identity1D(comp.getInDimSize(kBlock),
                                                   kBlock, kBlock))
