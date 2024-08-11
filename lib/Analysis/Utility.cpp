@@ -618,6 +618,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut` and
   // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
   // checks.
+  // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
+  // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
