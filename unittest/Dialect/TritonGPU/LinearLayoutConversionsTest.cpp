@@ -1007,7 +1007,8 @@ TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout) {
                                   {S("block"), {{0}}}},
                                  {S("dim0")});
   EXPECT_EQ(chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{64},
-                                                  /*repShape=*/{64}),
+                                                  /*repShape=*/{64},
+                                                  /*order=*/{1, 0}),
             LinearLayout({{S("offset"), {{1}, {2}, {4}, {8}, {16}, {32}}},
                           {S("iteration"), {}},
                           {S("block"), {}}},
@@ -1022,7 +1023,7 @@ TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout_Empty) {
                                  {S("dim0")});
   EXPECT_EQ(
       chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{},
-                                            /*repShape=*/{}),
+                                            /*repShape=*/{}, /*order=*/{}),
       LinearLayout({{S("offset"), {}}, {S("iteration"), {}}, {S("block"), {}}},
                    {}));
 }
@@ -1037,7 +1038,8 @@ TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout_Multidim) {
       {S("dim0"), S("dim1"), S("dim2"), S("dim3")});
   EXPECT_EQ(
       chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{4, 4, 4, 4},
-                                            /*repShape=*/{2, 2, 2, 2}),
+                                            /*repShape=*/{2, 2, 2, 2},
+                                            /*order=*/{3, 2, 1, 0}),
       LinearLayout({{S("offset"),
                      {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}},
                     {S("iteration"),
