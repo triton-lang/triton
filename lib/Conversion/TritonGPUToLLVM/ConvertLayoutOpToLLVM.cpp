@@ -454,7 +454,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Input dims: [offset, iteration, block]
     // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
     LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
-        ctx, tensorShape, scratchConfig.repShape);
+        ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
 
     // Layout for the store from registers to shared memory.
     //
@@ -493,15 +493,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // There's only one dimension that has been padded
     auto rank = scratchConfig.repShape.size();
-    auto paddedStride = 1;
-    auto paddedSize = 0;
-    for (size_t i = 0; i < rank; ++i) {
-      if (scratchConfig.repShape[i] != scratchConfig.paddedRepShape[i]) {
-        paddedStride = scratchConfig.repShape[i];
-        paddedSize = scratchConfig.paddedRepShape[i] - paddedStride;
-        break;
-      }
-    }
+    auto paddedStride = scratchConfig.repShape[scratchConfig.order[0]];
+    auto paddedSize =
+        scratchConfig.paddedRepShape[scratchConfig.order[0]] - paddedStride;
 
     // Linear layout function is split in two parts below:
     //

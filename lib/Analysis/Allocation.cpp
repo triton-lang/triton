@@ -149,6 +149,7 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   }
   auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
   scratchConfig.paddedRepShape[paddedDim] += paddedSize;
+  scratchConfig.order = outOrd;
 
   return scratchConfig;
 }

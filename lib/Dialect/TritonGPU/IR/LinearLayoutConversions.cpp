@@ -736,7 +736,8 @@ bool isCrossCTAConversion(const LinearLayout &layout) {
 LinearLayout
 chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
                                       ArrayRef<unsigned> tensorShape,
-                                      ArrayRef<unsigned> repShape) {
+                                      ArrayRef<unsigned> repShape,
+                                      ArrayRef<unsigned> order) {
   auto outDimNames = standardOutDimNames(ctx, tensorShape.size());
   LinearLayout layout = LinearLayout::empty();
   SmallVector<StringAttr> kRepDims;
@@ -746,7 +747,7 @@ chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
   for (int i = 0; i < tensorShape.size(); i++) {
     // The scratch buffer always has the last dimension to be the most-minor
     // dimension
-    int dim = tensorShape.size() - 1 - i;
+    int dim = order[i];
     StringAttr kIteration = S("iteration" + std::to_string(dim));
     StringAttr kOffset = S("offset" + std::to_string(dim));
     kRepDims.push_back(kIteration);
