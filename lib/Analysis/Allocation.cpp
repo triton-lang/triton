@@ -44,7 +44,8 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   auto dstMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout);
   auto dstDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(dstLayout);
 
-  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere()) &&
+  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere() &&
+           !srcMmaLayout.isHopper()) &&
          "mma -> mma layout conversion is only supported on Ampere");
 
   // mma or dot layout does not have an order, so the order depends on the
@@ -92,9 +93,9 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
 // a scalar value because Triton's block-based programming model ensures that
 // all threads in each block see the same return value, even those threads that
 // do not participate in the atomic operation
-static SmallVector<unsigned> getRepShapeForAtomic(Type retTy) {
+static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   SmallVector<unsigned> smemShape;
-  if (!isa<RankedTensorType>(retTy)) {
+  if (atomicNeedsSharedMemory(result)) {
     smemShape.push_back(1);
   }
   return smemShape;
@@ -267,7 +268,7 @@ private:
       if (dyn_cast<RankedTensorType>(value.getType())) {
         // nothing to do
       } else {
-        auto smemShape = getRepShapeForAtomic(op->getResult(0).getType());
+        auto smemShape = getRepShapeForAtomic(op->getResult(0));
         auto elems = getNumScratchElements(smemShape);
         auto elemTy =
             cast<triton::PointerType>(value.getType()).getPointeeType();

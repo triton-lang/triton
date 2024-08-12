@@ -373,7 +373,7 @@ class CodeGenerator(ast.NodeVisitor):
         if self.fn:
             raise self._unsupported(node, "nested function definition is not supported.")
         # initialize defaults
-        for i, default_value in enumerate(node.args.defaults):
+        for i, default_value in enumerate(node.args.defaults[::-1]):
             arg_node = node.args.args[-i - 1]
             annotation = arg_node.annotation
             name = arg_node.arg
@@ -465,8 +465,11 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Assign(self, node):
         _names = []
-        for target in node.targets:
-            _names += [self.visit(target)]
+        if isinstance(node, ast.AnnAssign):
+            _names += [self.visit(node.target)]
+        else:
+            for target in node.targets:
+                _names += [self.visit(target)]
         if len(_names) > 1:
             raise self._unsupported(node, "simultaneous multiple assignment is not supported.")
         names = _names[0]

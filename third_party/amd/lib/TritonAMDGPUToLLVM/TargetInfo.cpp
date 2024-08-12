@@ -243,6 +243,9 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   printfImpl(msgValue, msgBuffer.size_in_bytes(), /*args=*/ValueRange(),
              rewriter, /*useStdError=*/true);
 
+  // Set block barrrier before aborting kernel, give a chance for all
+  // the threads in a block to check/print the assert failure.
+  barrier();
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
 }

@@ -937,9 +937,10 @@ def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encod
 An encoding for tensors that have been produced by WMMA matrix core instructions,
 available on AMD Radeon GPUs of RDNA architectures.
 - A `version` parameter specifies instruction version to lower in. The data
-  distribution within one warp is also depends on it.
-  - 1: RDNA3 (gfx11)
-  - 2: RDNA4 (gfx12)
+  distribution within one warp is also depends on it. Following architectures are
+  supported:
+  - 1: gfx11
+  - 2: gfx12
 - A `warpsPerCTA` parameter characterizes data distribution between warps.
   An important limitation of WMMA for layout is a shape for tiles proccessed
   by a single warp. It is [16, 16].
