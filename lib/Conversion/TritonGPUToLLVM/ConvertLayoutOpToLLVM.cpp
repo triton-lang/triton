@@ -250,10 +250,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     MLIRContext *ctx = op.getContext();
 
     const auto &shape = op.getType().getShape();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
     std::optional<LinearLayout> srcLayout =
-        toLinearLayout(shape, op.getSrc().getType().getEncoding());
+        toLinearLayout(shape, srcTy.getEncoding());
     std::optional<LinearLayout> dstLayout =
-        toLinearLayout(shape, op.getType().getEncoding());
+        toLinearLayout(shape, dstTy.getEncoding());
     if (!srcLayout.has_value() || !dstLayout.has_value()) {
       return failure();
     }
@@ -270,63 +272,63 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     //  4. Transfer between values in different CTAs, in which case we move
     //     values through distributed shared memory.
     //
-    // We can tell which case we're in by examining `conversion`.  If e.g. the
-    // block -> block mapping is {1, 2, 4, ...} then there's no movement between
-    // data in different CTAs and we know we're not in case 4.
-    LinearLayout conversion = srcLayout->invertAndCompose(*dstLayout);
-
-    int numLanes = conversion.getInDimSize(str_attr("lane"));
-    int numWarps = conversion.getInDimSize(str_attr("warp"));
-    int numBlocks = conversion.getInDimSize(str_attr("block"));
-
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    // TODO(jlebar): These checks are overly-restrictive.  For example, we can
-    // transfer by shuffling registers (case 1) if and only if all of the bases
-    // for `register` have 0s for lane, warp, and block.  But the check below is
-    // stronger than this, checking also that the choice of lane/warp/block does
-    // not affect the permutation of registers.  If we allow different
-    // lane/warp/blocks to have different permutations, we can generalize this.
-    if (std::optional<LinearLayout> c = conversion.divideRight(
-            LinearLayout::identity1D(numLanes, kLane, kLane) *
-            LinearLayout::identity1D(numWarps, kWarp, kWarp) *
-            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
-        c.has_value()) {
-      return transferWithinThread(*c, op, adaptor, rewriter);
+    // We can tell which case we're in by examining `conversion`.
+    // For example, if the block -> block mapping is an identity layout: {1, 2,
+    // 4, ...}, then there's no movement between data in different CTAs, and we
+    // know we're not in case 4.
+    if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1.
+      return transferWithinThread(op, *srcLayout, *dstLayout, adaptor,
+                                  rewriter);
     }
 
-    if (std::optional<LinearLayout> c = conversion.divideRight(
-            LinearLayout::identity1D(numWarps, kWarp, kWarp) *
-            LinearLayout::identity1D(numBlocks, kBlock, kBlock));
-        c.has_value()) {
-      return transferWithinLane(*c, op, adaptor, rewriter);
+    if (cvtNeedsWarpShuffle(srcTy, dstTy)) { // Case 2.
+      return transferWithinLane(op, *srcLayout, *dstLayout, adaptor, rewriter);
     }
 
-    return transferWithinBlockOrGroup(conversion, op, *srcLayout, *dstLayout,
-                                      adaptor, rewriter);
+    return transferWithinBlockOrGroup(op, *srcLayout, *dstLayout, adaptor,
+                                      rewriter); // Case 3 and 4
   }
 
   LogicalResult
-  transferWithinThread(const LinearLayout &conversion, ConvertLayoutOp op,
-                       OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &srcLayout,
+                       const LinearLayout &dstLayout, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+    // There are three possible cases:
+    //
+    // 1. `srcLayout` has the same number of registers as `dstLayout`.
+    // 2. `srcLayout` has fewer registers than `dstLayout`.
+    // 3. `srcLayout` has more registers than `dstLayout`.
+    //
+    // In the second case `srcLayout . dstLayout^-1` is not surjective
+    // because not all destination registers are covered.
+    // Since the goal is to cover all of the destination
+    // registers, we can instead use `dstLayout . srcLayout^-1`.
+    LinearLayout conversion = dstLayout.invertAndCompose(srcLayout);
+    auto dstToSrc = conversion.divideRight(
+        LinearLayout::identity1D(conversion.getInDimSize(kLane), kLane, kLane) *
+        LinearLayout::identity1D(conversion.getInDimSize(kWarp), kWarp, kWarp) *
+        LinearLayout::identity1D(conversion.getInDimSize(kBlock), kBlock,
+                                 kBlock));
 
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-    assert(ArrayRef(to_vector(conversion.getInDimNames())) ==
+    assert(ArrayRef(to_vector(dstToSrc->getInDimNames())) ==
            ArrayRef{kRegister});
-    assert(ArrayRef(to_vector(conversion.getOutDimNames())) ==
+    assert(ArrayRef(to_vector(dstToSrc->getOutDimNames())) ==
            ArrayRef{kRegister});
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals(conversion.getOutDimSize(kRegister));
-    for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
-      auto dstIdx = conversion.apply({{kRegister, i}});
-      outVals[dstIdx.begin()->second] = inVals[i];
+    SmallVector<Value> outVals;
+    outVals.resize(dstToSrc->getInDimSize(kRegister));
+    for (int i = 0; i < dstToSrc->getInDimSize(kRegister); i++) {
+      auto srcIdx = dstToSrc->apply({{kRegister, i}});
+      outVals[i] = inVals[srcIdx.begin()->second];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
@@ -334,18 +336,21 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  LogicalResult transferWithinLane(const LinearLayout &conversion,
-                                   ConvertLayoutOp op, OpAdaptor adaptor,
+  LogicalResult transferWithinLane(ConvertLayoutOp op,
+                                   const LinearLayout &srcLayout,
+                                   const LinearLayout &dstLayout,
+                                   OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
     // TODO(jlebar): Implement me.
     return failure();
   }
 
   LogicalResult
-  transferWithinBlockOrGroup(const LinearLayout &conversion, ConvertLayoutOp op,
-                             const LinearLayout &srcLayout,
+  transferWithinBlockOrGroup(ConvertLayoutOp op, const LinearLayout &srcLayout,
                              const LinearLayout &dstLayout, OpAdaptor adaptor,
                              ConversionPatternRewriter &rewriter) const {
+    LinearLayout conversion = srcLayout.invertAndCompose(dstLayout);
+
     // TODO(Keren): LLs support cross-CTA conversions, this function does not
     if (isCrossCTAConversion(conversion))
       return failure();
@@ -353,10 +358,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
 
-    assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-
-    // TODO(jlebar): For now we handle only blocked/slice -> blocked/slice
-    // conversions.  Once we have ldmatrix support in
+    // TODO(jlebar): For now we handle only blocked/slice ->
+    // blocked/slice conversions.  Once we have ldmatrix support in
     // load/storeDistributedToShared, we can remove this constraint.
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (isa<NvidiaMmaEncodingAttr>(layout)) {
@@ -374,6 +377,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         !layoutIsOK(op.getType().getEncoding())) {
       return failure();
     }
+
+    assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
