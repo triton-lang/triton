@@ -27,14 +27,13 @@ static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
 // be either an atomic op or last usage of source pointer. Search ends when move
 // op is encountered.
 static llvm::ilist<Operation>::iterator
-findEarlyInsertionPoint(Block *block, Operation *move, bool &found) {
+findEarlyInsertionPoint(Block *block, Operation *move) {
   Value src;
   if (auto ld = dyn_cast<triton::LoadOp>(move))
     src = ld.getPtr();
 
-  found = false;
-  auto ipnt = block->begin();
-  for (auto bi = ipnt; bi != block->end(); ++bi) {
+  auto ipnt = block->end();
+  for (auto bi = block->begin(); bi != block->end(); ++bi) {
     auto *op = &*bi;
     if (op == move) // Don't move later than current location
       break;
@@ -43,22 +42,16 @@ findEarlyInsertionPoint(Block *block, Operation *move, bool &found) {
       if (src) {
         // Check for ops accessing src value.
         for (auto opr : wop->getOperands()) {
-          if (opr == src) {
+          if (opr == src)
             ipnt = bi;
-            found = true;
-          }
         }
       }
       // Atomics used for global synchronization.
-      if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop)) {
+      if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
         ipnt = bi;
-        found = true;
-      }
       // Break at loops.
-      if (isa<scf::ForOp, scf::WhileOp>(wop)) {
+      if (isa<scf::ForOp, scf::WhileOp>(wop))
         ipnt = bi;
-        found = true;
-      }
     });
   }
   return ipnt;
@@ -72,7 +65,6 @@ public:
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    mlir::DominanceInfo dom(m);
 
     // Sink shared memory loads and layout conversions into loops to decrease
     // register pressure when possible.
@@ -133,22 +125,23 @@ public:
       if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
         continue;
 
-      bool found;
-      auto ipoint = findEarlyInsertionPoint(block, op, found);
+      auto ipoint = findEarlyInsertionPoint(block, op);
       // Remove ops that already precede the insertion point. This is done
       // before moves happen to avoid `Operation::isBeforeInBlock` N^2
       // complexity.
-      if (!found && backwardSet.contains(&*block->begin()))
-        found = true;
 
       SmallVector<Operation *> dfg = backwardSet.takeVector();
-      // llvm::erase_if(
-      //     dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
-      // Move ops to insertion point.
-      for (auto *dfgop : llvm::reverse(dfg))
-        dfgop->moveAfter(block, ipoint);
-      if (!found)
-        block->begin()->moveAfter(op);
+      if (ipoint != block->end()) {
+        // Move ops to insertion point.
+        llvm::erase_if(
+            dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
+        for (auto *dfgop : llvm::reverse(dfg))
+          dfgop->moveAfter(block, ipoint);
+      } else {
+        // Move ops to block begin.
+        for (auto *dfgop : llvm::reverse(dfg))
+          dfgop->moveBefore(block, block->begin());
+      }
     }
   }
 };
