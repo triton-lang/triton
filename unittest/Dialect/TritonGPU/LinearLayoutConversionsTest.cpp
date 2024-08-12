@@ -780,8 +780,8 @@ TEST_F(LinearLayoutConversionsTest, SliceOfMmaV2) {
                           {S("block"), {}}},
                          {S("dim0")}));
   EXPECT_EQ(toLinearLayout({8}, slice(parent, 1)),
-            LinearLayout({{S("register"), {{4}}},
-                          {S("lane"), {{0}, {0}, {1}, {2}, {0}}},
+            LinearLayout({{S("register"), {{0}}},
+                          {S("lane"), {{0}, {0}, {1}, {2}, {4}}},
                           {S("warp"), {{0}, {0}}},
                           {S("block"), {}}},
                          {S("dim0")}));
