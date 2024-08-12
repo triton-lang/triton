@@ -404,6 +404,11 @@ struct AtomicCASOpConversion
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
+    // Synchronize warps before atomic operation.
+    // Prevent warps from being left behind while another warp
+    // finish evaluating and update the atomic operation.
+    barrier();
+
     // atomic ops
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value casVal = undef(vecTy);
@@ -554,6 +559,11 @@ struct AtomicRMWOpConversion
     SmallVector<Value> maskElements;
     if (llMask)
       maskElements = unpackLLElements(loc, llMask, rewriter);
+
+    // Synchronize warps before atomic operation.
+    // Prevent warps from being left behind while another warp
+    // finish evaluating and update the atomic operation.
+    barrier();
 
     Value opResult = op.getResult();
     auto tensorTy = dyn_cast<RankedTensorType>(opResult.getType());
