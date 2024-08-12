@@ -43,10 +43,15 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     """
     import torch
     assert return_mode in ["min", "max", "mean", "median", "all"]
-   
+
     with torch.cuda.stream(torch.cuda.Stream()):
         # warmup
         fn()
+        if grad_to_none is not None:
+            for x in grad_to_none:
+                x.detach_()
+                x.requires_grad_(True)
+                x.grad = None
         # step 1 - we estimate the amount of time the kernel call takes
         # NOTE: this estimate isn't super accurate because the GPU isn't warmed up at this point
         #       but it is probably good enough
