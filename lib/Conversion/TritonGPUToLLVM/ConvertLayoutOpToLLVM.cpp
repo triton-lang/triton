@@ -359,6 +359,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // conversions.  Once we have ldmatrix support in
     // load/storeDistributedToShared, we can remove this constraint.
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
+      if (isa<NvidiaMmaEncodingAttr>(layout)) {
+        return true;
+      }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
       }
