@@ -176,6 +176,13 @@ static const Fp8ConversionDesc Bf16_to_Fp8E5M2(bool hasNativeFP) {
 }
 
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
+static const Fp8ConversionDesc Fp8E5M2Nv_to_Fp16 = {
+    "{ \n"
+    "cvt.rn.f16x2.e5m2x2 $0, $1; \n"
+    "}",
+    16, 32, 2};
+
+// Fp8E4M3 (x2) -> Fp16 (x2) (packed)
 static const Fp8ConversionDesc Fp8E4M3Nv_to_Fp16 = {
     "{ \n"
     "cvt.rn.f16x2.e4m3x2 $0, $1; \n"
@@ -388,6 +395,7 @@ struct FpToFpOpConversion
                     std::optional<RoundingMode> roundingMode) const {
     auto F8E4M3TyID = TypeID::get<Float8E4M3FNUZType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
+    auto F8E5M2FNUZTyID = TypeID::get<Float8E5M2FNUZType>();
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
@@ -398,6 +406,7 @@ struct FpToFpOpConversion
     static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
         srcMap = {
             // F8 -> F16
+            {{F8E5M2FNUZTyID, F16TyID, undefRounding}, Fp8E5M2Nv_to_Fp16},
             {{F8E4M3TyID, F16TyID, undefRounding}, Fp8E4M3Nv_to_Fp16},
             {{F8E5M2TyID, F16TyID, undefRounding},
              Fp8E5M2_to_Fp16(computeCapability >= 90)},
