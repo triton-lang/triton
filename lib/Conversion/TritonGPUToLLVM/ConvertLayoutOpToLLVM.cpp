@@ -362,8 +362,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // blocked/slice conversions.  Once we have ldmatrix support in
     // load/storeDistributedToShared, we can remove this constraint.
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
-      if (isa<NvidiaMmaEncodingAttr>(layout)) {
-        return true;
+      if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
+        return product(getCTASplitNum(nvidiaMma)) == 1;
       }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
