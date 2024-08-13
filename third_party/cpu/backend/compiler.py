@@ -12,6 +12,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget
 from triton.runtime.build import _build
 import triton.backends.cpu.driver as cpu_driver
 
+
 def min_dot_size(target: GPUTarget):
     # Other architectures will only support 16,16,16
     return lambda lhsType, rhsType: (4, 4, 4)
