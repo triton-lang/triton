@@ -199,7 +199,6 @@ def benchmark(M, N, provider):
     x = torch.randn(M, N, device=device, dtype=torch.float32)
 
     if device == 'cpu':
-        is_cpu = True
         y = torch.empty_like(x)
         triton.runtime.driver.set_active_to_cpu()
         if 'single' in provider:
@@ -207,30 +206,29 @@ def benchmark(M, N, provider):
         else:
             os.unsetenv('TRITON_CPU_SINGLE_CORE')
     else:
-        is_cpu = False
         y = None
         triton.runtime.driver.set_active_to_gpu()
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-cpu-native':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles,
-                                                     is_cpu=is_cpu)
+                                                     device_type=device)
     if provider == 'torch-cpu-jit':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x), quantiles=quantiles, is_cpu=is_cpu)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x), quantiles=quantiles, device_type=device)
     if provider == 'torch-cpu-compile':
         compiled = torch.compile(naive_softmax)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: compiled(x), quantiles=quantiles, is_cpu=is_cpu)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: compiled(x), quantiles=quantiles, device_type=device)
     if provider == 'triton-cpu-single':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x, y), quantiles=quantiles, is_cpu=is_cpu)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x, y), quantiles=quantiles, device_type=device)
     if provider == 'triton-cpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x, y), quantiles=quantiles, is_cpu=is_cpu)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x, y), quantiles=quantiles, device_type=device)
     if provider == 'triton-gpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x), quantiles=quantiles, is_cpu=is_cpu)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x), quantiles=quantiles, device_type=device)
     if provider == 'torch-gpu-native':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles,
-                                                     is_cpu=is_cpu)
+                                                     device_type=device)
     if provider == 'torch-gpu-jit':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x), quantiles=quantiles, is_cpu=is_cpu)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x), quantiles=quantiles, device_type=device)
     gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 

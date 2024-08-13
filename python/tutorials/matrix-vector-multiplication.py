@@ -173,33 +173,38 @@ def benchmark(M, N, provider):
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-gpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(weight, x), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(weight, x), quantiles=quantiles,
+                                                     device_type=device)
     elif provider == 'triton-gpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output), quantiles=quantiles,
+                                                     device_type=device)
     elif provider == 'torch-cpu-native' or provider == 'torch-cpu-2d-native':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(weight, x, out=output), quantiles=quantiles,
-                                                     is_cpu=True)
+                                                     device_type=device)
     elif provider == 'torch-cpu-compile' or provider == 'torch-cpu-2d-compile':
         compiled = torch.compile(torch.matmul)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: compiled(weight, x, out=output), quantiles=quantiles,
-                                                     is_cpu=True)
+                                                     device_type=device)
     elif provider == 'torch-cpu-transpose-native':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(x, weight, out=output), quantiles=quantiles,
-                                                     is_cpu=True)
+                                                     device_type=device)
     elif provider == 'torch-cpu-transpose-compile':
         compiled = torch.compile(torch.matmul)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: compiled(x, weight, out=output), quantiles=quantiles,
-                                                     is_cpu=True)
+                                                     device_type=device)
     elif provider == 'torch-cpu-linear':
         weight = torch.nn.Linear(N, M, bias=False, device=weight.device, dtype=weight.dtype)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: weight.forward(x), quantiles=quantiles, is_cpu=True)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: weight.forward(x), quantiles=quantiles, device_type=device)
     elif provider == 'triton-cpu-single':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output), quantiles=quantiles, is_cpu=True)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output), quantiles=quantiles,
+                                                     device_type=device)
     elif provider == 'triton-cpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output), quantiles=quantiles, is_cpu=True)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output), quantiles=quantiles,
+                                                     device_type=device)
     elif provider == 'triton-cpu-linear':
         # torch.nn.Linear.forward does not take preallocated output buffer, so we also do no provide output buffer for fair comparison
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, None), quantiles=quantiles, is_cpu=True)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, None), quantiles=quantiles,
+                                                     device_type=device)
     perf = lambda ms: 2 * M * N * 1e-9 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
