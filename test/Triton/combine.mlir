@@ -211,8 +211,8 @@ tt.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32
 // CHECK-LABEL: @test_combine_broadcast_constant_pattern
 tt.func @test_combine_broadcast_constant_pattern(%cst : f32) -> tensor<8x2xf32> {
     // CHECK: %[[cst:.*]] = arith.constant dense<1.000000e+00> : tensor<8x2xf32>
-    %const = arith.constant dense<1.0> : tensor<8xf32>
-    %bst_out = tt.broadcast %const : tensor<8xf32> -> tensor<8x2xf32>
+    %const = arith.constant dense<1.0> : tensor<8x1xf32>
+    %bst_out = tt.broadcast %const : tensor<8x1xf32> -> tensor<8x2xf32>
 
     // CHECK-NEXT: tt.return %[[cst]] : tensor<8x2xf32>
     tt.return %bst_out : tensor<8x2xf32>

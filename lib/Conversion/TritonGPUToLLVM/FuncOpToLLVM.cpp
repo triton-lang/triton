@@ -75,11 +75,14 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
-        amendedFuncOp, rewriter, *getTypeConverter());
-    if (!newFuncOp) {
+    FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
+        mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
+                                        *getTypeConverter());
+    if (failed(maybeNewFuncOp)) {
       return failure();
     }
+
+    LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
 
     auto ctx = funcOp->getContext();
 
@@ -97,9 +100,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       rewriter.eraseOp(amendedFuncOp);
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
     }
-    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+    // Set an attribute for reqntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid",
+    newFuncOp->setAttr("nvvm.reqntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
     rewriter.eraseOp(funcOp);
     return success();

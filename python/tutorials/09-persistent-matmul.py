@@ -10,10 +10,10 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 import argparse
 import time
 
-import numpy as np
 import torch
 import triton
 import triton.language as tl
+import triton.tools.experimental_descriptor
 import triton.profiler as proton
 
 if torch.cuda.is_available():
@@ -26,6 +26,10 @@ else:
 
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def supports_tma():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
 def _matmul_launch_metadata(grid, kernel, args):
@@ -65,11 +69,10 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
     start_m = pid_m * BLOCK_SIZE_M
     start_n = pid_n * BLOCK_SIZE_N
 
-    offs_am = tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = tl.arange(0, BLOCK_SIZE_N)
-
-    offs_am = tl.where(offs_am < M - start_m, offs_am, 0)
-    offs_bn = tl.where(offs_bn < N - start_n, offs_bn, 0)
+    offs_am = start_m + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = start_n + tl.arange(0, BLOCK_SIZE_N)
+    offs_am = tl.where(offs_am < M, offs_am, 0)
+    offs_bn = tl.where(offs_bn < N, offs_bn, 0)
 
     offs_am = tl.max_contiguous(tl.multiple_of(offs_am, BLOCK_SIZE_M), BLOCK_SIZE_M)
     offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
@@ -182,10 +185,10 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
 
             start_m = pid_m * BLOCK_SIZE_M
             start_n = pid_n * BLOCK_SIZE_N
-            offs_am = tl.arange(0, BLOCK_SIZE_M)
-            offs_bn = tl.arange(0, BLOCK_SIZE_N)
-            offs_am = tl.where(offs_am < M - start_m, offs_am, 0)
-            offs_bn = tl.where(offs_bn < N - start_n, offs_bn, 0)
+            offs_am = start_m + tl.arange(0, BLOCK_SIZE_M)
+            offs_bn = start_n + tl.arange(0, BLOCK_SIZE_N)
+            offs_am = tl.where(offs_am < M, offs_am, 0)
+            offs_bn = tl.where(offs_bn < N, offs_bn, 0)
             offs_am = tl.max_contiguous(tl.multiple_of(offs_am, BLOCK_SIZE_M), BLOCK_SIZE_M)
             offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
         offs_k = ki * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
@@ -256,6 +259,14 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                                  GROUP_SIZE_M: tl.constexpr,  #
                                  FP8_OUTPUT: tl.constexpr,  #
                                  NUM_SMS: tl.constexpr):  #
+    # TODO(embg) remove TMA fence after __grid_constant__ lands
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [a_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [b_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [c_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -292,9 +303,6 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
             offs_am = pid_m * BLOCK_SIZE_M
             offs_bn = pid_n * BLOCK_SIZE_N
 
-            offs_am = tl.multiple_of(offs_am, BLOCK_SIZE_M)
-            offs_bn = tl.multiple_of(offs_bn, BLOCK_SIZE_N)
-
         offs_k = ki * BLOCK_SIZE_K
 
         a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
@@ -329,23 +337,18 @@ def matmul_tma_persistent(a, b):
     dtype = a.dtype
 
     c = torch.zeros((M, N), device=a.device, dtype=dtype)
-
-    TMA_SIZE = 128
-
-    desc_a = np.empty(TMA_SIZE, dtype=np.int8)
-    desc_b = np.empty(TMA_SIZE, dtype=np.int8)
-    desc_c = np.empty(TMA_SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), M, K, configs[dtype]["BLOCK_SIZE_M"],
-                                                              configs[dtype]["BLOCK_SIZE_K"], a.element_size(), desc_a)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), N, K, configs[dtype]["BLOCK_SIZE_N"],
-                                                              configs[dtype]["BLOCK_SIZE_K"], b.element_size(), desc_b)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(c.data_ptr(), M, N, configs[dtype]["BLOCK_SIZE_M"],
-                                                              configs[dtype]["BLOCK_SIZE_N"], c.element_size(), desc_c)
-
-    desc_a = torch.tensor(desc_a, device="cuda")
-    desc_b = torch.tensor(desc_b, device="cuda")
-    desc_c = torch.tensor(desc_c, device="cuda")
-
+    desc_a = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K,
+                                                                           configs[dtype]["BLOCK_SIZE_M"],
+                                                                           configs[dtype]["BLOCK_SIZE_K"],
+                                                                           a.element_size())
+    desc_b = triton.tools.experimental_descriptor.create_2d_tma_descriptor(b.data_ptr(), N, K,
+                                                                           configs[dtype]["BLOCK_SIZE_N"],
+                                                                           configs[dtype]["BLOCK_SIZE_K"],
+                                                                           b.element_size())
+    desc_c = triton.tools.experimental_descriptor.create_2d_tma_descriptor(c.data_ptr(), M, N,
+                                                                           configs[dtype]["BLOCK_SIZE_M"],
+                                                                           configs[dtype]["BLOCK_SIZE_N"],
+                                                                           c.element_size())
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
 
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
@@ -415,9 +418,10 @@ def bench(K, dtype, reps=10):
     for _ in range(reps):
         matmul_persistent(a, b.T)
         time.sleep(0.01)
-    for _ in range(reps):
-        matmul_tma_persistent(a, b)
-        time.sleep(0.01)
+    if supports_tma():
+        for _ in range(reps):
+            matmul_tma_persistent(a, b)
+            time.sleep(0.01)
 
     proton.deactivate(0)
 
@@ -431,7 +435,7 @@ def validate(M, N, K, dtype):
     cublas_result = cublas_matmul(a, b) if cublas is not None else None
     naive_result = matmul(a, b.T)
     persistent_result = matmul_persistent(a, b.T)
-    tma_persistent_result = matmul_tma_persistent(a, b)
+    tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
 
     if torch_result is not None:
         naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
@@ -441,15 +445,17 @@ def validate(M, N, K, dtype):
                                                 atol=1.0) else "❌"
     naive_vs_persistent = "✅" if torch.allclose(naive_result.to(torch.float16), persistent_result.to(torch.float16),
                                                 atol=1.0) else "❌"
-    naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
-                                                    tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
+    if tma_persistent_result is not None:
+        naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
+                                                        tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
     print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
     if torch_result is not None:
         print(f"torch: {naive_vs_torch} ", end="")
     if cublas_result is not None:
         print(f"cublas: {naive_vs_cublas} ", end="")
     print(f"persistent: {naive_vs_persistent} ", end="")
-    print(f"TMA persistent: {naive_vs_tma_persistent}")
+    if tma_persistent_result is not None:
+        print(f"TMA persistent: {naive_vs_tma_persistent}")
 
 
 if __name__ == "__main__":
@@ -457,7 +463,7 @@ if __name__ == "__main__":
     parser.add_argument("-K", type=int, required=False, default=512)
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=512)
-    parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp8")
+    parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
     args = parser.parse_args()
 
     if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):

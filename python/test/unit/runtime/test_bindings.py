@@ -28,9 +28,9 @@ def add_kernel(
     tl.store(out_ptr + offsets, output, mask=mask)
 
 
-def test_module_walk():
+def test_module_walk(device):
     """
-    Test the MLIR bindings exposed for the out-ot-tree walk.
+    Test the MLIR bindings exposed for the out-of-tree walk.
     """
 
     def walk_fn(op):
@@ -53,10 +53,10 @@ def test_module_walk():
 
     kernel = add_kernel
     args = [
-        torch.empty((32, 32), device="cuda"),  # in_ptr0
-        torch.empty((32, 32), device="cuda"),  # in_ptr1
+        torch.empty((32, 32), device=device),  # in_ptr0
+        torch.empty((32, 32), device=device),  # in_ptr1
         1024,  # n_elements
-        torch.empty((32, 32), device="cuda"),  # out_ptr
+        torch.empty((32, 32), device=device),  # out_ptr
         16,  # BLOCK_SIZE
     ]
     src = triton.compiler.compiler.ASTSource(

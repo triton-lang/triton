@@ -39,6 +39,17 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
     }                                                                          \
   } while (0)
 
+// Used to check if functions exist in old CUDA driver versions.
+#define INITIALIZE_FUNCTION_POINTER_IF_NULL(funcPointer, initializerFunction)  \
+  do {                                                                         \
+    if ((funcPointer) == NULL) {                                               \
+      (funcPointer) = (initializerFunction)();                                 \
+      if ((funcPointer) == NULL) {                                             \
+        return NULL;                                                           \
+      }                                                                        \
+    }                                                                          \
+  } while (0)
+
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int device_id;
   if (!PyArg_ParseTuple(args, "i", &device_id))
@@ -143,6 +154,14 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
     int *numClusters, CUfunction func, const CUlaunchConfig *config);
 
+typedef CUresult (*cuTensorMapEncodeTiled_t)(
+    CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
+    cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
+    const cuuint64_t *globalStrides, const cuuint32_t *boxDim,
+    const cuuint32_t *elementStrides, CUtensorMapInterleave interleave,
+    CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
+    CUtensorMapFloatOOBfill oobFill);
+
 #define defineGetFunctionHandle(name, symbolName)                              \
   static symbolName##_t name() {                                               \
     /* Open the shared library */                                              \
@@ -167,6 +186,9 @@ typedef CUresult (*cuOccupancyMaxActiveClusters_t)(
 
 defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
                         cuOccupancyMaxActiveClusters);
+
+defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
+                        cuTensorMapEncodeTiled);
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
@@ -204,9 +226,8 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   config.attrs = launchAttr;
 
   static cuOccupancyMaxActiveClusters_t cuOccupancyMaxActiveClusters = NULL;
-  if (cuOccupancyMaxActiveClusters == NULL) {
-    cuOccupancyMaxActiveClusters = getCuOccupancyMaxActiveClustersHandle();
-  }
+  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuOccupancyMaxActiveClusters,
+                                      getCuOccupancyMaxActiveClustersHandle);
 
   Py_BEGIN_ALLOW_THREADS;
   CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncSetAttribute(
@@ -263,12 +284,11 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   uint64_t dim;
   uint32_t tensorDim;
   int elementSize;
-  Py_buffer desc_buffer;
-  if (!PyArg_ParseTuple(args, "KKiiy*", &global_address, &dim, &tensorDim,
-                        &elementSize, &desc_buffer)) {
+  unsigned long long desc_address;
+  if (!PyArg_ParseTuple(args, "KKiiK", &global_address, &dim, &tensorDim,
+                        &elementSize, &desc_address)) {
     return NULL;
   }
-  char *desc = (char *)desc_buffer.buf;
   uint64_t dims[1] = {dim};
   uint64_t globalStrides[1] = {dim * elementSize};
   uint32_t boxDim[1] = {tensorDim};
@@ -289,12 +309,14 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   }
   assert((elementSize * tensorDim) >= 32 && "block size too small.");
   int rank = 1;
-  CUresult result = cuTensorMapEncodeTiled(
-      (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
+  static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
+  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
+                                      getCuTensorMapEncodeTiledHandle);
+  CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
+      (CUtensorMap *)desc_address, type, rank, (void *)global_address, dims,
       globalStrides, boxDim, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
-      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-  assert(result == CUDA_SUCCESS);
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
   return Py_None;
 }
 
@@ -305,13 +327,12 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   uint64_t dims[2];
   uint32_t tensorDims[2];
   int elementSize;
-  Py_buffer desc_buffer;
-  if (!PyArg_ParseTuple(args, "KKKiiiy*", &global_address, &dims[1], &dims[0],
+  unsigned long long desc_address;
+  if (!PyArg_ParseTuple(args, "KKKiiiK", &global_address, &dims[1], &dims[0],
                         &tensorDims[1], &tensorDims[0], &elementSize,
-                        &desc_buffer)) {
+                        &desc_address)) {
     return NULL;
   }
-  char *desc = (char *)desc_buffer.buf;
   uint64_t globalStrides[2] = {dims[0] * elementSize,
                                dims[0] * dims[1] * elementSize};
   uint32_t elementStrides[2] = {1, 1};
@@ -350,12 +371,14 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   if (contigDimSizeInByte > 128) {
     tensorDims[0] = 128 / elementSize;
   }
-  CUresult result = cuTensorMapEncodeTiled(
-      (CUtensorMap *)desc, type, rank, (void *)global_address, dims,
+  static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
+  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
+                                      getCuTensorMapEncodeTiledHandle);
+  CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
+      (CUtensorMap *)desc_address, type, rank, (void *)global_address, dims,
       globalStrides, tensorDims, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
-      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-  assert(result == CUDA_SUCCESS);
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
   return Py_None;
 }
 

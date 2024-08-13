@@ -1,8 +1,11 @@
 <div align="center">
-  <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
+  <img src="https://lh5.googleusercontent.com/wzQKEsTFkrgNQO9JjhGH5wFvslJr1saLtLaJ_a6Fp_gNENpvt3VG7BmztwngU9hFJaU4CPwGiw1opQtDvTkLrxWRbO_a12Q-pdESWHgtmheIHcPbOL5ZMC4TSiJVe5ty1w=w3517" alt="Triton logo">
 </div>
 
-We're hiring! If you are interested in working on Triton at OpenAI, we have roles open for [Compiler Engineers](https://openai.com/careers/software-engineer-triton-compiler) and [Kernel Engineers](https://openai.com/careers/kernel-engineer).
+The Triton Conference is happening again on September 17th, 2024 in Fremont (CA)!
+
+If you are interested in attending, please fill up [this form](https://docs.google.com/forms/d/e/1FAIpQLSecHC1lkalcm0h3JDUbspekDX5bmBvMxgVTLaK3e-61bzDDbg/viewform).
+
 
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
@@ -101,6 +104,11 @@ arbitrary LLVM version.
 
 - Set `TRITON_BUILD_WITH_CCACHE=true` to build with ccache.
 
+- Set `TRITON_HOME=/some/path` to change the location of the `.triton`
+  directory where Triton's cache is located and downloads are stored
+  during the build. By default, this is the user's home directory. It
+  can be changed anytime.
+
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
@@ -138,7 +146,7 @@ $ python3 -m pytest python/test/unit
 $ cd python/build/cmake<...>
 
 # Run C++ unit tests.
-$ ninja test
+$ ctest -j32
 
 # Run lit tests.
 $ lit test
@@ -164,7 +172,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 
 **Helpful environment variables**
 
-- `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs.
+- `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
+   kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
   GPU.  You can insert Python breakpoints in your kernel code!
@@ -184,10 +193,11 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   separated values to be specified (eg
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
-- `USE_TTGIR_LOC=1` reparses the ttgir such that the location information will
-  be the line number of the ttgir instead of line number of the python file.
-  This can provide a direct mapping from ttgir to llir/ptx. When used with
-  performance tools, it can provide a breakdown on ttgir instructions.
+- `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
+  will be the line number of the IR file with that particular extension,
+  instead of line number of the python file. This can provide a direct mapping
+  from the IR to llir/ptx. When used with performance tools, it can provide a
+  breakdown on IR instructions.
 - `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
   spent for each kernel after autotuning is complete.
 - `DISABLE_LLVM_OPT` will disable llvm optimizations for make_llir and make_ptx
@@ -199,6 +209,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
+- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
+- `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
 
 # Changelog
 
@@ -220,4 +232,5 @@ Supported Platforms:
 
 Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
-  * Under development: AMD GPUs, CPUs
+  * AMD GPUs (ROCm 5.2+)
+  * Under development: CPUs

@@ -120,6 +120,17 @@ triton::gpu::BlockedEncodingAttr
 getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
                           int numWarps, int threadsPerWarp, int numCTAs);
 
+// Dump information about which threads/registers contain each of the tensor
+// elements.
+void dumpLayout(RankedTensorType tensorType);
+
+// Dump the layout from HW point of view and prints what tensor element is held
+// by each thread and register.
+void dumpHWLayout(RankedTensorType tensorType);
+
+// Return a string representation of the layout of the tensor.
+std::string getLayoutStr(RankedTensorType tensorType, bool useHWPointOfView);
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir

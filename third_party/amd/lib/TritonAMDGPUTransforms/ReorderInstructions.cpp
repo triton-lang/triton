@@ -2,36 +2,59 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
-#include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
-#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
-#include "mlir/Transforms/RegionUtils.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include <deque>
+
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
 using namespace mlir;
+namespace ttg = mlir::triton::gpu;
 
-static bool willIncreaseRegisterPressure(Operation *op) {
-  if (isa<triton::gpu::LocalLoadOp>(op))
+static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
+  if (isa<ttg::LocalLoadOp>(op))
     return true;
-  auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
-  if (!cvt)
-    return false;
-  if (isa<triton::gpu::DotOperandEncodingAttr>(cvt.getType().getEncoding()))
-    return true;
+  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op))
+    return isa<ttg::DotOperandEncodingAttr>(cvt.getType().getEncoding());
   return false;
+}
+
+// Search through block to find earliest insertion point for move op. This can
+// be either an atomic op or last usage of source pointer. Search ends when move
+// op is encountered.
+static llvm::ilist<Operation>::iterator
+findEarlyInsertionPoint(Block *block, Operation *move) {
+  Value src;
+  if (auto ld = dyn_cast<triton::LoadOp>(move))
+    src = ld.getPtr();
+
+  auto ipnt = block->begin();
+  for (auto bi = ipnt; bi != block->end(); ++bi) {
+    auto *op = &*bi;
+    if (op == move) // Don't move later than current location
+      break;
+
+    op->walk([&](Operation *wop) {
+      if (src) {
+        // Check for ops accessing src value.
+        for (auto opr : wop->getOperands()) {
+          if (opr == src)
+            ipnt = bi;
+        }
+      }
+      // Atomics used for global synchronization.
+      if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
+        ipnt = bi;
+      // Break at loops.
+      if (isa<scf::ForOp, scf::WhileOp>(wop))
+        ipnt = bi;
+    });
+  }
+  return ipnt;
 }
 
 class TritonAMDGPUReorderInstructionsPass
@@ -43,45 +66,87 @@ public:
   void runOnOperation() override {
     ModuleOp m = getOperation();
     mlir::DominanceInfo dom(m);
-    // Sink conversions into loops when they will increase
-    // register pressure
+
+    // Sink shared memory loads and layout conversions into loops to decrease
+    // register pressure when possible.
     DenseMap<Operation *, Operation *> opToMove;
-    auto moveAfter = [](Operation *lhs, Operation *rhs) {
-      lhs->moveAfter(rhs);
-    };
     m.walk([&](Operation *op) {
-      if (!willIncreaseRegisterPressure(op))
+      if (!isLocalLoadOrDotLayoutConversion(op))
         return;
-      auto user_begin = op->user_begin();
-      auto user_end = op->user_end();
-      if (std::distance(user_begin, user_end) != 1)
+      if (!op->hasOneUse())
         return;
-      if (user_begin->getParentOfType<scf::ForOp>() ==
+      Operation *user = *op->getUsers().begin();
+      if (user->getParentOfType<scf::ForOp>() ==
           op->getParentOfType<scf::ForOp>())
         return;
-      opToMove.insert({op, *user_begin});
+      opToMove.insert({op, user});
     });
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
-    // Move LocalLoadOp and LocalAllocOp immediately after their operands.
-    m.walk([&](Operation *op) {
-      if (!isa<triton::gpu::LocalLoadOp, triton::gpu::LocalAllocOp>(op)) {
-        return;
-      }
-      Operation *argOp = op->getOperand(0).getDefiningOp();
-      if (!argOp)
-        return;
-      moveAfter(op, argOp);
-    });
-    // Move transpositions just after their definition
     opToMove.clear();
-    m.walk([&](triton::TransOp op) {
-      Operation *argOp = op.getSrc().getDefiningOp();
-      if (!argOp)
+
+    // Move LocalLoadOp and LocalAllocOp immediately after their operands.
+    // This enables issuing them as early as possible.
+    m.walk([&](Operation *op) {
+      if (!isa<ttg::LocalLoadOp, ttg::LocalAllocOp>(op) ||
+          op->getNumOperands() < 1)
         return;
-      moveAfter(op, argOp);
+      if (Operation *argOp = op->getOperand(0).getDefiningOp())
+        op->moveAfter(argOp);
     });
-    return;
+
+    // Move transpositions just after their definition.
+    m.walk([&](triton::TransOp op) {
+      if (Operation *argOp = op.getSrc().getDefiningOp())
+        op->moveAfter(argOp);
+    });
+
+    SmallVector<Operation *> moveOps;
+    // Move global loads early to prefetch. This may increase register pressure
+    // but it enables issuing global loads early.
+    m.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+    // Move local_stores early if dependence distance greater than
+    // one iteration.
+    // Best perf on GEMM when these precede global loads.
+    m.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
+
+    for (auto op : moveOps) {
+      // Gather use-def chain in block.
+      Block *block = op->getBlock();
+      bool leadsToLoad = false;
+      SetVector<Operation *> backwardSet;
+
+      BackwardSliceOptions options;
+      options.omitBlockArguments = true;
+      options.inclusive = false;
+      options.filter = [&](Operation *defOp) -> bool {
+        Block *defBlock = defOp->getBlock();
+        if (!block->findAncestorOpInBlock(*defOp))
+          return false;
+        // Check for a `load` dependent path.
+        leadsToLoad |= isa<triton::LoadOp>(defOp);
+        // Only move ops residing in the same block.
+        return defBlock == block;
+      };
+      mlir::getBackwardSlice(op, &backwardSet, options);
+      backwardSet.insert(op);
+
+      // Don't move a local_store if its source is a load from
+      // the same iteration.
+      if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
+        continue;
+
+      auto ipoint = findEarlyInsertionPoint(block, op);
+      // Remove ops that already precede the insertion point. This is done
+      // before moves happen to avoid `Operation::isBeforeInBlock` N^2
+      // complexity.
+      SmallVector<Operation *> dfg = backwardSet.takeVector();
+      llvm::erase_if(
+          dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
+      // Move ops to insertion point.
+      for (auto *op : llvm::reverse(dfg))
+        op->moveAfter(block, ipoint);
+    }
   }
 };
 

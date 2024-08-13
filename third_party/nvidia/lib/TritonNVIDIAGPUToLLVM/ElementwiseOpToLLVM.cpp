@@ -664,10 +664,6 @@ struct SIToFPOpConversion
       auto outVals = cvtFunc(loc, rewriter, inVals);
       assert(outVals.size() == 4);
       return outVals;
-    } else if (outElemTy.isBF16()) {
-      auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
-      return {FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, value,
-                                                    RoundingMode::RTNE)};
     } else {
       return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
     }
@@ -685,13 +681,7 @@ struct FPToSIOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     auto inElemTy = getElementType(op.getIn());
-    if (inElemTy.isBF16()) {
-      auto value =
-          FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0]);
-      return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, value)};
-    } else {
-      return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
-    }
+    return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
   }
 };
 

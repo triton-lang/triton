@@ -882,9 +882,7 @@ private:
 
   int64_t getDivisibility(arith::ShLIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
-    auto shift = rhs.getConstantValue().has_value()
-                     ? rhs.getConstantValue().value()
-                     : rhs.getDivisibility(dim);
+    auto shift = rhs.getConstantValue().value_or(0);
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
@@ -925,9 +923,9 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    auto shift = rhs.getConstantValue().has_value()
-                     ? rhs.getConstantValue().value()
-                     : rhs.getDivisibility(dim);
+    if (!rhs.getConstantValue().has_value())
+      return 1;
+    auto shift = rhs.getConstantValue().value();
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
@@ -1139,6 +1137,14 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
+    else if (isa<RegionBranchOpInterface>(op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp
+      // Control flow operations are initialized with "unknown" state:
+      // the maximum possible divisibility, contiguity, and constancy.
+      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+    }
   } else if (Operation *op = value.getDefiningOp()) {
     if (isa<RegionBranchOpInterface>(op)) {
       // scf::ForOp, scf::IfOp, scf::WhileOp

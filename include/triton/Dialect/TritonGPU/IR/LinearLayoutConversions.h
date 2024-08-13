@@ -44,6 +44,38 @@ std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth = std::nullopt);
 
+// Given a linear layout with input dims and output dims containing a "block"
+// dimension, determines if the layout moves data across block boundaries.
+bool isCrossCTAConversion(const LinearLayout &layout);
+
+// In this function, we construct a linear layout representing the
+// <shared memory offset, iteration> -> <tensor element index> mapping for
+// entire `src` and `dst` tensors.  We determine the shape of the intermediate
+// shared memory buffer needed for a register-to-register conversion using the
+// maximum size accessed in each dimension from `src`'s layout and `dst`'s
+// layout.  See the getRepShapeForCvt function in Allocation.cpp for details.
+// Note that the buffer might be smaller than the tensor being converted, so we
+// need multiple "iterations" to move a subregion of the `src` tensor to the
+// corresponding subregion of the `dst` tensor.  The pesudo code of layout
+// conversion is as follows:
+//
+// for iter in 0..numIterations:
+//   sync threads
+//   for vecIdx in [0..numRegisters/storeVec]:
+//     registers <- get registers used in iter
+//     offsets <- get offsets using the intermediate linear layout
+//     store registers[vecIdx * storeVec, (vecIdx + 1) * storeVec)] to shared
+//     memory
+//   sync threads
+//   for vecIdx in [0..numRegisters/loadVec]:
+//     registers <- get registers used in iter
+//     offsets <- get offsets using the intermediate linear layout
+//     load registers[vecIdx * loadVec, (vecIdx + 1) * loadVec)] from shared
+//     memory
+LinearLayout
+chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
+                                      ArrayRef<unsigned> tensorShape,
+                                      ArrayRef<unsigned> repShape);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

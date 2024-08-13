@@ -18,10 +18,12 @@
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include <csignal>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
@@ -150,6 +152,8 @@ void init_triton_llvm(py::module &&m) {
 
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
       .def(py::init<>());
+  py::class_<llvm::SourceMgr>(m, "source_mgr", py::module_local())
+      .def(py::init<>());
 
   py::class_<llvm::Module::FunctionListType>(m, "function_list")
       .def(
@@ -244,101 +248,111 @@ void init_triton_llvm(py::module &&m) {
       },
       py::keep_alive<0, 2>());
 
-  m.def(
-      "optimize_module",
-      [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
-         const std::string triple) {
-        if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
-          return;
-        // Check to see if we are passing a list of flags to disable
-        // optimizations.
-        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-        if (!flagList.empty()) {
-          auto options = llvm::cl::getRegisteredOptions();
-          llvm::SmallVector<StringRef, 3> split;
-          StringRef(flagList.c_str()).split(split, ',');
-          for (auto flag : split) {
-            auto optIt = options.find(flag);
-            if (optIt != options.end()) {
-              auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-              *optPtr = true;
-            }
-          }
+  m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
+                                const std::string proc,
+                                const std::string features) {
+    std::string error;
+    auto target = llvm::TargetRegistry::lookupTarget(triple, error);
+    if (!target) {
+      throw std::runtime_error("target lookup error: " + error);
+    }
+    llvm::TargetOptions opt;
+    // Target machine is only used to create the data layout.
+    std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
+        triple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
+        llvm::CodeGenOptLevel::None)};
+    // set data layout
+    mod->setDataLayout(machine->createDataLayout());
+  });
+
+  m.def("optimize_module", [](llvm::Module *mod,
+                              const llvm::OptimizationLevel &opt) {
+    if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+      return;
+    // Check to see if we are passing a list of flags to disable optimizations.
+    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    if (!flagList.empty()) {
+      auto options = llvm::cl::getRegisteredOptions();
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
         }
-        using namespace llvm;
-        LoopAnalysisManager lam;
-        FunctionAnalysisManager fam;
-        CGSCCAnalysisManager cgam;
-        ModuleAnalysisManager mam;
+      }
+    }
+    using namespace llvm;
+    LoopAnalysisManager lam;
+    FunctionAnalysisManager fam;
+    CGSCCAnalysisManager cgam;
+    ModuleAnalysisManager mam;
 
-        PassInstrumentationCallbacks *instrCbPtr = nullptr;
-        PassInstrumentationCallbacks passInstrCb;
-        StandardInstrumentations standardInstr(mod->getContext(),
-                                               /*DebugLogging*/ true);
-        if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-          auto optMap = llvm::cl::getRegisteredOptions();
-          auto optIt = optMap.find("print-after-all");
-          if (optIt != optMap.end()) {
-            auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-            *optPtr = true;
-          }
-          standardInstr.registerCallbacks(passInstrCb, &mam);
-          instrCbPtr = &passInstrCb;
-        }
+    PassInstrumentationCallbacks *instrCbPtr = nullptr;
+    PassInstrumentationCallbacks passInstrCb;
+    StandardInstrumentations standardInstr(mod->getContext(),
+                                           /*DebugLogging*/ true);
+    if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+      auto optMap = llvm::cl::getRegisteredOptions();
+      auto optIt = optMap.find("print-after-all");
+      if (optIt != optMap.end()) {
+        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+        *optPtr = true;
+      }
+      standardInstr.registerCallbacks(passInstrCb, &mam);
+      instrCbPtr = &passInstrCb;
+    }
 
-        PipelineTuningOptions tuningOptions;
-        tuningOptions.LoopUnrolling = true;
-        tuningOptions.LoopInterleaving = true;
-        tuningOptions.LoopVectorization = true;
-        // TODO: currently we run SLP vectorizer with an empty target machine.
-        // This cause the vectorizer to create larger vector which could be bad.
-        // Disabling it would currently cause regressions as this pass also
-        // applies some scheduling that helps performance in some cases. We
-        // should work on using NVPTX target instead and address the performance
-        // regressions with some scheduling solution.
-        tuningOptions.SLPVectorization = true;
+    PipelineTuningOptions tuningOptions;
+    tuningOptions.LoopUnrolling = true;
+    tuningOptions.LoopInterleaving = true;
+    tuningOptions.LoopVectorization = true;
+    // TODO: currently we run SLP vectorizer with an empty target machine.
+    // This cause the vectorizer to create larger vector which could be bad.
+    // Disabling it would currently cause regressions as this pass also applies
+    // some scheduling that helps performance in some cases. We should work on
+    // using NVPTX target instead and address the performance regressions with
+    // some scheduling solution.
+    tuningOptions.SLPVectorization = true;
 
-        if (!triple.empty())
-          mod->setTargetTriple(triple.c_str());
+    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
+                   instrCbPtr);
 
-        PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
-                       instrCbPtr);
+    std::string pluginFile =
+        mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
 
-        std::string pluginFile =
-            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
+    if (!pluginFile.empty()) {
+      // TODO: Add some logging here that we inserted a pass into the LLVM
+      // pass pipeline
+      auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+      if (!passPlugin) {
+        llvm::Error Err = passPlugin.takeError();
+        std::string ErrMsg =
+            "Pass Plugin Error: " + llvm::toString(std::move(Err));
+        throw std::runtime_error(ErrMsg);
+      }
+      passPlugin->registerPassBuilderCallbacks(pb);
+    }
 
-        if (!pluginFile.empty()) {
-          // TODO: Add some logging here that we inserted a pass into the LLVM
-          // pass pipeline
-          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
-          if (!passPlugin) {
-            llvm::Error Err = passPlugin.takeError();
-            std::string ErrMsg =
-                "Pass Plugin Error: " + llvm::toString(std::move(Err));
-            throw std::runtime_error(ErrMsg);
-          }
-          passPlugin->registerPassBuilderCallbacks(pb);
-        }
+    pb.registerModuleAnalyses(mam);
+    pb.registerCGSCCAnalyses(cgam);
+    pb.registerFunctionAnalyses(fam);
+    pb.registerLoopAnalyses(lam);
+    pb.crossRegisterProxies(lam, fam, cgam, mam);
 
-        pb.registerModuleAnalyses(mam);
-        pb.registerCGSCCAnalyses(cgam);
-        pb.registerFunctionAnalyses(fam);
-        pb.registerLoopAnalyses(lam);
-        pb.crossRegisterProxies(lam, fam, cgam, mam);
-
-        ModulePassManager mpm;
-        pb.registerVectorizerStartEPCallback(
-            [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-              // Triton generates large structure of scalars which may pessimise
-              // optimizations, we run a pass to break up phi of struct to make
-              // sure all the struct are removed for the following passes.
-              fpm.addPass(BreakStructPhiNodesPass());
-              fpm.addPass(InstCombinePass());
-            });
-        mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
-        mpm.run(*mod, mam);
-      },
-      py::arg("mod"), py::arg("opt"), py::arg("triple") = "");
+    ModulePassManager mpm;
+    pb.registerVectorizerStartEPCallback(
+        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+          // Triton generates large structure of scalars which may pessimise
+          // optimizations, we run a pass to break up phi of struct to make
+          // sure all the struct are removed for the following passes.
+          fpm.addPass(BreakStructPhiNodesPass());
+          fpm.addPass(InstCombinePass());
+        });
+    mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
+    mpm.run(*mod, mam);
+  });
 
   m.def(
       "translate_to_asm",
@@ -422,8 +436,13 @@ void init_triton_llvm(py::module &&m) {
   });
 }
 
+void triton_stacktrace_signal_handler(void *) {
+  llvm::sys::PrintStackTrace(llvm::errs());
+  raise(SIGABRT);
+}
+
 void init_triton_stacktrace_hook(pybind11::module &m) {
-  if (!mlir::triton::tools::getBoolEnv("TRITON_DISABLE_PYTHON_STACKTRACE")) {
-    llvm::sys::PrintStackTraceOnErrorSignal("triton_python");
+  if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_PYTHON_STACKTRACE")) {
+    llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
   }
 }

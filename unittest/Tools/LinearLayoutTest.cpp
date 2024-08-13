@@ -260,16 +260,18 @@ TEST_F(LinearLayoutTest, Compose4D) {
           {S("out2"), {{0, 0, 0, 1}, {0, 0, 0, 2}}},
       },
       {S("out3"), S("out2"), S("out1"), S("out0")});
-  EXPECT_EQ(l1.compose(l2),
-            LinearLayout(
-                {
-                    {S("in0"), {{1, 0, 0, 0}, {2, 0, 0, 0}}},
-                    {S("in1"),
-                     {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}},
-                    {S("in2"), {{0, 0, 1, 0}, {0, 0, 0, 1}, {0, 0, 0, 2}}},
-                    {S("in3"), {}},
-                },
-                {S("out3"), S("out2"), S("out1"), S("out0")}));
+  EXPECT_EQ(
+      l1.compose(l2),
+      LinearLayout(
+          {
+              {S("in0"), {{1, 0, 0, 0}, {2, 0, 0, 0}}},
+              {S("in1"),
+               {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}},
+              {S("in2"), {{0, 0, 1, 0}, {0, 0, 0, 1}, {0, 0, 0, 2}}},
+              {S("in3"), {}},
+          },
+          {{S("out3"), 4}, {S("out2"), 2}, {S("out1"), 2}, {S("out0"), 4}},
+          /*requireSurjective=*/false));
 }
 
 TEST_F(LinearLayoutTest, ReshapeIns) {
@@ -418,12 +420,14 @@ TEST_F(LinearLayoutTest, InvertAndCompose_SmallerResult) {
   //  out(1) = 2
   //  out(2) = 4
   //  out(4) = 1
+  //  out(8) = 8
   //
-  // l1 is the identity, so composing with l1 gives back l2^-1.
+  // Composing with l1 gives back l2^-1 without the out(8) entry.
   LinearLayout composition = l1.invertAndCompose(l2);
   EXPECT_EQ(composition,
-            LinearLayout({{S("in1"), {{2}, {4}, {1}}}}, {S("in2")}));
-  EXPECT_EQ(composition.compose(l2), l1);
+            LinearLayout({{S("in1"), {{2}, {4}, {1}}}}, {{S("in2"), 16}},
+                         /*requireSurjective=*/false));
+  EXPECT_TRUE(composition.compose(l2).equalIgnoringOutDimSizes(l1));
 }
 
 TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedInDim) {
@@ -475,8 +479,9 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastAtEndOfSecond) {
   // l1 is the identity, so composing with l1 gives back l2^-1.
   LinearLayout composition = l1.invertAndCompose(l2);
   EXPECT_EQ(composition,
-            LinearLayout({{S("in1"), {{2}, {4}, {1}}}}, {S("in2")}));
-  EXPECT_EQ(composition.compose(l2), l1);
+            LinearLayout({{S("in1"), {{2}, {4}, {1}}}}, {{S("in2"), 16}},
+                         /*requireSurjective=*/false));
+  EXPECT_TRUE(composition.compose(l2).equalIgnoringOutDimSizes(l1));
 }
 
 TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastBeginningAndEndOfSecond) {
@@ -484,7 +489,7 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastBeginningAndEndOfSecond) {
   LinearLayout l2({{S("in"), {{0}, {4}, {1}, {2}, {0}}}}, {S("out")});
   LinearLayout composition = l1.invertAndCompose(l2);
   EXPECT_EQ(composition,
-            LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {{S("in"), 16}},
+            LinearLayout({{S("in"), {{4}, {8}, {2}}}}, {{S("in"), 32}},
                          /*requireSurjective=*/false));
   EXPECT_EQ(composition.compose(l2), l1);
 }
@@ -626,6 +631,135 @@ TEST_F(LinearLayoutTest, DivideRight_Assertion) {
                     LinearLayout::identity1D(4, S("warp"), S("warp")) *
                     LinearLayout::identity1D(1, S("block"), S("block"));
   EXPECT_EQ(l1.divideRight(l2), std::nullopt);
+}
+
+TEST_F(LinearLayoutTest, EqualsChecksOutDimSizes) {
+  EXPECT_FALSE(LinearLayout::identity1D(4, S("in"), S("out")) ==
+               LinearLayout({{S("in"), {{1}, {2}}}}, {{S("out"), 8}},
+                            /*requireSurjective=*/false));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out")) !=
+              LinearLayout({{S("in"), {{1}, {2}}}}, {{S("out"), 8}},
+                           /*requireSurjective=*/false));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
+                  .equalIgnoringOutDimSizes(
+                      LinearLayout({{S("in"), {{1}, {2}}}}, {{S("out"), 8}},
+                                   /*requireSurjective=*/false)));
+}
+
+TEST_F(LinearLayoutTest, Sublayout) {
+  LinearLayout l1({{S("in1"), {{1, 0}, {0, 1}, {2, 0}}}, {S("in2"), {{0, 1}}}},
+                  {S("out1"), S("out2")});
+  EXPECT_EQ(l1.sublayout({S("in1"), S("in2")}, {S("out1")}),
+            LinearLayout({{S("in1"), {{1}, {0}, {2}}}, {S("in2"), {{0}}}},
+                         {S("out1")}));
+  EXPECT_EQ(l1.sublayout({S("in2"), S("in1")}, {S("out1")}),
+            LinearLayout({{S("in1"), {{1}, {0}, {2}}}, {S("in2"), {{0}}}},
+                         {S("out1")}));
+  EXPECT_EQ(l1.sublayout({S("in2"), S("in1")}, {S("out2"), S("out1")}), l1);
+  EXPECT_EQ(l1.sublayout({S("in1")}, {S("out1")}),
+            LinearLayout({{S("in1"), {{1}, {0}, {2}}}}, {S("out1")}));
+  EXPECT_EQ(l1.sublayout({}, {}), LinearLayout::empty());
+  EXPECT_EQ(l1.sublayout({S("in1")}, {}),
+            LinearLayout({{S("in1"), {{}, {}, {}}}}, {}));
+  EXPECT_EQ(l1.sublayout({}, {S("out1")}),
+            LinearLayout(LinearLayout::BasesT{}, {{S("out1"), 4}},
+                         /*requireSurjective=*/false));
+}
+
+TEST_F(LinearLayoutTest, SublayoutIsZero) {
+  EXPECT_FALSE(LinearLayout::identity1D(4, S("in"), S("out"))
+                   .sublayoutIsZero({S("in")}, {S("out")}));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
+                  .sublayoutIsZero({}, {S("out")}));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
+                  .sublayoutIsZero({S("in")}, {}));
+  EXPECT_TRUE(
+      LinearLayout::identity1D(4, S("in"), S("out")).sublayoutIsZero({}, {}));
+
+  LinearLayout l1({{S("in1"), {{0, 1}, {0, 2}}}, {S("in2"), {{1, 1}}}},
+                  {S("out1"), S("out2")});
+  EXPECT_TRUE(l1.sublayoutIsZero({S("in1")}, {S("out1")}));
+  EXPECT_FALSE(l1.sublayoutIsZero({S("in1")}, {S("out2")}));
+  EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out1")}));
+  EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out2")}));
+}
+
+TEST_F(LinearLayoutTest, SublayoutIsIdentity) {
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
+                  .sublayoutIsIdentity({S("in")}, {S("out")}));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
+                  .sublayoutIsIdentity({}, {S("out")}));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
+                  .sublayoutIsIdentity({S("in")}, {}));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
+                  .sublayoutIsIdentity({}, {}));
+
+  LinearLayout l1(
+      {{S("in1"), {{1, 1}, {2, 2}, {4, 4}}}, {S("in2"), {{2, 1}, {1, 2}}}},
+      {{S("out1"), 8}, {S("out2"), 8}}, /*requireSurjective=*/false);
+  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
+  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out2")}));
+  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1")}, {S("out1"), S("out2")}));
+  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1")}, {S("out2"), S("out1")}));
+  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in1")}, {S("out1")}));
+  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in1")}, {S("out2")}));
+  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in2")}, {S("out1")}));
+  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in2")}, {S("out2")}));
+
+  LinearLayout l2 =
+      LinearLayout::identity1D(4, S("in1"), S("out1")) *
+      LinearLayout::identity1D(8, S("in2"), S("out2")) *
+      LinearLayout({{S("in3"), {{1, 1, 1}}}},
+                   {{S("out1"), 2}, {S("out2"), 2}, {S("out3"), 2}},
+                   /*requireSurjective=*/false);
+  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in1")}, {S("out1")}));
+  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in2")}, {S("out2")}));
+  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in3")}, {S("out3")}));
+  EXPECT_FALSE(
+      l2.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1"), S("out2")}));
+  EXPECT_FALSE(l2.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
+  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in1"), S("in3")}, {S("out1")}));
+
+  LinearLayout l3 = LinearLayout::identity1D(4, S("in1"), S("out1")) *
+                    LinearLayout::identity1D(8, S("in2"), S("out2"));
+  EXPECT_TRUE(l3.sublayoutIsIdentity({S("in1")}, {S("out1")}));
+  EXPECT_TRUE(l3.sublayoutIsIdentity({S("in2")}, {S("out2")}));
+  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1")}, {S("out2")}));
+  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in2")}, {S("out1")}));
+  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
+  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out2")}));
+  EXPECT_TRUE(
+      l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1"), S("out2")}));
+}
+
+TEST_F(LinearLayoutTest, FreeVariableMasks) {
+  using llvm::to_vector;
+  using AR = llvm::ArrayRef<std::pair<StringAttr, int32_t>>;
+
+  EXPECT_EQ(AR(to_vector(LinearLayout::identity1D(4, S("in"), S("out"))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0}}));
+  EXPECT_EQ(
+      AR(to_vector(
+          LinearLayout::zeros1D(16, S("in"), S("out")).getFreeVariableMasks())),
+      AR({{S("in"), 0b1111}}));
+  EXPECT_EQ(AR(to_vector((LinearLayout::identity1D(2, S("in"), S("out")) *
+                          LinearLayout::zeros1D(4, S("in"), S("out")) *
+                          LinearLayout::identity1D(4, S("in"), S("out")) *
+                          LinearLayout::zeros1D(2, S("in"), S("out")))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0b100110}}));
+  EXPECT_EQ(AR(to_vector((LinearLayout::identity1D(2, S("in"), S("out")) *
+                          LinearLayout::zeros1D(4, S("in"), S("out")) *
+                          LinearLayout::identity1D(4, S("in"), S("out")) *
+                          LinearLayout::zeros1D(2, S("in"), S("out")))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0b100110}}));
+  EXPECT_EQ(AR(to_vector(LinearLayout({{S("in1"), {{1, 1}, {2, 2}, {0, 0}}},
+                                       {S("in2"), {{1, 0}, {0, 1}, {2, 0}}}},
+                                      {S("out1"), S("out2")})
+                             .getFreeVariableMasks())),
+            AR({{S("in1"), 0b100}, {S("in2"), 0b10}}));
 }
 
 } // anonymous namespace

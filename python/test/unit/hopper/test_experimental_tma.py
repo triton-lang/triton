@@ -1,10 +1,10 @@
-import numpy as np
 import pytest
 import torch
 import tempfile
 
 import triton
 import triton.language as tl
+from triton.tools.experimental_descriptor import create_1d_tma_descriptor, create_2d_tma_descriptor
 
 
 def test_descriptor_load_ttgir():
@@ -15,8 +15,7 @@ def test_descriptor_load_ttgir():
     SIZE = 128
 
     x = torch.randn(SIZE, dtype=torch.float32, device=device)
-    desc = np.empty(SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size(), desc)
+    desc = create_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size())
     size_in_bytes = SIZE * x.element_size()
 
     ir = f"""
@@ -46,7 +45,6 @@ def test_descriptor_load_ttgir():
         f.flush()
         kernel = triton.compile(f.name)
 
-    desc = torch.tensor(desc, device=device)
     z_tri = torch.empty_like(x)
     kernel[(1, 1, 1)](z_tri, desc)
     assert torch.equal(x, z_tri)
@@ -67,9 +65,7 @@ def test_experimetal_descriptor_load():
         tl.store(Z + off, x)
 
     x = torch.randn(SIZE, dtype=torch.float32, device=device)
-    desc = np.empty(SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size(), desc)
-    desc = torch.tensor(desc, device=device)
+    desc = create_1d_tma_descriptor(x.data_ptr(), SIZE, SIZE, x.element_size())
     z_tri = torch.empty_like(x)
     kernel[(1, )](z_tri, desc, SIZE=SIZE, num_warps=4)
     assert torch.equal(x, z_tri)
@@ -78,6 +74,14 @@ def test_experimetal_descriptor_load():
 @triton.jit
 def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                       M, N, K, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
+    # TODO(embg) remove TMA fence after __grid_constant__ lands
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [a_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [b_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
+                              [c_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     pid_m = pid % num_pid_m
@@ -107,20 +111,9 @@ def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
     A = torch.randn((M, K), dtype=torch.float16, device=device)
     B = torch.randn((K, N), dtype=torch.float16, device=device)
     C = torch.empty((M, N), dtype=torch.float16, device=device)
-    TMA_SIZE = 128
-    desc_a = np.empty(TMA_SIZE, dtype=np.int8)
-    desc_b = np.empty(TMA_SIZE, dtype=np.int8)
-    desc_c = np.empty(TMA_SIZE, dtype=np.int8)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(A.data_ptr(), M, K, BLOCK_M, BLOCK_K, A.element_size(),
-                                                              desc_a)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(B.data_ptr(), K, N, BLOCK_K, BLOCK_N, B.element_size(),
-                                                              desc_b)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(C.data_ptr(), M, N, BLOCK_M, BLOCK_N, C.element_size(),
-                                                              desc_c)
-
-    desc_a = torch.tensor(desc_a, device=device)
-    desc_b = torch.tensor(desc_b, device=device)
-    desc_c = torch.tensor(desc_c, device=device)
+    desc_a = create_2d_tma_descriptor(A.data_ptr(), M, K, BLOCK_M, BLOCK_K, A.element_size())
+    desc_b = create_2d_tma_descriptor(B.data_ptr(), K, N, BLOCK_K, BLOCK_N, B.element_size())
+    desc_c = create_2d_tma_descriptor(C.data_ptr(), M, N, BLOCK_M, BLOCK_N, C.element_size())
     kernel = matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1,
                                 1)](desc_a, desc_b, desc_c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps=8,
                                     num_stages=num_stages)

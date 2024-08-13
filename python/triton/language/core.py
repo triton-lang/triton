@@ -115,7 +115,7 @@ def to_tensor(x, _builder=None):
     return _to_tensor(x, _builder)
 
 
-def _to_tensor(x, builder):
+def _to_tensor(x, builder, check_type: bool = True):
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
     # Note: compile-time const integers are represented by unsigned values
@@ -129,7 +129,7 @@ def _to_tensor(x, builder):
         elif 2**63 <= x < 2**64:
             return tensor(builder.get_uint64(x), uint64)
         else:
-            raise RuntimeError(f'Nonrepresentable integer {x}.')
+            raise ValueError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
         min_float32 = 2**-126
         max_float32 = (2 - 2**-23) * 2**127
@@ -146,7 +146,9 @@ def _to_tensor(x, builder):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
-    assert False, f"cannot convert {x} of type {type(x)} to tensor"
+    if check_type:
+        raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+    return x
 
 
 # -----------------------
@@ -556,14 +558,14 @@ _DtypeClass = dtype
 
 class pointer_type(dtype):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1):
+    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False):
         element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
         self.address_space = address_space
-
-        self.name = f'pointer<{element_ty}>'
+        self.const = const
+        self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
@@ -577,10 +579,13 @@ class pointer_type(dtype):
     def is_ptr(self):
         return True
 
+    def is_const(self):
+        return self.const
+
     def __eq__(self, other: pointer_type) -> bool:
         if not isinstance(other, pointer_type):
             return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space
+        return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
 
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
@@ -588,23 +593,6 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
-
-
-class const_pointer_type(pointer_type):
-
-    def __init__(self, element_ty: dtype, address_space: int = 1):
-        super().__init__(element_ty, address_space)
-
-    def __str__(self):
-        return f'const_pointer<{self.element_ty}>'
-
-    def is_const(self):
-        return True
-
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, const_pointer_type):
-            return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space
 
 
 class block_type(dtype):
@@ -1165,7 +1153,7 @@ def program_id(axis, _builder=None):
     #     pid1 = program_id(1, _builder)
     #     pid2 = program_id(2, _builder)
     #     npg0 = num_programs(0, _builder)
-    #     npg1 = num_programs(0, _builder)
+    #     npg1 = num_programs(1, _builder)
     #     return pid0 + pid1*npg0 + pid2*npg0*npg1
     axis = _constexpr_to_value(axis)
     return semantic.program_id(axis, _builder)
@@ -1190,7 +1178,12 @@ def num_programs(axis, _builder=None):
 
 @builtin
 def arange(start, end, _builder=None):
-    f"""
+    start = _constexpr_to_value(start)
+    end = _constexpr_to_value(end)
+    return semantic.arange(start, end, _builder)
+
+
+arange.__doc__ = f"""
     Returns contiguous values within the half-open interval :code:`[start,
     end)`.  :code:`end - start` must be less than or equal to
     :code:`TRITON_MAX_TENSOR_NUMEL = {TRITON_MAX_TENSOR_NUMEL}`
@@ -1200,10 +1193,7 @@ def arange(start, end, _builder=None):
     :param end: End of the interval. Must be a power of two greater than
         :code:`start`.
     :type end: int32
-    """
-    start = _constexpr_to_value(start)
-    end = _constexpr_to_value(end)
-    return semantic.arange(start, end, _builder)
+"""
 
 
 def _shape_check_impl(shape):
@@ -1229,8 +1219,8 @@ def full(shape, value, dtype, _builder=None):
     :type shape: tuple of ints
     :param value: A scalar value to fill the array with
     :type value: scalar
-    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
-    :type dtype: DType
+    :param dtype: Data type of the new array, e.g., :code:`tl.float16`
+    :type dtype: tl.dtype
     """
     shape = _shape_check_impl(shape)
     value = _constexpr_to_value(value)
@@ -1442,7 +1432,7 @@ def reshape(input, *shape, can_reorder=False, _builder=None):
     :type input: Block
     :param shape: The new shape.
 
-    :code:`shape ` can be passed as a tuple or as individual parameters: ::
+    :code:`shape` can be passed as a tuple or as individual parameters: ::
 
         # These are equivalent
         reshape(x, (32, 32))
@@ -1496,13 +1486,16 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
     Casts a tensor to the given :code:`dtype`.
 
     :param dtype: The target data type.
+    :type dtype: tl.dtype
     :param fp_downcast_rounding: The rounding mode for downcasting
-        floating-point values.  This parameter is only used when self is a
+        floating-point values. This parameter is only used when self is a
         floating-point tensor and dtype is a floating-point type with a
         smaller bitwidth. Supported values are :code:`"rtne"` (round to
         nearest, ties to even) and :code:`"rtz"` (round towards zero).
+    :type fp_downcast_rounding: str, optional
     :param bitcast: If true, the tensor is bitcasted to the given
         :code:`dtype`, instead of being numerically casted.
+    :type bitcast: bool, optional
     """
     input = _to_tensor(input, _builder)
     if isinstance(bitcast, constexpr):
@@ -1582,9 +1575,8 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
         (3) If `pointer` is a block pointer defined by `make_block_ptr`, a
             tensor is loaded.  In this case:
 
-            - `mask` and `other` must be None, and
-            - `boundary_check` and `padding_option` can be specified to control
-               the behavior of out-of-bound access.
+            - `mask` and `other` must be `None`, and
+            - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access.
 
     :param pointer: Pointer to the data to be loaded
     :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
@@ -1595,11 +1587,11 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type other: Block, optional
     :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
     :type boundary_check: tuple of ints, optional
-    :param padding_option: should be one of {"", "zero", "nan"}, do padding while out of bound
+    :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
         cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
-        [cache operator](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators) for more details.
+        `cache operator <https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators>`_ for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional
     :param volatile: changes volatile option in NVIDIA PTX
@@ -1680,7 +1672,7 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", ".wb", ".cg", ".cs", ".wt"}, where ".wb" stands for
         cache write-back all coherent levels, ".cg" stands for cache global, ".cs" stands for cache streaming, ".wt"
-        stands for cache write-through, see [cache operator](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators) for more details.
+        stands for cache write-through, see `cache operator <https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators>`_ for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional, should be one of {"", "evict_first", "evict_last"}
     """
@@ -2211,6 +2203,14 @@ def max_constancy(input, values, _builder=None):
     return semantic.max_constancy(input, values)
 
 
+@builtin
+def assume(cond, _builder=None):
+    '''
+    Allow compiler to assume the :code:`cond` is True.
+    '''
+    return semantic.assume(_to_tensor(cond, _builder), _builder)
+
+
 # -----------------------
 # Debugging functions
 # -----------------------
@@ -2227,7 +2227,7 @@ def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=Fals
     .. highlight:: python
     .. code-block:: python
 
-        tl.static_print(f"{BLOCK_SIZE=}")
+        tl.static_print(f"BLOCK_SIZE={BLOCK_SIZE}")
     '''
     pass
 
@@ -2359,66 +2359,66 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         cost you anything if you don't use it.
 
         Example using
-        [PTX](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html)
+        `PTX <https://docs.nvidia.com/cuda/parallel-thread-execution/index.html>`_
         assembly:
 
         .. highlight:: python
         .. code-block:: python
 
-        @triton.jit
-        def kernel(A, B, C, D, BLOCK: tl.constexpr):
-            a = tl.load(A + tl.arange(0, BLOCK)) # uint8 tensor
-            b = tl.load(B + tl.arange(0, BLOCK)) # float32 tensor
+            @triton.jit
+            def kernel(A, B, C, D, BLOCK: tl.constexpr):
+                a = tl.load(A + tl.arange(0, BLOCK)) # uint8 tensor
+                b = tl.load(B + tl.arange(0, BLOCK)) # float32 tensor
 
-            # For each (a,b) in zip(a,b), perform the following:
-            # - Let ai be `a` converted to int32.
-            # - Let af be `a` converted to float.
-            # - Let m be the max of ai and b.
-            # - Return ai and mi.
-            # Do the above 4 elements at a time.
-            (c, d) = tl.inline_asm_elementwise(
-                asm="""
-                {
-                    // Unpack `a` into `ai`.
-                    .reg .b8 tmp<4>;
-                    mov.b32 {tmp0, tmp1, tmp2, tmp3}, $8;
-                    cvt.u32.u8 $0, tmp0;
-                    cvt.u32.u8 $1, tmp1;
-                    cvt.u32.u8 $2, tmp2;
-                    cvt.u32.u8 $3, tmp3;
-                }
-                // Convert `ai` to float.
-                cvt.rn.f32.s32 $4, $0;
-                cvt.rn.f32.s32 $5, $1;
-                cvt.rn.f32.s32 $6, $2;
-                cvt.rn.f32.s32 $7, $3;
-                // Take max of `ai` and `b`.
-                max.f32 $4, $4, $9;
-                max.f32 $5, $5, $10;
-                max.f32 $6, $6, $11;
-                max.f32 $7, $7, $12;
-                """,
-                constraints=(
-                    # 8 output registers, namely
-                    #   $0=ai0, $1=ai1, $2=ai2, $3=ai3,
-                    #   $4=m0,  $5=m1,  $6=m2,  $7=m3.
-                    "=r,=r,=r,=r,=r,=r,=r,=r,"
-                    # 5 input registers, namely
-                    #   $8=ai,
-                    #   $9=b0, $10=b1, $11=b2, $12=b3.
-                    # The four elements from `a` are all packed into one register.
-                    "r,r,r,r,r"),
-                args=[a, b],
-                dtype=(tl.int32, tl.float32),
-                is_pure=True,
-                pack=4,
-            )
-            tl.store(C + tl.arange(0, BLOCK), c)
-            tl.store(D + tl.arange(0, BLOCK), d)
+                # For each (a,b) in zip(a,b), perform the following:
+                # - Let ai be `a` converted to int32.
+                # - Let af be `a` converted to float.
+                # - Let m be the max of ai and b.
+                # - Return ai and mi.
+                # Do the above 4 elements at a time.
+                (c, d) = tl.inline_asm_elementwise(
+                    asm="""
+                    {
+                        // Unpack `a` into `ai`.
+                        .reg .b8 tmp<4>;
+                        mov.b32 {tmp0, tmp1, tmp2, tmp3}, $8;
+                        cvt.u32.u8 $0, tmp0;
+                        cvt.u32.u8 $1, tmp1;
+                        cvt.u32.u8 $2, tmp2;
+                        cvt.u32.u8 $3, tmp3;
+                    }
+                    // Convert `ai` to float.
+                    cvt.rn.f32.s32 $4, $0;
+                    cvt.rn.f32.s32 $5, $1;
+                    cvt.rn.f32.s32 $6, $2;
+                    cvt.rn.f32.s32 $7, $3;
+                    // Take max of `ai` and `b`.
+                    max.f32 $4, $4, $9;
+                    max.f32 $5, $5, $10;
+                    max.f32 $6, $6, $11;
+                    max.f32 $7, $7, $12;
+                    """,
+                    constraints=(
+                        # 8 output registers, namely
+                        #   $0=ai0, $1=ai1, $2=ai2, $3=ai3,
+                        #   $4=m0,  $5=m1,  $6=m2,  $7=m3.
+                        "=r,=r,=r,=r,=r,=r,=r,=r,"
+                        # 5 input registers, namely
+                        #   $8=ai,
+                        #   $9=b0, $10=b1, $11=b2, $12=b3.
+                        # The four elements from `a` are all packed into one register.
+                        "r,r,r,r,r"),
+                    args=[a, b],
+                    dtype=(tl.int32, tl.float32),
+                    is_pure=True,
+                    pack=4,
+                )
+                tl.store(C + tl.arange(0, BLOCK), c)
+                tl.store(D + tl.arange(0, BLOCK), d)
 
         :param asm: assembly to run.  Must match target's assembly format.
         :param constraints: asm constraints in
-            [LLVM format](https://llvm.org/docs/LangRef.html#inline-asm-constraint-string)
+            `LLVM format <https://llvm.org/docs/LangRef.html#inline-asm-constraint-string>`_
         :param args: the input tensors, whose values are passed to the asm block
         :param dtype: the element type(s) of the returned tensor(s)
         :param is_pure: if true, the compiler assumes the asm block has no side-effects
@@ -2491,17 +2491,17 @@ class static_range:
     """
 
     def __init__(self, arg1, arg2=None, step=None):
-        assert isinstance(arg1, constexpr)
+        assert isinstance(arg1, constexpr), f"{arg1} used as tl.static_range start value is not a constexpr"
         if step is None:
             self.step = constexpr(1)
         else:
-            assert isinstance(step, constexpr)
+            assert isinstance(step, constexpr), f"{step} used as tl.static_range step value is not a constexpr"
             self.step = step
         if arg2 is None:
             self.start = constexpr(0)
             self.end = arg1
         else:
-            assert isinstance(arg2, constexpr)
+            assert isinstance(arg2, constexpr), f"{arg2} used as tl.static_range end value is not a constexpr"
             self.start = arg1
             self.end = arg2
 

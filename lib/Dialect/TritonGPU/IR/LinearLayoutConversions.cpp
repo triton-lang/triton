@@ -7,6 +7,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -37,6 +38,25 @@ SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
     ret.push_back(S("dim" + llvm::Twine(i)));
   }
   return ret;
+}
+
+void assertIsRegisterLayout(const LinearLayout &layout) {
+  assert(layout.getNumInDims() > 0);
+  MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
+
+  const auto &ins = layout.getInDimNames();
+  assert(llvm::SmallVector<StringAttr>(ins.begin(), ins.end()) ==
+         llvm::SmallVector<StringAttr>({kRegister, kLane, kWarp, kBlock}));
+
+  const auto &outs = layout.getOutDimNames();
+  const auto &expectedOuts = standardOutDimNames(ctx, layout.getNumOutDims());
+  assert(llvm::SmallDenseSet<StringAttr>(outs.begin(), outs.end()) ==
+         llvm::SmallDenseSet<StringAttr>(expectedOuts.begin(),
+                                         expectedOuts.end()));
 }
 
 // Returns a 1D -> ND layout that's equivalent to creating a 1D -> 1D mapping of
@@ -85,125 +105,49 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
   return ret.transposeOuts(outDimNames);
 }
 
-// Shrinks the output set of a layout function while leaving the input set
-// unchanged, by making high-order inputs in inDimName map to the same output.
-// Attempts to shrink down to desiredSize, but this is not always possible just
-// by modifying one the specified input dimension.
-//
-// We do this by making the most-major inputs to the layout map to 0.  This
-// effectively duplicates data along that input dimension.  For example, this
-// layout has out-dim size 32:
-//
-//   L(register=1) = 8
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 16.
-//
-// If we shrink it to size 16 along the `lane` dimension, we set L(lane=2) to 0:
-//
-//   L(register=1) = 8
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 0.
-//
-// This means that lane=2 has the same data as lane=0.
-//
-// If we shrink to size 8 along the lane dimension, we set L(lane=1) = 0 as
-// well.  But when we do this, we have to remove bit 1 (the value of L(lane=1))
-// from all other bases:
-//
-//   L(register=1) = 4
-//   L(register=2) = 2
-//   L(register=1) = 1
-//   L(lane=1) = 0
-//   L(lane=2) = 0.
-//
-// Note this only works because the bases are powers of two.  I don't quite know
-// what to do when they're not.
-LinearLayout shrinkCodomain(const LinearLayout &layout, StringAttr inDimName,
-                            StringAttr outDimName, int desiredSize) {
-  assert(llvm::isPowerOf2_32(desiredSize));
-  int outDimIdx = layout.getOutDimIndex(outDimName);
-  int desiredZeros =
-      llvm::Log2_32(layout.getOutDimSize(outDimName) / desiredSize);
-  if (desiredZeros == 0) {
-    return layout;
-  }
-
-  // Find the desiredZeros most-major basis vectors that are not already zero.
-  // These are the ones we will set to zero.
-  SmallVector<int> basesToZero;
-  for (int i = layout.getInDimSizeLog2(inDimName) - 1;
-       i >= 0 && basesToZero.size() < desiredZeros; i--) {
-    int basis = layout.getBasis(inDimName, i, outDimName);
-    if (basis != 0) {
-      basesToZero.push_back(basis);
-    }
-  }
-
-  // Bail if all the bases are already zero; nothing more we can do.
-  if (basesToZero.empty()) {
-    return layout;
-  }
-
-  // The algorithm below only works because the bases are powers of two.  I'm
-  // not sure what to do otherwise.
-  assert(llvm::all_of(basesToZero,
-                      [&](int basis) { return llvm::isPowerOf2_32(basis); }));
-
-  // We want to zero out the bases in `basesToZero`, and also "shift out" the
-  // corresponding bits from all other bases.  For example if we remove the
-  // basis with value 8 = 0b100, then if another basis has value 26 = 0b11010,
-  // the 1 in its 3rd position gets removed and it becomes 10 = 0b1010.
-  //
-  // We could manually alter the bases in `layout` to achieve this, but it's
-  // perhaps simpler to use the linearity of LLs to our advantage.
-  //
-  // Consider the function O which is the identity map from out-dims to
-  // out-dims.  We can easily calculate what happens when we remove the relevant
-  // bases from O.  Call this new function O'.
-  //
-  // Because of linearity, removing the bases from L is equivalent to composing
-  // L with O'.  So that's what we do below.
-
-  // Construct the out-dims -> out-dims identity layout O.
-  LinearLayout outputIdentity = LinearLayout::empty();
-  for (StringAttr dim : layout.getOutDimNames()) {
-    outputIdentity *=
-        LinearLayout::identity1D(layout.getOutDimSize(dim), dim, dim);
-  }
-
-  // Modify O to remove the relevant bases.
-  //
-  // TODO(jlebar): I don't like manually modifying bases here.  Perhaps this
-  // should be a function on LinearLayout.
-  LinearLayout::BasesT newBases = outputIdentity.getBases();
-  llvm::sort(basesToZero);
-  for (int basis : basesToZero) {
-    int idx = llvm::Log2_32(basis);
-    for (int i = newBases[outDimName].size() - 1; i > idx; i--) {
-      newBases[outDimName][i][outDimIdx] =
-          newBases[outDimName][i - 1][outDimIdx];
-    }
-    newBases[outDimName][idx][outDimIdx] = 0;
-  }
-
-  // Construct O'.
-  LinearLayout transform(std::move(newBases),
-                         llvm::to_vector(layout.getOutDimNames()));
-
-  // Compose O' with L.
-  return layout.compose(transform);
-}
-
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// larger than shape[d].  Do this without changing the size of the layout's
-// inputs (i.e. leave its domain unchanged).
+// For each output dimension d, ensure that the layout's output size (i.e., its
+// codomain) does not exceed shape[d]. Do this without changing the size of the
+// layout's inputs (i.e., leave its domain unchanged).
 //
 // This function is invariant to the order of the layout's input and output
 // dimensions.
+//
+// We achieve this by setting the largest value in each output dimension d to 0
+// because bases that map to a location larger than shape[d]
+// effectively duplicate along that dimension.  For example, consider a layout
+// with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
+// shrink the output dimension size to 8:
+//
+//   L(register=1) = 8
+//   L(register=2) = 4
+//   L(register=4) = 1
+//   L(lane=1) = 2
+//   L(lane=2) = 16
+//
+// In the first step, we shrink the output dimension size to 16 by setting
+// L(lane=2) to 0:
+//
+//   L(register=1) = 8
+//   L(register=2) = 4
+//   L(register=4) = 1
+//   L(lane=1) = 2
+//   L(lane=2) = 0
+//
+// This means that lane=2 has the same data as lane=0.
+//
+// Now the output dimension of this layout has a size of 16, which is still
+// larger than 8.  We find the current largest value in the output dimension,
+// which is L(register=1) = 8, and we set L(register=1) to 0:
+//
+//   L(register=1) = 0
+//   L(register=2) = 4
+//   L(register=4) = 1
+//   L(lane=1) = 2
+//   L(lane=2) = 0
+//
+// Now the output dimension of this layout has a size of 8, which is the desired
+// size.  Note that this method works only because the bases are powers of two.
+// It is unclear what to do when they are not.
 LinearLayout ensureLayoutNotLargerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
@@ -213,45 +157,40 @@ LinearLayout ensureLayoutNotLargerThan(
   }
   MLIRContext *ctx = shape.begin()->first.getContext();
 
-  // For the purposes of this function, "block" is the "most-minor" dimension.
-  // This is just a consequence of how legacy layouts work: We only put the same
-  // tensor element into two different blocks as a last resort, only after all
-  // the registers in all the lanes in all the warps in a block already have the
-  // same tensor element.  (Or, for shared layouts, only after all values in
-  // smem within a block have the same value.)
-  //
-  // inDimNames combines the in dims for register and shared layouts; that's OK
-  // because we skip in-dims that aren't present.  So we'll iterate over
-  // {blocked, register, lane, warp} or {blocked, offset}.
-  SmallVector<StringAttr> inDimNames = {
-      // for both register and shared layouts
-      S("block"),
-
-      // for register layouts
-      S("register"),
-      S("lane"),
-      S("warp"),
-
-      // for shared layouts
-      S("offset"),
-  };
-
-  LinearLayout ret = layout;
-  for (auto outDimName : layout.getOutDimNames()) {
+  auto bases = layout.getBases();
+  for (auto outDim : llvm::enumerate(layout.getOutDimNames())) {
+    auto outDimName = outDim.value();
     int32_t actualSize = layout.getOutDimSize(outDimName);
     int32_t desiredSize = shape.lookup(outDimName);
     if (actualSize <= desiredSize) {
       continue;
     }
     assert(actualSize % desiredSize == 0);
-    for (StringAttr inDimName : llvm::reverse(inDimNames)) {
-      if (ret.hasInDim(inDimName)) {
-        ret = shrinkCodomain(ret, inDimName, outDimName, desiredSize);
+    // <inDimName, basisIdx, outValue>
+    std::vector<std::tuple<StringAttr, int, int>> sortedBases;
+    for (auto [inDimName, basis] : bases) {
+      for (size_t basisIdx = 0; basisIdx < basis.size(); basisIdx++) {
+        auto outValue = basis[basisIdx][outDim.index()];
+        if (outValue == 0) {
+          continue;
+        }
+        assert(llvm::isPowerOf2_32(outValue));
+        sortedBases.emplace_back(inDimName, basisIdx, outValue);
       }
     }
-    assert(ret.getOutDimSize(outDimName) == desiredSize);
+    // From the largest basis to the smallest.
+    llvm::sort(sortedBases,
+               [](auto a, auto b) { return std::get<2>(a) > std::get<2>(b); });
+    for (auto [inDimName, basisIdx, outValue] : sortedBases) {
+      if (actualSize <= desiredSize) {
+        break;
+      }
+      bases[inDimName][basisIdx][outDim.index()] = 0;
+      actualSize >>= 1;
+    }
   }
-  return ret;
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(layout.getOutDimNames()));
 }
 
 // For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
@@ -387,7 +326,7 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   int n = mma.getInstrShape()[1];
   int k = mma.getInstrShape()[2];
   assert(m == 16);
-  assert(n == 16 || n == 32 || n == 64 || n == 128 || n == 256);
+  assert(n == 8 || n == 16 || n == 32 || n == 64 || n == 128 || n == 256);
   assert(k == 8 || k == 16 || k == 32);
 
   MLIRContext *ctx = mma.getContext();
@@ -499,7 +438,7 @@ LinearLayout wmmaToLinearLayout(ArrayRef<int64_t> shape,
   int nIndex = 1 + hasBatchDim;
   (void)mIndex, (void)nIndex;
 
-  SmallVector<unsigned> mnkDim = wmma.getMNKDimPerWMMAInstr();
+  SmallVector<unsigned> mnkDim = wmma.getMNKDimPerInstr();
   unsigned mDim = mnkDim[0], nDim = mnkDim[1];
   (void)mDim, (void)nDim;
 
@@ -551,8 +490,8 @@ LinearLayout wmmaToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, wmma.getCTALayout(), shape);
 }
 
-std::optional<LinearLayout> sliceToLinearLayout(ArrayRef<int64_t> shape,
-                                                SliceEncodingAttr slice) {
+LinearLayout sliceToLinearLayout(ArrayRef<int64_t> shape,
+                                 SliceEncodingAttr slice) {
   MLIRContext *ctx = slice.getContext();
 
   // First compute the linear layout for this layout's parent.
@@ -560,9 +499,9 @@ std::optional<LinearLayout> sliceToLinearLayout(ArrayRef<int64_t> shape,
   parentShape.insert(parentShape.begin() + slice.getDim(), 1);
   std::optional<LinearLayout> parentLL =
       triton::gpu::toLinearLayout(parentShape, slice.getParent());
-  if (!parentLL) {
-    return std::nullopt;
-  }
+  if (!parentLL.has_value())
+    llvm::report_fatal_error(
+        "Failed to compute parent layout for slice layout.");
 
   // Remove dimension slice.getDim() from the parent layout.
   //
@@ -773,6 +712,67 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 
   // TODO(jlebar): Other layouts
   return std::nullopt;
+}
+
+bool isCrossCTAConversion(const LinearLayout &layout) {
+  assert(!layout.getInDimNames().empty());
+  MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
+
+  StringAttr kBlock = S("block");
+  assert(layout.hasInDim(kBlock));
+  assert(layout.hasOutDim(kBlock));
+
+  SetVector<StringAttr> nonBlockInDims(layout.getInDimNames().begin(),
+                                       layout.getInDimNames().end());
+  nonBlockInDims.remove(kBlock);
+
+  // This layout moves data between CTAs if
+  // - the value for any input dim other than block affects the output block, or
+  // - input (0, ..., block=i) does not map to output (0, ..., block=i).
+  return !layout.sublayoutIsZero(nonBlockInDims.getArrayRef(), {kBlock}) ||
+         !layout.sublayoutIsIdentity({kBlock}, {kBlock});
+}
+
+LinearLayout
+chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
+                                      ArrayRef<unsigned> tensorShape,
+                                      ArrayRef<unsigned> repShape) {
+  auto outDimNames = standardOutDimNames(ctx, tensorShape.size());
+  LinearLayout layout = LinearLayout::empty();
+  SmallVector<StringAttr> kRepDims;
+  SmallVector<StringAttr> kOffsetDims;
+  auto totalIters = 1;
+  auto totalOffsets = 1;
+  for (int i = 0; i < tensorShape.size(); i++) {
+    // The scratch buffer always has the last dimension to be the most-minor
+    // dimension
+    int dim = tensorShape.size() - 1 - i;
+    StringAttr kIteration = S("iteration" + std::to_string(dim));
+    StringAttr kOffset = S("offset" + std::to_string(dim));
+    kRepDims.push_back(kIteration);
+    kOffsetDims.push_back(kOffset);
+    assert(llvm::isPowerOf2_32(repShape[dim]));
+    assert(llvm::isPowerOf2_32(tensorShape[dim]));
+    auto numIters = tensorShape[dim] / repShape[dim];
+    layout *=
+        LinearLayout::identity1D(repShape[dim], kOffset, outDimNames[dim]);
+    layout *= LinearLayout::identity1D(numIters, kIteration, outDimNames[dim]);
+    totalIters *= numIters;
+    totalOffsets *= repShape[dim];
+  }
+  StringAttr kOffset = S("offset");
+  StringAttr kIteration = S("iteration");
+  StringAttr kBlock = S("block");
+  SmallVector<StringAttr> newDims;
+  newDims.append(kOffsetDims.begin(), kOffsetDims.end());
+  newDims.append(kRepDims.begin(), kRepDims.end());
+  // Transpose layout from [offset0, rep0, offset1, rep1, ...] to
+  // [offset0, offset1, ..., rep0, rep1, ...]
+  auto ret = layout.transposeIns(newDims);
+  // Reshape layout from [offset0, offset1, ..., rep0, rep1, ...] to
+  // [offset, rep, block]
+  return ret.reshapeIns(
+      {{kOffset, totalOffsets}, {kIteration, totalIters}, {kBlock, 1}});
 }
 
 } // namespace mlir::triton::gpu
