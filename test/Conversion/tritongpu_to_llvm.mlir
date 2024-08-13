@@ -844,10 +844,12 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK: llvm.mlir.global external @global_smem
   // CHECK-LABEL: convert_layout_mmav2_block
   tt.func @convert_layout_mmav2_blocked(%arg0: tensor<32x16xf32, #mma>) {
-    // CHECK: st.shared.b32.v2
-    // CHECK: st.shared.b32.v2
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: ld.shared.v4.b32
+    // CHECK: ld.shared
     %0 = triton_gpu.convert_layout %arg0 : tensor<32x16xf32, #mma> -> tensor<32x16xf32, #blocked0>
     tt.return
   }
