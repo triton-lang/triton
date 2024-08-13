@@ -115,6 +115,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   assert(!isMfmaToDotShortcut(srcTy, dstTy));
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
+  scratchConfig.order = outOrd;
+
   unsigned srcContigPerThread =
       getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
   unsigned dstContigPerThread =
@@ -149,7 +151,6 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   }
   auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
   scratchConfig.paddedRepShape[paddedDim] += paddedSize;
-  scratchConfig.order = outOrd;
 
   return scratchConfig;
 }
