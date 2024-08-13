@@ -363,7 +363,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // load/storeDistributedToShared, we can remove this constraint.
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-        return product(getCTASplitNum(nvidiaMma)) == 1;
+        return product(getCTAsPerCGA(nvidiaMma)) == 1;
       }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
