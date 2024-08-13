@@ -164,7 +164,8 @@ class Autotuner(KernelInterface):
             self.post_hook(full_nargs, exception=None)
 
         try:
-            return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+            device = driver.active.get_current_target().backend
+            return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8), device_type=device)
         except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
             if verbose:
                 print(f"Autotuning failed with {e}")
