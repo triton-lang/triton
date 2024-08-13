@@ -17,6 +17,9 @@ def create_tma_desc_gmem_ptr(ptr, dims, block_dims, element_size):
     return cpu_desc.cuda()
 
 
+TMA_FENCE_ASM: tl.constexpr = "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg"
+
+
 @pytest.mark.parametrize("byval_tma", [True, False])
 def test_experimetal_descriptor_load(byval_tma):
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
@@ -26,7 +29,9 @@ def test_experimetal_descriptor_load(byval_tma):
     SIZE = 128
 
     @triton.jit
-    def kernel(Z, desc, SIZE: tl.constexpr):
+    def kernel(Z, desc, SIZE: tl.constexpr, BYVAL_TMA: tl.constexpr):
+        if not BYVAL_TMA:
+            tl.inline_asm_elementwise(TMA_FENCE_ASM, "=r, l", [desc], dtype=tl.int32, is_pure=False, pack=1)
         off_desc = 0
         off = tl.arange(0, SIZE)
         x = tl._experimental_descriptor_load(desc, [off_desc], [SIZE], Z.dtype.element_ty)
@@ -38,7 +43,7 @@ def test_experimetal_descriptor_load(byval_tma):
     else:
         desc = create_tma_desc_gmem_ptr(x.data_ptr(), [SIZE], [SIZE], x.element_size())
     z_tri = torch.empty_like(x)
-    compiled_kernel = kernel[(1, )](z_tri, desc, SIZE=SIZE, num_warps=4)
+    compiled_kernel = kernel[(1, )](z_tri, desc, SIZE=SIZE, BYVAL_TMA=byval_tma, num_warps=4)
     assert torch.equal(x, z_tri)
     if byval_tma:
         assert ".param .align 64 .b8" in compiled_kernel.asm["ptx"]
@@ -46,7 +51,13 @@ def test_experimetal_descriptor_load(byval_tma):
 
 @triton.jit
 def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
-                      M, N, K, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
+                      M, N, K, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+                      BYVAL_TMA: tl.constexpr):
+    if not BYVAL_TMA:
+        tl.inline_asm_elementwise(TMA_FENCE_ASM, "=r, l", [a_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+        tl.inline_asm_elementwise(TMA_FENCE_ASM, "=r, l", [b_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+        tl.inline_asm_elementwise(TMA_FENCE_ASM, "=r, l", [c_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     pid_m = pid % num_pid_m
@@ -86,8 +97,8 @@ def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tm
         desc_b = create_tma_desc_gmem_ptr(B.data_ptr(), [K, N], [BLOCK_K, BLOCK_N], B.element_size())
         desc_c = create_tma_desc_gmem_ptr(C.data_ptr(), [M, N], [BLOCK_M, BLOCK_N], C.element_size())
     kernel = matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1,
-                                1)](desc_a, desc_b, desc_c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_warps=8,
-                                    num_stages=num_stages)
+                                1)](desc_a, desc_b, desc_c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, BYVAL_TMA=byval_tma,
+                                    num_warps=8, num_stages=num_stages)
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if BLOCK_M >= 64 and BLOCK_N >= 64:
