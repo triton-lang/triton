@@ -47,12 +47,13 @@ def asin_kernel(
 # -----------------------------------------
 # We can use the default libdevice library path encoded in `triton/language/math.py`
 
+device = triton.runtime.driver.active.get_current_target().backend
+
 torch.manual_seed(0)
 size = 98432
-x = torch.rand(size, device='cuda')
-output_triton = torch.zeros(size, device='cuda')
+x = torch.rand(size, device=device)
+output_triton = torch.zeros(size, device=device)
 output_torch = torch.asin(x)
-assert x.is_cuda and output_triton.is_cuda
 n_elements = output_torch.numel()
 grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
 asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
