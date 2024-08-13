@@ -733,11 +733,9 @@ bool isCrossCTAConversion(const LinearLayout &layout) {
          !layout.sublayoutIsIdentity({kBlock}, {kBlock});
 }
 
-LinearLayout
-chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
-                                      ArrayRef<unsigned> tensorShape,
-                                      ArrayRef<unsigned> repShape,
-                                      ArrayRef<unsigned> order) {
+LinearLayout chooseShemLayoutForRegToRegConversion(
+    MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
+    ArrayRef<unsigned> repShape, ArrayRef<unsigned> order) {
   auto outDimNames = standardOutDimNames(ctx, tensorShape.size());
   LinearLayout layout = LinearLayout::empty();
   SmallVector<StringAttr> kRepDims;
