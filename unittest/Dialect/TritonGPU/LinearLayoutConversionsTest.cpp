@@ -1004,11 +1004,11 @@ TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout) {
   LinearLayout ll = LinearLayout({{S("register"), {{1}, {2}, {2}, {8}}},
                                   {S("lane"), {{8}, {4}, {1}}},
                                   {S("warp"), {{16}, {32}, {0}}},
-                                  {S("block"), {{0}}}},
+                                  {S("block"), {}}},
                                  {S("dim0")});
   EXPECT_EQ(chooseShemLayoutForRegToRegConversion(&ctx, /*tensorShape=*/{64},
                                                   /*repShape=*/{64},
-                                                  /*order=*/{1, 0}),
+                                                  /*order=*/{0}),
             LinearLayout({{S("offset"), {{1}, {2}, {4}, {8}, {16}, {32}}},
                           {S("iteration"), {}},
                           {S("block"), {}}},
