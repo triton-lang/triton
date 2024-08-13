@@ -114,7 +114,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 //        CHECK:       triton_gpu.local_store %[[LOAD_24]], %[[MEMDESC_SUBVIEW_36]]
 //        CHECK:       scf.yield %[[ADDPTR_25]], %[[ADDPTR_20]], %[[DOT_31]], %[[SELECT_34]], %[[MEMDESC_SUBVIEW_35]], %[[MEMDESC_SUBVIEW_36]]
 //        CHECK:   }
-    
+
   tt.func @matmul_loop(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #mma> {
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -202,7 +202,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 //        CHECK:       %[[DOT_45:.*]] = tt.dot %[[LOCAL_LOAD_42]], %[[MULF_44]], %[[ARG8]]
 //        CHECK:       scf.yield %[[ADDPTR_39]], %[[ADDPTR_33]], %[[DOT_45]], %[[SELECT_30]], %[[MEMDESC_SUBVIEW_32]], %[[MEMDESC_SUBVIEW_31]], %[[LOAD_41]], %[[LOAD_38]]
 //        CHECK:   }
-    
+
   tt.func @matmul_loop_mb(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #mma> {
     %c2 = arith.constant 2 : index
     %c2_i32 = arith.constant 2 : i32
