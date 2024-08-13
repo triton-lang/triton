@@ -743,8 +743,6 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
   auto totalIters = 1;
   auto totalOffsets = 1;
   for (int i = 0; i < tensorShape.size(); i++) {
-    // The scratch buffer always has the last dimension to be the most-minor
-    // dimension
     int dim = order[i];
     StringAttr kIteration = S("iteration" + std::to_string(dim));
     StringAttr kOffset = S("offset" + std::to_string(dim));

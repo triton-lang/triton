@@ -378,6 +378,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return failure();
     }
 
+    // TODO(Keren): Use stmatrix if possible, currently it falls back to the old
+    // class but we should make it work using LL soon. accumNumReplicates is 1
+    // because there's no cross CTA data movement.
+    auto scratchConfig =
+        getScratchConfigForCvt(op.getSrc().getType(), op.getType());
+    if (targetInfo.canUseStMatrix(op.getSrc().getType(),
+                                  scratchConfig.paddedRepShape,
+                                  scratchConfig.order,
+                                  /*accumNumReplicates=*/1))
+      return failure();
+
     assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
     SmallVector<Value> inVals =
