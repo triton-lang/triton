@@ -12,6 +12,10 @@ from triton.backends.compiler import BaseBackend, GPUTarget
 from triton.runtime.build import _build
 import triton.backends.cpu.driver as cpu_driver
 
+def min_dot_size(target: GPUTarget):
+    # Other architectures will only support 16,16,16
+    return lambda lhsType, rhsType: (4, 4, 4)
+
 
 @dataclass(frozen=True)
 class CPUOptions:
@@ -65,7 +69,7 @@ class CPUBackend(BaseBackend):
         return metadata
 
     def get_codegen_implementation(self):
-        codegen_fns = dict()
+        codegen_fns = {"min_dot_size": min_dot_size(self.target)}
         return codegen_fns
 
     def load_dialects(self, ctx):
