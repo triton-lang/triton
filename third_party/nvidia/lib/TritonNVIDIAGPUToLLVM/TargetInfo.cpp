@@ -385,8 +385,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   auto st = builder.create<>("st")
                 ->o("shared::cta", ctaId.has_value())
                 .o("shared", !ctaId.has_value())
-                .b(elemBitwidth)
-                .v(vec, /*predicate=*/vec > 1);
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
 
   PTXBuilder::Operand *valOpr;
