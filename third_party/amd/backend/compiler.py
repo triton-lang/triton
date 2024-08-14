@@ -174,7 +174,6 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_llir(src, metadata, options):
         mod = src
-        print(mod)
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()

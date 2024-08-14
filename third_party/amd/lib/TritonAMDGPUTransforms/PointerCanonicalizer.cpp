@@ -189,8 +189,7 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
         newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(),
                                                    newPtr, scalarOffset);
       } else {
-        // Extension logic:
-        // - If we the offsets in the IR are 32 bits, then we have to cast to 64
+        // If we the incoming offset is 32 bits, then we have to cast to 64
         if (addPtrOffsetType.isInteger(32))
           addPtrOffset =
               extend32bitOffsetTo64Bits(rewriter, curLoc, addPtrOffset);
@@ -209,18 +208,23 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
     } else if (auto loadOp = dyn_cast<triton::LoadOp>(curOp)) {
       if (failed(materializeFatPointer(curOp, curLoc, loadOp.getPtr())))
         return failure();
-      // Delete the old load operation
+      // Delete the old operation
       opToDelete.insert(loadOp);
     } else if (auto storeOp = dyn_cast<triton::StoreOp>(curOp)) {
       if (failed(materializeFatPointer(curOp, curLoc, storeOp.getPtr())))
         return failure();
-      // Delete the old load operation
+      // Delete the old operation
       opToDelete.insert(storeOp);
-    } else if (auto atomicOp = dyn_cast<triton::AtomicRMWOp>(curOp)) {
-      if (failed(materializeFatPointer(curOp, curLoc, atomicOp.getPtr())))
+    } else if (auto atomicRmwOp = dyn_cast<triton::AtomicRMWOp>(curOp)) {
+      if (failed(materializeFatPointer(curOp, curLoc, atomicRmwOp.getPtr())))
         return failure();
-      // Delete the old load operation
-      opToDelete.insert(atomicOp);
+      // Delete the old operation
+      opToDelete.insert(atomicRmwOp);
+    } else if (auto atomicCasOp = dyn_cast<triton::AtomicCASOp>(curOp)) {
+      if (failed(materializeFatPointer(curOp, curLoc, atomicCasOp.getPtr())))
+        return failure();
+      // Delete the old operation
+      opToDelete.insert(atomicCasOp);
     } else if (auto forOp = resolveOp<scf::ForOp>(curOp, rewriteOpMap)) {
       size_t operandNum = curOperand->getOperandNumber();
       FatPtr fatPtr = pointers[curOperand->get()];
@@ -332,8 +336,8 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
       opToDelete.insert(curOp);
     } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(curOp)) {
       // ConditionOp can only be contained within the BeforeRegion of a
-      // WhileOp. We already rewrotw the WhileOp with the right operands, so
-      // we need only to add the offset the the current operand to be the base
+      // WhileOp. We already rewrote the WhileOp with the right operands, so
+      // we need only to add the offset the current operand to be the base
       // pointer and continue the walk inside the AfterRegion
       size_t operandNum = curOperand->getOperandNumber();
       FatPtr fatPtr = pointers[curOperand->get()];
@@ -453,8 +457,11 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
         nextPtr = dest->getArgument(operandNum);
         pointers[nextPtr] = {basePtrArg, offsetArg, fatPtr.canNarrow};
       }
-    } else if (isa<triton::PtrToIntOp>(curOp)) {
-      // Do nothing, just keep going
+    } else if (auto ptrCastOp = dyn_cast<triton::PtrToIntOp>(curOp)) {
+      if (failed(materializeFatPointer(curOp, curLoc, ptrCastOp.getSrc())))
+        return failure();
+      // Delete the old operation
+      opToDelete.insert(ptrCastOp);
     } else {
       // If we meet an unsupported operation, materialize the fat pointer and
       // continue. We flag that we met unknown usage of the pointer, hence we
