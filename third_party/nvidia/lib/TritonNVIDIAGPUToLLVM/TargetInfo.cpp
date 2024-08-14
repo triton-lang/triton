@@ -585,11 +585,6 @@ bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
                                 ArrayRef<unsigned> outOrd,
                                 unsigned accumNumReplicates,
                                 int swizzleByteWidth) const {
-  llvm::errs() << "isStMatrixCompatible: "
-               << isStMatrixCompatible(srcTy, swizzleByteWidth) << "\n";
-  llvm::errs() << "accumNumReplicates: " << accumNumReplicates << "\n";
-  llvm::errs() << "outOrd[0]: " << outOrd[0] << "\n";
-  llvm::errs() << "paddedRepShape[1]: " << paddedRepShape[1] << "\n";
   return isStMatrixCompatible(srcTy, swizzleByteWidth) &&
          accumNumReplicates == 1 && outOrd[0] == 1 &&
          paddedRepShape[1] % 8 == 0;
