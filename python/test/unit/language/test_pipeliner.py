@@ -5,6 +5,7 @@ import torch
 import triton
 import triton.language as tl
 import triton.tools.experimental_descriptor
+from test_core import is_cpu
 
 from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_mi200
 
@@ -267,7 +268,11 @@ def test_pipeline_matmul(scale, device):
     if scale:
         ref_out = dot_scale_ref(a, scale_a, b, a_type, b_type)
     else:
-        ref_out = torch.matmul(a, b)
+        if is_cpu():
+            ref_out = torch.matmul(a.to(torch.float32), b.to(torch.float32)).to(torch.float16)
+        else:
+            ref_out = torch.matmul(a, b)
+
     # Bigger tolerance for AMD MI200 devices.
     # MI200 devices use reduced precision fp16 and bf16 and flush input and
     # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices

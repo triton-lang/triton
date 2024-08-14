@@ -83,10 +83,21 @@ jobs:
             python/test/unit/language/test_annotations.py \
             python/test/unit/language/test_block_pointer.py \
             python/test/unit/language/test_conversions.py \
+            python/test/unit/language/test_compile_errors.py \
+            python/test/unit/language/test_decorator.py \
+            python/test/unit/language/test_pipeliner.py \
+            python/test/unit/language/test_random.py \
+            python/test/unit/language/test_standard.py \
+            python/test/unit/runtime/test_bindings.py \
+            python/test/unit/runtime/test_driver.py \
+            python/test/unit/runtime/test_jit.py \
+            python/test/unit/runtime/test_launch.py \
+            python/test/unit/runtime/test_subproc.py \
+            python/test/unit/runtime/test_autotuner.py \
+            python/test/unit/runtime/test_cache.py \
             python/test/unit/cpu/test_libdevice.py \
             python/test/unit/cpu/test_libmvec.py \
-            python/test/unit/cpu/test_opt.py \
-            python/test/unit/runtime/test_autotuner.py
+            python/test/unit/cpu/test_opt.py
 
       - name: Run lit tests
         run: |

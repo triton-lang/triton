@@ -8,7 +8,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.runtime.jit import JITFunction
+from triton.runtime.jit import JITFunction, get_device_key
 from triton._internal_testing import is_hip
 
 
@@ -194,12 +194,12 @@ def test_annotation(device):
 
     x = torch.empty(1, dtype=torch.int32, device=device)
 
-    device = getattr(torch, device).current_device()
+    device_key = get_device_key()
     kernel[(1, )](x, 1)
     kernel[(1, )](x, 8)
     kernel[(1, )](x, 16)
     kernel[(1, )](x, 17)
-    assert len(kernel.cache[device]) == 3
+    assert len(kernel.cache[device_key]) == 3
 
 
 GLOBAL_DEFAULT_ARG = 1
@@ -222,7 +222,7 @@ def test_kernel_default_arg(device):
     kernel[(1, )](x)
     assert x == torch.ones_like(x)
 
-    device = getattr(torch, device).current_device()
+    device = get_device_key()
     assert len(kernel.cache[device]) == 1
 
 
@@ -415,7 +415,7 @@ def test_jit_warmup_cache(device) -> None:
         torch.randn(32, dtype=torch.float32, device=device),
         32,
     ]
-    device = getattr(torch, device).current_device()
+    device = get_device_key()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
@@ -430,6 +430,9 @@ def test_jit_debug(device) -> None:
     @triton.jit
     def kernel(tmp):
         tl.device_assert(tl.load(tmp) == 1, "tmp == 1")
+
+    if device == "cpu":
+        pytest.skip('Device Assert is not yet supported on CPU')
 
     device = getattr(torch, device).current_device()
     tmp = torch.tensor([1], dtype=torch.int32, device=device)
@@ -454,7 +457,7 @@ def test_jit_noinline(device) -> None:
     def kernel_add_device(a, b, o, N: tl.constexpr):
         add_fn(a, b, o, N)
 
-    device = getattr(torch, device).current_device()
+    device = get_device_key()
     assert len(kernel_add_device.cache[device]) == 0
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1
@@ -498,7 +501,7 @@ def test_preload(device, fresh_triton_cache) -> None:
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) - tl.load(b + idx))
 
-    device = getattr(torch, device).current_device()
+    device = get_device_key()
 
     # get the serialized specialization data
     specialization_data = None
