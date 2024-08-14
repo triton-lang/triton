@@ -54,6 +54,9 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   m.def("add_convert_atomic_ops", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createConvertAtomicOps());
   });
+  m.def("add_convert_debug_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertDebugOps());
+  });
   m.def("add_optimize_masks", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createOptimizeMasks());
   });

@@ -67,9 +67,6 @@ void TritonCPUDialect::initialize() {
       >();
 }
 
-#define GET_OP_CLASSES
-#include "triton/Dialect/TritonCPU/IR/Ops.cpp.inc"
-
 // verify TritonCPU ops
 LogicalResult TritonCPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {

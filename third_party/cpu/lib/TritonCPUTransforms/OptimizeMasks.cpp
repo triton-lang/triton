@@ -85,9 +85,9 @@ struct CdivToDiv : public OpRewritePattern<arith::DivSIOp> {
 
     arith::ConstantOp addCstDef;
     Value addOtherVal;
-    if (addCstDef = addOpDef.getLhs().getDefiningOp<arith::ConstantOp>())
+    if ((addCstDef = addOpDef.getLhs().getDefiningOp<arith::ConstantOp>()))
       addOtherVal = addOpDef.getRhs();
-    else if (addCstDef = addOpDef.getRhs().getDefiningOp<arith::ConstantOp>())
+    else if ((addCstDef = addOpDef.getRhs().getDefiningOp<arith::ConstantOp>()))
       addOtherVal = addOpDef.getLhs();
     else
       return failure();

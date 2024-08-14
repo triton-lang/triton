@@ -10,11 +10,8 @@ TritonCPUToLLVMTypeConverter::TritonCPUToLLVMTypeConverter(
   addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
   });
-  addConversion([this](RankedTensorType tensorTy) -> std::optional<Type> {
-    if (isa<PointerType>(tensorTy.getElementType()))
-      return VectorType::get(tensorTy.getShape(),
-                             IntegerType::get(tensorTy.getContext(), 64));
-    return std::nullopt;
+  addConversion([this](RankedTensorType type) -> std::optional<Type> {
+    return convertTritonTensorType(type);
   });
 }
 
@@ -40,4 +37,12 @@ Type TritonCPUToLLVMTypeConverter::convertTritonPointerType(
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
   return LLVM::LLVMPointerType::get(ctx);
+}
+
+Type TritonCPUToLLVMTypeConverter::convertTritonTensorType(
+    RankedTensorType type) {
+  if (isa<PointerType>(type.getElementType()))
+    return VectorType::get(type.getShape(),
+                           IntegerType::get(type.getContext(), 64));
+  llvm_unreachable("No tensor types are expected in TTCIR");
 }

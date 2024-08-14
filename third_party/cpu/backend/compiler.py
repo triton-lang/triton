@@ -106,6 +106,7 @@ class CPUBackend(BaseBackend):
         cpu.passes.ttcpuir.add_convert_scan_op(pm)
         cpu.passes.ttcpuir.add_convert_cf_ops(pm)
         cpu.passes.ttcpuir.add_convert_atomic_ops(pm)
+        cpu.passes.ttcpuir.add_convert_debug_ops(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)

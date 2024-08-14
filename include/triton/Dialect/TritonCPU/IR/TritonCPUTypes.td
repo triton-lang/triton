@@ -1,6 +1,7 @@
 #ifndef TRITONCPU_TYPES
 #define TRITONCPU_TYPES
 
+include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/TritonCPU/IR/TritonCPUDialect.td"
 include "mlir/IR/AttrTypeBase.td"
 
@@ -22,5 +23,7 @@ def TTC_TokenType : TTC_TypeDef<"Token", "token"> {
 
   let skipDefaultBuilders = 1;
 }
+
+def TTC_Vector : VectorOf<[TT_Float, TT_Int]>;
 
 #endif

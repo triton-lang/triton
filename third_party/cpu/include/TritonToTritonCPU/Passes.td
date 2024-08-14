@@ -142,4 +142,17 @@ def ConvertAtomicOps : Pass<"triton-cpu-convert-atomic-ops", "mlir::ModuleOp"> {
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def ConvertDebugOps : Pass<"triton-cpu-convert-debug-ops", "mlir::ModuleOp"> {
+    let summary = "Convert Triton debug operations.";
+    let description = [{
+
+    }];
+    let constructor = "mlir::triton::cpu::createConvertDebugOps()";
+
+    let dependentDialects = ["mlir::vector::VectorDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 #endif

@@ -17,6 +17,7 @@ public:
                                const DataLayoutAnalysis *analysis = nullptr);
 
   Type convertTritonPointerType(triton::PointerType type);
+  Type convertTritonTensorType(RankedTensorType type);
 };
 
 #endif

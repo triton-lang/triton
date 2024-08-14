@@ -76,4 +76,24 @@ def TTC_PtrToMemRefOp : TTC_Op<"ptr_to_memref", [NoMemoryEffect]> {
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+
+def TTC_PrintOp : TTC_Op<"print", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Print at most a single scalar or vector (converted from tensor) on each line";
+
+  let description = [{
+    For converting tensor types to vector types.
+    It only takes a single scalar or vector (tensor) element.
+  }];
+
+  let arguments = (ins StrAttr:$prefix, BoolAttr:$hex,
+                   Variadic<AnyTypeOf<[TT_Float, TT_Int, TT_Ptr, TTC_Vector]>>:$val);
+
+  let assemblyFormat = [{
+    $prefix attr-dict (`:` $val^ `:` type($val))?
+  }];
+
+  let hasVerifier = 1;
+}
+
 #endif

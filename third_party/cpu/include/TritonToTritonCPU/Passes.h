@@ -28,6 +28,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertHistogramOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertReductionOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertScanOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertAtomicOps();
+std::unique_ptr<OperationPass<ModuleOp>> createConvertDebugOps();
 
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonToTritonCPU/Passes.h.inc"
