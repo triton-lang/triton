@@ -113,8 +113,8 @@ struct DecomposeUnsupportedAMDConversions
 
     triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
 
-    triton::gpu::decomposeTensorCoreToDotLayoutConversion<
-        triton::gpu::AMDMfmaEncodingAttr>(mod, isMfmaToDotShortcut);
+    triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
+                                                          isMfmaToDotShortcut);
 
     /* -------------------------------- */
     // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`
