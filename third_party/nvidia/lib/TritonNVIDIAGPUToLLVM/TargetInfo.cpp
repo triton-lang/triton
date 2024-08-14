@@ -596,8 +596,8 @@ bool TargetInfo::processReplicaUsingStMatrix(
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
     int swizzleByteWidth) const {
-  if (isStMatrixCompatible(srcTy, swizzleByteWidth) &&
-      accumNumReplicates == 1 && outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
+  if (canUseStMatrix(srcTy, paddedRepShape, outOrd, accumNumReplicates,
+                     swizzleByteWidth)) {
     storeDistributedToSharedWithStMatrix(srcTy, elemTy, vals, smemBase,
                                          paddedRepShape, origRepShape, loc,
                                          rewriter, swizzleByteWidth);
