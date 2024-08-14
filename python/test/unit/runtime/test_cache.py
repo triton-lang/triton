@@ -542,3 +542,38 @@ def test_preload(fresh_triton_cache) -> None:
     # test that we can't preload a mismatched kernel
     with pytest.raises(RuntimeError, match="Specialization data is for"):
         kernel_sub.preload(specialization_data)
+
+
+def test_hooks(fresh_triton_cache) -> None:
+
+    @triton.jit
+    def kernel_add(a, b, o, N: tl.constexpr, type: tl.constexpr):
+        idx = tl.arange(0, N)
+        tl.device_assert(idx < 32, "idx < 32")
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
+
+    # get the serialized specialization data
+    specialization_data = None
+    is_warmup = False
+    key = 0
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+        nonlocal is_warmup
+        is_warmup = kwargs["compile"]["is_warmup"]
+        nonlocal key
+        key = kwargs["compile"]["key"]
+
+    specialization_data_compiled = None
+
+    def compiled_hook(*args, **kwargs):
+        nonlocal specialization_data_compiled
+        specialization_data_compiled = kwargs["compile"]["specialization_data"]
+
+    JITFunction.cache_hook = cache_hook
+    JITFunction.compiled_hook = compiled_hook
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
+    assert specialization_data is not None and specialization_data_compiled == specialization_data
+    assert is_warmup is True
+    assert key in kernel_add.cache[torch.cuda.current_device()]

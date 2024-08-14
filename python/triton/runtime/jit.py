@@ -440,6 +440,7 @@ for v in list(type_canonicalisation_dict.values()):
 class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
+    compiled_hook = None
     divisibility = 16
 
     @staticmethod
@@ -523,6 +524,7 @@ class JITFunction(KernelInterface[T]):
         constants,
         options,
         configs,
+        is_warmup,
     ):
         if JITFunction.cache_hook is None:
             return False
@@ -553,6 +555,7 @@ class JITFunction(KernelInterface[T]):
             'extern_libs': options.extern_libs,
             'configs': configs,
             'specialization_data': specialization_data,
+            'is_warmup': is_warmup,
         }
 
         return JITFunction.cache_hook(
@@ -560,8 +563,54 @@ class JITFunction(KernelInterface[T]):
             repr=repr,
             fn=JitFunctionInfo(module, name, self),
             compile={"key": key, **kwargs},
-            is_manual_warmup=False,
+            is_manual_warmup=is_warmup,
             already_compiled=False,
+        )
+
+    def _call_compiled_hook(
+        self,
+        key,
+        signature,
+        device,
+        constants,
+        options,
+        configs,
+        is_warmup,
+    ):
+        if JITFunction.compiled_hook is None:
+            return False
+
+        name = self.fn.__name__
+        module = self.fn.__module__
+
+        class JitFunctionInfo:
+
+            def __init__(self, module, name, jit_function):
+                self.module = module
+                self.name = name
+                self.jit_function = jit_function
+                pass
+
+        specialization_data = serialize_specialization_data(name, signature, constants, configs[0], options, key)
+
+        kwargs = {
+            'signature': signature,
+            'device': device,
+            'constants': constants,
+            'num_warps': options.num_warps,
+            'num_ctas': options.num_ctas,
+            'num_stages': options.num_stages,
+            'enable_fp_fusion': options.enable_fp_fusion,
+            'extern_libs': options.extern_libs,
+            'configs': configs,
+            'specialization_data': specialization_data,
+            'is_warmup': is_warmup,
+        }
+
+        JITFunction.compiled_hook(
+            key=key,
+            fn=JitFunctionInfo(module, name, self),
+            compile={"key": key, **kwargs},
         )
 
     def add_pre_run_hook(self, hook):
@@ -641,7 +690,7 @@ class JITFunction(KernelInterface[T]):
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
-            if self._call_hook(key, signature, device, constants, options, configs):
+            if self._call_hook(key, signature, device, constants, options, configs, warmup):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constants, configs[0])
@@ -651,6 +700,7 @@ class JITFunction(KernelInterface[T]):
                 options=options.__dict__,
             )
             self.cache[device][key] = kernel
+            self._call_compiled_hook(key, signature, device, constants, options, configs, warmup)
 
         # Check that used global values have not changed.
         not_present = object()
