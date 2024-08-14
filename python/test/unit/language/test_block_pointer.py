@@ -65,6 +65,24 @@ def test_block_copy(dtypes_str, n, padding_option, boundary_check, device):
             assert torch.all(torch.isnan(b[n // 2:n]))
 
 
+def test_block_copy2d(device):
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr, BLOCK_M: tl.constexpr):
+        block_offset = tl.program_id(0) * BLOCK_M
+        in_block_ptr = tl.make_block_ptr(base=in_ptr, shape=(M, N), strides=(N, 1), offsets=(block_offset, 0),
+                                         block_shape=(BLOCK_M, N), order=(1, 0))
+        out_block_ptr = tl.make_block_ptr(base=out_ptr, shape=(M, N), strides=(N, 1), offsets=(block_offset, 0),
+                                          block_shape=(BLOCK_M, N), order=(1, 0))
+        x = tl.load(in_block_ptr)
+        tl.store(out_block_ptr, x)
+
+    inp = torch.randn((256, 16), device=device, dtype=torch.float32)
+    res = torch.empty_like(inp)
+    kernel[(16, )](inp, res, M=16, N=16, BLOCK_M=16)
+    assert (inp == res).all()
+
+
 @triton.jit
 def matmul_no_scf_with_advance_kernel(  #
         a_ptr, b_ptr, c_ptr,  #

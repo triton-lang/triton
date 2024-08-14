@@ -98,11 +98,8 @@ struct ExtractIndicesOpConversion
     SmallVector<Value> indices;
 
     for (int64_t i = 0; i < rank; i++) {
-      Value offs = rewriter.create<LLVM::ExtractValueOp>(
-          loc, i64Ty, tensorPtrStruct, SmallVector<int64_t, 2>{1, i});
-      Value stride = rewriter.create<LLVM::ExtractValueOp>(
-          loc, i64Ty, tensorPtrStruct, SmallVector<int64_t, 2>{3, i});
-      indices.push_back(rewriter.create<LLVM::MulOp>(loc, offs, stride));
+      indices.push_back(rewriter.create<LLVM::ExtractValueOp>(
+          loc, i64Ty, tensorPtrStruct, SmallVector<int64_t, 2>{1, i}));
     }
 
     rewriter.replaceOp(op, indices);
