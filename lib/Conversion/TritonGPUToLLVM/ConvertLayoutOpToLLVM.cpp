@@ -379,6 +379,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                       /*accumNumReplicates=*/1)) {
           return false;
         }
+        return true;
       }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
