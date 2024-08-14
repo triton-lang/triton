@@ -144,13 +144,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   if (rank <= 1)
     return scratchConfig;
-  // pad the last dimension
-  auto paddedDim = rank - 1;
-  if (auto dstBlockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(dstLayout)) {
-    paddedDim = dstBlockedLayout.getOrder()[0];
-  }
   auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
-  scratchConfig.paddedRepShape[paddedDim] += paddedSize;
+  scratchConfig.paddedRepShape[outOrd[0]] += paddedSize;
 
   return scratchConfig;
 }
