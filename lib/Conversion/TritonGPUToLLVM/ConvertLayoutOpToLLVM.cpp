@@ -401,7 +401,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // We munge the input values by converting i<n> (n<8) elements to i8 and
     // pointers to i64. This is necessary because TargetInfo::loadDShared and
     // storeDShared can't handle vectors of pointers or sub-byte elements.
-    RankedTensorType srcTy = op.getSrc().getType();
     auto elemTy = srcTy.getElementType();
     auto isSubByteInt =
         elemTy.isInteger() && elemTy.getIntOrFloatBitWidth() < 8;
