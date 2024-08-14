@@ -9,6 +9,14 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let description = [{
     Applies software pipelining to loops in the module based on number of stages.
     This may convert some load into asynchronous loads, and multi-buffer the data.
+    The underlying idea is to hide data loading by pipelining loops,
+    basically, one stage to load/fetch data, a second one to compute the data and
+    a third one to commit the data.
+    This pass comprises three steps:
+    1. Create a schedule.
+    2. Rewrite the loop.
+    3. Convert `MMAv3 tt::DotOps` into `ttng::DotAsyncOps` and
+       insert `ttng::DotWaitOps` if necessary.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -39,8 +47,19 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
   let summary = "prefetch";
 
   let description = [{
+    This pass attempts to prefetch from shared memory the operands (A and B)
+    of a `tt.dot`, when this operation is located in a loop.
     Decompose `DotOp` instructions in loops into several finer-grained `DotOp`
-    that may have their operands constructed at the end of the previous iteration
+    that may have their operands constructed at the end of the previous
+    iteration.
+    Transformations are performed in five different places:
+      1. The pass emits a prologue to the loop where the data for the first
+         loop iteration are prefetched.
+      2. The loop arguments are extended with the new prefetched values.
+      3. The dotOp parameters is updated with the new args.
+      4. The prefetch operations for the next iteration are added to the loop.
+      5. The yieldOp is updated by adding the prefetched values for the next
+         iteration.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -84,7 +103,11 @@ def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
   let summary = "coalesce";
 
   let description = [{
-    TODO
+    The pass analyses loads/stores with type `tensor<tt.ptr<>>` or
+    `tt.ptr<tensor<>>` and replaces the layouts of these operations with
+    coalesced layouts, i.e. cache friendly access patterns.
+    Layout conversions are inserted before and after the load/store op
+    to maintain consistency with the rest of the program.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
@@ -95,6 +118,11 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
   let summary = "remove superfluous layout conversions";
 
   let description = [{
+    The purpose of this pass is to rewrite the `ConvertLayoutOps` to reduce
+    the number of operations and to prefer favorable layouts like
+    `BlockedEncodingAttr` layout for "expensive" loads and stores
+    (good for coalescing) and `NvidiaMmaEncodingAttr` otherwise
+    (good for tensor ops).
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -106,7 +134,11 @@ def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality",
   let summary = "Reduce the cost of synchronization between threads in an SM";
 
   let description = [{
-    Today, this optimizes reduction yielded by loop to be thread-local until after the loop completes.
+    The aim of this pass is to reduce cross-thread communication for reduction
+    operations, by adjusting the reduction size (or layout) to avoid splitting
+    the reduction operation between multiple threads. Currently, this pass only
+    optimizes reduction yielded by loop to be thread-local until
+    after the loop completes.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
