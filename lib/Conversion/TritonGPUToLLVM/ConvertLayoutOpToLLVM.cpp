@@ -365,7 +365,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // 1. Support for AMD's MFMA and WMMA
     // 2. Implementation of NVIDIA's stmatrix
     // 3. Handling NVIDIA's MMA layout when CTA per CGA > 1
-    // 4. Adding ldmatrix support in load/storeDistributedToShared
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
         if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
