@@ -19,11 +19,12 @@ namespace triton {
 class AllocationAnalysis;
 
 // To convert a tensor from one layout to another, we need to allocate a
-// temporary buffer (i.e., scratch buffer) in the shared memory.  We may go
-// through multiple iterations to convert the tensor, and each iteration may
-// have multiple vectorized loads/stores.  The scratch buffer has a shape
-// ("repShape") that is the maximum size accessed in each dimension during
-// each iteration.
+// temporary buffer (i.e., scratch buffer) in shared memory. The conversion may
+// require multiple iterations, with each iteration involving multiple
+// vectorized loads/stores. The scratch buffer has a shape (`repShape`) that
+// represents the maximum size accessed in each dimension during each iteration.
+// It is padded (`paddedRepShape`) to avoid bank conflicts and is accessed in a
+// specific `order`.
 struct ScratchConfig {
   SmallVector<unsigned> repShape;
   SmallVector<unsigned> paddedRepShape;

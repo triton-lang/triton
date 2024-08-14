@@ -358,12 +358,27 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
 
-    // TODO(jlebar): For now we handle only blocked/slice ->
-    // blocked/slice conversions.  Once we have ldmatrix support in
-    // load/storeDistributedToShared, we can remove this constraint.
+    // TODO (Keren): Currently, we handle general mma/blocked/slice ->
+    // mma/blocked/slice conversions.
+    // The following tasks must be completed before we can remove the layoutIsOK
+    // check constraint:
+    // 1. Support for AMD's MFMA and WMMA
+    // 2. Implementation of NVIDIA's stmatrix
+    // 3. Handling NVIDIA's MMA layout when CTA per CGA > 1
+    // 4. Adding ldmatrix support in load/storeDistributedToShared
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-        return product(getCTAsPerCGA(nvidiaMma)) == 1;
+        if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
+          return false;
+        }
+        auto scratchConfig =
+            getScratchConfigForCvt(op.getSrc().getType(), op.getType());
+        if (targetInfo.canUseStMatrix(op.getSrc().getType(),
+                                      scratchConfig.paddedRepShape,
+                                      scratchConfig.order,
+                                      /*accumNumReplicates=*/1)) {
+          return false;
+        }
       }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
@@ -377,17 +392,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         !layoutIsOK(op.getType().getEncoding())) {
       return failure();
     }
-
-    // TODO(Keren): Use stmatrix if possible, currently it falls back to the old
-    // class but we should make it work using LL soon. accumNumReplicates is 1
-    // because there's no cross CTA data movement.
-    auto scratchConfig =
-        getScratchConfigForCvt(op.getSrc().getType(), op.getType());
-    if (targetInfo.canUseStMatrix(op.getSrc().getType(),
-                                  scratchConfig.paddedRepShape,
-                                  scratchConfig.order,
-                                  /*accumNumReplicates=*/1))
-      return failure();
 
     assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
@@ -502,8 +506,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(scratchConfig.inVec * iterations <= inVals.size());
     assert(scratchConfig.outVec * iterations <= outSize);
 
-    // There's only one dimension that has been padded
+    // Check only one dimension has been padded.
+    // This means the difference between the padded shape and the original shape
+    // should only be in one dimension, specifically in
+    // `scratchConfig.order[0]`.
     auto rank = scratchConfig.repShape.size();
+    for (auto i = 0; i < rank; i++) {
+      if (i == scratchConfig.order[0]) {
+        continue;
+      }
+      assert(scratchConfig.repShape[i] == scratchConfig.paddedRepShape[i]);
+    }
     auto paddedStride = scratchConfig.repShape[scratchConfig.order[0]];
     auto paddedSize =
         scratchConfig.paddedRepShape[scratchConfig.order[0]] - paddedStride;

@@ -60,8 +60,8 @@ public:
                               unsigned accumNumReplicates,
                               int swizzleByteWidth = 0) const = 0;
 
-  // TODO(Keren): Remove this function when layout conversion is handled by
-  // Linear Layout
+  // TODO (Keren): Remove this function once layout conversion using stmatrix is
+  // handled by Linear Layout.
   virtual bool processReplicaUsingStMatrix(
       RewriterBase &rewriter, Location loc, Value smemBase,
       SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
