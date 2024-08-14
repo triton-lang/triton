@@ -21,7 +21,6 @@ void decomposeSplatOpToSharedLayoutConversion(ModuleOp module);
 /// given |module| op, but bypass the decomposition if |shortcutFn| returns
 /// true.
 using ShortcutFn = std::function<bool(RankedTensorType, RankedTensorType)>;
-template <typename TensorCoreEncodingAttr>
 void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
                                               ShortcutFn shortcutFn);
 
