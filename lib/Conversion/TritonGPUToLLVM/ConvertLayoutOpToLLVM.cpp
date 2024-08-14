@@ -357,6 +357,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
 
     // TODO (Keren): Currently, we handle general mma/blocked/slice ->
     // mma/blocked/slice conversions.
@@ -370,10 +372,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
           return false;
         }
-        auto scratchConfig =
-            getScratchConfigForCvt(op.getSrc().getType(), op.getType());
-        if (targetInfo.canUseStMatrix(op.getSrc().getType(),
-                                      scratchConfig.paddedRepShape,
+        auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
+        if (targetInfo.canUseStMatrix(srcTy, scratchConfig.paddedRepShape,
                                       scratchConfig.order,
                                       /*accumNumReplicates=*/1)) {
           return false;
@@ -388,12 +388,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
       return false;
     };
-    if (!layoutIsOK(op.getSrc().getType().getEncoding()) ||
-        !layoutIsOK(op.getType().getEncoding())) {
+    if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
       return failure();
     }
 
-    assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+    assert(cvtNeedsSharedMemory(srcTy, dstTy));
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
