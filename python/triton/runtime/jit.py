@@ -440,6 +440,8 @@ for v in list(type_canonicalisation_dict.values()):
 class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
+    # Hook to signal that a kernel is done compiling and inspect compiled function.
+    # cache_hook will always be called before compilation and compiled_hook after.
     compiled_hook = None
     divisibility = 16
 
@@ -516,7 +518,7 @@ class JITFunction(KernelInterface[T]):
         constants = dict(zip(self.constexprs, constexpr_key))
         return constants
 
-    def _call_hook(
+    def _call_cache_hook(
         self,
         key,
         signature,
@@ -690,7 +692,7 @@ class JITFunction(KernelInterface[T]):
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
-            if self._call_hook(key, signature, device, constants, options, configs, warmup):
+            if self._call_cache_hook(key, signature, device, constants, options, configs, warmup):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constants, configs[0])
