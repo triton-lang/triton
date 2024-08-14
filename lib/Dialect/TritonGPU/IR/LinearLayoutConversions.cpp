@@ -681,6 +681,9 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+  if (auto lltrait = dyn_cast<LinearLayoutTrait>(layout)) {
+    return lltrait.toLinearLayout(shape, elemBitWidth);
+  }
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
     return blockedToLinearLayout(shape, blocked);
   }

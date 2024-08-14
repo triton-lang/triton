@@ -794,6 +794,20 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// LinearLayout Conversion Interface
+//===----------------------------------------------------------------------===//
+def LinearLayoutTrait : AttrInterface<"LinearLayoutTrait"> {
+  let cppNamespace = "::mlir::triton::gpu";
+  let methods = [
+    InterfaceMethod<"Convert to LinearLayout.",
+                    "LinearLayout",
+                    "toLinearLayout",
+                    (ins "ArrayRef<int64_t>":$shape,
+                         "std::optional<int32_t>":$elemBitWidth)>
+  ];
+}
+
 def AMDMfmaEncodingAttr : DistributedEncoding<"AMDMfmaEncoding", "amd_mfma_encoding", [MmaEncodingTrait]> {
   let mnemonic = "amd_mfma";
 
