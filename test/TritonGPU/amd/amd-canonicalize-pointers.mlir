@@ -183,7 +183,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c1024_i32 : i32
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-    // CHECK: %[[offset0]] = arith.addi
+    // CHECK: %[[offset0:.*]] = arith.addi
     // CHECK: %[[base_offset:.*]] = tt.splat %{{.*}} : i64
     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
