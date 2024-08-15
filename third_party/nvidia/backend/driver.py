@@ -291,24 +291,28 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
     return NULL;
   }}
 
-  PyObject *method_handle = PyObject_GetAttrString(obj, "tma_desc_ptr");
+  PyObject *method_handle = PyObject_GetAttrString(obj, "tma_desc_cpu_ptr");
   if (!method_handle) {{
-    PyErr_SetString(PyExc_TypeError, "tma_desc_ptr() method does not exist");
+    PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() method does not exist");
     return NULL;
   }}
 
   PyObject *empty_tuple = PyTuple_New(0);
   if (!empty_tuple) {{
     Py_DECREF(method_handle);
-    goto python_internal_error;
+    PyErr_SetString(PyExc_SystemError, "Internal Python error!");
+    return NULL;
   }}
   PyObject *method_ret = PyObject_Call(method_handle, empty_tuple, NULL);
   Py_DECREF(empty_tuple);
   Py_DECREF(method_handle);
-  if (!method_ret) goto python_internal_error;
+  if (!method_ret) {{
+    PyErr_SetString(PyExc_SystemError, "Internal Python error!");
+    return NULL;
+  }}
 
   if (!PyLong_Check(method_ret)) {{
-    PyErr_SetString(PyExc_TypeError, "tma_desc_ptr() must return 64-bit int");
+    PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() must return 64-bit int");
     Py_DECREF(method_ret);
     return NULL;
   }}
@@ -316,19 +320,15 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   uint64_t ptr_as_uint = PyLong_AsUnsignedLongLong(method_ret);
   Py_DECREF(method_ret);
   if (!ptr_as_uint) {{
-    PyErr_SetString(PyExc_ValueError, "received NULL ptr from tma_desc_ptr()");
+    PyErr_SetString(PyExc_ValueError, "received NULL ptr from tma_desc_cpu_ptr()");
     return NULL;
   }}
   if (ptr_as_uint % 64 != 0) {{
-    PyErr_SetString(PyExc_ValueError, "tma_desc_ptr() must be 64-byte aligned");
+    PyErr_SetString(PyExc_ValueError, "tma_desc_cpu_ptr() must be 64-byte aligned");
     return NULL;
   }}
 
   return (CUtensorMap*)(ptr_as_uint);
-
-python_internal_error:
-  PyErr_SetString(PyExc_SystemError, "Internal Python error!");
-  return NULL;
 }}
 
 static PyObject* launch(PyObject* self, PyObject* args) {{

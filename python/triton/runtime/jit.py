@@ -306,7 +306,7 @@ def mangle_type(arg, is_const=False):
             return "i64"
     elif isinstance(arg, float):
         return "fp32"
-    elif hasattr(arg, "tma_desc_ptr"):
+    elif hasattr(arg, "tma_desc_cpu_ptr"):
         return "nvTmaDesc"
     else:
         # dtypes are hashable so we can memoize this mapping:
