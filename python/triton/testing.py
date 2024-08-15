@@ -47,25 +47,25 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     with torch.cuda.stream(torch.cuda.Stream()):
         # warmup
         fn()
-        # step 1 - we estimate the amount of time the kernel call takes
-        # NOTE: this estimate isn't super accurate because the GPU isn't warmed up at this point
-        #       but it is probably good enough
         if grad_to_none is not None:
             for x in grad_to_none:
                 x.detach_()
                 x.requires_grad_(True)
                 x.grad = None
-        g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
-            fn()
-        torch.cuda.synchronize()
+        # step 1 - we estimate the amount of time the kernel call takes
+        # NOTE: this estimate isn't super accurate because the GPU isn't warmed up at this point
+        #       but it is probably good enough
+        # NOTE: we don't use a graph to estimate the runtime because creating a graph is expensive,
+        #       ~300ms on A100, so we default to the same method used in `do_bench` (minus the L2
+        #       cache flush).
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
         start_event.record()
-        g.replay()
+        for _ in range(5):
+            fn()
         end_event.record()
         torch.cuda.synchronize()
-        estimate_ms = start_event.elapsed_time(end_event)
+        estimate_ms = start_event.elapsed_time(end_event) / 5
         n_repeat = max(1, int(rep / estimate_ms))
         # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
         # host overhead

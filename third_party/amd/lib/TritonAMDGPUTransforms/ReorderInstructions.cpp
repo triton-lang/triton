@@ -32,8 +32,8 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
   if (auto ld = dyn_cast<triton::LoadOp>(move))
     src = ld.getPtr();
 
-  auto ipnt = block->begin();
-  for (auto bi = ipnt; bi != block->end(); ++bi) {
+  auto ipnt = block->end();
+  for (auto bi = block->begin(); bi != block->end(); ++bi) {
     auto *op = &*bi;
     if (op == move) // Don't move later than current location
       break;
@@ -65,7 +65,6 @@ public:
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    mlir::DominanceInfo dom(m);
 
     // Sink shared memory loads and layout conversions into loops to decrease
     // register pressure when possible.
@@ -84,16 +83,6 @@ public:
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
     opToMove.clear();
-
-    // Move LocalLoadOp and LocalAllocOp immediately after their operands.
-    // This enables issuing them as early as possible.
-    m.walk([&](Operation *op) {
-      if (!isa<ttg::LocalLoadOp, ttg::LocalAllocOp>(op) ||
-          op->getNumOperands() < 1)
-        return;
-      if (Operation *argOp = op->getOperand(0).getDefiningOp())
-        op->moveAfter(argOp);
-    });
 
     // Move transpositions just after their definition.
     m.walk([&](triton::TransOp op) {
@@ -140,12 +129,19 @@ public:
       // Remove ops that already precede the insertion point. This is done
       // before moves happen to avoid `Operation::isBeforeInBlock` N^2
       // complexity.
+
       SmallVector<Operation *> dfg = backwardSet.takeVector();
-      llvm::erase_if(
-          dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
-      // Move ops to insertion point.
-      for (auto *op : llvm::reverse(dfg))
-        op->moveAfter(block, ipoint);
+      if (ipoint != block->end()) {
+        // Move ops to insertion point.
+        llvm::erase_if(
+            dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
+        for (auto *dfgop : llvm::reverse(dfg))
+          dfgop->moveAfter(block, ipoint);
+      } else {
+        // Move ops to block begin.
+        for (auto *dfgop : llvm::reverse(dfg))
+          dfgop->moveBefore(block, block->begin());
+      }
     }
   }
 };
