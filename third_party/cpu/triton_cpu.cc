@@ -60,6 +60,9 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   m.def("add_optimize_masks", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createOptimizeMasks());
   });
+  m.def("add_convert_dot_product", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertDotProduct());
+  });
   m.def("add_convert_unsupported_ops",
         [](mlir::PassManager &pm, bool promote_bf16_to_fp32,
            bool convert_mixed_precision_matmul, bool promote_lib_math_to_fp32) {

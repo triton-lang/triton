@@ -2,6 +2,7 @@
 #define TRITONCPU_CONVERSION_TRITONCPUOPT_OPTCOMMON_H
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -101,6 +102,22 @@ template <typename T,
           std::enable_if_t<std::is_floating_point<T>::value, bool> = true>
 Value cstLike(Location loc, Value tySrc, T val, PatternRewriter &rewriter) {
   return fpCst(loc, tySrc.getType(), val, rewriter);
+}
+
+inline Value shapeCast(Location loc, Value in, VectorType outTy,
+                       PatternRewriter &rewriter) {
+  VectorType inTy = cast<VectorType>(in.getType());
+  assert(outTy.getElementType() == inTy.getElementType());
+  assert(outTy.getNumElements() == inTy.getNumElements());
+  return rewriter.create<vector::ShapeCastOp>(loc, outTy, in);
+}
+
+inline Value shapeCast(Location loc, Value in,
+                       std::initializer_list<int64_t> shapes,
+                       PatternRewriter &rewriter) {
+  VectorType inTy = cast<VectorType>(in.getType());
+  VectorType outTy = VectorType::get(shapes, inTy.getElementType());
+  return shapeCast(loc, in, outTy, rewriter);
 }
 
 } // namespace cpu

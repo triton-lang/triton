@@ -75,4 +75,21 @@ def OptimizeMasks : Pass<"triton-cpu-optimize-masks", "mlir::ModuleOp"> {
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def ConvertDotProduct : Pass<"triton-cpu-convert-dot-product", "mlir::ModuleOp"> {
+    let summary = "Convert dot product op.";
+    let description = [{
+        This pass is used for indentifying dot product pattern
+        (for example, elementwise mul followed by a sum) and
+        converting it to dot product intrinsics like bfdot.
+    }];
+
+    let constructor = "mlir::triton::cpu::createConvertDotProduct()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::vector::VectorDialect",
+                             "mlir::LLVM::LLVMDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 #endif
