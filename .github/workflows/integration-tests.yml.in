@@ -347,7 +347,7 @@ jobs:
 
     container:
       image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.4
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video
 
     steps:
       - name: Checkout
@@ -402,11 +402,6 @@ jobs:
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
       - *inspect-cache-directories-step
-
-      - name: Clean up caches
-        run: |
-          rm -rf ~/.triton
-          rm -rf ~/.cache
 
   Build-Tests:
     needs: Runner-Preparation
