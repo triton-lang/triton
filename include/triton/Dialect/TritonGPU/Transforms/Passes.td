@@ -9,14 +9,6 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let description = [{
     Applies software pipelining to loops in the module based on number of stages.
     This may convert some load into asynchronous loads, and multi-buffer the data.
-    The underlying idea is to hide data loading by pipelining loops,
-    basically, one stage to load/fetch data, a second one to compute the data and
-    a third one to commit the data.
-    This pass comprises three steps:
-    1. Create a schedule.
-    2. Rewrite the loop.
-    3. Convert `MMAv3 tt::DotOps` into `ttng::DotAsyncOps` and
-       insert `ttng::DotWaitOps` if necessary.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
