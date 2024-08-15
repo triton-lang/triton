@@ -226,6 +226,12 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     if (computeCapability < 70)
       return failure();
+    if (computeCapability < 80) {
+      dotOp.emitRemark()
+          << "Dot op using MMA for compute capability " << computeCapability
+          << " has been deprecated. It falls back to the FMA path.";
+      return failure();
+    }
     // TODO: Check data-types and SM compatibility
     RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
