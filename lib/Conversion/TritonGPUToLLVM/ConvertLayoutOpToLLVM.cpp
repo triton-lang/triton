@@ -17,8 +17,6 @@
 namespace {
 
 using ::mlir::LLVM::getMultiDimOffset;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
 
@@ -371,6 +369,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         if (targetInfo.canUseStMatrix(srcTy, scratchConfig.paddedRepShape,
                                       scratchConfig.order,
                                       /*accumNumReplicates=*/1)) {
+          return false;
+        }
+        if (nvidiaMma.getVersionMajor() == 1) {
+          llvm::report_fatal_error(
+              "Volta MMA layout conversion has been removed. If you need this, "
+              "please refer to `ampereMmaToLinearLayout` and implement "
+              "`voltaMmaToLinearLayout`.");
           return false;
         }
         return true;
