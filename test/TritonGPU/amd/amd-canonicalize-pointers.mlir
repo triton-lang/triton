@@ -8,6 +8,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
      %1 = arith.muli %0, %c1024_i32 : i32
      %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
      %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+     // CHECK: %[[scalarOffset:.*]] = arith.muli{{.*}} : i32
      // CHECK: %[[scalarPtr:.*]] = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
      // CHECK: %[[offset_32bit:.*]] = arith.trunci %{{.*}} : tensor<1024xi64, #blocked> to tensor<1024xi32, #blocked>
      // CHECK: %[[basePtr:.*]] = tt.splat %[[scalarPtr]]
@@ -17,7 +18,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
      %7 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
      tt.return %7 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @conversion2
   tt.func @conversion2(%arg0: !tt.ptr<f32>)-> tensor<1024xf32, #blocked>{
      %c1024_i32 = arith.constant 1024 : i32
@@ -38,7 +44,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
      %7 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
      tt.return %7 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @conversion3
   tt.func @conversion3(%arg0: !tt.ptr<f32>)-> tensor<1024xf32, #blocked>{
      %c1024_i32 = arith.constant 1024 : i32
@@ -63,7 +74,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
      %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>, #blocked>
      tt.return %8 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @forOp
   tt.func @forOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
@@ -98,7 +114,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %11 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @forOp2
   tt.func @forOp2(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
@@ -134,7 +155,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %11 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @forNested
   tt.func @forNested(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
@@ -173,7 +199,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %11 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @ifOp
   tt.func @ifOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>, %cond : i1)-> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
@@ -208,7 +239,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %11 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %11 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL  tt.func @whileOp
   tt.func @whileOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>, %cond : i1)-> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
@@ -239,7 +275,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %11 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %11 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL  tt.func @condBranch
   tt.func @condBranch(%arg0 : !tt.ptr<f32>, %i1 : i1) -> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
@@ -276,7 +317,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %out2 = tt.load %arg2 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %out2 : tensor<1024xf32, #blocked>
   }
+}
 
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL  tt.func @branch
   tt.func @branch(%arg0 : !tt.ptr<f32>, %i1 : i1) -> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32

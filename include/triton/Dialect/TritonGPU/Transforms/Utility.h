@@ -150,11 +150,11 @@ scf::WhileOp replaceWhileOpWithNewSignature(RewriterBase &rewriter,
 scf::IfOp replaceIfOpWithNewSignature(
     RewriterBase &rewriter, scf::IfOp loop, TypeRange newResultTypes,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements);
+scf::IfOp replaceIfOpWithNewSignature(RewriterBase &rewriter, scf::IfOp ifOp,
+                                      TypeRange newResultTypes);
 
 // Append the given |newOperands| to the |forOp|'s yield op.
 void appendToForOpYield(scf::ForOp forOp, ArrayRef<Value> newOperands);
-scf::IfOp replaceIfOpWithNewSignature(RewriterBase &rewriter, scf::IfOp ifOp,
-                                      TypeRange newResultTypes);
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
