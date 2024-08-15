@@ -16,7 +16,6 @@
 
 namespace {
 
-using ::mlir::isLayoutMmaV1;
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -41,17 +40,13 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isSupported(srcLayout, dstLayout)) {
+    if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
     return failure();
   }
 
 private:
-  bool isSupported(Attribute srcLayout, Attribute dstLayout) const {
-    return isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout) &&
-           !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
-  }
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
