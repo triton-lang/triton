@@ -149,6 +149,20 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
 }
 
 //===----------------------------------------------------------------------===//
+// LinearLayout Conversion Interface
+//===----------------------------------------------------------------------===//
+def LinearLayoutTrait : AttrInterface<"LinearLayoutTrait"> {
+  let cppNamespace = "::mlir::triton::gpu";
+  let methods = [
+    InterfaceMethod<"Convert to LinearLayout.",
+                    "LinearLayout",
+                    "toLinearLayout",
+                    (ins "ArrayRef<int64_t>":$shape,
+                         "std::optional<int32_t>":$elemBitWidth)>
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
@@ -583,7 +597,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 // Blocked Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def BlockedEncodingAttr : DistributedEncoding<"BlockedEncoding", "blocked_encoding"> {
+def BlockedEncodingAttr : DistributedEncoding<"BlockedEncoding", "blocked_encoding", [LinearLayoutTrait]> {
   let mnemonic = "blocked";
 
   let description = [{
@@ -756,6 +770,8 @@ for
       // Block encoding is dense stride layout. The elements per thread are contiguous.
       return getSizePerThread();
     };
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape,
+                         std::optional<int32_t> elemBitWidth);
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -791,20 +807,6 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperands",
                     (ins "unsigned":$opIdx)>,
-  ];
-}
-
-//===----------------------------------------------------------------------===//
-// LinearLayout Conversion Interface
-//===----------------------------------------------------------------------===//
-def LinearLayoutTrait : AttrInterface<"LinearLayoutTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-  let methods = [
-    InterfaceMethod<"Convert to LinearLayout.",
-                    "LinearLayout",
-                    "toLinearLayout",
-                    (ins "ArrayRef<int64_t>":$shape,
-                         "std::optional<int32_t>":$elemBitWidth)>
   ];
 }
 

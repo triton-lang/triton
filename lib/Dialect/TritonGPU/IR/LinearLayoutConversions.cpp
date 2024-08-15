@@ -268,24 +268,6 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
-LinearLayout blockedToLinearLayout(ArrayRef<int64_t> shape,
-                                   BlockedEncodingAttr blocked) {
-  assert(shape.size() == blocked.getOrder().size());
-
-  int rank = shape.size();
-  MLIRContext *ctx = blocked.getContext();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  const auto &order = blocked.getOrder();
-  LinearLayout ctaLayout =
-      identityND(S("register"), blocked.getSizePerThread(), order,
-                 outDimNames) *
-      identityND(S("lane"), blocked.getThreadsPerWarp(), order, outDimNames) *
-      identityND(S("warp"), blocked.getWarpsPerCTA(), order, outDimNames);
-
-  return combineCtaCgaWithShape(ctaLayout, blocked.getCTALayout(), shape);
-}
-
 LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
                                      NvidiaMmaEncodingAttr mma) {
   int rank = shape.size();
@@ -678,14 +660,29 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 
 } // anonymous namespace
 
+LinearLayout
+BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape,
+                                    std::optional<int32_t> elemBitWidth) {
+  assert(shape.size() == getOrder().size());
+
+  int rank = shape.size();
+  MLIRContext *ctx = getContext();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  const auto &order = getOrder();
+  LinearLayout ctaLayout =
+      identityND(S("register"), getSizePerThread(), order, outDimNames) *
+      identityND(S("lane"), getThreadsPerWarp(), order, outDimNames) *
+      identityND(S("warp"), getWarpsPerCTA(), order, outDimNames);
+
+  return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
+}
+
 std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
   if (auto lltrait = dyn_cast<LinearLayoutTrait>(layout)) {
     return lltrait.toLinearLayout(shape, elemBitWidth);
-  }
-  if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
-    return blockedToLinearLayout(shape, blocked);
   }
   if (auto mfma = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     return mfmaToLinearLayout(shape, mfma);
