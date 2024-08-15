@@ -1554,7 +1554,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
 @builtin
 def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-         volatile=False, _builder=None):
+         volatile=False, sem="", scope="", _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
 
@@ -1596,6 +1596,16 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type eviction_policy: str, optional
     :param volatile: changes volatile option in NVIDIA PTX
     :type volatile: bool, optional
+    :param sem: str, optional. Specifies the memory semantics for the operation. Acceptable values are "acquire",
+        "release", "acq_rel" (stands for "ACQUIRE_RELEASE"), and "relaxed". If not provided,
+        no memory semantics is applied.
+        This option is effective on NVIDIA GPUs only.
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing effect of the atomic operation.
+        Acceptable values are "gpu" (default), "cta" (cooperative thread array, thread block), or "sys" (stands for "SYSTEM").
+        If no memory semantics is going to be applied, this option is ignored.
+        This option is effective on NVIDIA GPUs only.
+    :type scope: str, optional
     """
     # `mask` and `other` can be constexpr
     mask = _constexpr_to_value(mask)
@@ -1608,8 +1618,10 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
+    sem = _constexpr_to_value(sem)
+    scope = _constexpr_to_value(scope)
     return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
-                         volatile, _builder)
+                         volatile, sem, scope, _builder)
 
 
 @builtin
@@ -1637,7 +1649,8 @@ def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
 
 @_tensor_member_fn
 @builtin
-def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _builder=None):
+def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", sem="", scope="",
+          _builder=None):
     """
     Store a tensor of data into memory locations defined by `pointer`.
 
@@ -1675,6 +1688,16 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
         stands for cache write-through, see `cache operator <https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators>`_ for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional, should be one of {"", "evict_first", "evict_last"}
+    :param sem: str, optional. Specifies the memory semantics for the operation. Acceptable values are "acquire",
+        "release", "acq_rel" (stands for "ACQUIRE_RELEASE"), and "relaxed". If not provided,
+        no memory semantics is applied.
+        This option is effective on NVIDIA GPUs only.
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing effect of the atomic operation.
+        Acceptable values are "gpu" (default), "cta" (cooperative thread array, thread block), or "sys" (stands for "SYSTEM").
+        If no memory semantics is going to be applied, this option is ignored.
+        This option is effective on NVIDIA GPUs only.
+    :type scope: str, optional
     """
     # `value` can be constexpr
     value = _to_tensor(value, _builder)
@@ -1683,7 +1706,9 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
         mask = _to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
-    return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, _builder)
+    sem = _constexpr_to_value(sem)
+    scope = _constexpr_to_value(scope)
+    return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, sem, scope, _builder)
 
 
 @builtin

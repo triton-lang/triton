@@ -20,6 +20,9 @@ void LoadOp::getEffects(
   if (getIsVolatile())
     effects.emplace_back(MemoryEffects::Write::get(),
                          SideEffects::DefaultResource::get());
+  if (getSem())
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         SideEffects::DefaultResource::get());
 }
 
 } // namespace triton
@@ -34,49 +37,66 @@ void LoadOp::getEffects(
 namespace mlir {
 namespace triton {
 
+namespace {
+
+template <class T, class E>
+T getAttrOrDefault(OpBuilder &builder, std::optional<E> enum_opt) {
+  return enum_opt ? T::get(builder.getContext(), *enum_opt) : T();
+}
+
+} // namespace
+
 //-- LoadOp --
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
+                   CacheModifier cache, EvictionPolicy evict, bool isVolatile,
+                   std::optional<MemSemantic> sem,
+                   std::optional<MemSyncScope> scope) {
   LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
                 /*boundaryCheck=*/ArrayRef<int32_t>{}, /*padding=*/std::nullopt,
-                cache, evict, isVolatile);
+                cache, evict, isVolatile, sem, scope);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    ArrayRef<int32_t> boundaryCheck,
                    std::optional<PaddingOption> padding, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
+                   EvictionPolicy evict, bool isVolatile,
+                   std::optional<MemSemantic> sem,
+                   std::optional<MemSyncScope> scope) {
   LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, boundaryCheck,
-                padding, cache, evict, isVolatile);
+                padding, cache, evict, isVolatile, sem, scope);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    Value mask, CacheModifier cache, EvictionPolicy evict,
-                   bool isVolatile) {
+                   bool isVolatile, std::optional<MemSemantic> sem,
+                   std::optional<MemSyncScope> scope) {
   LoadOp::build(builder, state, ptr, mask, /*other=*/{},
                 /*boundaryCheck=*/ArrayRef<int32_t>{},
-                /*padding=*/std::nullopt, cache, evict, isVolatile);
+                /*padding=*/std::nullopt, cache, evict, isVolatile, sem, scope);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    Value mask, Value other, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
+                   EvictionPolicy evict, bool isVolatile,
+                   std::optional<MemSemantic> sem,
+                   std::optional<MemSyncScope> scope) {
   LoadOp::build(builder, state, ptr, mask, other,
                 /*boundaryCheck=*/ArrayRef<int32_t>{},
-                /*padding=*/std::nullopt, cache, evict, isVolatile);
+                /*padding=*/std::nullopt, cache, evict, isVolatile, sem, scope);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    Value mask, Value other, ArrayRef<int32_t> boundaryCheck,
                    std::optional<PaddingOption> padding, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
-  auto paddingAttr =
-      padding.has_value()
-          ? PaddingOptionAttr::get(builder.getContext(), padding.value())
-          : PaddingOptionAttr();
+                   EvictionPolicy evict, bool isVolatile,
+                   std::optional<MemSemantic> sem,
+                   std::optional<MemSyncScope> scope) {
+  auto semAttr = getAttrOrDefault<MemSemanticAttr>(builder, sem);
+  auto scopeAttr = getAttrOrDefault<MemSyncScopeAttr>(builder, scope);
+  auto paddingAttr = getAttrOrDefault<PaddingOptionAttr>(builder, padding);
   LoadOp::build(builder, state, ptr, mask, other,
                 builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
-                evict, isVolatile);
+                evict, isVolatile, semAttr, scopeAttr);
 }
 
 // load(ptr, splat(1), ...)        -> load(ptr, ...)
@@ -105,7 +125,8 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
       rewriter.replaceOpWithNewOp<LoadOp>(
           loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
           loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
-          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
+          loadOp.getSemAttr(), loadOp.getScopeAttr());
     } else {
       // mask = splat(0)
 
@@ -127,24 +148,40 @@ void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
 
 //-- StoreOp --
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                    Value value, CacheModifier cache, EvictionPolicy evict) {
+                    Value value, CacheModifier cache, EvictionPolicy evict,
+                    std::optional<MemSemantic> sem,
+                    std::optional<MemSyncScope> scope) {
   return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
-                        /*boundaryCheck=*/{}, cache, evict);
+                        /*boundaryCheck=*/{}, cache, evict, sem, scope);
 }
 
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                     Value value, Value mask, CacheModifier cache,
-                    EvictionPolicy evict) {
+                    EvictionPolicy evict, std::optional<MemSemantic> sem,
+                    std::optional<MemSyncScope> scope) {
   return StoreOp::build(builder, state, ptr, value, mask, /*boundaryCheck=*/{},
-                        cache, evict);
+                        cache, evict, sem, scope);
 }
 
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                     Value value, ArrayRef<int32_t> boundaryCheck,
-                    CacheModifier cache, EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                    CacheModifier cache, EvictionPolicy evict,
+                    std::optional<MemSemantic> sem,
+                    std::optional<MemSyncScope> scope) {
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{}, boundaryCheck,
+                        cache, evict, sem, scope);
+}
+
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, Value mask, ArrayRef<int32_t> boundaryCheck,
+                    CacheModifier cache, EvictionPolicy evict,
+                    std::optional<MemSemantic> sem,
+                    std::optional<MemSyncScope> scope) {
+  auto semAttr = getAttrOrDefault<MemSemanticAttr>(builder, sem);
+  auto scopeAttr = getAttrOrDefault<MemSyncScopeAttr>(builder, scope);
+  return StoreOp::build(builder, state, ptr, value, mask,
                         builder.getDenseI32ArrayAttr(boundaryCheck), cache,
-                        evict);
+                        evict, semAttr, scopeAttr);
 }
 
 // store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
@@ -172,7 +209,7 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
       // mask = splat(1)
       rewriter.replaceOpWithNewOp<StoreOp>(
           storeOp, storeOp.getPtr(), storeOp.getValue(), storeOp.getCache(),
-          storeOp.getEvict());
+          storeOp.getEvict(), storeOp.getSem(), storeOp.getScope());
     } else {
       // mask = splat(0)
       rewriter.eraseOp(storeOp);

@@ -246,9 +246,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       auto *addrOpr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
+      auto sem = op.getSem() ? stringifyMemSemantic(*op.getSem()).str() : "";
+      auto scope =
+          op.getScope() ? stringifyMemSyncScope(*op.getScope()).str() : "";
       // Define the instruction opcode
       auto &ld = ptxBuilder.create<>("ld")
                      ->o("volatile", op.getIsVolatile())
+                     .o(sem, !!op.getSem())
+                     .o(scope, !!op.getScope())
                      .global()
                      .o("ca", op.getCache() == triton::CacheModifier::CA)
                      .o("cg", op.getCache() == triton::CacheModifier::CG)
@@ -441,9 +446,14 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
+      auto sem = op.getSem() ? stringifyMemSemantic(*op.getSem()).str() : "";
+      auto scope =
+          op.getScope() ? stringifyMemSyncScope(*op.getScope()).str() : "";
       auto &ptxStoreInstr =
           ptxBuilder.create<>("st")
-              ->global()
+              ->o(sem, !!op.getSem())
+              .o(scope, !!op.getScope())
+              .global()
               .o("wb", op.getCache() == triton::CacheModifier::WB)
               .o("cg", op.getCache() == triton::CacheModifier::CG)
               .o("cs", op.getCache() == triton::CacheModifier::CS)

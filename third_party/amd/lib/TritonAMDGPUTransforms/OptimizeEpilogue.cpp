@@ -154,7 +154,8 @@ public:
     }
 
     rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        stOp, newPtr, newVal, newMask, stOp.getCache(), stOp.getEvict());
+        stOp, newPtr, newVal, newMask, stOp.getCache(), stOp.getEvict(),
+        stOp.getSem(), stOp.getScope());
     return mlir::success();
   }
 };

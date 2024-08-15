@@ -917,6 +917,12 @@ def _str_to_sem(sem_option):
     return sem
 
 
+def _str_to_sem_optional(sem_option):
+    if sem_option:
+        return _str_to_sem(sem_option)
+    return None
+
+
 def _str_to_scope(scope_option):
     scope = ir.MEM_SYNC_SCOPE.GPU
     if scope_option:
@@ -944,7 +950,7 @@ def _canonicalize_boundary_check(boundary_check, block_shape):
     return ()
 
 
-def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
+def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, sem, scope, builder):
     # Load by a block pointer: `pointer_type<block_type<>>`
     # Block pointer can not have `mask` and `other` arguments
     if mask is not None or other is not None:
@@ -963,10 +969,11 @@ def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, evicti
 
     # Build IR
     return tl.tensor(
-        builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile), dst_ty)
+        builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile, sem,
+                                           scope), dst_ty)
 
 
-def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
+def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, sem, scope, builder):
     # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
     if not ptr.type.scalar.is_ptr():
         raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
@@ -1017,27 +1024,38 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
 
     # Build IR
     if mask is None:
-        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
+        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile, sem, scope), dst_ty)
     else:
         return tl.tensor(
             builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache, eviction,
-                                       is_volatile), dst_ty)
+                                       is_volatile, sem, scope), dst_ty)
 
 
 def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], boundary_check: Tuple,
-         padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool,
+         padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool, sem: str, scope: str,
          builder: ir.builder) -> tl.tensor:
     # Cache, eviction and padding options
     cache = _str_to_load_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
     padding = _str_to_padding_option(padding_option)
+    sem = _str_to_sem_optional(sem)
+    if sem is not None:
+        scope = _str_to_scope(scope)
+    else:
+        assert scope == "", "`scope` must be `None` if `sem` is not set."
+        scope = None
+
+    if is_volatile and sem:
+        raise ValueError("`is_volatile` and `sem` may not be specified at the same time.")
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
         # Load by a block pointer: `pointer_type<block_type<>>`
-        return _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
+        return _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, sem, scope,
+                                   builder)
     else:
         # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-        return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
+        return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, sem, scope,
+                            builder)
 
 
 def descriptor_load(desc_ptr: tl.tensor, offsets, cache_modifier: str, eviction_policy: str, type,
@@ -1054,7 +1072,7 @@ def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir
     return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
 
 
-def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
+def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, sem, scope, builder):
     # Store by a block pointer: `pointer_type<block_type<>>`
     # Block pointers can not have the `mask` argument
     if mask is not None:
@@ -1079,11 +1097,12 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     val = cast(val, elt_ty, builder)
 
     # Build IR
-    return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
-                     tl.void)
+    return tl.tensor(
+        builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction, sem, scope),
+        tl.void)
 
 
-def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
+def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, sem, scope, builder):
     # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
     if not ptr.type.scalar.is_ptr():
         raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
@@ -1121,27 +1140,34 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
 
     # Build IR
     if not mask:
-        return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
+        return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction, sem, scope), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
-    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction), tl.void)
+    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction, sem, scope),
+                     tl.void)
 
 
 def store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], boundary_check, cache_modifier: str,
-          eviction_policy: str, builder: ir.builder) -> tl.tensor:
+          eviction_policy: str, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
     # Cache and eviction options
     cache = _str_to_store_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
+    sem = _str_to_sem_optional(sem)
+    if sem is not None:
+        scope = _str_to_scope(scope)
+    else:
+        assert scope == "", "`scope` must be `None` if `sem` is not set."
+        scope = None
 
     if ptr.type.is_const() or ptr.type.scalar.is_const():
         raise ValueError("Cannot store to a constant pointer")
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
         # Store by a block pointer: `pointer_type<block_type<>>`
-        return _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder)
+        return _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, sem, scope, builder)
     else:
         # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-        return _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder)
+        return _store_legacy(ptr, val, mask, boundary_check, cache, eviction, sem, scope, builder)
 
 
 #########

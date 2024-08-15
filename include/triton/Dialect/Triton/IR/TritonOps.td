@@ -252,7 +252,9 @@ def TT_LoadOp : TT_Op<"load", [
       OptionalAttr<TT_PaddingOptionAttr>:$padding,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
-      DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+      DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
+      OptionalAttr<TT_MemSemanticAttr>:$sem,
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
 
     let results = (outs TT_Type:$result);
@@ -260,32 +262,42 @@ def TT_LoadOp : TT_Op<"load", [
     let builders = [
         // A tensor of pointers or a pointer to a scalar
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>,
         // A tensor pointer with boundary check and padding
         OpBuilder<(ins "Value":$ptr, "ArrayRef<int32_t>":$boundaryCheck,
                        "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>,
         // A tensor of pointers or a pointer to a scalar with mask
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>,
         // A tensor of pointers or a pointer to a scalar with mask and other
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>,
         // A utility function to build the operation with all attributes
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
                        "ArrayRef<int32_t>":$boundaryCheck,
                        "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>
     ];
 
-    // Specify `cacheModifier` and `evictionPolicy` explicitly in the
-    // assemblyFormat instead of as part of attr-dict so that they get printed
-    // as strings rather than opaque integers.
+    // Specify cacheModifier, evictionPolicy, memSemantic and memSyncScope
+    // explicitly, instead of leaving them in attr-dict, because this way their
+    // values get printed as strings, rather than as opaque integers.
     //
     // Note there's no comma between `other` and `cacheModifier` and between
-    // `cacheModifier` and `evictionPolicy`.  This is due to an apparent
-    // limitation in the MLIR custom-format parser.  In oilist, the initial
-    // keywords of each clause have to be unique, so they can't be `,`.
+    // names in oilist.  This is due to an apparent limitation in the MLIR
+    // custom-format parser.  In oilist, the initial keywords of each clause
+    // have to be unique, so they can't be `,`.
     //
     // Even if we gave up on order-independence and used vanilla optional
     // clauses, the format (`,` `foo` `=` $foo^)? (`,` `bar` `=` $bar^)?  will
@@ -295,7 +307,9 @@ def TT_LoadOp : TT_Op<"load", [
       $ptr (`,` $mask^)? (`,` $other^)?
       oilist(
         `cacheModifier` `=` $cache |
-        `evictionPolicy` `=` $evict
+        `evictionPolicy` `=` $evict |
+        `memSemantic` `=` $sem |
+        `memSyncScope` `=` $scope
       )
       attr-dict `:` type($ptr)
     }];
@@ -322,29 +336,49 @@ def TT_StoreOp : TT_Op<"store", [
       Optional<TT_BoolLike>:$mask,
       DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
       DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict
+      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+      OptionalAttr<TT_MemSemanticAttr>:$sem,
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>,
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>,
         // A tensor of pointers or a pointer to a scalar with mask
         OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict)>,
+                       "triton::EvictionPolicy":$evict,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>,
         // A tensor pointer with boundary check
         OpBuilder<(ins "Value":$ptr, "Value":$value, "ArrayRef<int32_t>":$boundaryCheck, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict)>
+                       "triton::EvictionPolicy":$evict,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>,
+        // A utility function to build the operation with all attributes
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask,
+                       "ArrayRef<int32_t>":$boundaryCheck,
+                       "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope)>
     ];
 
-    // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
-    // them in attr-dict, because this way their values get printed as strings,
-    // rather than as opaque integers.
+    // Specify cacheModifier, evictionPolicy, memSemantic and memSyncScope
+    // explicitly, instead of leaving them in attr-dict, because this way their
+    // values get printed as strings, rather than as opaque integers.
     //
-    // Note there are no commas between mask, cacheModifier, and evictionPolicy,
-    // due to limitations in MLIR's asm parser.
+    // Note there are no commas between mask, cacheModifier / ..., due to
+    // limitations in MLIR's asm parser.
     let assemblyFormat = [{
       $ptr `,` $value (`,` $mask^)?
-      oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+      oilist(
+        `cacheModifier` `=` $cache |
+        `evictionPolicy` `=` $evict |
+        `memSemantic` `=` $sem |
+        `memSyncScope` `=` $scope
+      )
       attr-dict `:` type($ptr)
     }];
 

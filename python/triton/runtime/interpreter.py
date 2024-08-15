@@ -363,16 +363,16 @@ class InterpreterBuilder:
         return TensorHandle(np.array([self.grid_dim[axis]], dtype=np.int32), tl.int32)
 
     # memory ops
-    def create_load(self, ptr, _0, _1, is_volatile):
+    def create_load(self, ptr, _0, _1, is_volatile, sem, scope):
         mask = TensorHandle(np.ones_like(ptr.data, dtype=bool), tl.int1)
         other = None
-        return self.create_masked_load(ptr, mask, other, _0, _1, is_volatile)
+        return self.create_masked_load(ptr, mask, other, _0, _1, is_volatile, sem, scope)
 
-    def create_store(self, ptr, val, _0, _1):
+    def create_store(self, ptr, val, _0, _1, sem, scope):
         mask = TensorHandle(np.ones_like(ptr.data, dtype=bool), tl.int1)
-        return self.create_masked_store(ptr, val, mask, None, None)
+        return self.create_masked_store(ptr, val, mask, None, None, sem, scope)
 
-    def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
+    def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile, sem, scope):
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
         if other is None:
@@ -380,7 +380,7 @@ class InterpreterBuilder:
         ret = _interpreter.load(ptrs.data, mask.data, other.data, dtype_np)
         return TensorHandle(ret, dtype_tt)
 
-    def create_masked_store(self, ptrs, value, mask, cache_modifier, eviction_policy):
+    def create_masked_store(self, ptrs, value, mask, cache_modifier, eviction_policy, sem, scope):
         return _interpreter.store(ptrs.data, value.data, mask.data)
 
     # casting ops
@@ -565,8 +565,8 @@ class InterpreterBuilder:
         element_bytewidth = max(1, element_bitwidth // 8)
         return TensorHandle(ptr.data + element_bytewidth * offset.data.astype(np.uint64), ptr.dtype)
 
-    def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
-                                   is_volatile):
+    def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy, sem,
+                                   scope, is_volatile):
         ptrs, masks = ptr.materialize_pointers(boundary_check)
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
@@ -578,11 +578,11 @@ class InterpreterBuilder:
             other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
         else:
             raise ValueError(f"unsupported padding option {padding_option}")
-        return self.create_masked_load(ptrs, masks, other, cache_modifier, eviction_policy, is_volatile)
+        return self.create_masked_load(ptrs, masks, other, cache_modifier, eviction_policy, is_volatile, sem, scope)
 
-    def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy):
+    def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy, sem, scope):
         ptrs, masks = ptr.materialize_pointers(boundary_check)
-        return self.create_masked_store(ptrs, value, masks, cache_modifier, eviction_policy)
+        return self.create_masked_store(ptrs, value, masks, cache_modifier, eviction_policy, sem, scope)
 
     def create_expand_dims(self, arg, axis):
         return TensorHandle(np.expand_dims(arg.data, axis), arg.dtype.scalar)

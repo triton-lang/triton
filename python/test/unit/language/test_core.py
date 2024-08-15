@@ -1761,6 +1761,49 @@ def test_load_store_same_ptr(device):
         assert torch.all(x == 2)
 
 
+def test_load_store_with_mem_sem(device):
+    if is_hip():
+        pytest.skip("Memory semantics is not supported on ROCm")
+
+    @triton.jit()
+    def producer_and_consumer(flag_ptr, data_ptr, data_copy_ptr, n, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        blk_id = pid // 2
+        producer = pid % 2 == 0
+        consumer = pid % 2 == 1
+        if producer:
+            r = tl.arange(0, BLOCK_SIZE) + blk_id * BLOCK_SIZE
+            mask = r < n
+            tl.store(data_ptr + r, 5, mask=mask)
+            # Necessary. We need to make sure the release store above does not start until all
+            # writes are issued.
+            tl.debug_barrier()
+            tl.store(flag_ptr + blk_id, 1, sem="release")
+        if consumer:
+            while tl.load(flag_ptr + blk_id, sem="acquire") != 1:
+                pass
+            # Necessary, see comments on counterpart in the producer.
+            tl.debug_barrier()
+            r = tl.arange(0, BLOCK_SIZE) + blk_id * BLOCK_SIZE
+            mask = r < n
+            tl.store(data_copy_ptr + r, tl.load(data_ptr + r, mask=mask), mask=mask)
+
+    # Errors regarding memory semantics cannot usually be reproduced reliably, so we run it multiple
+    # times.
+    for _ in range(1000):
+        blk_size = 1024
+        n = 1234567
+        n_blks = triton.cdiv(n, blk_size)
+        flag = torch.zeros([n_blks], device=device, dtype=torch.int32)
+        data = torch.zeros([n], device=device, dtype=torch.int32)
+        data_copy = torch.zeros([n], device=device, dtype=torch.int32)
+        program = producer_and_consumer[(n_blks * 2, )](flag, data, data_copy, n, blk_size)
+        assert torch.all(data == 5)
+        assert torch.all(data_copy == 5)
+        assert 'ld.acquire.gpu' in program.asm['ptx']
+        assert 'st.release.gpu' in program.asm['ptx']
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ['int32'])
 def test_umulhi(dtype_str, device):
