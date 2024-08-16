@@ -1395,7 +1395,14 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     // allowed in between.
     Value transitiveOperand = operand;
     while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp>(
-        transitiveOperand.getDefiningOp())) {
+               transitiveOperand.getDefiningOp()) ||
+           isa<BlockArgument>(transitiveOperand)) {
+      if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
+        assert(blockArg.getOwner() == forOp.getBody());
+        transitiveOperand =
+            cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
+                .getOperand(blockArg.getArgNumber() - 1);
+      }
       transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
     }
     return forOp.isDefinedOutsideOfLoop(transitiveOperand) ||
