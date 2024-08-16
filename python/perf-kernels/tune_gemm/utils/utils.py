@@ -34,7 +34,7 @@ name_to_tl_types = {
 def run_bash_command_wrapper(commandstring, capture=True):
     try:
         run_bash_command(commandstring, capture)
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         if not capture:
             print(f"running {commandstring} one more time")
         run_bash_command(commandstring, capture)
@@ -42,16 +42,9 @@ def run_bash_command_wrapper(commandstring, capture=True):
 
 def run_bash_command(commandstring, capture=True):
     if capture:
-        proc = subprocess.run(commandstring,
-                              shell=True,
-                              check=True,
-                              executable='/bin/bash',
-                              stdout=subprocess.PIPE)
+        proc = subprocess.run(commandstring, shell=True, check=True, executable='/bin/bash', stdout=subprocess.PIPE)
         return proc.stdout.splitlines()
-    proc = subprocess.run(commandstring,
-                          shell=True,
-                          check=True,
-                          executable='/bin/bash')
+    proc = subprocess.run(commandstring, shell=True, check=True, executable='/bin/bash')
     return None
 
 
@@ -111,5 +104,7 @@ def patch_triton_compiler():
     cuda_driver_filename = os.path.join(triton_dir, "../third_party/nvidia/backend/", "driver.py")
 
     run_bash_command(f"sed -i 's/import torch/return True/g' {hip_driver_filename}")
-    run_bash_command(f"sed -i 's/device = self.get_current_device()/return GPUTarget(\"hip\", \"{target.arch}\", 64)/g' {hip_driver_filename}")
+    run_bash_command(
+        f"sed -i 's/device = self.get_current_device()/return GPUTarget(\"hip\", \"{target.arch}\", 64)/g' {hip_driver_filename}"
+    )
     run_bash_command(f"sed -i 's/import torch/return False/g' {cuda_driver_filename}")

@@ -1,12 +1,8 @@
-import ctypes
-import array
-import random
-import math
-
 # the hip module can be installed as
 # `python3 -m pip install -i https://test.pypi.org/simple hip-python~=$rocm_version`
 # more information about hip-python is at: https://github.com/ROCm/hip-python
 from hip import hip, hiprtc
+
 
 def hip_check(call_result):
     err = call_result[0]
@@ -16,13 +12,11 @@ def hip_check(call_result):
 
     if isinstance(err, hip.hipError_t) and err != hip.hipError_t.hipSuccess:
         raise RuntimeError(str(err))
-    elif (
-        isinstance(err, hiprtc.hiprtcResult)
-        and err != hiprtc.hiprtcResult.HIPRTC_SUCCESS
-        ):
+    elif (isinstance(err, hiprtc.hiprtcResult) and err != hiprtc.hiprtcResult.HIPRTC_SUCCESS):
         raise RuntimeError(str(err))
 
     return result
+
 
 # S_ICACHE_INV Invalidate entire first level instruction cache.
 # There must be 16 separate S_NOP instructions or a jump/branch instruction
@@ -56,7 +50,7 @@ def gen_kernel():
     progs = hip.hipDeviceProp_t()
     hip_check(hip.hipGetDeviceProperties(progs, 0))
     arch = progs.gcnArchName
-    cflags = [b"--offload-arch="+arch]
+    cflags = [b"--offload-arch=" + arch]
     err, = hiprtc.hiprtcCompileProgram(prog, len(cflags), cflags)
     if err != hiprtc.hiprtcResult.HIPRTC_SUCCESS:
         log_size = hip_check(hiprtc.hiprtcGetProgramLogSize(prog))
@@ -73,22 +67,16 @@ def gen_kernel():
 
     return kernel
 
+
 kernel = gen_kernel()
 progs = hip.hipDeviceProp_t()
 hip_check(hip.hipGetDeviceProperties(progs, 0))
 cu_num = progs.multiProcessorCount
 
+
 def icache_flush():
     block = hip.dim3(x=64)
     grid = hip.dim3(cu_num * 60)
 
-    hip_check(hip.hipModuleLaunchKernel(
-        kernel,
-        *grid,
-        *block,
-        sharedMemBytes=0,
-        stream=None,
-        kernelParams=None,
-        extra=()
-        )
-    )
+    hip_check(
+        hip.hipModuleLaunchKernel(kernel, *grid, *block, sharedMemBytes=0, stream=None, kernelParams=None, extra=()))
