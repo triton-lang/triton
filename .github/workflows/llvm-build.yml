@@ -27,7 +27,6 @@ jobs:
       matrix:
         config:
         - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'x64'}
-        - {runner: 'Ubuntu 20.04 ARM64', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
         - {runner: 'AlmaLinux 8', runs_on: ['self-hosted', 'CPU'], target-os: 'almalinux', arch: 'x64'}
         - {runner: 'MacOS X64', runs_on: 'macos-12', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-12', target-os: 'macos', arch: 'arm64'}
