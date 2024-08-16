@@ -30,6 +30,8 @@ createDecomposeFpConversions(bool decomposeBf16Conversions,
 std::unique_ptr<OperationPass<ModuleOp>> createOptimizeMasks();
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertDotProduct();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertDotProduct(bool useHorizontalSum);
 
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonCPUTransforms/Passes.h.inc"

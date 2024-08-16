@@ -83,6 +83,12 @@ def ConvertDotProduct : Pass<"triton-cpu-convert-dot-product", "mlir::ModuleOp">
         converting it to dot product intrinsics like bfdot.
     }];
 
+    let options = [
+        Option<"useHorizontalSum", "use-horizontal-sum",
+               "bool", /*default*/"true",
+               "Use Horizontal Sum kernel for the dot product (gemv). Otherwise use a kernel with packing.">,
+    ];
+
     let constructor = "mlir::triton::cpu::createConvertDotProduct()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
