@@ -1,1 +1,13 @@
-1a9acd786d493b00c08d1611f51420d421b74cf1
+commit 18d691e491b9f6184c505f9b553a49075e67d4bd
+Author: Tori Baker <vwbaker@google.com>
+Date:   Mon May 27 16:37:12 2024 +0200
+
+    [BACKEND] Update LLVM version to https://github.com/llvm/llvm-project/commit/10dc3a8e916d73291269e5e2b82dd22681489aa1 (#4010)
+
+diff --git a/cmake/llvm-hash.txt b/cmake/llvm-hash.txt
+index 90ca14b33..f2895130b 100644
+--- a/cmake/llvm-hash.txt
++++ b/cmake/llvm-hash.txt
+@@ -1 +1 @@
+-1e5f29af81a5f6fda308074f6345b9fba4faa71c
++10dc3a8e916d73291269e5e2b82dd22681489aa1
