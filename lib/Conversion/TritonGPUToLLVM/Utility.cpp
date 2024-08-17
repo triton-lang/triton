@@ -164,7 +164,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   // Manually constant-fold the layout where possible.
   SmallVector<std::pair<StringAttr, int32_t>> constantIns;
   for (auto [inDimName, idx] : indices) {
-    if (auto constant = dyn_cast<LLVM::ConstantOp>(idx.getDefiningOp())) {
+    if (auto constant = idx.getDefiningOp<LLVM::ConstantOp>()) {
       constantIns.push_back(
           {inDimName, cast<IntegerAttr>(constant.getValue()).getInt()});
     } else {
@@ -184,7 +184,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   }
 
   for (auto [inDimName, idx] : indices) {
-    if (isa<LLVM::ConstantOp>(idx.getDefiningOp())) {
+    if (idx.getDefiningOp<LLVM::ConstantOp>()) {
       continue;
     }
 

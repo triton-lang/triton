@@ -1397,16 +1397,18 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp>(
                transitiveOperand.getDefiningOp()) ||
            isa<BlockArgument>(transitiveOperand)) {
-      if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
-        assert(blockArg.getOwner() == forOp.getBody());
+      auto blockArg = dyn_cast<BlockArgument>(transitiveOperand);
+      if (blockArg && blockArg.getOwner() == forOp.getBody()) {
         transitiveOperand =
             cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
                 .getOperand(blockArg.getArgNumber() - 1);
       }
-      transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
+      if (Operation *def = transitiveOperand.getDefiningOp()) {
+        transitiveOperand = def->getOperand(0);
+      }
     }
     return forOp.isDefinedOutsideOfLoop(transitiveOperand) ||
-           isa<ttg::MemDescSubviewOp>(transitiveOperand.getDefiningOp());
+           transitiveOperand.getDefiningOp<ttg::MemDescSubviewOp>();
   };
 
   // We don't have to call checkOperand on getC() because it's always in
