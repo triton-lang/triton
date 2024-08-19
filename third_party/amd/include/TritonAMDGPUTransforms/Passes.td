@@ -139,4 +139,30 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
   let dependentDialects = [];
 }
 
+
+def TritonAMDGPUHoistReduction : Pass<"tritonamdgpu-hoist-reduction", "mlir::ModuleOp"> {
+  let summary = "hoist reduction operation applied to dot accumulator outside of loop over K";
+
+  let description = [{
+    Optimization hoists reduction operation out of the loop:
+
+    %acc = <zero tensor>
+    for k tiles:
+      %acc3d_input = reshape %acc
+      %acc3d_out = dot3d(%x, %y, %acc3d_input)
+      %acc = reduction batch %acc3d_out
+
+    transformed to:
+
+    %acc3d = <zero tensor>
+    for k tiles:
+      %acc3d = dot3d(%x, %y, %acc3d)
+    %acc = reduction batch %acc3d
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUHoistReductionPass()";
+
+  let dependentDialects = [];
+}
+
 #endif

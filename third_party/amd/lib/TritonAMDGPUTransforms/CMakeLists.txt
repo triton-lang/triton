@@ -6,6 +6,7 @@ add_triton_library(TritonAMDGPUTransforms
   ReorderInstructions.cpp
   StreamPipeline.cpp
   StreamPipelineV2.cpp
+  HoistReduction.cpp
   MfmaGroup.cpp
 
   DEPENDS
