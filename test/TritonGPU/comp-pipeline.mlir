@@ -3,9 +3,9 @@
 
 // DEBUG: Final coarse schedule:
 // DEBUG: Ops in stage 2
-// DEBUG: triton_nvidia_gpu.warp_group_dot
+// DEBUG-DAG: triton_nvidia_gpu.wait_barrier
+// DEBUG-DAG: triton_nvidia_gpu.warp_group_dot
 // DEBUG: Ops in stage 3
-// DEBUG: triton_nvidia_gpu.wait_barrier
 // DEBUG: triton_nvidia_gpu.wait_barrier
 // DEBUG: Original loop:
 
@@ -50,13 +50,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: triton_nvidia_gpu.async_tma_copy_global_to_local{{.*}} %[[V1]]
     // CHECK: scf.for {{.*}} %[[ARG:.+]] = %[[FIRSTDOT]]
     // CHECK: %[[KBARSUB:.+]] = triton_gpu.memdesc_subview %[[KBAR]][%[[KBARIDX:.+]]]
+    // CHECK: scf.if
     // CHECK: triton_nvidia_gpu.wait_barrier %[[KBARSUB]]
     // CHECK: %[[KLOOP:.+]] = triton_gpu.memdesc_subview %[[KLOC]]
     // CHECK: tt.trans %[[KLOOP]]
     // CHECK: %[[FIRSTDOTLOOP:.+]] = triton_nvidia_gpu.warp_group_dot
     // CHECK: %[[WAIT:.+]]:{{[0-9]+}} = triton_nvidia_gpu.warp_group_dot_wait
     // CHECK: "tt.reduce"(%[[ARG]])
-    // CHECK: %[[VBARSUB:.+]] = triton_gpu.memdesc_subview %[[VBAR]][%[[KBARIDX]]]
+    // CHECK: %[[VBARSUB:.+]] = triton_gpu.memdesc_subview %[[VBAR]]
     // CHECK: triton_nvidia_gpu.wait_barrier %[[VBARSUB]]
     // CHECK: triton_nvidia_gpu.async_tma_copy_global_to_local
     // CHECK: triton_nvidia_gpu.async_tma_copy_global_to_local
