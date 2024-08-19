@@ -201,6 +201,7 @@ def streamk_gemm(
             rn1 = tl.max_contiguous(tl.multiple_of(rn1, BLOCK_SIZE_N), BLOCK_SIZE_N)
             P_ = P + pid * BLOCK_SIZE_M * BLOCK_SIZE_N + rm1[:, None] * BLOCK_SIZE_N + rn1[None, :]
             tl.store(P_, acc)
+            tl.debug_barrier()
             tl.atomic_xchg(locks + pid, 1)
 
         start_iter = end_iter
