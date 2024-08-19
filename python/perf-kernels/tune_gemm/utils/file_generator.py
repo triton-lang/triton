@@ -76,6 +76,10 @@ def gen_kernel_and_configStr_from_config(config, EVEN_K, dtype_a, dtype_b, dtype
 
     use_bias = bias_size > 0
 
+    ## Let's enable xcd-based pid remapping only when split-K is NOT used
+    ## Also #xcd is fixed to 8. If we are tuning for MI308, please change it to 4
+    num_xcds = 1 if split_k > 1 else 8
+
     if warmup:
         torch_dtype_a = 'fp16'
         torch_dtype_b = 'fp16'
@@ -89,6 +93,7 @@ def gen_kernel_and_configStr_from_config(config, EVEN_K, dtype_a, dtype_b, dtype
 
         matmul_def_str = f"""
 def matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
+    grid_mn = triton.cdiv(M, {block_m}) * triton.cdiv(N, {block_n})
     matmul_kernel_{configStr}.warmup(
         {torch_dtype_a}, {torch_dtype_b}, {torch_dtype_c}, {torch_dtype_c},
         M, N, K,
@@ -103,8 +108,10 @@ def matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
         waves_per_eu = {waves_per_eu},
         matrix_instr_nonkdim = {mfmaInstrSize},
         kpack = {kpack},
-        BIAS={use_bias},
-        EVEN_K={EVEN_K},
+        BIAS = {use_bias},
+        EVEN_K = {EVEN_K},
+        GRID_MN = grid_mn,
+        NUM_XCDS = {num_xcds},
         grid=(1,),
     )
     return None
@@ -136,7 +143,9 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn):
         matrix_instr_nonkdim = {mfmaInstrSize},
         kpack = {kpack},
         BIAS = {use_bias},
-        EVEN_K = {EVEN_K}
+        EVEN_K = {EVEN_K},
+        GRID_MN = grid[0],
+        NUM_XCDS = {num_xcds}
     )
     return c
 """
@@ -310,7 +319,7 @@ from icache_flush import icache_flush
 
     # call all matmul_xxx functions
     idx = 0
-    runs = iters if run_bench else 200
+    runs = iters if run_bench else 120
     for config in configs:
         configStr = gen_configStr(config)
         matmul_call_str = f"""

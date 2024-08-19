@@ -1,8 +1,9 @@
-# GEMM tuning script (current v3.3)
+# GEMM tuning script (current v3.4)
 
 ## matmul kernel
 
 The matmul kernel implementation can be found as [matmul_kernel.py](https://github.com/ROCm/triton/blob/main_perf/python/perf-kernels/tune_gemm/matmul_kernel.py), which includes the following features:
+- XCD-based pid remapping
 - grouping order of workgroup id, which is controlled by `GROUP_SIZE_M`, that
 implements L2 cache optimization introduced in the [tutorial](https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html#l2-cache-optimizations).
 - split-k algorithm, which is controlled by `SPLIT_K`.
@@ -144,7 +145,7 @@ The default value is 1000.
 
 The general idea of the tuning script can be summarized as
 - Compile all the kernels in the tuning space in parallel.
-- Divide the tuning space into tasks and invoke `rocprofv2` once per
+- Divide the tuning space into tasks and invoke `rocprof` once per
 task. This will save invocation overhead of the profiler.
 - Profile tasks in parallel on multiple GPUs.
 
@@ -307,6 +308,21 @@ places:
   function in the hip backend [driver](https://github.com/triton-lang/triton/blob/fd691c67ac20958a67693358186d877790f5f48f/third_party/amd/backend/driver.py#L437)
   - Return False from the `is_active()` function in the cuda hackend [driver](https://github.com/triton-lang/triton/blob/fd691c67ac20958a67693358186d877790f5f48f/third_party/nvidia/backend/driver.py#L383)
   - Statically set `device` and `stream` in the [jit.py](https://github.com/triton-lang/triton/blob/fd691c67ac20958a67693358186d877790f5f48f/python/triton/runtime/jit.py#L588-L589)
+
+
+# GEMM Tuning Script v3.4
+
+## API changes
+
+No API changes
+
+## Implementation changes
+
+- Now the matmul_kernel supports XCD-based pid remapping. Details with experiments
+will be added later.
+- Switched back to rocprofv1. Check [ticket#228](https://github.com/ROCm/triton-internal/issues/228) for more details.
+- Improved the post-procesing logic to filter out the "spikes" in the profiling results.
+- Reduced the number of iterations in both tuning and benchmark mode (120 and 200).
 
 
 # One config running script
