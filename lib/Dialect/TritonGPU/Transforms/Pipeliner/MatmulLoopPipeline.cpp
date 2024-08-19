@@ -563,7 +563,12 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
     // always present in the opInfo
     if (!isa<tt::LoadOp>(use)) {
-      schedule.insert(use, numStages - 1, rootUsersCluster);
+      int stage = numStages - 1;
+      if (use->hasAttr("loop.stage"))
+        stage = cast<IntegerAttr>(use->getAttr("loop.stage"))
+                    .getValue()
+                    .getZExtValue();
+      schedule.insertIfAbsent(use, stage, rootUsersCluster);
       rootUsers.insert(use);
     }
   }
@@ -577,7 +582,11 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     if (loadToInfo.count(loadOp) == 0)
       continue;
     int stage = (maxIndirectionLevel - indLevel) * stagesBetweenLoads;
-    schedule.insert(loadOp, stage, loadsClusters[indLevel]);
+    if (loadOp->hasAttr("loop.stage"))
+      stage = cast<IntegerAttr>(loadOp->getAttr("loop.stage"))
+                  .getValue()
+                  .getZExtValue();
+    schedule.insertIfAbsent(loadOp, stage, loadsClusters[indLevel]);
   }
 
   // Distance from the load to the use.

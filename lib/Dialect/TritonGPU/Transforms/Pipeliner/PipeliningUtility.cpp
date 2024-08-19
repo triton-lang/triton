@@ -74,6 +74,9 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   }
 
+  if (isa<ttng::WarpGroupDotOp>(op))
+    return op;
+
   assert("don't know how to predicate this op" && false);
   return op;
 }
