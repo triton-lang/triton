@@ -131,6 +131,14 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return false;
 }
 
+bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
+                                ArrayRef<unsigned> paddedRepShape,
+                                ArrayRef<unsigned> outOrd,
+                                unsigned accumNumReplicates,
+                                int swizzleByteWidth) const {
+  return false;
+}
+
 bool TargetInfo::processReplicaUsingStMatrix(
     RewriterBase &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
@@ -243,6 +251,9 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   printfImpl(msgValue, msgBuffer.size_in_bytes(), /*args=*/ValueRange(),
              rewriter, /*useStdError=*/true);
 
+  // Set block barrrier before aborting kernel, give a chance for all
+  // the threads in a block to check/print the assert failure.
+  barrier();
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
 }

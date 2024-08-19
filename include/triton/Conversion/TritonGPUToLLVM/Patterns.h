@@ -20,8 +20,7 @@ void decomposeSplatOpToSharedLayoutConversion(ModuleOp module);
 /// Replaces `mma/mfma -> dot_op` with `mma/mfma -> blocked -> dot_op` in the
 /// given |module| op, but bypass the decomposition if |shortcutFn| returns
 /// true.
-using ShortcutFn = std::function<bool(RankedTensorType &, RankedTensorType &)>;
-template <typename TensorCoreEncodingAttr>
+using ShortcutFn = std::function<bool(RankedTensorType, RankedTensorType)>;
 void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
                                               ShortcutFn shortcutFn);
 

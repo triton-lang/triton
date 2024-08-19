@@ -176,8 +176,6 @@ LogicalResult Prefetcher::initialize() {
     return failure();
 
   // returns source of cvt
-
-  // returns source of cvt
   auto getPrefetchSrc = [](Value v) -> SmallVector<Value> {
     // walk back to conversion
     Operation *op = v.getDefiningOp();
@@ -210,7 +208,7 @@ LogicalResult Prefetcher::initialize() {
     return Value();
   };
 
-  auto getYieldOp = [this](Value v) -> Value {
+  auto getYieldOperand = [this](Value v) -> Value {
     auto arg = mlir::cast<BlockArgument>(v);
     unsigned yieldIdx = arg.getArgNumber() - forOp.getNumInductionVars();
     return yieldOp.getOperand(yieldIdx);
@@ -256,8 +254,8 @@ LogicalResult Prefetcher::initialize() {
         dot2bHeaderDef[dot] = bHeaderDef;
         dot2aLoopArg[dot] = aSmem;
         dot2bLoopArg[dot] = bSmem;
-        dot2aYield[dot] = getYieldOp(aSmem);
-        dot2bYield[dot] = getYieldOp(bSmem);
+        dot2aYield[dot] = getYieldOperand(aSmem);
+        dot2bYield[dot] = getYieldOperand(bSmem);
       }
     }
   }
@@ -303,18 +301,28 @@ scf::ForOp Prefetcher::createNewForOp() {
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
+  // The insertion point should be placed before the yield op
+  auto setInsertionPointBeforeYield = [](OpBuilder &builder,
+                                         scf::ForOp newForOp) {
+    if (newForOp.getBody()->mightHaveTerminator()) {
+      builder.setInsertionPoint(newForOp.getBody()->getTerminator());
+    } else {
+      builder.setInsertionPointToEnd(newForOp.getBody());
+    }
+  };
+
   for (Operation &op : forOp.getBody()->without_terminator()) {
     // If we're currently trying to sink a prefetched dot, we need to stop
     // sinking it (by resetting the insertion point to the end) if we find
     // control flow, or anything that depends on the dot op.
     if (op.getNumRegions() > 0) {
-      builder.setInsertionPointToEnd(newForOp.getBody());
+      setInsertionPointBeforeYield(builder, newForOp);
     }
     for (auto operand : op.getOperands()) {
       if (auto def = operand.getDefiningOp()) {
         auto dot = dyn_cast<triton::DotOp>(def);
         if (dot && dots.contains(dot)) {
-          builder.setInsertionPointToEnd(newForOp.getBody());
+          setInsertionPointBeforeYield(builder, newForOp);
         }
       }
     }
