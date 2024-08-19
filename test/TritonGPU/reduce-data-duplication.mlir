@@ -12,3 +12,31 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     tt.return
   }
 }
+
+// -----
+
+//       CHECK:   conversion_shortcut_blocked_dotop_warp32
+//       CHECK-NOT:  triton_gpu.local_alloc
+//       CHECK: triton_gpu.convert_layout
+//       CHECK-NOT:  triton_gpu.local_alloc
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 64], threadsPerWarp = [16, 2], warpsPerCTA = [2, 2], order = [0, 1]}>
+module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func @conversion_shortcut_blocked_dotop_warp32(%arg0: tensor<64x64xf16, #blocked>) {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>
+    tt.return
+  }
+}
+
+// -----
+
+//       CHECK:   conversion_shortcut_blocked_dotop_warp64
+//       CHECK-NOT:  triton_gpu.local_alloc
+//       CHECK: triton_gpu.convert_layout
+//       CHECK-NOT:  triton_gpu.local_alloc
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 2], warpsPerCTA = [2, 2], order = [0, 1]}>
+module attributes {"triton_gpu.target" = "hip:gfx940", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  tt.func @conversion_shortcut_blocked_dotop_warp64(%arg0: tensor<64x64xf16, #blocked>) {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>
+    tt.return
+  }
+}
