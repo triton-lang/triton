@@ -125,25 +125,25 @@ Credits: OpenAI kernel team</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     113.059807     93.033278
-1   2048.0     139.288174    108.084989
-2   4096.0     154.702993    118.006561
-3   8192.0     165.155468    125.187197
-4  16384.0     171.316717    127.813092
+0   1024.0     113.470127     92.875692
+1   2048.0     139.685414    108.275569
+2   4096.0     154.027379    117.274500
+3   8192.0     165.045471    125.479792
+4  16384.0     171.826188    128.719011
 fused-attention-batch4-head32-d64-fwd-causal=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     156.796422    125.083391
-1   2048.0     165.769729    128.388282
-2   4096.0     168.976463    128.038413
-3   8192.0     171.221423    127.385112
-4  16384.0     168.499474    129.136992
+0   1024.0     156.612099    125.501305
+1   2048.0     172.520338    128.956612
+2   4096.0     170.529518    127.987073
+3   8192.0     170.379433    128.030650
+4  16384.0     174.744887    129.545978
 fused-attention-batch4-head32-d64-bwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      72.473731     71.395161
-1   2048.0      95.395970     95.509175
-2   4096.0     112.986202    113.797848
-3   8192.0     121.739442    124.162156
-4  16384.0     129.024496    130.700257
+0   1024.0      72.343198     71.387876
+1   2048.0      98.114586     95.072999
+2   4096.0     113.014750    113.758306
+3   8192.0     121.901143    124.159289
+4  16384.0     130.697081    130.759148
 </pre></div>
 </div>
 <div class="line-block">
@@ -779,7 +779,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 54.092 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 53.989 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>
