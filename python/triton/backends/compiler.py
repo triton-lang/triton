@@ -4,7 +4,8 @@ import subprocess
 
 from abc import ABCMeta, abstractmethod, abstractclassmethod
 from dataclasses import dataclass
-from typing import Union
+from typing import Dict, Union
+from types import ModuleType
 
 
 @dataclass(frozen=True)
@@ -72,5 +73,12 @@ class BaseBackend(metaclass=ABCMeta):
     def load_dialects(self, context):
         """
         Load additional MLIR dialects into the provided `context`
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_module_map(self) -> Dict[str, ModuleType]:
+        """
+        Return a map of interface modules to their device-specific implementations.
         """
         raise NotImplementedError

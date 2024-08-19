@@ -1,7 +1,8 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
-from typing import Any, Tuple
+from typing import Any, Dict, Tuple
+from types import ModuleType
 import hashlib
 import tempfile
 import os
@@ -94,6 +95,10 @@ class HIPBackend(BaseBackend):
     def get_codegen_implementation(self):
         codegen_fns = {"min_dot_size": min_dot_size(self.target)}
         return codegen_fns
+
+    def get_module_map(self) -> Dict[str, ModuleType]:
+        from triton.language.extra.hip import libdevice
+        return {"triton.language.extra.libdevice": libdevice}
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
