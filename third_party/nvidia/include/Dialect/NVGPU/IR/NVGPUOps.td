@@ -87,30 +87,6 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
   let assemblyFormat = "$opA `,` $opB (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
 }
 
-def NVGPU_LoadDSmemOp : NVGPU_Op<"load_dsmem", [MemoryEffects<[MemRead]>]> {
-  let arguments = (ins LLVM_AnyPointer:$addr, I32:$ctaId, I32Attr:$bitwidth, I32Attr:$vec);
-  let builders = [
-      OpBuilder<(ins "Type":$resultTy, "Value":$addr, "Value":$ctaId)>,
-      OpBuilder<(ins "Value":$addr, "Value":$ctaId, "unsigned":$bitwidth, "unsigned":$vec)>,
-      OpBuilder<(ins "Value":$addr, "Value":$ctaId, "unsigned":$bitwidth)>
-  ];
-  let results = (outs LLVM_LoadableType:$result);
-  let assemblyFormat = "operands attr-dict `:` functional-type(operands, results)";
-}
-
-def NVGPU_StoreDSmemOp : NVGPU_Op<"store_dsmem", [MemoryEffects<[MemWrite]>]> {
-  let arguments = (ins LLVM_AnyPointer:$addr, I32:$ctaId,
-                       Variadic<LLVM_LoadableType>:$values, I1:$pred);
-  let builders = [
-      OpBuilder<(ins "Value":$addr, "Value":$ctaId, "Value":$value, "Value":$pred)>,
-  ];
-  let assemblyFormat = "operands attr-dict `:` type(operands)";
-  let extraClassDeclaration = [{
-      unsigned getBitwidth();
-      unsigned getVec();
-  }];
-}
-
 def NVGPU_FenceAsyncSharedOp : NVGPU_Op<"fence_async_shared", []> {
   let arguments = (ins BoolAttr:$bCluster);
   let assemblyFormat = "attr-dict";

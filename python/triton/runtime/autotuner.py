@@ -126,13 +126,10 @@ class Autotuner(KernelInterface):
 
         try:
             if self.use_cuda_graph:
-                import torch
-                with torch.cuda.stream(torch.cuda.Stream()):
-                    bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
-                return bench_res
+                return do_bench_cudagraph(kernel_call, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except (OutOfResources, CompileTimeAssertionFailure):
-            return float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
+            return [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))

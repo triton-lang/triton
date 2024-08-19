@@ -246,7 +246,12 @@ def compile(src, target=None, options=None):
     enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
     fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
-    metadata_filename = f"{src.name}.json"
+    # Pre-truncate the file name here to avoid hitting the 255 character limit on common platforms.
+    # The final file name in the cache will have a format of f"{filename}.{ext}.tmp.pid_{pid}_{uuid}".
+    # A PID string can be 5-character long. A UUID string has typically 36 characters. Let's truncate
+    # the file name to 150 characters to be safe.
+    file_name = src.name[:150]
+    metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
     always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
@@ -277,27 +282,32 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
-    use_ttgir_loc = os.environ.get("USE_TTGIR_LOC", "0") == "1"
+    use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
-        ir_filename = f"{src.name}.{ext}"
-        metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
-        if fn_dump_manager is not None:
-            fn_dump_manager.put(next_module, ir_filename)
+        ir_filename = f"{file_name}.{ext}"
         if (fn_override_manager is not None and fn_override_manager.has_file(ir_filename)):
             print(f"\nOverriding kernel with file {ir_filename}")
             full_name = fn_override_manager.get_file(ir_filename)
             next_module = parse(full_name, ext, context)
-        # use an env variable to parse ttgir from file
-        if use_ttgir_loc and ext == "ttgir":
-            ttgir_full_name = fn_cache_manager.get_file(ir_filename)
-            next_module.create_location_snapshot(ttgir_full_name)
-            print(f"Create new locations for {ttgir_full_name}")
+        metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
+        if fn_dump_manager is not None:
+            fn_dump_manager.put(next_module, ir_filename)
+        # use an env variable to parse ir from file
+        if use_ir_loc == ext:
+            ir_full_name = fn_cache_manager.get_file(ir_filename)
+            next_module.create_location_snapshot(ir_full_name)
+            print(f"Creating new locations for {ir_full_name}")
         module = next_module
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
+    # Compilation completed, disabling multithreading in context.
+    # This is needed to safely finalize threads pool inside context: if current process forks before
+    # python GC deletes context object, thread pool in child process will be invalid, which could
+    # lead to child crash or hang.
+    context.disable_multithreading()
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 

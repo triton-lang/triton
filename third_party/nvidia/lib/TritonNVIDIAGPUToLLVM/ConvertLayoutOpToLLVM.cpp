@@ -140,74 +140,6 @@ private:
   }
 };
 
-struct ConvertLayoutOpOptimizedConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
-public:
-  using ConvertOpToLLVMPattern<
-      triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    RankedTensorType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
-    // forwarding on mma->mma shortcut, lower distributed->distributed otherwise
-    if (isa<NvidiaMmaEncodingAttr>(srcLayout) &&
-        isa<NvidiaMmaEncodingAttr>(dstLayout)) {
-      if (isMmaToMmaShortcut(srcTy, dstTy)) {
-        return lowerMmaToMma(op, adaptor, rewriter);
-      }
-    }
-    return failure();
-  }
-
-private:
-  // mma -> mma
-  LogicalResult lowerMmaToMma(triton::gpu::ConvertLayoutOp op,
-                              OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    RankedTensorType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
-    if (triton::gpu::getTotalElemsPerThread(srcTy) ==
-        triton::gpu::getTotalElemsPerThread(dstTy)) {
-      rewriter.replaceOp(op, adaptor.getSrc());
-      return success();
-    }
-    auto dstMmaLayout = cast<NvidiaMmaEncodingAttr>(dstTy.getEncoding());
-    auto srcMmaLayout = cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
-    assert(dstMmaLayout.isHopper() && srcMmaLayout.isHopper() &&
-           "only MMAV3 layout is supported");
-    auto dstShape = dstTy.getShape();
-    auto shapePerCTA = getShapePerCTA(dstMmaLayout, dstShape);
-    ArrayRef<unsigned int> dstInstrShape = dstMmaLayout.getInstrShape();
-    ArrayRef<unsigned int> srcInstrShape = srcMmaLayout.getInstrShape();
-    SmallVector<Value> retVals;
-    unsigned numBlockM =
-        ceil<unsigned>(shapePerCTA[0], getShapePerCTATile(dstMmaLayout)[0]);
-    unsigned numBlockN =
-        ceil<unsigned>(shapePerCTA[1], getShapePerCTATile(dstMmaLayout)[1]);
-    // Remap the values based on MMAV3 layout, there may be duplicated values in
-    // either the source or destination.
-    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    for (unsigned i = 0; i < numBlockM; i++) {
-      for (unsigned j = 0; j < numBlockN; j++) {
-        for (unsigned k = 0; k < dstInstrShape[1] / 2; k++) {
-          int index = i * numBlockN * (srcInstrShape[1] / 2) + j +
-                      (k % (srcInstrShape[1] / 2));
-          retVals.push_back(vals[index]);
-        }
-      }
-    }
-    assert(retVals.size() == triton::gpu::getTotalElemsPerThread(dstTy));
-    Value view =
-        packLLElements(loc, getTypeConverter(), retVals, rewriter, dstTy);
-    rewriter.replaceOp(op, view);
-    return success();
-  }
-};
-
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
@@ -431,6 +363,7 @@ private:
   lowerDistToDistWithDistSmem(triton::gpu::ConvertLayoutOp op,
                               OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
     auto srcTy = op.getSrc().getType();
@@ -495,7 +428,8 @@ private:
         Value localOffset = linearize(rewriter, loc, localCoord, smemShape);
 
         Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
-        outVals.push_back(load_dsmem(ptr, remoteCTAId, llvmElemTy));
+        outVals.push_back(targetInfo.loadDShared(
+            rewriter, loc, ptr, remoteCTAId, llvmElemTy, /*pred=*/true_val()));
       }
 
       Value result =
@@ -554,10 +488,12 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    unsigned inVec = 0;
-    unsigned outVec = 0;
-    auto origRepShape = getRepShapeForCvtLayout(op);
-    auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
+    auto scratchConfig =
+        getScratchConfigForCvt(op.getSrc().getType(), op.getType());
+    unsigned inVec = scratchConfig.inVec;
+    unsigned outVec = scratchConfig.outVec;
+    auto origRepShape = scratchConfig.repShape;
+    auto paddedRepShape = scratchConfig.paddedRepShape;
 
     unsigned outElems = getTotalElemsPerThread(dstTy);
     auto outOrd = getOrder(dstLayout);
@@ -832,7 +768,6 @@ private:
 void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMOptimizedPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpOptimizedConversion>(typeConverter, benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
 }
 
@@ -841,6 +776,9 @@ void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // For now give ConvertLayoutOpConversion higher benefit, I can split before
   // merging
+  //
+  // TODO(jlebar): lowerDistributedToDistributed does not get hit in any
+  // testcases.  Is this dead code?  Does the benefit need to be increased?
   patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
   // Same default benefit
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);

@@ -21,39 +21,53 @@
 namespace proton {
 
 template <>
-thread_local GPUProfiler<RoctracerProfiler>::ProfilerState
-    GPUProfiler<RoctracerProfiler>::profilerState(
-        RoctracerProfiler::instance());
+thread_local GPUProfiler<RoctracerProfiler>::ThreadState
+    GPUProfiler<RoctracerProfiler>::threadState(RoctracerProfiler::instance());
+
+template <>
+thread_local std::deque<size_t>
+    GPUProfiler<RoctracerProfiler>::Correlation::externIdQueue{};
 
 namespace {
 
-// Node to device id mapping
-int deviceOffset = 0x7fffffff;
+class DeviceInfo : public Singleton<DeviceInfo> {
+public:
+  DeviceInfo() = default;
+  int mapDeviceId(int id) {
+    // Lazy initialization of device offset by calling hip API.
+    // Otherwise on nvidia platforms, the HSA call will fail because of no
+    // available libraries.
+    std::call_once(deviceOffsetFlag, [this]() { initDeviceOffset(); });
+    return id - deviceOffset;
+  }
 
-void createDeviceMap() {
-  int dc = 0;
-  auto ret = hip::getDeviceCount<true>(&dc);
-  hsa::iterateAgents(
-      [](hsa_agent_t agent, void *data) {
-        auto &deviceOffset = *static_cast<int *>(data);
-        int nodeId;
-        hsa::agentGetInfo<true>(
-            agent,
-            static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DRIVER_NODE_ID),
-            &nodeId);
-        int deviceType;
-        hsa::agentGetInfo<true>(
-            agent, static_cast<hsa_agent_info_t>(HSA_AGENT_INFO_DEVICE),
-            &deviceType);
-        if ((nodeId < deviceOffset) && (deviceType == HSA_DEVICE_TYPE_GPU))
-          deviceOffset = nodeId;
+private:
+  void initDeviceOffset() {
+    int dc = 0;
+    auto ret = hip::getDeviceCount<true>(&dc);
+    hsa::iterateAgents(
+        [](hsa_agent_t agent, void *data) {
+          auto &offset = *static_cast<int *>(data);
+          int nodeId;
+          hsa::agentGetInfo<true>(
+              agent,
+              static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DRIVER_NODE_ID),
+              &nodeId);
+          int deviceType;
+          hsa::agentGetInfo<true>(
+              agent, static_cast<hsa_agent_info_t>(HSA_AGENT_INFO_DEVICE),
+              &deviceType);
+          if ((nodeId < offset) && (deviceType == HSA_DEVICE_TYPE_GPU))
+            offset = nodeId;
 
-        return HSA_STATUS_SUCCESS;
-      },
-      &deviceOffset);
+          return HSA_STATUS_SUCCESS;
+        },
+        &deviceOffset);
+  }
+
+  std::once_flag deviceOffsetFlag;
+  int deviceOffset = 0x7fffffff;
 };
-
-int mapDeviceId(int id) { return id - deviceOffset; };
 
 std::shared_ptr<Metric>
 convertActivityToMetric(const roctracer_record_t *activity) {
@@ -63,7 +77,8 @@ convertActivityToMetric(const roctracer_record_t *activity) {
     metric = std::make_shared<KernelMetric>(
         static_cast<uint64_t>(activity->begin_ns),
         static_cast<uint64_t>(activity->end_ns), 1,
-        static_cast<uint64_t>(mapDeviceId(activity->device_id)),
+        static_cast<uint64_t>(
+            DeviceInfo::instance().mapDeviceId(activity->device_id)),
         static_cast<uint64_t>(DeviceType::HIP));
     break;
   }
@@ -73,36 +88,25 @@ convertActivityToMetric(const roctracer_record_t *activity) {
   return metric;
 }
 
-void addMetric(size_t scopeId, std::set<Data *> &dataSet,
-               const roctracer_record_t *activity) {
+void processActivityKernel(size_t externId, std::set<Data *> &dataSet,
+                           const roctracer_record_t *activity, bool isAPI) {
+  if (externId == Scope::DummyScopeId)
+    return;
+  auto correlationId = activity->correlation_id;
   for (auto *data : dataSet) {
+    auto scopeId = externId;
+    if (isAPI)
+      scopeId = data->addScope(/*parentId=*/externId, activity->kernel_name);
     data->addMetric(scopeId, convertActivityToMetric(activity));
   }
 }
 
-void processActivityKernel(std::mutex &corrIdToExternIdMutex,
-                           std::map<uint64_t, size_t> &corrIdToExternId,
-                           std::set<Data *> &dataSet,
-                           const roctracer_record_t *activity) {
-  auto correlationId = activity->correlation_id;
-  std::unique_lock<std::mutex> lock(corrIdToExternIdMutex);
-  if (corrIdToExternId.find(correlationId) == corrIdToExternId.end())
-    return;
-  auto externalId = corrIdToExternId[correlationId];
-  addMetric(externalId, dataSet, activity);
-  // Track correlation ids from the same stream and erase those < correlationId
-  corrIdToExternId.erase(correlationId);
-}
-
-void processActivity(std::mutex &corrIdToExternIdMutex,
-                     std::map<uint64_t, size_t> &corrIdToExternId,
-                     std::set<Data *> &dataSet,
-                     const roctracer_record_t *record) {
+void processActivity(size_t externId, std::set<Data *> &dataSet,
+                     const roctracer_record_t *record, bool isAPI) {
   switch (record->kind) {
   case 0x11F1: // Task - kernel enqueued by graph launch
   case kHipVdiCommandKernel: {
-    processActivityKernel(corrIdToExternIdMutex, corrIdToExternId, dataSet,
-                          record);
+    processActivityKernel(externId, dataSet, record, isAPI);
     break;
   }
   default:
@@ -138,76 +142,8 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
   }
   return std::make_pair(isRuntimeApi, isDriverApi);
 }
-// C++ symbol demangle
-static inline const std::string cxxDemangle(const char *symbol) {
-  size_t funcNameSize;
-  int status;
-  if (const char *name =
-          abi::__cxa_demangle(symbol, NULL, &funcNameSize, &status)) {
-    std::string ret(name);
-    std::free(reinterpret_cast<void *>(const_cast<char *>(name)));
-    return ret;
-  }
-  return std::string(symbol);
-}
-
-const std::string kernelName(uint32_t domain, uint32_t cid,
-                             const void *callback_data) {
-  std::string name;
-  if (domain == ACTIVITY_DOMAIN_HIP_API) {
-    const hip_api_data_t *data = (const hip_api_data_t *)(callback_data);
-    switch (cid) {
-    case HIP_API_ID_hipExtLaunchKernel: {
-      auto &params = data->args.hipExtLaunchKernel;
-      name = cxxDemangle(
-          hip::getKernelNameRefByPtr(params.function_address, params.stream));
-    } break;
-    case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice: {
-      auto &params =
-          data->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList__val;
-      name =
-          cxxDemangle(hip::getKernelNameRefByPtr(params.func, params.stream));
-    } break;
-    case HIP_API_ID_hipExtModuleLaunchKernel: {
-      auto &params = data->args.hipExtModuleLaunchKernel;
-      name = cxxDemangle(hip::getKernelNameRef(params.f));
-    } break;
-    case HIP_API_ID_hipHccModuleLaunchKernel: {
-      auto &params = data->args.hipHccModuleLaunchKernel;
-      name = cxxDemangle(hip::getKernelNameRef(params.f));
-    } break;
-    case HIP_API_ID_hipLaunchCooperativeKernel: {
-      auto &params = data->args.hipLaunchCooperativeKernel;
-      name = cxxDemangle(hip::getKernelNameRefByPtr(params.f, params.stream));
-    } break;
-    case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice: {
-      auto &params = data->args.hipLaunchCooperativeKernelMultiDevice
-                         .launchParamsList__val;
-      name =
-          cxxDemangle(hip::getKernelNameRefByPtr(params.func, params.stream));
-    } break;
-    case HIP_API_ID_hipLaunchKernel: {
-      auto &params = data->args.hipLaunchKernel;
-      name = cxxDemangle(
-          hip::getKernelNameRefByPtr(params.function_address, params.stream));
-    } break;
-    case HIP_API_ID_hipModuleLaunchKernel: {
-      auto &params = data->args.hipModuleLaunchKernel;
-      name = cxxDemangle(hip::getKernelNameRef(params.f));
-    } break;
-    case HIP_API_ID_hipGraphLaunch: {
-      name = "graphLaunch";
-    } break;
-    default:
-      break;
-    }
-  }
-  return name;
-}
 
 } // namespace
-
-enum CorrelationDomain { Default, Domain0, Domain1, Count };
 
 struct RoctracerProfiler::RoctracerProfilerPimpl
     : public GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface {
@@ -215,27 +151,19 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~RoctracerProfilerPimpl() = default;
 
-  void startOp(const Scope &scope);
-  void stopOp(const Scope &scope);
-
-  void doStart();
-  void doFlush();
-  void doStop();
+  void doStart() override;
+  void doFlush() override;
+  void doStop() override;
 
   static void apiCallback(uint32_t domain, uint32_t cid,
                           const void *callbackData, void *arg);
   static void activityCallback(const char *begin, const char *end, void *arg);
 
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
-
-  std::mutex corrIdToExternIdMutex;
-  std::map<uint64_t, size_t> corrIdToExternId;
-  inline static thread_local std::deque<size_t>
-      externIdQueue[CorrelationDomain::Count];
 };
 
 void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
-    uint32_t domain, uint32_t cid, const void *callback_data, void *arg) {
+    uint32_t domain, uint32_t cid, const void *callbackData, void *arg) {
   auto [isRuntimeAPI, isDriverAPI] = matchKernelCbId(cid);
   if (!(isRuntimeAPI || isDriverAPI)) {
     return;
@@ -245,21 +173,15 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
   auto &pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl &>(
       *profiler.pImpl);
   if (domain == ACTIVITY_DOMAIN_HIP_API) {
-    const hip_api_data_t *data = (const hip_api_data_t *)(callback_data);
+    const hip_api_data_t *data = (const hip_api_data_t *)(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
-      const std::string name = kernelName(domain, cid, callback_data);
       auto scopeId = Scope::getNewScopeId();
-      auto scope = Scope(scopeId, name);
-      profilerState.record(scope);
-      profilerState.enterOp();
-      if (externIdQueue[CorrelationDomain::Domain0].empty())
-        return;
-      std::unique_lock<std::mutex> lock(pImpl.corrIdToExternIdMutex);
-      pImpl.corrIdToExternId[data->correlation_id] =
-          externIdQueue[CorrelationDomain::Domain0].back();
+      threadState.record(scopeId);
+      threadState.enterOp(scopeId);
+      profiler.correlation.correlate(data->correlation_id);
     } else if (data->phase == ACTIVITY_API_PHASE_EXIT) {
-      profilerState.exitOp();
+      threadState.exitOp();
       // Track outstanding op for flush
       profiler.correlation.submit(data->correlation_id);
     }
@@ -270,8 +192,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     const char *begin, const char *end, void *arg) {
   auto &profiler =
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
-  auto &pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl &>(
-      *profiler.pImpl);
   auto &dataSet = profiler.dataSet;
   auto &correlation = profiler.correlation;
 
@@ -286,20 +206,20 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     // data on stop
     maxCorrelationId =
         std::max<uint64_t>(maxCorrelationId, record->correlation_id);
-    processActivity(pImpl.corrIdToExternIdMutex, pImpl.corrIdToExternId,
-                    dataSet, record);
+    // TODO(Keren): Roctracer doesn't support cuda graph yet.
+    auto externId =
+        correlation.corrIdToExternId.contain(record->correlation_id)
+            ? correlation.corrIdToExternId.at(record->correlation_id).first
+            : Scope::DummyScopeId;
+    auto isAPI = correlation.apiExternIds.contain(externId);
+    processActivity(externId, dataSet, record, isAPI);
+    // Track correlation ids from the same stream and erase those <
+    // correlationId
+    correlation.corrIdToExternId.erase(record->correlation_id);
+    correlation.apiExternIds.erase(externId);
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
-}
-
-void RoctracerProfiler::RoctracerProfilerPimpl::startOp(const Scope &scope) {
-  // Track correlation id for the scope
-  externIdQueue[CorrelationDomain::Domain0].push_back(scope.scopeId);
-}
-
-void RoctracerProfiler::RoctracerProfilerPimpl::stopOp(const Scope &scope) {
-  externIdQueue[CorrelationDomain::Domain0].pop_back();
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
@@ -335,7 +255,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {
 
 RoctracerProfiler::RoctracerProfiler() {
   pImpl = std::make_unique<RoctracerProfilerPimpl>(*this);
-  createDeviceMap();
 }
 
 RoctracerProfiler::~RoctracerProfiler() = default;

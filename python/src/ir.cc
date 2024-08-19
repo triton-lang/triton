@@ -10,6 +10,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
@@ -27,6 +28,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/Support/SourceMgr.h"
 
 namespace {
 
@@ -201,7 +203,20 @@ void init_triton_ir(py::module &&m) {
       .value("IEEE", InputPrecision::IEEE)
       .export_values();
 
-  py::class_<MLIRContext>(m, "context", py::module_local()).def(py::init<>());
+  py::class_<MLIRContext>(m, "context", py::module_local())
+      .def(py::init<>())
+      .def("printOpOnDiagnostic",
+           [](MLIRContext &self, bool v) { self.printOpOnDiagnostic(v); })
+      .def("printStackTraceOnDiagnostic",
+           [](MLIRContext &self, bool v) {
+             self.printStackTraceOnDiagnostic(v);
+           })
+      .def("disable_multithreading",
+           [](MLIRContext &self) { self.disableMultithreading(); });
+
+  py::class_<SourceMgrDiagnosticHandler>(m, "source_mgr_diag",
+                                         py::module_local())
+      .def(py::init<llvm::SourceMgr &, MLIRContext *>());
 
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
@@ -428,6 +443,13 @@ void init_triton_ir(py::module &&m) {
              if (!ret)
                return py::none();
              return py::str(ret.getValue().str());
+           })
+      .def("get_bool_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<BoolAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::bool_(ret.getValue());
            })
       .def("get_flat_symbol_ref_attr",
            [](Operation &self, const std::string &name) -> py::object {
@@ -1498,11 +1520,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_print",
            [](TritonOpBuilder &self, const std::string &prefix, bool hex,
-              const std::vector<Value> &values) -> void {
-             self.create<PrintOp>(
-                 StringAttr::get(self.getBuilder().getContext(),
-                                 llvm::StringRef(prefix)),
-                 hex, values);
+              const std::vector<Value> &values,
+              const std::vector<int32_t> &isSigned) -> void {
+             auto prefixAttr = StringAttr::get(self.getBuilder().getContext(),
+                                               llvm::StringRef(prefix));
+             self.create<PrintOp>(prefixAttr, hex, values, isSigned);
            })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
@@ -1517,6 +1539,10 @@ void init_triton_ir(py::module &&m) {
              auto lineNoAttr = self.getBuilder().getI32IntegerAttr(lineNo);
              self.create<AssertOp>(condition, messageAttr, fileNameAttr,
                                    funcNameAttr, lineNoAttr);
+           })
+      .def("create_assume",
+           [](TritonOpBuilder &self, Value &condition) {
+             self.create<LLVM::AssumeOp>(condition);
            })
       // Undef
       .def("create_undef",
@@ -1558,6 +1584,12 @@ void init_triton_ir(py::module &&m) {
              bool haveDiagnostics =
                  ::triton::tools::getBoolEnv("MLIR_ENABLE_DIAGNOSTICS");
              bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+             std::string funcToDump;
+             if (!haveDump) {
+               funcToDump = triton::tools::getStrEnv("MLIR_ENABLE_DUMP");
+               if (!funcToDump.empty())
+                 haveDump = true;
+             }
              if (haveDiagnostics || haveDump) {
                context->disableMultithreading();
              }
@@ -1573,7 +1605,19 @@ void init_triton_ir(py::module &&m) {
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
                printingFlags.enableDebugInfo();
-               auto printAlways = [](Pass *, Operation *) { return true; };
+               auto printAlways = [funcToDump](Pass *, Operation *op) -> bool {
+                 if (funcToDump.empty())
+                   return true;
+                 if (auto mod = dyn_cast<mlir::ModuleOp>(op)) {
+                   return mod.lookupSymbol(funcToDump);
+                 }
+                 if (auto func = dyn_cast<triton::FuncOp>(op)) {
+                   return SymbolTable::getSymbolName(func).getValue() ==
+                          funcToDump;
+                 }
+
+                 return false;
+               };
                self.enableIRPrinting(
                    /*shouldPrintBeforePass=*/printAlways,
                    /*shouldPrintAfterPass=*/printAlways,
@@ -1617,7 +1661,8 @@ void init_triton_ir(py::module &&m) {
                           });
 
           ::llvm::DebugFlag = true;
-          ::llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+          using namespace llvm;
+          setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
         }
 
         bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");

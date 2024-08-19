@@ -120,7 +120,8 @@ class CublasLtInstance {
   }
 
   // Simple wrapper around the cublasLtMatmul function
-  void fp8Matmul_impl(int m, int n, int k, uint64_t A, uint64_t B, uint64_t D) {
+  void matmul_impl(int m, int n, int k, uint64_t A, uint64_t B, uint64_t D,
+                   cudaDataType_t dtype) {
     cublasLtMatmulDesc_t matmulDesc = NULL;
 
     cublasOperation_t transa = CUBLAS_OP_T;
@@ -140,14 +141,16 @@ class CublasLtInstance {
         matmulDesc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa)));
     successOrExit(cublasLtMatmulDescSetAttribute(
         matmulDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transb)));
-    successOrExit(cublasLtMatmulDescSetAttribute(
-        matmulDesc, CUBLASLT_MATMUL_DESC_FAST_ACCUM, &fastAccum,
-        sizeof(fastAccum)));
+    if (dtype == CUDA_R_8F_E4M3) {
+      successOrExit(cublasLtMatmulDescSetAttribute(
+          matmulDesc, CUBLASLT_MATMUL_DESC_FAST_ACCUM, &fastAccum,
+          sizeof(fastAccum)));
+    }
 
-    successOrExit(cublasLtMatrixLayoutCreate(&Adesc, CUDA_R_8F_E4M3, k, m, k));
-    successOrExit(cublasLtMatrixLayoutCreate(&Bdesc, CUDA_R_8F_E4M3, k, n, k));
-    successOrExit(cublasLtMatrixLayoutCreate(&Cdesc, CUDA_R_16BF, m, n, m));
-    successOrExit(cublasLtMatrixLayoutCreate(&Ddesc, CUDA_R_8F_E4M3, m, n, m));
+    successOrExit(cublasLtMatrixLayoutCreate(&Adesc, dtype, k, m, k));
+    successOrExit(cublasLtMatrixLayoutCreate(&Bdesc, dtype, k, n, k));
+    successOrExit(cublasLtMatrixLayoutCreate(&Cdesc, CUDA_R_16F, m, n, m));
+    successOrExit(cublasLtMatrixLayoutCreate(&Ddesc, dtype, m, n, m));
 
     successOrExit(cublasLtMatmulAlgoGetHeuristic(
         ltHandle, matmulDesc, Adesc, Bdesc, Cdesc, Ddesc, preference, 1,
@@ -159,12 +162,10 @@ class CublasLtInstance {
 
     float alpha = 1.0f;
     float beta = 0.0f;
-
     successOrExit(cublasLtMatmul(ltHandle, matmulDesc, &alpha, (void *)A, Adesc,
                                  (void *)B, Bdesc, &beta, nullptr, Cdesc,
                                  (void *)D, Ddesc, &heuristicResult.algo,
                                  (void *)workspace, workspaceSize, 0));
-
     if (Ddesc)
       successOrExit(cublasLtMatrixLayoutDestroy(Ddesc));
     if (Cdesc)
@@ -201,10 +202,11 @@ public:
   // *will-not* transpose the matrices, so the caller is responsible for
   // ensuring that the matrices are in the correct format and have the correct
   // dimensions.
-  void fp8Matmul(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C) {
+  void matmul(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C,
+              cudaDataType_t dtype) {
     // CUDA is column-major, while triton is row-major, therefore we need to
     // reverse the order of the matrices ( A * B = (B^T * A^T)^T ).
-    fp8Matmul_impl(n, m, k, B, A, C);
+    matmul_impl(n, m, k, B, A, C, dtype);
   }
 };
 

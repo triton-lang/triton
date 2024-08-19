@@ -27,13 +27,13 @@ struct Device {
   uint64_t memoryClockRate; // khz
   uint64_t busWidth;
   uint64_t numSms;
-  uint64_t arch;
+  std::string arch;
 
   Device() = default;
 
   Device(DeviceType type, uint64_t id, uint64_t clockRate,
          uint64_t memoryClockRate, uint64_t busWidth, uint64_t numSms,
-         uint64_t arch)
+         std::string arch)
       : type(type), id(id), clockRate(clockRate),
         memoryClockRate(memoryClockRate), busWidth(busWidth), numSms(numSms),
         arch(arch) {}

@@ -3,8 +3,10 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 
@@ -14,8 +16,7 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 namespace {
 Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
-                          ConversionPatternRewriter &rewriter,
-                          int swizzleByteWidth) {
+                          RewriterBase &rewriter, int swizzleByteWidth) {
   Value rowInMat = urem(laneId, i32_val(8)); // row in the 8x8 matrix
   // linear index of the matrix in the 2x2 matrices
   // Decompose matIndex => s_0, s_1, that is the coordinate in 2x2 matrices in
@@ -34,7 +35,7 @@ Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
 
 void stMatrixm8n8x4(Value offset, ArrayRef<Value> vals, int indexOffset,
                     Value smemBase, Type elemTy, Location loc,
-                    ConversionPatternRewriter &rewriter) {
+                    RewriterBase &rewriter) {
   SmallVector<Value> inputs;
   auto prTy = ptr_ty(rewriter.getContext(), 3);
   // Pack the input into 2xf16
@@ -53,8 +54,8 @@ void stMatrixm8n8x4(Value offset, ArrayRef<Value> vals, int indexOffset,
 void storeDistributedToSharedWithStMatrix(
     RankedTensorType tensorTy, Type elemTy, SmallVector<Value> &inVals,
     Value smemBase, ArrayRef<unsigned> paddedRepShape,
-    ArrayRef<unsigned> origRepShape, Location loc,
-    ConversionPatternRewriter &rewriter, int swizzlingByteWidth) {
+    ArrayRef<unsigned> origRepShape, Location loc, RewriterBase &rewriter,
+    int swizzleByteWidth) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
   auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   auto order = triton::gpu::getOrder(mmaLayout);
@@ -68,7 +69,7 @@ void storeDistributedToSharedWithStMatrix(
   std::array<int, 2> numRep = {ceil((int)origRepShape[0], instrM),
                                ceil((int)origRepShape[1], instrN)};
   int numBoxes = 1;
-  if (swizzlingByteWidth == 128) {
+  if (swizzleByteWidth == 128) {
     int contigDimSizeInByte =
         origRepShape[1] * elemTy.getIntOrFloatBitWidth() / 8;
     numBoxes = ceil<int>(contigDimSizeInByte, 128);
@@ -84,7 +85,7 @@ void storeDistributedToSharedWithStMatrix(
 
   // Compute the relative offset for each lane.
   Value stMatrixLaneOffset =
-      computeStMatrixAddr(lane, boxShape[1], loc, rewriter, swizzlingByteWidth);
+      computeStMatrixAddr(lane, boxShape[1], loc, rewriter, swizzleByteWidth);
   multiDimWarpId[0] = mul(multiDimWarpId[0], i32_val(mmaShape[0]));
   multiDimWarpId[1] = mul(multiDimWarpId[1], i32_val(mmaShape[1]));
   SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
@@ -102,8 +103,8 @@ void storeDistributedToSharedWithStMatrix(
       for (int box = 0; box < numBoxes; box++) {
         for (int k = 0; k < numNChunk; k++) {
           Value kOffset;
-          if (swizzlingByteWidth >= 64) {
-            int swizzleBits = swizzlingByteWidth == 128 ? 6 : 2;
+          if (swizzleByteWidth >= 64) {
+            int swizzleBits = swizzleByteWidth == 128 ? 6 : 2;
             Value o = lshr(and_(lane, i32_val(swizzleBits)), i32_val(1));
             Value kV = xor_(o, i32_val(k));
             kOffset = mul(kV, i32_val(m8n8x4Stride));
@@ -124,23 +125,23 @@ void storeDistributedToSharedWithStMatrix(
   }
 }
 
-bool isStMatrixCompatible(RankedTensorType tensorTy, int swizzlingByteWidth) {
+bool isStMatrixCompatible(RankedTensorType tensorTy, int swizzleByteWidth) {
   auto mmaLayout =
       mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   if (!mmaLayout || !mmaLayout.isHopper())
     return false;
   if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
     return false;
-  if (swizzlingByteWidth > 0 && mmaLayout.getInstrShape()[1] < 64)
+  if (swizzleByteWidth > 0 && mmaLayout.getInstrShape()[1] < 64)
     return false;
-  if (swizzlingByteWidth != 0 && swizzlingByteWidth != 32 &&
-      swizzlingByteWidth != 64 && swizzlingByteWidth != 128)
+  if (swizzleByteWidth != 0 && swizzleByteWidth != 32 &&
+      swizzleByteWidth != 64 && swizzleByteWidth != 128)
     return false;
   return true;
 }
 
 // declare vprintf(i8*, i8*) as external function
-LLVM::LLVMFuncOp getVprintfDeclaration(ConversionPatternRewriter &rewriter) {
+LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("vprintf");
   Operation *funcOp = moduleOp.lookupSymbol(funcName);
@@ -152,7 +153,7 @@ LLVM::LLVMFuncOp getVprintfDeclaration(ConversionPatternRewriter &rewriter) {
   SmallVector<Type> argsType{ptr_ty(context), ptr_ty(context)};
   auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType);
 
-  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  RewriterBase::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
 
   return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(context), funcName,
@@ -161,8 +162,7 @@ LLVM::LLVMFuncOp getVprintfDeclaration(ConversionPatternRewriter &rewriter) {
 
 // extend integer to int32, extend float to float64
 // this comes from vprintf alignment requirements.
-std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
-                                          Value value) {
+std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto type = value.getType();
   Value newOp = value;
@@ -186,7 +186,7 @@ std::pair<Type, Value> printfPromoteValue(ConversionPatternRewriter &rewriter,
   return {newType, newOp};
 }
 
-LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
+LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("__assertfail");
   {
@@ -200,7 +200,7 @@ LLVM::LLVMFuncOp getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
   SmallVector<Type> argsType{ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
                              rewriter.getIntegerType(sizeof(size_t) * 8)};
   auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
-  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  RewriterBase::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
   auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx),
                                                   funcName, funcType);
@@ -260,68 +260,286 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
                                                         rewriter.getI32Type());
 }
 
-Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
-                         Type type, Value cmp) const {
+Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
+                         Value cmp) const {
   Value threadMask = int_val(type.getIntOrFloatBitWidth(), -1);
   return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
 }
-void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Value val, Value pred) const {
+
+static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
+                  Value pred) {
+  PTXBuilder builder;
+  (*builder.create<>("mapa.shared::cluster.u32"))(
+      builder.newOperand("=r"), //
+      builder.newAddrOperand(ptr, "r"), builder.newAddrOperand(ctaid, "r"))
+      .predicate(pred, "b");
+  return builder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
+}
+
+static std::string getConstraintForBitwidth(unsigned bitwidth) {
+  switch (bitwidth) {
+  case 8:
+  case 16:
+    return "h";
+  case 32:
+    return "r";
+  case 64:
+    return "l";
+  default:
+    llvm_unreachable("unsupported bitwidth");
+  }
+}
+
+void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Value val,
+                              Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
-  const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
+  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
+  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
+
+  if (!isa<VectorType>(val.getType())) {
+    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, {val}, rewriter),
+                 pred);
+    return;
+  }
+
+  auto vecTy = cast<VectorType>(val.getType());
+  Type elemTy = vecTy.getElementType();
+  unsigned vec = vecTy.getNumElements();
+  unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
+  assert(llvm::isPowerOf2_32(vec));
+
+  if (elemBitwidth < 8) {
+    assert(vec == 1 &&
+           "don't know how to load/store vectors of sub-byte elems");
+    SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
+    for (Value &v : vals) {
+      v = zext(int_ty(8), bitcast(v, int_ty(elemBitwidth)));
+    }
+    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
+                 pred);
+    return;
+  }
+
+  if (!elemTy.isInteger()) {
+    SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
+    for (Value &v : vals) {
+      v = bitcast(v, int_ty(elemBitwidth));
+    }
+    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
+                 pred);
+    return;
+  }
+
+  // load/store ops only support v2 and v4.  If the vector width is larger than
+  // 4, we have two strategies for dealing with it.
+  //  1. If the element type is smaller than b32, store b32's instead.
+  //  2. Otherwise, split the store into multiple stores.
+  if (vec > 4 && elemBitwidth < 32) {
+    assert(llvm::isPowerOf2_32(vec));
+    int elemsPerPack = 32 / elemBitwidth;
+    SmallVector<Value> oldVals = unpackLLVector(loc, val, rewriter);
+
+    SmallVector<Value> newVals;
+    for (int i = 0; i < vec / elemsPerPack; i++) {
+      Value v = packLLVector(
+          loc, ArrayRef(oldVals).slice(i * elemsPerPack, elemsPerPack),
+          rewriter);
+      newVals.push_back(bitcast(v, i32_ty));
+    }
+    storeDShared(rewriter, loc, ptr, ctaId,
+                 packLLVector(loc, newVals, rewriter), pred);
+    return;
+  }
+
+  if (vec * elemBitwidth > 128) {
+    assert(llvm::isPowerOf2_32(vec));
+    assert(elemBitwidth == 32 || elemBitwidth == 64);
+    int maxVec = 128 / elemBitwidth;
+
+    auto newVecTy = vec_ty(elemTy, maxVec);
+    SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
+    for (int i = 0; i < vec / maxVec; i++) {
+      auto newPtr = gep(ptr.getType(), elemTy, ptr, i32_val(i * maxVec),
+                        /*inbounds=*/true);
+      storeDShared(
+          rewriter, loc, newPtr, ctaId,
+          packLLVector(loc, ArrayRef(vals).slice(i * maxVec, maxVec), rewriter),
+          pred);
+    }
+    return;
+  }
+
+  // At this point we're committed to doing the store!
+  assert(elemBitwidth >= 8);
+  assert(elemTy.isInteger());
+  assert(1 <= vec && vec <= 4);
+  assert(vec * elemBitwidth <= 128);
+
+  // Get pointer to remote shared memory if needed.
+  if (ctaId.has_value()) {
+    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
+  }
 
   PTXBuilder builder;
+  auto st = builder.create<>("st")
+                ->o("shared::cta", ctaId.has_value())
+                .o("shared", !ctaId.has_value())
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto *valOpr = builder.newOperand(val, c);
-  auto &st = builder.create<>("st")->shared().b(bits);
+
+  PTXBuilder::Operand *valOpr;
+  std::string constraint = getConstraintForBitwidth(elemBitwidth);
+  if (vec > 1) {
+    SmallVector<std::pair<Value, std::string>> vecVals;
+    for (int i = 0; i < vec; i++) {
+      vecVals.push_back({extract_element(val, i32_val(i)), constraint});
+    }
+    valOpr = builder.newListOperand(vecVals);
+  } else {
+    valOpr = builder.newOperand(val, constraint);
+  }
   st(ptrOpr, valOpr).predicate(pred, "b");
   builder.launch(rewriter, loc, void_ty(ctx));
 }
 
-Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             const TypeConverter *converter, Value ptr,
-                             Type elemTy, Value pred) const {
+Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Type loadTy,
+                              Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
-  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
+  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
 
-  const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
+  if (!isa<VectorType>(loadTy)) {
+    SmallVector<Value> values = unpackLLVector(
+        loc, loadDShared(rewriter, loc, ptr, ctaId, vec_ty(loadTy, 1), pred),
+        rewriter);
+    assert(values.size() == 1);
+    return values[0];
+  }
+
+  auto vecTy = cast<VectorType>(loadTy);
+  Type elemTy = vecTy.getElementType();
+  unsigned vec = vecTy.getNumElements();
+  unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
+  assert(llvm::isPowerOf2_32(vec));
+
+  if (elemBitwidth < 8) {
+    assert(vec == 1 &&
+           "don't know how to load/store vectors of sub-byte elems");
+    SmallVector<Value> vals = unpackLLVector(
+        loc, loadDShared(rewriter, loc, ptr, ctaId, int_ty(8), pred), rewriter);
+    assert(vals.size() == 1);
+    return bitcast(trunc(int_ty(elemBitwidth), vals[0]), elemTy);
+  }
+
+  // We only know how to load integers.
+  if (!elemTy.isInteger()) {
+    Type newLoadTy = vec_ty(int_ty(elemBitwidth), vec);
+    SmallVector<Value> vals = unpackLLVector(
+        loc, loadDShared(rewriter, loc, ptr, ctaId, newLoadTy, pred), rewriter);
+    for (Value &v : vals) {
+      v = bitcast(v, elemTy);
+    }
+    return packLLVector(loc, vals, rewriter);
+  }
+
+  // load/store ops only support v2 and v4.  If the vector width is larger than
+  // 4, we have two strategies for dealing with it.
+  //  1. If the element type is smaller than b32, load b32's instead.
+  //  2. Otherwise, split the load into multiple loads.
+  if (vec > 4 && elemBitwidth < 32) {
+    int newVec = vec / (32 / elemBitwidth);
+    auto newVecTy = vec_ty(i32_ty, newVec);
+    auto res = loadDShared(rewriter, loc, ptr, ctaId, newVecTy, pred);
+
+    // Unpack the b32's into the original vector type.
+    SmallVector<Value> vals;
+    for (Value v : unpackLLVector(loc, res, rewriter)) {
+      Value vv = bitcast(v, vec_ty(elemTy, 32 / elemBitwidth));
+      for (Value vvv : unpackLLVector(loc, vv, rewriter)) {
+        vals.push_back(vvv);
+      }
+    }
+    return packLLVector(loc, vals, rewriter);
+  }
+
+  if (vec * elemBitwidth > 128) {
+    assert(elemBitwidth == 32 || elemBitwidth == 64);
+    assert(llvm::isPowerOf2_32(vec));
+    int maxVec = 128 / elemBitwidth;
+
+    SmallVector<Value> vals;
+    for (int i = 0; i < vec / maxVec; i++) {
+      auto newPtr = gep(ptr.getType(), elemTy, ptr, i32_val(i * maxVec),
+                        /*inbounds=*/true);
+      auto newVal = loadDShared(rewriter, loc, newPtr, ctaId,
+                                vec_ty(elemTy, maxVec), pred);
+      for (Value v : unpackLLVector(loc, newVal, rewriter)) {
+        vals.push_back(v);
+      }
+    }
+    return packLLVector(loc, vals, rewriter);
+  }
+
+  // At this point we're committed to actually do the load!
+  assert(elemBitwidth >= 8);
+  assert(elemTy.isInteger());
+  assert(1 <= vec && vec <= 4);
+  assert(vec * elemBitwidth <= 128);
+
+  // Get pointer to remote shared memory if needed.
+  if (ctaId.has_value()) {
+    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
+  }
 
   PTXBuilder builder;
-  auto *dOpr = builder.newOperand(c);
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto &ld = builder.create<>("ld")->shared().b(bitwidth);
-  ld(dOpr, ptrOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, elemTy);
+  auto ld = builder.create<>("ld")
+                ->o("shared::cta", ctaId.has_value())
+                .o("shared", !ctaId.has_value())
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
+
+  std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
+  auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
+                          : builder.newListOperand(vec, elemConstraint);
+  ld(outOpr, builder.newAddrOperand(ptr, "r")).predicate(pred, "b");
+
+  Type resultTy =
+      vec == 1 ? Type(int_ty(elemBitwidth))
+               : Type(struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth))));
+  Value load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
+
+  SmallVector<Value> resultVals = unpackLLElements(loc, load, rewriter);
+  return packLLVector(loc, resultVals, rewriter);
 }
 
-Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::NVIDIA::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
-                            Value val, int i) const {
+Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
+                            int i) const {
   return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, Value i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             Value i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
+Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
-bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
@@ -361,17 +579,28 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
   }
   return false;
 }
+
+bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
+                                ArrayRef<unsigned> paddedRepShape,
+                                ArrayRef<unsigned> outOrd,
+                                unsigned accumNumReplicates,
+                                int swizzleByteWidth) const {
+  return isStMatrixCompatible(srcTy, swizzleByteWidth) &&
+         accumNumReplicates == 1 && outOrd[0] == 1 &&
+         paddedRepShape[1] % 8 == 0;
+}
+
 bool TargetInfo::processReplicaUsingStMatrix(
-    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+    RewriterBase &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzlingByteWidth) const {
-  if (isStMatrixCompatible(srcTy, swizzlingByteWidth) &&
-      accumNumReplicates == 1 && outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
+    int swizzleByteWidth) const {
+  if (canUseStMatrix(srcTy, paddedRepShape, outOrd, accumNumReplicates,
+                     swizzleByteWidth)) {
     storeDistributedToSharedWithStMatrix(srcTy, elemTy, vals, smemBase,
                                          paddedRepShape, origRepShape, loc,
-                                         rewriter, swizzlingByteWidth);
+                                         rewriter, swizzleByteWidth);
     return true;
   }
   return false;
@@ -383,9 +612,8 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   return funcName;
 }
 
-void TargetInfo::printf(ConversionPatternRewriter &rewriter,
-                        Value formatStrStart, int /*formatStrByteCount*/,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
+                        int /*formatStrByteCount*/, ValueRange args) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -426,7 +654,19 @@ void TargetInfo::printf(ConversionPatternRewriter &rewriter,
   call(funcOp, operands);
 }
 
-void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
+                        ValueRange args) const {
+  assert(!msg.empty() && "printf with empty string not supported");
+  llvm::SmallString<64> msgNewline(msg);
+  msgNewline.push_back('\n');
+  msgNewline.push_back('\0');
+  Value msgValue =
+      LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
+                              "printfFormat_", msgNewline);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+}
+
+void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   auto funcOp = getAssertfailDeclaration(rewriter);

@@ -23,17 +23,21 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "MLIR_ENABLE_DIAGNOSTICS",
     "MLIR_ENABLE_DUMP",
     "MLIR_ENABLE_TIMING",
+    "TRITON_DEFAULT_FP_FUSION",
     "TRITON_DISABLE_LINE_INFO",
     "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE",
     "TRITON_ENABLE_LLVM_DEBUG",
     "TRITON_LLVM_DEBUG_ONLY",
-    "USE_TTGIR_LOC",
+    "USE_IR_LOC",
     "NVPTX_ENABLE_DUMP",
     // clang-format on
 };
 
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
+    // clang-format off
     "TRITON_REPRODUCER_PATH",
+    "TRITON_ENABLE_PYTHON_STACKTRACE"
+    // clang-format on
 };
 
 namespace tools {

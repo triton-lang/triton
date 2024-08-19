@@ -72,8 +72,8 @@ struct DecomposeUnsupportedConversions
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
-    triton::gpu::decomposeTensorCoreToDotLayoutConversion<
-        triton::gpu::NvidiaMmaEncodingAttr>(mod, isMmaToDotShortcut);
+    triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
+                                                          isMmaToDotShortcut);
     triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
 
     mlir::RewritePatternSet patterns(&getContext());

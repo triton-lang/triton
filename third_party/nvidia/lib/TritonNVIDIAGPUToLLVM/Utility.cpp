@@ -8,9 +8,8 @@ namespace LLVM {
 namespace NVIDIA {
 using namespace mlir::triton;
 
-static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, Value i, NVVM::ShflKind mode,
-                           Value clamp) {
+static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
+                           Value i, NVVM::ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -42,31 +41,27 @@ static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
   return result;
 }
 
-Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
                        i32_val(0x1f));
 }
 
-Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                int i) {
+Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
                        i32_val(0x0));
 }
 
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleIdx(loc, rewriter, val, i32_val(i));
 }
 
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 Value i) {
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, NVVM::ShflKind::idx,
                        i32_val(0x1f));
 }
 
-Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
-               ModuleOp moduleOp, int axis) {
+Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               int axis) {
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
@@ -92,8 +87,8 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   return val;
 }
 
-Value permute(Location loc, ConversionPatternRewriter &rewriter, Value a,
-              Value b, Value mask) {
+Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
+              Value mask) {
   PTXBuilder builder;
   auto &prmt = builder.create("prmt")->o("b32");
   auto *destOpr = builder.newOperand("=r");
@@ -104,94 +99,8 @@ Value permute(Location loc, ConversionPatternRewriter &rewriter, Value a,
   return builder.launch(rewriter, loc, rewriter.getIntegerType(32), false);
 }
 
-// A wrapper of LoadDSmemOp when vec = 1
-// (1) Get bitwidth from elemTy
-// (2) Create LoadDSmemOp
-// (3) Bitcast result from dataTy (u16/u32/u64) back to elemTy
-Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Type elemTy) {
-  assert(isa<LLVMPointerType>(addr.getType()) && "addr must be a pointer type");
-  auto ptrTy = cast<LLVMPointerType>(addr.getType());
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
-  Value ret =
-      rewriter.create<triton::nvgpu::LoadDSmemOp>(loc, addr, ctaId, bitwidth);
-  return bitcast(ret, elemTy);
-}
-
-// A wrapper of LoadDSmemOp when vec > 1
-// (1) Get bitwidth from elemTy
-// (2) Create LoadDSmemOp and extract results from retStruct
-// (3) Bitcast results from dataTy (u16/u32/u64) back to elemTy
-SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
-                                   Value addr, Value ctaId, unsigned vec,
-                                   Type elemTy) {
-  assert(isa<LLVMPointerType>(addr.getType()) && "addr must be a pointer type");
-  auto ptrTy = cast<LLVMPointerType>(addr.getType());
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
-  Value retStruct = rewriter.create<triton::nvgpu::LoadDSmemOp>(
-      loc, addr, ctaId, bitwidth, vec);
-  SmallVector<Value> retVals;
-  for (unsigned i = 0; i < vec; ++i) {
-    auto dataTy = rewriter.getIntegerType(bitwidth);
-    Value data = extract_val(dataTy, retStruct, i);
-    retVals.push_back(bitcast(data, elemTy));
-  }
-  return retVals;
-}
-
-// A wrapper of StoreDSmemOp when vec = 1
-// (1) Get bitwidth from elemTy
-// (2) Bitcast value from elemTy to dataTy (u16/u32/u64)
-// (3) Create StoreDSmemOp
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Value value, Value pred) {
-  assert(isa<LLVMPointerType>(addr.getType()) && "addr must be a pointer type");
-  auto ptrTy = cast<LLVMPointerType>(addr.getType());
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  unsigned bitwidth = value.getType().getIntOrFloatBitWidth();
-  auto dataTy = rewriter.getIntegerType(bitwidth);
-  Value data = bitcast(value, dataTy);
-  rewriter.create<triton::nvgpu::StoreDSmemOp>(loc, addr, ctaId, data, pred);
-}
-
-// A wrapper of StoreDSmemOp when vec = 1 and pred = 1
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Value value) {
-  Value pred = int_val(/*width=*/1, 1);
-  createStoreDSmem(loc, rewriter, addr, ctaId, value, pred);
-}
-
-// A wrapper of StoreDSmemOp when vec > 1
-// (1) Get bitwidth from elemTy
-// (2) Bitcast values from elemTy to dataTy (u16/u32/u64)
-// (3) Create StoreDSmemOp
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, ArrayRef<Value> values, Value pred) {
-  assert(isa<LLVMPointerType>(addr.getType()) && "addr must be a pointer type");
-  auto ptrTy = cast<LLVMPointerType>(addr.getType());
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  unsigned bitwidth = 0;
-  if (!values.empty()) {
-    bitwidth = values.back().getType().getIntOrFloatBitWidth();
-  }
-  auto dataTy = rewriter.getIntegerType(bitwidth);
-  SmallVector<Value> data;
-  for (unsigned i = 0; i < values.size(); ++i)
-    data.push_back(bitcast(values[i], dataTy));
-  rewriter.create<triton::nvgpu::StoreDSmemOp>(loc, addr, ctaId, data, pred);
-}
-
-// A wrapper of StoreDSmemOp when vec > 1 and pred = 1
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, ArrayRef<Value> values) {
-  Value pred = int_val(/*width=*/1, 1);
-  createStoreDSmem(loc, rewriter, addr, ctaId, values, pred);
-}
-
 /// Create a predicate with just single active thread.
-Value createElectPredicate(Location loc, PatternRewriter &rewriter) {
+Value createElectPredicate(Location loc, RewriterBase &rewriter) {
   PTXBuilder ptxBuilder;
   auto &elect = *ptxBuilder.create<>("elect.sync _|$0, 0xffffffff;");
   elect({ptxBuilder.newOperand("=b")}, /*onlyAttachMLIRArgs=*/true);

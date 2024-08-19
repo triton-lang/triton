@@ -14,12 +14,11 @@ cd triton/python
 pip install .
 ```
 
-To not build Proton, you can set the `TRITON_BUILD_PROTON` environment variable to `OFF`:
+To **not build** Proton, you can set the `TRITON_BUILD_PROTON` environment variable to `OFF`:
 
 ```bash
 TRITON_BUILD_PROTON=OFF pip install .
 ```
-
 
 ## Usage
 
@@ -138,11 +137,49 @@ When profiling in the command line mode, the `proton.start` and `proton.finalize
 By default, proton profiles are in the *json* format and can be read by *Hatchet*. The following command visualizes the profile data on terminal.
 
 ```bash
+pip install llnl-hatchet
 proton-viewer -m time/s <profile.hatchet>
 ```
+
+NOTE: `pip install hatchet` does not work because the API is slightly different.
 
 More options can be found by running the following command.
 
 ```bash
 proton-viewer -h
 ```
+
+## Proton *vs* nsys
+
+- Runtime overhead (up to 1.5x)
+
+Proton has a lower profiling overhead than nsys. Even for workload with a large number of small GPU kernels, proton triggers less than ~1.5x overhead.
+
+For GPU-bound workload, both proton and nsys has similar overhead, with little impact on the workload.
+
+The lower overhead of proton is due to its less profiling metrics and callbacks compared to nsys.
+
+- Profile size (significantly smaller than nsys)
+
+nsys traces and records every GPU kernel, while proton aggregates the metrics of GPU kernels under the same calling context.
+
+As a result, proton's profile size can be up to thousands of times smaller than nsys's profile size, depending on the running time.
+
+- Portability (support different GPUs)
+
+Proton is designed to be portable and can be used on AMD GPUs. nsys only supports NVIDIA GPUs.
+
+- Insights (more insightful than nsys on triton kernels)
+
+Proton can register hooks to analyze the metadata of triton kernels, while nsys cannot. **Note** that the hooks do add additional overhead to proton.
+
+## Known Issues
+
+- CUDA Graph
+
+Proton does not yet support graph profiling on AMD GPUs.
+
+`hooks` cannot be used to accurately accumulate the number of FLOPs in CUDA graph mode profiling because kernels are captured and launched separately; metrics are not accumulated when kernels are launched in graph mode. This issue can be circumvented by using `scope` to supply FLOPs.
+
+If profiling is initiated after CUDA graph capturing, there may be minor memory leak issues.
+This is because the number of kernels in a graph instance (i.e., `cuGraphExec`) is unknown, preventing the deletion of mappings between the kernel ID and the graph ID.

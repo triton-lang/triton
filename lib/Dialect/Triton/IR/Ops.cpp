@@ -15,7 +15,7 @@ namespace triton {
 void LoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), getPtr(),
+  effects.emplace_back(MemoryEffects::Read::get(), &getPtrMutable(),
                        triton::GlobalMemory::get());
   if (getIsVolatile())
     effects.emplace_back(MemoryEffects::Write::get(),
@@ -91,8 +91,7 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
     if (!mask)
       return failure();
 
-    auto constantMask =
-        llvm::dyn_cast_or_null<arith::ConstantOp>(mask.getDefiningOp());
+    auto constantMask = mask.getDefiningOp<arith::ConstantOp>();
     if (!constantMask)
       return failure();
 
@@ -159,8 +158,7 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
     if (!mask)
       return failure();
 
-    auto constantMask =
-        llvm::dyn_cast_or_null<arith::ConstantOp>(mask.getDefiningOp());
+    auto constantMask = mask.getDefiningOp<arith::ConstantOp>();
     if (!constantMask)
       return failure();
 
@@ -226,7 +224,8 @@ LogicalResult TransOp::inferReturnTypes(
   }
   if (auto memDescTy = dyn_cast<MemDescType>(argTy)) {
     inferredReturnTypes.push_back(MemDescType::get(
-        retShape, retEltTy, retEncoding, memDescTy.getMemorySpace()));
+        retShape, retEltTy, retEncoding, memDescTy.getMemorySpace(),
+        memDescTy.getMutableMemory()));
   } else {
     inferredReturnTypes.push_back(
         RankedTensorType::get(retShape, retEltTy, retEncoding));
@@ -335,8 +334,8 @@ LogicalResult MakeRangeOp::verify() {
 
 //-- ReduceOp --
 static LogicalResult
-inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
-                       int axis, SmallVectorImpl<Type> &inferredReturnTypes) {
+inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
+                       SmallVectorImpl<Type> &inferredReturnTypes) {
   auto retShape = argTy.getShape().vec();
   retShape.erase(retShape.begin() + axis);
   if (retShape.empty()) {
@@ -542,6 +541,8 @@ unsigned ScanOp::getNumOperands() { return this->getOperands().size(); }
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   auto value = adaptor.getSrc();
   if (!value)
+    return {};
+  if (!isa<FloatAttr, IntegerAttr>(value))
     return {};
   auto shapedType = cast<ShapedType>(getType());
   auto ret = SplatElementsAttr::get(shapedType, ArrayRef<Attribute>(value));
@@ -756,6 +757,26 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+LogicalResult BroadcastOp::verify() {
+  auto src = getSrc();
+  auto srcTensorType = cast<RankedTensorType>(src.getType());
+  auto srcShape = srcTensorType.getShape();
+  auto result = getResult();
+  auto resultTensorType = cast<RankedTensorType>(result.getType());
+  auto resultShape = resultTensorType.getShape();
+  if (srcShape.size() != resultShape.size()) {
+    return emitError("rank of source must be same as rank of result");
+  }
+  for (int i = 0; i < srcShape.size(); i++) {
+    if (srcShape[i] != 1 && srcShape[i] != resultShape[i]) {
+      return emitError("Different dimensions at index ")
+             << i << " between source and result.  "
+             << "Broadcast requires the source dimension to be 1.";
+    }
+  }
+  return success();
+}
+
 //-- MakeTensorPtrOp --
 void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
                             Value base, ValueRange shape, ValueRange strides,
@@ -773,6 +794,19 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
 
   return build(builder, state, result, base, shape, strides, offsets,
                builder.getDenseI32ArrayAttr(order));
+}
+
+//-- AdvanceOp --
+OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
+  // advance(ptr, 0, 0) -> ptr
+  SmallVector<OpFoldResult> rawOffsets = getOffsets();
+  auto offsets = getConstantIntValues(rawOffsets);
+  if (!offsets.has_value())
+    return {};
+  for (int64_t offset : offsets.value())
+    if (offset != 0)
+      return {};
+  return getPtr();
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and

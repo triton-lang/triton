@@ -14,6 +14,91 @@ using json = nlohmann::json;
 
 namespace proton {
 
+class TreeData::Tree {
+public:
+  struct TreeNode : public Context {
+    inline static const size_t RootId = 0;
+    inline static const size_t DummyId = std::numeric_limits<size_t>::max();
+
+    TreeNode() = default;
+    explicit TreeNode(size_t id, const std::string &name)
+        : id(id), Context(name) {}
+    TreeNode(size_t id, size_t parentId, const std::string &name)
+        : id(id), parentId(parentId), Context(name) {}
+    virtual ~TreeNode() = default;
+
+    void addChild(const Context &context, size_t id) { children[context] = id; }
+
+    bool hasChild(const Context &context) const {
+      return children.find(context) != children.end();
+    }
+
+    size_t getChild(const Context &context) const {
+      return children.at(context);
+    }
+
+    size_t parentId = DummyId;
+    size_t id = DummyId;
+    std::map<Context, size_t> children = {};
+    std::map<MetricKind, std::shared_ptr<Metric>> metrics = {};
+    std::map<std::string, FlexibleMetric> flexibleMetrics = {};
+    friend class Tree;
+  };
+
+  Tree() {
+    treeNodeMap.try_emplace(TreeNode::RootId, TreeNode::RootId, "ROOT");
+  }
+
+  size_t addNode(const Context &context, size_t parentId) {
+    if (treeNodeMap[parentId].hasChild(context)) {
+      return treeNodeMap[parentId].getChild(context);
+    }
+    auto id = nextContextId++;
+    treeNodeMap.try_emplace(id, id, parentId, context.name);
+    treeNodeMap[parentId].addChild(context, id);
+    return id;
+  }
+
+  size_t addNode(const std::vector<Context> &indices) {
+    auto parentId = TreeNode::RootId;
+    for (auto index : indices) {
+      parentId = addNode(index, parentId);
+    }
+    return parentId;
+  }
+
+  TreeNode &getNode(size_t id) { return treeNodeMap.at(id); }
+
+  enum class WalkPolicy { PreOrder, PostOrder };
+
+  template <WalkPolicy walkPolicy, typename FnT> void walk(FnT &&fn) {
+    if constexpr (walkPolicy == WalkPolicy::PreOrder) {
+      walkPreOrder(TreeNode::RootId, fn);
+    } else if constexpr (walkPolicy == WalkPolicy::PostOrder) {
+      walkPostOrder(TreeNode::RootId, fn);
+    }
+  }
+
+  template <typename FnT> void walkPreOrder(size_t contextId, FnT &&fn) {
+    fn(getNode(contextId));
+    for (auto &child : getNode(contextId).children) {
+      walkPreOrder(child.second, fn);
+    }
+  }
+
+  template <typename FnT> void walkPostOrder(size_t contextId, FnT &&fn) {
+    for (auto &child : getNode(contextId).children) {
+      walkPostOrder(child.second, fn);
+    }
+    fn(getNode(contextId));
+  }
+
+private:
+  size_t nextContextId = TreeNode::RootId + 1;
+  // tree node id->tree node
+  std::map<size_t, TreeNode> treeNodeMap;
+};
+
 void TreeData::init() { tree = std::make_unique<Tree>(); }
 
 void TreeData::startOp(const Scope &scope) {
@@ -28,6 +113,25 @@ void TreeData::startOp(const Scope &scope) {
 }
 
 void TreeData::stopOp(const Scope &scope) {}
+
+size_t TreeData::addScope(size_t parentScopeId, const std::string &name) {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  auto scopeIdIt = scopeIdToContextId.find(parentScopeId);
+  auto scopeId = parentScopeId;
+  if (scopeIdIt == scopeIdToContextId.end()) {
+    std::vector<Context> contexts;
+    if (contextSource != nullptr)
+      contexts = contextSource->getContexts();
+    // Record the parent context
+    scopeIdToContextId[parentScopeId] = tree->addNode(contexts);
+  } else {
+    // Add a new context under it and update the context
+    scopeId = Scope::getNewScopeId();
+    scopeIdToContextId[scopeId] =
+        tree->addNode(Context(name), scopeIdIt->second);
+  }
+  return scopeId;
+}
 
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);
@@ -172,5 +276,12 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
     std::logic_error("OutputFormat not supported");
   }
 }
+
+TreeData::TreeData(const std::string &path, ContextSource *contextSource)
+    : Data(path, contextSource) {
+  init();
+}
+
+TreeData::~TreeData() {}
 
 } // namespace proton

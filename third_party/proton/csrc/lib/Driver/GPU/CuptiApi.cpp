@@ -26,6 +26,9 @@ DEFINE_DISPATCH(ExternLibCupti, subscribe, cuptiSubscribe,
 DEFINE_DISPATCH(ExternLibCupti, enableDomain, cuptiEnableDomain, uint32_t,
                 CUpti_SubscriberHandle, CUpti_CallbackDomain)
 
+DEFINE_DISPATCH(ExternLibCupti, enableCallback, cuptiEnableCallback, uint32_t,
+                CUpti_SubscriberHandle, CUpti_CallbackDomain, CUpti_CallbackId);
+
 DEFINE_DISPATCH(ExternLibCupti, activityEnable, cuptiActivityEnable,
                 CUpti_ActivityKind)
 
@@ -60,6 +63,12 @@ DEFINE_DISPATCH(ExternLibCupti, unsubscribe, cuptiUnsubscribe,
                 CUpti_SubscriberHandle)
 
 DEFINE_DISPATCH(ExternLibCupti, finalize, cuptiFinalize)
+
+DEFINE_DISPATCH(ExternLibCupti, getGraphExecId, cuptiGetGraphExecId,
+                CUgraphExec, uint32_t *);
+
+DEFINE_DISPATCH(ExternLibCupti, getGraphId, cuptiGetGraphId, CUgraph,
+                uint32_t *);
 
 } // namespace cupti
 

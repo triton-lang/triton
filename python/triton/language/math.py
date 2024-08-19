@@ -157,7 +157,7 @@ def sqrt(x, _builder=None):
 
 @core.builtin
 @_check_dtype(dtypes=["fp32"])
-@_add_math_1arg_docstr("precise square root (rounding to nearest)")
+@_add_math_1arg_docstr("precise square root (rounding to nearest wrt the IEEE standard)")
 @core._tensor_member_fn
 def sqrt_rn(x, _builder=None):
     x = core._to_tensor(x, _builder)
@@ -203,7 +203,7 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 
 @core.builtin
 @_check_dtype(dtypes=["fp32"])
-@_add_math_2arg_docstr("precise division (rounding to nearest)")
+@_add_math_2arg_docstr("precise division (rounding to nearest wrt the IEEE standard)")
 def div_rn(x, y, _builder=None):
     x = core._to_tensor(x, _builder)
     y = core._to_tensor(y, _builder)

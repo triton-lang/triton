@@ -1,20 +1,26 @@
 #include "triton/Tools/LinearLayout.h"
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/StrUtil.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Alignment.h"
+#include "llvm/ADT/SetOperations.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+
+#define DEBUG_TYPE "linear_layout"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton {
 
 namespace {
 using BasesT = LinearLayout::BasesT;
+using llvm::SmallDenseSet;
 using llvm::Twine;
 
 BasesT makeBasesMap(
@@ -116,6 +122,11 @@ getInjectiveMat(const LinearLayout &layout) {
 // outDim as columns.  In other words, finds the number of linearly-independent
 // bases for this output dimension.
 int getMatrixRank(std::unique_ptr<uint64_t[]> m, int numRows, int numCols) {
+  // f2reduce underflows if the number of cols is 0, return the rank early in
+  // this case.
+  if (numCols == 0) {
+    return 0;
+  }
   // stride is specified in number of 64-bit words per row, and we pack our
   // matrix so that there's only one uint64_t per row.
   assert(numCols <= 64);
@@ -132,8 +143,8 @@ int getMatrixRank(std::unique_ptr<uint64_t[]> m, int numRows, int numCols) {
 
 template <typename T, typename U>
 void assertDimsEqualIgnoringOrder(T &&a, U &&b) {
-  llvm::DenseSet<StringAttr> as(a.begin(), a.end());
-  llvm::DenseSet<StringAttr> bs(b.begin(), b.end());
+  SmallDenseSet<StringAttr> as(a.begin(), a.end());
+  SmallDenseSet<StringAttr> bs(b.begin(), b.end());
   if (as != bs) {
     llvm::report_fatal_error("Dimensions must match, ignoring order, but they "
                              "don't.  Got dims: [" +
@@ -142,7 +153,75 @@ void assertDimsEqualIgnoringOrder(T &&a, U &&b) {
   }
 }
 
+template <typename T, typename U>
+void assertDimsSubsetIgnoringOrder(T &&small, U &&big) {
+  SmallDenseSet<StringAttr> smallSet(small.begin(), small.end());
+  SmallDenseSet<StringAttr> bigSet(big.begin(), big.end());
+  if (!llvm::set_is_subset(smallSet, bigSet)) {
+    llvm::report_fatal_error("Dimensions must be a subset, ignoring order, but "
+                             "they aren't.  Got dims: [" +
+                             Twine(triton::join(small, ", ")) + "] and [" +
+                             triton::join(big, ", ") + "]");
+  }
+}
+
+void eraseEmptyInOutDims(BasesT &bases,
+                         llvm::MapVector<StringAttr, int32_t> &outDims) {
+  // Erase empty out-dims.
+  SmallVector<int> emptyOutDims;
+  for (auto [i, outDim] : llvm::enumerate(
+           llvm::to_vector_of<StringAttr>(llvm::make_first_range(outDims)))) {
+    if (outDims[outDim] == 1) {
+      emptyOutDims.push_back(i);
+      outDims.erase(outDim);
+    }
+  }
+  if (outDims.empty()) {
+    bases.clear();
+    return;
+  }
+
+  for (auto &[inDim, inDimBases] : bases) {
+    for (auto &basis : inDimBases) {
+      // Erase the basis elements corresponding to the empty out-dims.
+      for (int i : llvm::reverse(emptyOutDims)) {
+        basis.erase(basis.begin() + i);
+      }
+    }
+  }
+
+  // Erase empty in-dims.
+  // TODO: This needs a test-case.
+  for (StringAttr inDim :
+       llvm::to_vector_of<StringAttr>(llvm::make_first_range(bases))) {
+    if (bases[inDim].empty()) {
+      bases.erase(inDim);
+    }
+  }
+}
+
 } // anonymous namespace
+
+/*static*/ std::optional<LinearLayout>
+LinearLayout::tryCreate(BasesT bases,
+                        ArrayRef<std::pair<StringAttr, int32_t>> outDims,
+                        bool requireSurjective) {
+  LinearLayout ll(std::move(bases), std::move(outDims), NoCheckInvariants{});
+  std::optional<std::string> error = ll.checkInvariants(requireSurjective);
+  if (error) {
+    return std::nullopt;
+  }
+  return ll;
+}
+
+LinearLayout::LinearLayout(BasesT bases,
+                           ArrayRef<std::pair<StringAttr, int32_t>> outDims,
+                           NoCheckInvariants)
+    : bases(std::move(bases)) {
+  for (auto [outDim, size] : outDims) {
+    this->outDims[outDim] = size;
+  }
+}
 
 LinearLayout::LinearLayout(BasesT bases, ArrayRef<StringAttr> outDimNames)
     : bases(std::move(bases)) {
@@ -159,31 +238,34 @@ LinearLayout::LinearLayout(BasesT bases, ArrayRef<StringAttr> outDimNames)
     }
   }
 
-  checkInvariants(/*requireSurjective=*/true);
+  std::optional<std::string> error =
+      checkInvariants(/*requireSurjective=*/true);
+  if (error.has_value()) {
+    llvm::report_fatal_error(StringRef(*error));
+  }
 }
 
 LinearLayout::LinearLayout(BasesT bases,
                            ArrayRef<std::pair<StringAttr, int32_t>> outDims,
                            bool requireSurjective)
-    : bases(std::move(bases)) {
-  for (auto [outDim, size] : outDims) {
-    assert(llvm::isPowerOf2_32(size));
-    this->outDims[outDim] = size;
+    : LinearLayout(std::move(bases), std::move(outDims), NoCheckInvariants{}) {
+  std::optional<std::string> error = checkInvariants(requireSurjective);
+  if (error.has_value()) {
+    llvm::report_fatal_error(StringRef(*error));
   }
-
-  checkInvariants(requireSurjective);
 }
 
-void LinearLayout::checkInvariants(bool requireSurjective) {
+std::optional<std::string>
+LinearLayout::checkInvariants(bool requireSurjective) {
+  LDBG("checkInvariants: " << toString());
   // Check that basis values are non-negative.
   for (const auto &[inDim, inDimBases] : bases) {
     for (const auto &basis : inDimBases) {
       if (llvm::any_of(basis, [](int32_t b) { return b < 0; })) {
-        llvm::report_fatal_error(
-            "Invalid bases passed to LinearLayout.  Expected all basis "
-            "values to be non-negative, but found a negative value for "
-            "in dimension '" +
-            Twine(inDim) + "'.  Full list of bases:" + toString() + "\n");
+        return "Invalid bases passed to LinearLayout.  Expected all basis "
+               "values to be non-negative, but found a negative value for "
+               "in dimension '" +
+               inDim.str() + "'.  Full list of bases:" + toString() + "\n";
       }
     }
   }
@@ -192,12 +274,20 @@ void LinearLayout::checkInvariants(bool requireSurjective) {
   for (const auto &[inDim, inDimBases] : bases) {
     for (const auto &basis : inDimBases) {
       if (basis.size() != outDims.size()) {
-        llvm::report_fatal_error(
-            "Invalid bases passed to LinearLayout.  Expect all bases to have "
-            "the same size, equal to outDimNames.size() (" +
-            Twine(outDims.size()) + ").  But this failed for in dimension '" +
-            Twine(inDim) + "'.  Full list of bases:" + toString() + "\n");
+        return "Invalid bases passed to LinearLayout.  Expect all bases to "
+               "have the same size, equal to outDimNames.size() (" +
+               std::to_string(outDims.size()) +
+               ").  But this failed for in dimension '" + inDim.str() +
+               "'.  Full list of bases:" + toString() + "\n";
       }
+    }
+  }
+
+  // Check that the out-dim sizes are powers of 2.
+  for (const auto &[outDim, size] : outDims) {
+    if (!llvm::isPowerOf2_32(size)) {
+      return "Invalid out-dim size " + std::to_string(size) + " for out-dim '" +
+             outDim.str() + "'.  Out-dim sizes must be powers of 2.\n";
     }
   }
 
@@ -206,7 +296,11 @@ void LinearLayout::checkInvariants(bool requireSurjective) {
   for (const auto &[inDim, inDimBases] : this->bases) {
     for (const auto &basis : inDimBases) {
       for (int i = 0; i < basis.size(); i++) {
-        assert(basis[i] < getOutDimSize(outDimNames[i]));
+        if (basis[i] >= outDims[outDimNames[i]]) {
+          return "Invalid basis " + std::to_string(basis[i]) + " for in-dim '" +
+                 inDim.str() + "' and out-dim '" + outDimNames[i].str() +
+                 "'.  Basis must be less than the out-dim size.\n";
+        }
       }
     }
   }
@@ -214,24 +308,24 @@ void LinearLayout::checkInvariants(bool requireSurjective) {
   // Determine whether the this layout is surjective, i.e. that every `out`
   // coordinate can be reached by some `in` coordinate.
   //
-  // It's prohibitively slow to calculate this naively, but thankfully, this is
-  // equivalent to checking that the number of linearly-independent bases is
-  // equal to sum(getOutDimSizeLog2).  This can be computed by finding the rank
-  // of the matrix whose columns are those bases.  We can compute the rank of
-  // our matrix using Gaussian elimination, which runs in O(n^3) for an n x n
-  // matrix.  Our matrix size is sum(inDimSizeLog2) x sum(outDimSizeLog2), so
-  // this should be plenty fast.
+  // It's prohibitively slow to calculate this naively, but thankfully, this
+  // is equivalent to checking that the number of linearly-independent bases
+  // is equal to sum(getOutDimSizeLog2).  This can be computed by finding
+  // the rank of the matrix whose columns are those bases.  We can compute
+  // the rank of our matrix using Gaussian elimination, which runs in O(n^3)
+  // for an n x n matrix.  Our matrix size is sum(inDimSizeLog2) x
+  // sum(outDimSizeLog2), so this should be plenty fast.
   this->surjective =
       getMatrixRank(getMatrix(*this), /*numRows=*/getTotalOutDimSizeLog2(),
                     /*numCols=*/getTotalInDimSizeLog2()) ==
       getTotalOutDimSizeLog2();
 
   if (requireSurjective && !surjective) {
-    llvm::report_fatal_error("Layout is expected to be surjective, i.e. every "
-                             "`out` coordinate can be reached by some `in` "
-                             "coordinate, but was not:" +
-                             Twine(toString()));
+    return "Layout is expected to be surjective, i.e. every `out` coordinate "
+           "can be reached by some `in` coordinate, but was not:" +
+           toString();
   }
+  return std::nullopt;
 }
 
 LinearLayout::LinearLayout(
@@ -391,8 +485,8 @@ LinearLayout LinearLayout::reshapeIns(
                                                   return acc * inDim.second;
                                                 }));
 
-  // First flatten into a single in-dimension.  Then split it up according to
-  // `newInDims`.
+  // First flatten into a single in-dimension.  Then split it up according
+  // to `newInDims`.
   SmallVector<std::vector<int32_t>> flatBases;
   for (const auto &[inDim, inDimBases] : bases) {
     for (const auto &basis : inDimBases) {
@@ -459,13 +553,13 @@ LinearLayout LinearLayout::reshapeOuts(
 }
 
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
-  // Check that elements common to both outerDimsRange and innerDimsRange appear
-  // in the same relative order.
+  // Check that elements common to both outerDimsRange and innerDimsRange
+  // appear in the same relative order.
   auto checkCommonDims = [&](auto outerDimsRange, auto innerDimsRange) {
-    llvm::DenseSet<StringAttr> outerDims(outerDimsRange.begin(),
-                                         outerDimsRange.end());
-    llvm::DenseSet<StringAttr> innerDims(innerDimsRange.begin(),
-                                         innerDimsRange.end());
+    SmallDenseSet<StringAttr> outerDims(outerDimsRange.begin(),
+                                        outerDimsRange.end());
+    SmallDenseSet<StringAttr> innerDims(innerDimsRange.begin(),
+                                        innerDimsRange.end());
 
     std::vector<StringAttr> outerCommonDims;
     for (StringAttr dim : outerDimsRange) {
@@ -495,7 +589,8 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   checkCommonDims(outer.getOutDimNames(), inner.getOutDimNames());
 
   // Get the sizeLog2 of all input and output dimensions we're going to
-  // consider, in order.  `inner` is more minor, so its dimensions come first.
+  // consider, in order.  `inner` is more minor, so its dimensions come
+  // first.
   llvm::MapVector<StringAttr, int32_t> inDimSizesLog2;
   llvm::MapVector<StringAttr, int32_t> outDimSizesLog2;
   for (const auto &layout : {inner, outer}) {
@@ -543,6 +638,120 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   }
   return LinearLayout(std::move(allBases), outDimSizes,
                       inner.isSurjective() && outer.isSurjective());
+}
+
+std::optional<LinearLayout>
+LinearLayout::divideRight(const LinearLayout &divisor) {
+  // Strip off the top N bases for each input dimension of divisor.  This
+  // gives a candidate quotient.  Then check if quotient * divisor equals
+  // `this`.
+  BasesT newBases = bases;
+  for (StringAttr inDim : divisor.getInDimNames()) {
+    if (getInDimSizeLog2(inDim) < divisor.getInDimSizeLog2(inDim)) {
+      return std::nullopt;
+    }
+    auto &newInDimBases = newBases[inDim];
+    newInDimBases.resize(newInDimBases.size() -
+                         divisor.getInDimSizeLog2(inDim));
+  }
+
+  llvm::MapVector<StringAttr, int32_t> newOutDims = outDims;
+  for (const auto [outDim, outDimSize] : divisor.outDims) {
+    if (newOutDims[outDim] < outDimSize) {
+      return std::nullopt;
+    }
+    newOutDims[outDim] /= outDimSize;
+  }
+
+  eraseEmptyInOutDims(newBases, newOutDims);
+
+  LDBG("this->divideRight(divisor)=candidate_quotient");
+  LDBG("this:" << *this);
+  LDBG("divisor:" << divisor);
+  LDBG("newOutDims: " << triton::join(newOutDims, ", ", [](auto &p) {
+         return p.first.str() + "=" + std::to_string(p.second);
+       }));
+  std::optional<LinearLayout> candidateQuotient = LinearLayout::tryCreate(
+      std::move(newBases), std::move(newOutDims).takeVector(),
+      /*requireSurjective=*/false);
+  if (!candidateQuotient.has_value()) {
+    LDBG("candidate quotient failed invariant checks");
+    return std::nullopt;
+  }
+  LDBG("candidate_quotient:" << candidateQuotient);
+
+  if (*candidateQuotient * divisor == *this) {
+    return *candidateQuotient;
+  }
+  return std::nullopt;
+}
+
+LinearLayout LinearLayout::sublayout(ArrayRef<StringAttr> inDimNames,
+                                     ArrayRef<StringAttr> outDimNames) const {
+  assertDimsSubsetIgnoringOrder(inDimNames, getInDimNames());
+  assertDimsSubsetIgnoringOrder(outDimNames, getOutDimNames());
+  SmallDenseSet<StringAttr> inDimSet(inDimNames.begin(), inDimNames.end());
+  SmallDenseSet<StringAttr> outDimSet(outDimNames.begin(), outDimNames.end());
+
+  SmallDenseSet<int> outDimIndicesToKeep;
+  for (auto [i, outDim] : llvm::enumerate(getOutDimNames())) {
+    if (outDimSet.contains(outDim)) {
+      outDimIndicesToKeep.insert(i);
+    }
+  }
+  BasesT newBases;
+  for (auto [inDim, inDimBases] : bases) {
+    if (!inDimSet.contains(inDim)) {
+      continue;
+    }
+    auto &newInDimBases = newBases[inDim];
+    for (auto &basis : inDimBases) {
+      auto &newBasis = newInDimBases.emplace_back();
+      for (int i : outDimIndicesToKeep) {
+        newBasis.push_back(basis[i]);
+      }
+    }
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto [outDim, outDimSize] : outDims) {
+    if (outDimSet.contains(outDim)) {
+      newOutDims.push_back({outDim, outDimSize});
+    }
+  }
+  return LinearLayout(std::move(newBases), std::move(newOutDims),
+                      /*requireSurjective=*/false);
+}
+
+bool LinearLayout::sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
+                                   ArrayRef<StringAttr> outDimNames) const {
+  LinearLayout ss = sublayout(inDimNames, outDimNames);
+  for (auto [inDim, inDimBases] : ss.bases) {
+    for (auto basis : inDimBases) {
+      if (!llvm::all_of(basis, [](int32_t b) { return b == 0; })) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool LinearLayout::sublayoutIsIdentity(ArrayRef<StringAttr> inDimNames,
+                                       ArrayRef<StringAttr> outDimNames) const {
+  LinearLayout sl =
+      sublayout(inDimNames, outDimNames).flattenIns().flattenOuts();
+  if (sl.getNumInDims() == 0 || sl.getNumOutDims() == 0) {
+    return true;
+  }
+  int b = 0;
+  const auto &inDimBases = sl.bases.begin()->second;
+  for (auto basis : inDimBases) {
+    if (basis[0] != (1 << b)) {
+      return false;
+    }
+    b++;
+  }
+  return true;
 }
 
 SmallVector<std::pair<StringAttr, int32_t>>
@@ -600,19 +809,20 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   }
   assert(outer.isSurjective());
 
-  // Make both `this` and `outer` injective.  We need to do this on the `outer`
-  // layout because we can't invert a non-injective function.  We choose to do
-  // so on the `this` layout as well.  The rest of the comment explains why we
-  // make that choice.
+  // Make both `this` and `outer` injective.  We need to do this on the
+  // `outer` layout because we can't invert a non-injective function.  We
+  // choose to do so on the `this` layout as well.  The rest of the comment
+  // explains why we make that choice.
   //
   // Recall from the header that C = A.invertAndCompose(B) just means that
   //  A(x) = B(C(x)).
   //
-  // Sometimes we may have a choice of multiple values for a particular C(x).
-  // For example, if A(1) = B(0) = B(1) = 0, then C(1) can be either 0 or 1.
+  // Sometimes we may have a choice of multiple values for a particular
+  // C(x). For example, if A(1) = B(0) = B(1) = 0, then C(1) can be either 0
+  // or 1.
   //
   // We want to choose C such that C(x) != 0 where possible.  For example,
-  // suppose we are transfering from registers to registers and we have the
+  // suppose we are transferring from registers to registers and we have the
   // following layouts.
   //
   //   A(thread=1, block=0) = 1
@@ -623,17 +833,19 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   //   B(thread=2, block=0) = 1
   //   B(thread=0, block=1) = 0
   //
-  // Notice that A and B both have the same data in each of their two blocks.
-  // So if we want to transfer from A to B, we don't need to cross blocks, which
-  // is expensive.  We want A.invertAndCompose(B) to reflect that choice.
+  // Notice that A and B both have the same data in each of their two
+  // blocks. So if we want to transfer from A to B, we don't need to cross
+  // blocks, which is expensive.  We want A.invertAndCompose(B) to reflect
+  // that choice.
   //
-  // Let A' be A with the last line changed to "=4", and similarly for B'.  When
-  // transfering from A' to B', we can't cross blocks even if we wanted to,
-  // because the two blocks now have different data.  But also, any mapping of
-  // thread+block from A' to B' is also valid for mapping from A to B.
+  // Let A' be A with the last line changed to "=4", and similarly for B'.
+  // When transferring from A' to B', we can't cross blocks even if we wanted
+  // to, because the two blocks now have different data.  But also, any
+  // mapping of thread+block from A' to B' is also valid for mapping from A
+  // to B.
   //
-  // Thus making A and B injective encodes our desire not to cross blocks, or
-  // more generally our desire that C(x) != 0 where possible.
+  // Thus making A and B injective encodes our desire not to cross blocks,
+  // or more generally our desire that C(x) != 0 where possible.
   auto [matThis, numRowsThis, numColsThis] = getInjectiveMat(*this);
   auto [matOuter, numRowsOuter, numColsOuter] = getInjectiveMat(
       outer.transposeOuts(llvm::to_vector(this->getOutDimNames())));
@@ -652,12 +864,13 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     m[r] |= matThis[r] << numColsOuter;
   }
 
-  // Perform Gaussian elimination on `m`.  Because `outer` was modified to be
-  // bijective, the first half of the matrix should be the identity matrix.  The
-  // remaining half are the bases for the combined transformation.
+  // Perform Gaussian elimination on `m`.  Because `outer` was modified to
+  // be bijective, the first half of the matrix should be the identity
+  // matrix.  The remaining half are the bases for the combined
+  // transformation.
   //
-  // `stride` is specified in number of 64-bit words per row, and we pack our
-  // matrix so that there's only one uint64_t per row.
+  // `stride` is specified in number of 64-bit words per row, and we pack
+  // our matrix so that there's only one uint64_t per row.
   f2reduce::inplace_rref_strided(m.get(), combinedNumRows, combinedNumCols,
                                  /*stride=*/1);
 
@@ -676,8 +889,8 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   StringAttr inDim1D = *getInDimNames().begin();
   StringAttr outDim1D = *getOutDimNames().begin();
 
-  // Read off the new bases.  These are for a flattened 1D -> 1D transformation
-  // from `this`'s in-dims to `outer`'s in-dims.
+  // Read off the new bases.  These are for a flattened 1D -> 1D
+  // transformation from `this`'s in-dims to `outer`'s in-dims.
   BasesT newBases;
   auto &bs = newBases[inDim1D];
   for (int c = 0; c < numColsThis; c++) {
@@ -703,15 +916,62 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
 }
 
+llvm::MapVector<StringAttr, int32_t>
+LinearLayout::getFreeVariableMasks() const {
+  std::unique_ptr<uint64_t[]> mat = getMatrix(*this);
+  int numRows = getTotalOutDimSizeLog2();
+  int numCols = getTotalInDimSizeLog2();
+
+  // stride is specified in number of 64-bit words per row, and we pack our
+  // matrix so that there's only one uint64_t per row.
+  assert(numCols <= 64);
+  f2reduce::inplace_rref_strided(mat.get(), numRows, numCols, /*stride=*/1);
+
+  // For each row in the RREF matrix, identify the column with the first "1".
+  // These columns correspond to the basic (i.e. non-free) variables.
+  std::set<int32_t> basicVars;
+  for (int r = 0; r < numRows; r++) {
+    if (mat[r] == 0) {
+      continue;
+    }
+    basicVars.insert(__builtin_ctzll(mat[r]));
+  }
+
+  llvm::MapVector<StringAttr, int32_t> ret;
+  int c = 0;
+  for (StringAttr dim : getInDimNames()) {
+    int32_t mask = 0;
+    for (int i = 0; i < getInDimSizeLog2(dim); i++, c++) {
+      if (basicVars.count(c) == 0) {
+        mask |= (1 << i);
+      }
+    }
+    ret[dim] = mask;
+  }
+  return ret;
+}
+
 bool operator==(LinearLayout lhs, LinearLayout rhs) {
+  if (!lhs.equalIgnoringOutDimSizes(rhs))
+    return false;
+
+  for (const auto &[lhsOutDimAndSize, rhsOutDimAndSize] :
+       llvm::zip(lhs.outDims, rhs.outDims)) {
+    if (lhsOutDimAndSize.second != rhsOutDimAndSize.second)
+      return false;
+  }
+  return true;
+}
+
+bool LinearLayout::equalIgnoringOutDimSizes(const LinearLayout &other) const {
   // llvm::MapVector doesn't have an operator== :(.
-  if (llvm::to_vector(lhs.getOutDimNames()) !=
-      llvm::to_vector(rhs.getOutDimNames()))
+  if (llvm::to_vector(this->getOutDimNames()) !=
+      llvm::to_vector(other.getOutDimNames()))
     return false;
-  if (lhs.bases.size() != rhs.bases.size())
+  if (this->bases.size() != other.bases.size())
     return false;
-  for (auto it1 = lhs.bases.begin(), it2 = rhs.bases.begin();
-       it1 != lhs.bases.end(); ++it1, ++it2) {
+  for (auto it1 = this->bases.begin(), it2 = other.bases.begin();
+       it1 != this->bases.end(); ++it1, ++it2) {
     if (*it1 != *it2)
       return false;
   }
@@ -719,13 +979,26 @@ bool operator==(LinearLayout lhs, LinearLayout rhs) {
 }
 
 std::string LinearLayout::toString() const {
-  // Start with a newline because we print out a bulleted list; it doesn't make
-  // sense for the first line of this list to be on the same line as any
-  // previous text.
+  // Start with a newline because we print out a bulleted list; it doesn't
+  // make sense for the first line of this list to be on the same line as
+  // any previous text.
   std::string ret = "\n";
+  std::string outDimsStr =
+      "[" +
+      join(outDims, ", ",
+           [](auto dimAndSize) {
+             auto [outDim, size] = dimAndSize;
+             return outDim.str() + " (size " + std::to_string(size) + ")";
+           }) +
+      "]";
 
-  if (bases.empty())
-    return "\n(empty layout)";
+  if (bases.empty()) {
+    if (outDims.empty()) {
+      return "\n(empty layout)";
+    } else {
+      return "\n(empty layout with out-dims " + outDimsStr + ")";
+    }
+  }
 
   // TODO: Add spaces for alignment.
   for (const auto &[inDim, inDimBases] : bases) {
@@ -742,13 +1015,7 @@ std::string LinearLayout::toString() const {
                 }) +
            "\n";
   }
-  ret += "where out dims are: [" +
-         join(outDims, ", ",
-              [](auto dimAndSize) {
-                auto [outDim, size] = dimAndSize;
-                return outDim.str() + " (size " + std::to_string(size) + ")";
-              }) +
-         "]";
+  ret += "where out dims are: " + outDimsStr;
   return ret;
 }
 

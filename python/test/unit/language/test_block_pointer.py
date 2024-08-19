@@ -3,6 +3,7 @@ import torch
 
 import triton
 import triton.language as tl
+from test_core import check_type_supported
 
 
 @triton.jit
@@ -13,23 +14,29 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option:
                                     block_shape=(BLOCK_SIZE, ), order=(0, ))
     b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(N, ), strides=(1, ), offsets=(pid * BLOCK_SIZE, ),
                                     block_shape=(BLOCK_SIZE, ), order=(0, ))
-    a = tl.load(a_block_ptr, boundary_check=(0, ), padding_option=padding_option)
+    if padding_option is None:
+        a = tl.load(a_block_ptr, boundary_check=(0, ))
+    else:
+        a = tl.load(a_block_ptr, boundary_check=(0, ), padding_option=padding_option)
     tl.store(b_block_ptr, a, boundary_check=(0, ))
 
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtypes_str, n, padding_option", [  #
     (dtypes_str, n, padding)
-    for dtypes_str in (("bool", "bool"), ("int16", "int16"), ("float16", "float16"), ("int16", "float16"))
+    for dtypes_str in (("bool", "bool"), ("int16", "int16"), ("int32", "int32"), ("float16", "float16"),
+                       ("float32", "float32"), ("bfloat16", "bfloat16"))
     for n in (64, 128, 256, 512, 1024)
-    for padding in ("zero", "nan")  #
+    for padding in (None, "zero", "nan")  #
 ])
 def test_block_copy(dtypes_str, n, padding_option, device):
     src_dtype_str = dtypes_str[0]
-    dst_dtype_str = dtypes_str[0]
+    dst_dtype_str = dtypes_str[1]
     src_dtype = getattr(torch, src_dtype_str)
     dst_dtype = getattr(torch, dst_dtype_str)
-    if src_dtype_str in ("bool", "int16"):
+    check_type_supported(src_dtype, device)
+    check_type_supported(dst_dtype, device)
+    if src_dtype_str in ("bool", "int16", "int32"):
         if padding_option == "nan":
             pytest.skip("Padding with NaN is not supported for integer types")
         a = torch.randint(0, 2, (n, ), device=device, dtype=src_dtype)
@@ -43,7 +50,7 @@ def test_block_copy(dtypes_str, n, padding_option, device):
     assert torch.all(a[0:n // 2] == b[0:n // 2])
     if padding_option == "zero":
         assert torch.all(b[n // 2:n] == 0)
-    else:
+    elif padding_option == "nan":
         assert torch.all(torch.isnan(b[n // 2:n]))
 
 

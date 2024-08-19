@@ -98,7 +98,7 @@ class DependenciesFinder(ast.NodeVisitor):
             self.hasher.update(func_key.encode("utf-8"))
 
     def visit_Name(self, node):
-        if type(node.ctx) == ast.Store:
+        if type(node.ctx) is ast.Store:
             return node.id
 
         if node.id in self.local_names:
@@ -117,12 +117,11 @@ class DependenciesFinder(ast.NodeVisitor):
                 and not self.visiting_arg_default_value
                 # It would be pretty evil if someone did `import x` and then
                 # `x = blah`.
-                and type(val) != ModuleType
+                and type(val) is not ModuleType
                 # It would be pretty evil if we used function `foo` inside of
                 # `bar` and then someone did `foo = baz`.
                 and not isinstance(val, JITFunction) and not getattr(val, "__triton_builtin__", False)  #
-                and node.id not in self.supported_python_builtins  #
-            ):
+                and node.id not in self.supported_python_builtins):
             self.used_global_vals[(node.id, id(self.globals))] = (val, self.globals)
 
         self._update_hash(val)
@@ -231,10 +230,12 @@ def _normalize_ty(ty) -> str:
 class KernelParam:
     """Represents a parameter (name plus metadata) to a @jit'ed function."""
 
-    def __init__(self, num: int, param: inspect.Parameter, do_not_specialize: bool):
+    def __init__(self, num: int, param: inspect.Parameter, do_not_specialize: bool,
+                 do_not_specialize_on_alignment: bool):
         self.num = num
         self._param = param
         self.do_not_specialize = do_not_specialize
+        self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
 
     @cached_property
     def name(self):
@@ -274,13 +275,13 @@ class KernelParam:
         return self._param.default != inspect.Parameter.empty
 
 
-def compute_spec_key(v):
+def compute_spec_key(v, align):
 
-    if hasattr(v, "data_ptr") and (v.data_ptr() % 16 == 0):
+    if align and hasattr(v, "data_ptr") and (v.data_ptr() % 16 == 0):
         return "D"
     elif isinstance(v, int):
         # bool is a subclass of int, so we don't check explicitly above.
-        if (v % 16 == 0):
+        if align and (v % 16 == 0):
             return "D"
         elif v == 1:
             return "1"
@@ -369,7 +370,10 @@ def create_function_from_signature(sig, kparams):
         else:
             non_constexpr_vals.append(name)
             if not kp.do_not_specialize:
-                specialisations.append('compute_spec_key(%s)' % name)
+                if not kp.do_not_specialize_on_alignment:
+                    specialisations.append('compute_spec_key(%s, align=True)' % name)
+                else:
+                    specialisations.append('compute_spec_key(%s, align=False)' % name)
             if kp.annotation_type:
                 signature_types.append('"%s"' % kp.annotation_type)
             else:
@@ -481,7 +485,7 @@ class JITFunction(KernelInterface[T]):
         divisible_by_16 = {
             param.num
             for param, arg in zip(self.params, args)
-            if is_divisible_by_16(arg) and not param.do_not_specialize
+            if is_divisible_by_16(arg) and not param.do_not_specialize and not param.do_not_specialize_on_alignment
         }
         equal_to_1 = {
             param.num
@@ -650,7 +654,7 @@ class JITFunction(KernelInterface[T]):
 
         # Check that used global values have not changed.
         not_present = object()
-        for (name, globals_dict_id), (val, globals_dict) in self.used_global_vals.items():
+        for (name, _), (val, globals_dict) in self.used_global_vals.items():
             if (newVal := globals_dict.get(name, not_present)) != val:
                 raise RuntimeError(
                     f"Global variable {name} has changed since we compiled this kernel, from {val} to {newVal}")
@@ -674,15 +678,17 @@ class JITFunction(KernelInterface[T]):
                        self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook, *non_constexpr_vals)
         return kernel
 
-    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None, repr=None,
-                 launch_metadata=None):
+    def __init__(self, fn, version=None, do_not_specialize=None, do_not_specialize_on_alignment=None, debug=None,
+                 noinline=None, repr=None, launch_metadata=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []
+        do_not_specialize_on_alignment = do_not_specialize_on_alignment if do_not_specialize_on_alignment else []
 
         self.fn = fn
         self.module = fn.__module__
         self.version = version
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
+        self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self.starting_line_number = inspect.getsourcelines(fn)[1]
         self.repr = lambda _: fn.__name__ if repr is None else repr(_)
         self.launch_metadata = launch_metadata
@@ -691,8 +697,9 @@ class JITFunction(KernelInterface[T]):
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
-            dns = do_not_specialize and (i in do_not_specialize or param.name in do_not_specialize)
-            self.params.append(KernelParam(i, param, dns))
+            dns = i in do_not_specialize or param.name in do_not_specialize
+            dns_oa = i in do_not_specialize_on_alignment or param.name in do_not_specialize_on_alignment
+            self.params.append(KernelParam(i, param, dns, dns_oa))
 
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
@@ -810,6 +817,7 @@ def jit(
     repr: Optional[Callable] = None,
     launch_metadata: Optional[Callable] = None,
     do_not_specialize: Optional[Iterable[int]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
 ) -> Callable[[T], JITFunction[T]]:
@@ -823,6 +831,7 @@ def jit(
     repr: Optional[Callable] = None,
     launch_metadata: Optional[Callable] = None,
     do_not_specialize: Optional[Iterable[int]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
@@ -848,12 +857,15 @@ def jit(
         assert callable(fn)
         if os.getenv("TRITON_INTERPRET", "0") == "1":
             from .interpreter import InterpretedFunction
-            return InterpretedFunction(fn)
+            return InterpretedFunction(fn, version=version, do_not_specialize=do_not_specialize,
+                                       do_not_specialize_on_alignment=do_not_specialize_on_alignment, debug=debug,
+                                       noinline=noinline, repr=repr, launch_metadata=launch_metadata)
         else:
             return JITFunction(
                 fn,
                 version=version,
                 do_not_specialize=do_not_specialize,
+                do_not_specialize_on_alignment=do_not_specialize_on_alignment,
                 debug=debug,
                 noinline=noinline,
                 repr=repr,
@@ -936,3 +948,21 @@ def reinterpret(tensor, dtype):
         return TensorWrapper(tensor, dtype)
     else:
         raise TypeError(f"Cannot reinterpret a {type(tensor)}.")
+
+
+def get_jit_fn_file_line(fn):
+    base_fn = fn
+    while not isinstance(base_fn, JITFunction):
+        base_fn = base_fn.fn
+    file_name = base_fn.fn.__code__.co_filename
+    lines, begin_line = inspect.getsourcelines(base_fn.fn)
+    # Match the following pattern:
+    # @triton.autotune(...) <- foo.__code__.co_firstlineno
+    # @triton.heuristics(...)
+    # @triton.jit
+    # def foo(...): <- this line is the first line
+    for idx, line in enumerate(lines):
+        if line.strip().startswith("def "):
+            begin_line += idx
+            break
+    return file_name, begin_line
