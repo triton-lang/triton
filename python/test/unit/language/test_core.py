@@ -1535,6 +1535,10 @@ def test_atomic_cas(sem, num_ctas, device):
 
         tl.store(ptrs, tl.load(ptrs) + 1.0)
 
+        # insert barrier to set a fence between tl.store and
+        # tl.atomic_xchg in a block.
+        tl.debug_barrier()
+
         # release lock
         tl.atomic_xchg(Lock, 0)
 
