@@ -968,9 +968,8 @@ void init_triton_ir(py::module &&m) {
                  self.getBuilder().getIndexType(), input);
            })
       .def("create_index_to_si",
-           [](TritonOpBuilder &self, Value &input) -> Value {
-             return self.create<arith::IndexCastOp>(
-                 self.getBuilder().getI64Type(), input);
+           [](TritonOpBuilder &self, Value &input, Type &dstType) -> Value {
+             return self.create<arith::IndexCastOp>(dstType, input);
            })
       .def("create_fmul",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {

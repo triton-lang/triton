@@ -924,15 +924,14 @@ class CodeGenerator(ast.NodeVisitor):
         iv_type = language.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = language.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
-        iv_is_signed = iv_type.int_signedness == language.core.dtype.SIGNEDNESS.SIGNED
         # lb/ub/step might be constexpr, we need to cast them to tensor
         lb = lb.handle
         ub = ub.handle
         step = step.handle
         # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
-        lb = self.builder.create_int_cast(lb, iv_ir_type, iv_is_signed)
-        ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
-        step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
+        lb = self.builder.create_to_index(lb)
+        ub = self.builder.create_to_index(ub)
+        step = self.builder.create_to_index(step)
         # Create placeholder for the loop induction variable
         iv = self.builder.create_undef(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv, iv_type))
@@ -1000,6 +999,7 @@ class CodeGenerator(ast.NodeVisitor):
             if negative_step:
                 iv = self.builder.create_sub(ub, iv)
                 iv = self.builder.create_add(iv, lb)
+            iv = self.builder.create_index_to_si(iv, iv_ir_type)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
             self.set_value(node.target.id, language.core.tensor(iv, iv_type))
 

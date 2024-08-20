@@ -102,8 +102,6 @@ struct ConvertTritonGPUToLLVM
 
     // Lower functions
     {
-      mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       mlir::triton::populateFuncOpConversionPattern(
