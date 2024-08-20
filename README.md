@@ -199,7 +199,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   from the IR to llir/ptx. When used with performance tools, it can provide a
   breakdown on IR instructions.
 - `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
-  spent for each kernel after autotuning is complete.
+- `TRITON_PRINT_AUTOTUNING_ALL=1` prints out all autotuning configs and their
+  timings in sorted order (based on the timings for each config).
 - `DISABLE_LLVM_OPT` will disable llvm optimizations for make_llir and make_ptx
   if its value is true when parsing as Bool. Otherwise, it will be parsed as a list
   of flags to disable llvm optimizations. One usage case is
