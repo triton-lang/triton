@@ -318,16 +318,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                  kBlock));
 
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-    assert(ArrayRef(to_vector(dstToSrc->getInDimNames())) ==
-           ArrayRef{kRegister});
     assert(ArrayRef(to_vector(dstToSrc->getOutDimNames())) ==
            ArrayRef{kRegister});
+    assert(dstToSrc->sublayoutIsZero({kLane, kWarp, kBlock}, {kRegister}));
+    auto subLayout = dstToSrc->sublayout({kRegister}, {kRegister});
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals;
-    outVals.resize(dstToSrc->getInDimSize(kRegister));
-    for (int i = 0; i < dstToSrc->getInDimSize(kRegister); i++) {
-      auto srcIdx = dstToSrc->apply({{kRegister, i}});
+    outVals.resize(subLayout.getInDimSize(kRegister));
+    for (int i = 0; i < subLayout.getInDimSize(kRegister); i++) {
+      auto srcIdx = subLayout.apply({{kRegister, i}});
       outVals[i] = inVals[srcIdx.begin()->second];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
@@ -342,7 +342,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                    OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
     // TODO(jlebar): Implement me.
-    return failure();
+    return transferWithinBlockOrGroup(op, srcLayout, dstLayout, adaptor,
+                                      rewriter);
   }
 
   LogicalResult

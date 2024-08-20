@@ -165,6 +165,34 @@ void assertDimsSubsetIgnoringOrder(T &&small, U &&big) {
   }
 }
 
+// Check that elements common to both outerDimsRange and innerDimsRange
+// appear in the same relative order.
+template <typename T, typename U>
+void assertCommonDimsSameOrder(T &&outerDims, U &&innerDims) {
+  SmallDenseSet<StringAttr> outerDimsSet(outerDims.begin(), outerDims.end());
+  SmallDenseSet<StringAttr> innerDimsSet(innerDims.begin(), innerDims.end());
+
+  std::vector<StringAttr> outerCommonDims;
+  for (StringAttr dim : outerDims) {
+    if (innerDimsSet.contains(dim)) {
+      outerCommonDims.push_back(dim);
+    }
+  }
+
+  std::vector<StringAttr> innerCommonDims;
+  for (StringAttr dim : innerDims) {
+    if (outerDimsSet.contains(dim)) {
+      innerCommonDims.push_back(dim);
+    }
+  }
+
+  if (outerCommonDims != innerCommonDims) {
+    llvm::report_fatal_error("All in/out dimensions common to both layouts "
+                             "must appear in the same relative order, but they "
+                             "don't.\n");
+  }
+}
+
 void eraseEmptyInOutDims(BasesT &bases,
                          llvm::MapVector<StringAttr, int32_t> &outDims) {
   // Erase empty out-dims.
@@ -553,40 +581,9 @@ LinearLayout LinearLayout::reshapeOuts(
 }
 
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
-  // Check that elements common to both outerDimsRange and innerDimsRange
-  // appear in the same relative order.
-  auto checkCommonDims = [&](auto outerDimsRange, auto innerDimsRange) {
-    SmallDenseSet<StringAttr> outerDims(outerDimsRange.begin(),
-                                        outerDimsRange.end());
-    SmallDenseSet<StringAttr> innerDims(innerDimsRange.begin(),
-                                        innerDimsRange.end());
-
-    std::vector<StringAttr> outerCommonDims;
-    for (StringAttr dim : outerDimsRange) {
-      if (innerDims.contains(dim)) {
-        outerCommonDims.push_back(dim);
-      }
-    }
-
-    std::vector<StringAttr> innerCommonDims;
-    for (StringAttr dim : innerDimsRange) {
-      if (outerDims.contains(dim)) {
-        innerCommonDims.push_back(dim);
-      }
-    }
-
-    if (outerCommonDims != innerCommonDims) {
-      llvm::report_fatal_error(
-          "Cannot multiply layouts.  All in/out dimensions common to both "
-          "layouts must appear in the same relative order, but they "
-          "don't.\nOuter:" +
-          Twine(outer.toString()) + "\nInner:" + inner.toString());
-    }
-  };
-
   // Check that dims common to outer and inner have the same relative order.
-  checkCommonDims(outer.getInDimNames(), inner.getInDimNames());
-  checkCommonDims(outer.getOutDimNames(), inner.getOutDimNames());
+  assertCommonDimsSameOrder(inner.getOutDimNames(), outer.getOutDimNames());
+  assertCommonDimsSameOrder(inner.getInDimNames(), outer.getInDimNames());
 
   // Get the sizeLog2 of all input and output dimensions we're going to
   // consider, in order.  `inner` is more minor, so its dimensions come
@@ -642,6 +639,9 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 
 std::optional<LinearLayout>
 LinearLayout::divideRight(const LinearLayout &divisor) {
+  assertCommonDimsSameOrder(getOutDimNames(), divisor.getOutDimNames());
+  assertCommonDimsSameOrder(getInDimNames(), divisor.getInDimNames());
+
   // Strip off the top N bases for each input dimension of divisor.  This
   // gives a candidate quotient.  Then check if quotient * divisor equals
   // `this`.
@@ -655,19 +655,95 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
                          divisor.getInDimSizeLog2(inDim));
   }
 
+  // Record size 1 out-dims caused by the division.
   llvm::MapVector<StringAttr, int32_t> newOutDims = outDims;
-  for (const auto [outDim, outDimSize] : divisor.outDims) {
-    if (newOutDims[outDim] < outDimSize) {
+  llvm::DenseSet<size_t> sizeOneOutDimIndices;
+  for (auto [outDimName, outDimSize] : divisor.outDims) {
+    if (newOutDims[outDimName] < outDimSize) {
       return std::nullopt;
     }
-    newOutDims[outDim] /= outDimSize;
+    auto newOutDimSize = newOutDims[outDimName] / outDimSize;
+    if (newOutDimSize == 1) {
+      sizeOneOutDimIndices.insert(getOutDimIndex(outDimName));
+    }
+    newOutDims[outDimName] = newOutDimSize;
   }
 
-  eraseEmptyInOutDims(newBases, newOutDims);
+  // Only erase the trailing empty out-dims.
+  // For example, consider l = o / r, where:
+  //
+  //   out-dims(o) = ["out0", "out1", "out2", "out3"]
+  //   out-dims(r) = ["out1", "out3"]
+  //
+  // If we remove "out1" from o, we get:
+  //
+  //   out-dims(l) = ["out0", "out2", "out3"]
+  //
+  // Then, out-dims(l * r) = ["out0", "out2", "out3"] * ["out1", "out3"] =
+  // ["out0", "out2", "out3", "out1"] which does not match out-dims(o).
+  //
+  // However, if we only remove "out3", we get:
+  //
+  //   out-dims(l) = ["out0", "out1", "out2"]
+  //
+  // Then, out-dims(l * r) = ["out0", "out1", "out2"] * ["out1", "out3"] =
+  // ["out0", "out1", "out2", "out3"] which matches out-dims(o).
+  llvm::SmallVector<size_t> emptyOutDimIndices;
+  for (int outDimIdx = outDims.size() - 1; outDimIdx >= 0; outDimIdx--) {
+    if (sizeOneOutDimIndices.contains(outDimIdx)) {
+      emptyOutDimIndices.push_back(outDimIdx);
+      newOutDims.erase(newOutDims.begin() + outDimIdx);
+    } else {
+      break;
+    }
+  }
+
+  // Erase the basis elements corresponding to the empty out-dims.
+  for (auto &[inDim, inDimBases] : newBases) {
+    for (auto &basis : inDimBases) {
+      for (int i : emptyOutDimIndices) {
+        basis.erase(basis.begin() + i);
+      }
+    }
+  }
+
+  // In some cases, we may have input dimensions that map to all zeros for
+  // certain output dimensions.  For example, suppose the current layout is:
+  //
+  //  - in-dim0=1 -> (0, 1)
+  //  where out dims are: [out-dim0 (size 1), out-dim1 (size 2)]
+  //
+  // And the layout of the divisor is:
+  //
+  //  - in-dim0=1 -> (0, 1)
+  //  where out dims are: [out-dim1 (size 2)]
+  //
+  // The quotient should be:
+  //
+  //   - in-dim0 is a size 1 dimension
+  //  where out dims are: [out-dim0 (size 1)]
+  //
+  // If we remove all input dimensions that map to zero, we would get an
+  // empty layout.  Then, empty() * divisor = L("in-dim0") -> ("out-dim1"),
+  // which is different from the original layout, causing `divideRight` to fail!
+  // As a result, we conservatively erase input dimensions only when the number
+  // of output dimensions matches that of the divisor.
+  if (newOutDims.size() == divisor.getOutDimNames().size()) {
+    for (auto inDimName : llvm::reverse(getInDimNames())) {
+      if (newBases[inDimName].empty() && divisor.hasInDim(inDimName)) {
+        newBases.erase(inDimName);
+      } else {
+        break;
+      }
+    }
+  }
 
   LDBG("this->divideRight(divisor)=candidate_quotient");
   LDBG("this:" << *this);
   LDBG("divisor:" << divisor);
+  LDBG("newBases: " << triton::join(newBases, ", ", [](auto &p) {
+         return p.first.str() + "=" + std::to_string(p.second.size());
+       }));
   LDBG("newOutDims: " << triton::join(newOutDims, ", ", [](auto &p) {
          return p.first.str() + "=" + std::to_string(p.second);
        }));
@@ -679,6 +755,7 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
     return std::nullopt;
   }
   LDBG("candidate_quotient:" << candidateQuotient);
+  LDBG("*candidate_quotient*divisor=" << *candidateQuotient * divisor);
 
   if (*candidateQuotient * divisor == *this) {
     return *candidateQuotient;
