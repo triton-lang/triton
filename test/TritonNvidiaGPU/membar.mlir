@@ -20,26 +20,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #shared0 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: inval_barrier
-	// CHECK: local_alloc
-	// CHECK-NEXT: gpu.barrier
-	// CHECK-NEXT: init_barrier
-	// CHECK-NEXT: gpu.barrier
-	// CHECK-NEXT: inval_barrier
-  tt.func @inval_barrier() {
-  	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
-  	%alloc = triton_gpu.local_alloc %cst : (tensor<1xi64, #blocked0>) -> !tt.memdesc<1xi64, #shared0, #triton_gpu.shared_memory, mutable>
-    triton_nvidia_gpu.init_barrier %alloc, 1 : !tt.memdesc<1xi64, #shared0, #triton_gpu.shared_memory, mutable>
-		triton_nvidia_gpu.inval_barrier %alloc : !tt.memdesc<1xi64, #shared0, #triton_gpu.shared_memory, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#shared0 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: barrier_expect
 	// CHECK: local_alloc
 	// CHECK-NEXT: gpu.barrier

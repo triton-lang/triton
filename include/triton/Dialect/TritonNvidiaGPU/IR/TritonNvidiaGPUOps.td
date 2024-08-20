@@ -125,21 +125,6 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [DeclareOpInterfaceMethods<Memo
     let assemblyFormat = "$alloc `,` $count attr-dict `:` type($alloc)";
 }
 
-def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-    let summary = "Invalidate a barrier allocation.";
-
-    let description = [{
-      Invalidate a barrier allocation so that it can be re-used. According to PTX
-      spec this has to be done before any re-use of the memory used by mbarrier.
-
-      https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
-    }];
-
-    let hasVerifier = 1;
-    let arguments = (ins TT_MemDescType:$alloc);
-    let assemblyFormat = "$alloc attr-dict `:` type($alloc)";
-}
-
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Signal a barrier of an expected number of bytes to be copied.";
 

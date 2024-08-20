@@ -822,7 +822,6 @@ struct AsyncLoad {
 static void createTMABarrierAndWait(
     scf::ForOp &forOp, SmallVector<AsyncLoad> &asyncLoads, Value insertIdx,
     Value extractIdx, Value phase, int numBuffers, tt::CoarseSchedule &schedule,
-    SmallVector<Value> &barriers,
     const llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
   llvm::SmallDenseMap<Operation *, AsyncLoad *> loadToAsyncLoad;
   for (AsyncLoad &asyncLoad : asyncLoads) {
@@ -889,7 +888,6 @@ static void createTMABarrierAndWait(
     }
 
     Value barrierAlloc = createBarrierAlloc(forOp, numBuffers);
-    barriers.push_back(barrierAlloc);
     Location loc = forOp.getLoc();
     OpBuilder builder(forOp);
     Attribute sharedMemorySpace =
@@ -926,7 +924,7 @@ static void createTMABarrierAndWait(
 static SmallVector<Value>
 createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
                llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-               SmallVector<Value> &barriers, int numStages) {
+               int numStages) {
   // Calculate the number of buffers needed for each load.
   // TODO pawel: we could do more fine-grained allocation here and
   // allocate only the number of buffers that specific loads need.
@@ -1008,7 +1006,7 @@ createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
     phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
   }
   createTMABarrierAndWait(forOp, asyncLoads, insertIdx, extractIdx, phase,
-                          numBuffers, schedule, barriers, loadToInfo);
+                          numBuffers, schedule, loadToInfo);
 
   // Create a cluster for the prefetches. It may end up being empty, but this
   // is OK.
@@ -1034,26 +1032,6 @@ createAsyncOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
   return allocs;
 }
 
-static void invalidateBarriers(OpBuilder &builder,
-                               SmallVector<Value> &barriers) {
-  Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(builder.getContext());
-  for (Value barrier : barriers) {
-    int numBarriers = cast<tt::MemDescType>(barrier.getType()).getShape()[0];
-    for (int i = 0; i < numBarriers; i++) {
-      Value idx = builder.create<arith::ConstantIntOp>(barrier.getLoc(), i, 32);
-      tt::MemDescType barrierTy = tt::MemDescType::get(
-          {1}, builder.getI64Type(),
-          cast<tt::MemDescType>(barrier.getType()).getEncoding(),
-          sharedMemorySpace,
-          /*mutableMemory=*/true);
-      Value barrierView = builder.create<ttg::MemDescSubviewOp>(
-          barrier.getLoc(), barrierTy, barrier, idx);
-      builder.create<ttng::InvalBarrierOp>(barrier.getLoc(), barrierView);
-    }
-  }
-}
-
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
@@ -1077,10 +1055,9 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     coarseSchedule.dump();
   });
 
-  SmallVector<Value> barriers;
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
-      createAsyncOps(forOp, coarseSchedule, loadToInfo, barriers, numStages);
+      createAsyncOps(forOp, coarseSchedule, loadToInfo, numStages);
 
   LLVM_DEBUG({
     LDBG("Coarse schedule with async loads:");
@@ -1126,8 +1103,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
   builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), ValueRange({}), 0);
-  // Invalidate any mbarrier create
-  invalidateBarriers(builder, barriers);
   // Explicitly deallocate allocated tensors after the wait op
   for (auto alloc : allocs)
     builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);

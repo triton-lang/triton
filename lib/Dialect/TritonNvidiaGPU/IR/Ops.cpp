@@ -103,20 +103,6 @@ void InitBarrierOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
-// -- InvalBarrierOp --
-LogicalResult InvalBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
-  return success();
-}
-
-void InvalBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // -- BarrierExpectOp --
 LogicalResult BarrierExpectOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))

@@ -60,7 +60,6 @@ public:
         loc, op.getDescPtr(), op.getIndices(), barrierAlloc, alloc, pred);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
-    rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
     rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op.getType(), alloc);
     return success();
   }

@@ -8,7 +8,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // CHECK: triton_nvidia_gpu.init_barrier
 // CHECK: triton_nvidia_gpu.async_tma_copy_global_to_local
 // CHECK: triton_nvidia_gpu.wait_barrier
-// CHECK: triton_nvidia_gpu.inval_barrier
 // CHECK: triton_gpu.local_load
   tt.func public @tma_load(%arg0: !tt.ptr<i8>, %arg1: i32) -> tensor<128x64xf16, #blocked> {
     %l = tt.experimental_descriptor_load %arg0[%arg1, %arg1] : !tt.ptr<i8> -> tensor<128x64xf16, #blocked>
