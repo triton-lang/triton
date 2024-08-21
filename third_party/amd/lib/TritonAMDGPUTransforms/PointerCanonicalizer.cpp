@@ -3,6 +3,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -56,20 +57,87 @@ static Value narrow64bitOffsetTo32bits(IRRewriter &rewriter, Location loc,
   return rewriter.create<arith::TruncIOp>(loc, rewriter.getI32Type(), offset);
 }
 
-// Try to extract a scalar `offset` by a (possibly) tensor offset
-Value getScalarOffset(IRRewriter &rewriter, Location loc, Value offset) {
+// Try to extract a scalar `offset` by a (possibly) tensor offset. This will
+// potentially modify the `offset` field of the `addPtrOp` (which will be
+// potentially stripped off the non-uniform component)
+Value getScalarOffset(IRRewriter &rewriter, Location loc,
+                      triton::AddPtrOp addPtrOp, bool &hasNonUniformComponent) {
+  hasNonUniformComponent = false;
+  Value offset = addPtrOp.getOffset();
   if (!isa<RankedTensorType>(offset.getType()))
     return offset;
 
-  if (auto splatOp = dyn_cast<triton::SplatOp>(offset.getDefiningOp()))
-    return splatOp.getSrc();
-
+  // Eearly exit for constant
   DenseIntElementsAttr constVal;
   if (matchPattern(offset, m_Constant(&constVal)) && constVal.isSplat())
     return rewriter.create<arith::ConstantOp>(
         loc, constVal.getSplatValue<IntegerAttr>());
 
-  return Value();
+  // Eearly exit for triton.splat
+  if (auto splatOp = dyn_cast<triton::SplatOp>(offset.getDefiningOp()))
+    return splatOp.getSrc();
+
+  // Additional optimization to catch cases where `offset = f(non-splat, splat)`
+  // and `f==AddIOp`. In this case we can get the non-splat contribution out of
+  // the add and use that to update the scalar pointer. We use a queue of
+  // <Operation, Operand> to traverse the offset contribution, in this way we
+  // can propagate the non-splat component to the right place
+  Value scalarOffset = rewriter.create<arith::ConstantIntOp>(
+      loc, 0,
+      dyn_cast<RankedTensorType>(offset.getType())
+          .getElementType()
+          .getIntOrFloatBitWidth());
+  SmallVector<std::pair<Operation *, OpOperand &>> Queue{
+      {offset.getDefiningOp(), addPtrOp->getOpOperand(1)}};
+  while (!Queue.empty()) {
+    auto [curOp, curOperand] = Queue.pop_back_val();
+    if (!curOp)
+      continue;
+    if (auto broadcastOp = dyn_cast<triton::BroadcastOp>(curOp)) {
+      // Keep going if you see broadcasts
+      Queue.push_back(
+          {broadcastOp.getSrc().getDefiningOp(), broadcastOp->getOpOperand(0)});
+    } else if (auto expandOp = dyn_cast<triton::ExpandDimsOp>(curOp)) {
+      // Keep going if you see expands
+      Queue.push_back(
+          {expandOp.getSrc().getDefiningOp(), expandOp->getOpOperand(0)});
+    } else if (auto splatOp =
+                   dyn_cast<triton::SplatOp>(offset.getDefiningOp())) {
+      // If the operation is a splat, simply add into the scalar offset
+      scalarOffset =
+          rewriter.create<arith::AddIOp>(loc, scalarOffset, splatOp.getSrc());
+    } else if (auto addOp = dyn_cast<arith::AddIOp>(curOp)) {
+      // Core case: we have an add. Isolate (if any) the splat contributions and
+      // keep going for non-splat contributions.
+      if (auto lhsSplat =
+              dyn_cast<triton::SplatOp>(addOp.getLhs().getDefiningOp())) {
+        Value lhsScalar = lhsSplat.getSrc();
+        scalarOffset =
+            rewriter.create<arith::AddIOp>(loc, scalarOffset, lhsScalar);
+        curOperand.set(addOp.getRhs());
+        Queue.push_back(
+            {addOp.getRhs().getDefiningOp(), addOp->getOpOperand(1)});
+      } else if (auto rhsSplat = dyn_cast<triton::SplatOp>(
+                     addOp.getRhs().getDefiningOp())) {
+        Value rhsScalar = rhsSplat.getSrc();
+        scalarOffset =
+            rewriter.create<arith::AddIOp>(loc, scalarOffset, rhsScalar);
+        curOperand.set(addOp.getLhs());
+        Queue.push_back(
+            {addOp.getLhs().getDefiningOp(), addOp->getOpOperand(0)});
+      } else {
+        Queue.push_back(
+            {addOp.getLhs().getDefiningOp(), addOp->getOpOperand(0)});
+        Queue.push_back(
+            {addOp.getRhs().getDefiningOp(), addOp->getOpOperand(1)});
+      }
+    } else {
+      // If we meet operations for which we cannot continue, this means that the
+      // offset has still a non-uniform component
+      hasNonUniformComponent = true;
+    }
+  }
+  return scalarOffset;
 }
 
 // Narrowing logic
@@ -172,19 +240,23 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
                                                     Value &nextPtr) {
   nextPtr = addPtrOp.getResult();
   auto fatPtr = pointers[addPtrOp.getPtr()];
-  Value fatPtrOffset = fatPtr.offset;
-  Value addPtrOffset = addPtrOp.getOffset();
-
-  Type fatPtrOffsetType = getElementTypeOrSelf(fatPtrOffset);
-  Type addPtrOffsetType = getElementTypeOrSelf(addPtrOffset);
-  Value newOffset = fatPtrOffset;
   Value newPtr = fatPtr.basePtr;
-  bool canNarrow = fatPtr.canNarrow;
-  if (Value scalarOffset = getScalarOffset(rewriter, curLoc, addPtrOffset)) {
+  bool hasNonUniformComponent = false;
+  Value scalarOffset =
+      getScalarOffset(rewriter, curLoc, addPtrOp, hasNonUniformComponent);
+  if (!isZeroConst(scalarOffset)) {
     // Scalar pointer update
     newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
                                                scalarOffset);
-  } else {
+  }
+
+  Value fatPtrOffset = fatPtr.offset;
+  bool canNarrow = fatPtr.canNarrow;
+  Value newOffset = fatPtrOffset;
+  // Vector offset update
+  if (hasNonUniformComponent) {
+    Value addPtrOffset = addPtrOp.getOffset();
+    Type addPtrOffsetType = getElementTypeOrSelf(addPtrOffset);
     canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, addPtrOffset);
 
     // If we the incoming offset is 32 bits, then we have to cast to 64
