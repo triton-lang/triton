@@ -106,7 +106,7 @@ jobs:
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo '::set-output name=matrix-CUDA::[["a100-runner-set"], ["h100-runner-set"]]'
-            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"], ["self-hosted", "gfx942"]]'
+            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx942"]]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
             echo '::set-output name=matrix-CUDA::["ubuntu-latest"]'
