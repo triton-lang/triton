@@ -24,9 +24,10 @@ namespace py = pybind11;
 
 void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   using namespace mlir::triton;
-  m.def("add_convert_memory_ops", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::cpu::createConvertMemoryOps());
-  });
+  m.def("add_convert_memory_ops",
+        [](mlir::PassManager &pm, bool useScalarLoops) {
+          pm.addPass(mlir::triton::cpu::createConvertMemoryOps(useScalarLoops));
+        });
   m.def("add_convert_ptr_ops", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createConvertPtrOps());
   });

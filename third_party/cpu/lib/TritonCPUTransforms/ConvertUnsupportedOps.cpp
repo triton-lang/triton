@@ -1,6 +1,7 @@
 #include "cpu/include/TritonCPUTransforms/OptCommon.h"
 #include "cpu/include/TritonCPUTransforms/Passes.h"
 
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -87,23 +88,30 @@ struct ConvertIToBf16ToFp32 : public OpRewritePattern<OpT> {
 };
 
 Value convertMemRefToI16(Value memRef, PatternRewriter &rewriter) {
-  Value res;
   MemRefType memRefTy = cast<MemRefType>(memRef.getType());
-  Type newMemRefTy =
+  if (memRefTy.getElementType().isInteger())
+    return memRef;
+
+  Value res;
+  MemRefType newMemRefTy =
       MemRefType::get(memRefTy.getShape(), rewriter.getI16Type(),
                       memRefTy.getLayout(), memRefTy.getMemorySpace());
   auto insPoint = rewriter.saveInsertionPoint();
   rewriter.setInsertionPointAfter(memRef.getDefiningOp());
   // Memory references for masked operations and transfers are always built
-  // with PtrToMemRefOp or ExtractMemRefOp.
+  // with PtrToMemRefOp, ExtractMemRefOp, or memref::AllocaOp.
   if (auto castOp = memRef.getDefiningOp<PtrToMemRefOp>()) {
     res = rewriter.create<PtrToMemRefOp>(memRef.getLoc(), newMemRefTy,
                                          castOp.getSrc());
-  } else {
-    auto extractOp = memRef.getDefiningOp<ExtractMemRefOp>();
-    assert(extractOp && "Unexpected memref producer");
+  } else if (auto extractOp = memRef.getDefiningOp<ExtractMemRefOp>()) {
     res = rewriter.create<ExtractMemRefOp>(memRef.getLoc(), newMemRefTy,
                                            extractOp.getSrc());
+  } else {
+    auto allocaOp = memRef.getDefiningOp<memref::AllocaOp>();
+    assert(allocaOp && "Unexpected memref producer");
+    res = rewriter.create<memref::AllocaOp>(allocaOp.getLoc(), newMemRefTy,
+                                            allocaOp.getAlignmentAttr());
+    rewriter.replaceOp(allocaOp, res);
   }
   rewriter.restoreInsertionPoint(insPoint);
   return res;
@@ -191,6 +199,42 @@ struct ConvertBf16TransferWriteOp
     rewriter.replaceOpWithNewOp<vector::TransferWriteOp>(
         op, intVal, newSource, op.getIndices(), op.getPermutationMapAttr(),
         op.getMask(), op.getInBoundsAttr());
+    return success();
+  }
+};
+
+struct ConvertBf16LoadOp : public OpRewritePattern<memref::LoadOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(memref::LoadOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isBf16(op.getType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    Value newMemRef = convertMemRefToI16(op.getMemRef(), rewriter);
+    Value intVal =
+        rewriter.create<memref::LoadOp>(loc, newMemRef, op.getIndices());
+    Value res = rewriter.create<arith::BitcastOp>(loc, op.getType(), intVal);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
+struct ConvertBf16StoreOp : public OpRewritePattern<memref::StoreOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(memref::StoreOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isBf16(op.getValue().getType()))
+      return failure();
+
+    Location loc = op.getLoc();
+    Value newMemRef = convertMemRefToI16(op.getMemRef(), rewriter);
+    Value intVal = rewriter.create<arith::BitcastOp>(
+        loc, toInt16(op.getValue().getType()), op.getValue());
+    rewriter.replaceOpWithNewOp<memref::StoreOp>(op, intVal, newMemRef,
+                                                 op.getIndices());
     return success();
   }
 };
@@ -353,6 +397,8 @@ struct ConvertUnsupportedOps
       patterns.add<ConvertBf16TransferReadOp>(context);
       patterns.add<ConvertBf16TransferWriteOp>(context);
       patterns.add<ConvertBf16Abs>(context);
+      patterns.add<ConvertBf16LoadOp>(context);
+      patterns.add<ConvertBf16StoreOp>(context);
     }
     patterns.add<ConvertF8Abs>(context);
     if (convertMixedPrecisionMatmul) {

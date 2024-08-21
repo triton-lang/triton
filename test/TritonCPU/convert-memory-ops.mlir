@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -triton-cpu-convert-memory-ops | FileCheck %s
+// RUN: triton-opt %s -split-input-file -triton-cpu-convert-memory-ops=use-scalar-loops=false | FileCheck %s
 
 // Convert strided masked loads to scalar loads.
 

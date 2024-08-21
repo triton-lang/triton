@@ -10,6 +10,12 @@ def ConvertMemoryOps : Pass<"triton-cpu-convert-memory-ops", "mlir::ModuleOp"> {
     }];
     let constructor = "mlir::triton::cpu::createConvertMemoryOps()";
 
+    let options = [
+        Option<"useScalarLoops", "use-scalar-loops",
+               "bool", /*default*/"true",
+               "Enable lowering of tensor loads and stores to scalar loops.">,
+    ];
+
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::memref::MemRefDialect",
                              "mlir::vector::VectorDialect",
