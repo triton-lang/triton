@@ -594,9 +594,45 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   }
 
   // Distance from the load to the use.
+  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
+    for (auto [loadOp, _, use] : loadOpToIndLevelAndUse) {
+      if (loadToInfo.count(loadOp) == 0)
+        continue;
+      loadToInfo[loadOp].distToUse =
+          schedule[use].first - schedule[loadOp].first;
+    }
+    return loadToInfo;
+  }
+  // If there is a use chain of load -> dot -> dot, we can ignore the second dot
+  // here.
+  // Start from loadOp, check uses and stop the recursion when hitting a dot.
+  DenseSet<Operation *> seen;
+  llvm::SmallVector<std::tuple<Operation *, Operation *>> loadOpToDirectUses;
+  std::function<void(Operation * op, Operation *)> dfsUse =
+      [&](Operation *op, Operation *use) {
+        if (!seen.insert(use).second)
+          return;
+        if (use->hasTrait<OpTrait::DotLike>()) {
+          loadOpToDirectUses.push_back(std::make_tuple(op, use));
+          return;
+        }
+        for (auto &tUse : use->getUses()) {
+          Operation *useOp = tUse.getOwner();
+          if (useOp && useOp->getBlock() == op->getBlock()) {
+            dfsUse(op, useOp);
+          }
+        }
+      };
+  DenseSet<Operation *> loadOps;
   for (auto [loadOp, _, use] : loadOpToIndLevelAndUse) {
     if (loadToInfo.count(loadOp) == 0)
       continue;
+    if (!loadOps.insert(loadOp).second)
+      continue;
+    seen.clear();
+    dfsUse(loadOp, loadOp);
+  }
+  for (auto [loadOp, use] : loadOpToDirectUses) {
     loadToInfo[loadOp].distToUse = schedule[use].first - schedule[loadOp].first;
   }
 

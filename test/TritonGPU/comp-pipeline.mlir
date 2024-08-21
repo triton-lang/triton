@@ -27,10 +27,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     %30 = arith.extsi %arg17 : i32 to i64
     // CHECK: tt.experimental_descriptor_load
     // CHECK: %[[QLOC:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<128x128xf16
-    // CHECK: %[[KLOC:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<4x128x128xf16
-    // CHECK: %[[VLOC:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<4x128x128xf16
-    // CHECK: %[[KBAR:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<4xi64
-    // CHECK: %[[VBAR:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<4xi64
+    // CHECK: %[[KLOC:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<3x128x128xf16
+    // CHECK: %[[VLOC:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<3x128x128xf16
+    // CHECK: %[[KBAR:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<3xi64
+    // CHECK: %[[VBAR:.+]] = triton_gpu.local_alloc {{.*}}tt.memdesc<3xi64
     // stage 0 iteration 0
     // CHECK: %[[K0:.+]] = triton_gpu.memdesc_subview %[[KLOC]][%c0_i32, %c0_i32, %c0_i32]
     // CHECK: triton_nvidia_gpu.async_tma_copy_global_to_local{{.*}} %[[K0]]
