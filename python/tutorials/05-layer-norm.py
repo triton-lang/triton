@@ -290,7 +290,7 @@ class LayerNorm(torch.autograd.Function):
 layer_norm = LayerNorm.apply
 device = triton.runtime.driver.active.get_current_target().backend
 # Torch doesn't support operations in float16 on CPU so use float32 instead
-dtype = torch.float32 if device == 'cpu' else torch.flaot16
+dtype = torch.float32 if device == 'cpu' else torch.float16
 
 
 def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
