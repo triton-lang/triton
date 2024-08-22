@@ -95,6 +95,12 @@ configs = [
     for w in [4, 8]\
 ]
 
+configs_tma = [
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64}, num_stages=s, num_warps=w) \
+    for s in [2, 3]\
+    for w in [4, 8]\
+]
+
 
 def keep(conf):
     BLOCK_M = conf.kwargs["BLOCK_M"]
@@ -192,8 +198,8 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
-    tl.store(m_ptrs, m_i)
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+    tl.store(m_ptrs, m_i)
 
 
 @triton.jit
@@ -271,6 +277,7 @@ def _tma_attn_fwd_inner(
     return acc, l_i, m_i
 
 
+@triton.autotune(configs_tma, key=["N_CTX", "HEAD_DIM"])
 @triton.jit
 def _tma_attn_fwd(Q, K, V, q_desc_ptr, k_desc_ptr, v_desc_ptr, o_desc_ptr, m_desc_ptr, sm_scale, Out,  #
                   Z, H, N_CTX,  #
@@ -631,6 +638,7 @@ cached_args = None
 def get_fwd_tma_descriptors(*args):
     global cached_desc_q, cached_desc_k, cached_desc_v, cached_desc_o, cached_desc_m, cached_args
     if args != cached_args:
+        cached_args = args
         # reuse cached tma descriptors if input matches
         q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, Z, H, N_CTX, HEAD_DIM, BLOCK_M, BLOCK_N, qkvo_element_size, m_element_size = args
         cached_desc_q = triton.tools.experimental_descriptor.create_2d_tma_descriptor(
@@ -696,15 +704,13 @@ class _attention(torch.autograd.Function):
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
         if supports_tma() and q.dtype == torch.float16:
-            configs = {
-                torch.float16: {"BLOCK_M": 128, "BLOCK_N": 64, "num_stages": 2, "num_warps": 8},
-            }
+            BLOCK_M = 128
+            BLOCK_N = 64
             Z, H, N_CTX = k.shape[:3]
-            dtype = q.dtype
             desc_q, desc_k, desc_v, desc_o, desc_m = get_fwd_tma_descriptors(q.data_ptr(), k.data_ptr(), v.data_ptr(),
                                                                              o.data_ptr(), M.data_ptr(), Z, H, N_CTX,
-                                                                             HEAD_DIM_Q, configs[dtype]["BLOCK_M"],
-                                                                             configs[dtype]["BLOCK_N"],
+                                                                             HEAD_DIM_Q, BLOCK_M,
+                                                                             BLOCK_N,
                                                                              q.element_size(), M.element_size())
             _tma_attn_fwd[grid](
                 q, k, v,  #
@@ -714,10 +720,6 @@ class _attention(torch.autograd.Function):
                 N_CTX=q.shape[2],  #
                 HEAD_DIM=HEAD_DIM_K,  #
                 STAGE=stage,  #
-                BLOCK_M=configs[dtype]["BLOCK_M"],  #
-                BLOCK_N=configs[dtype]["BLOCK_N"],  #
-                num_stages=configs[dtype]["num_stages"],  #
-                num_warps=configs[dtype]["num_warps"],  #
             )
         else:
             _attn_fwd[grid](
@@ -832,7 +834,7 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+BATCH, N_HEADS, HEAD_DIM = 4, 32, 256
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd", "bwd"]:
@@ -864,7 +866,7 @@ for mode in ["fwd", "bwd"]:
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device="cuda"):
     assert mode in ["fwd", "bwd"]
-    warmup = 25
+    warmup = 100
     rep = 100
     dtype = torch.float16
     if "triton" in provider:
