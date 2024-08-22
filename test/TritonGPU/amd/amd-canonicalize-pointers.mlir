@@ -340,7 +340,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL  tt.func @branch
+  // CHECK-LABEL: tt.func @branch
   tt.func @branch(%arg0 : !tt.ptr<f32>, %i1 : i1) -> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0: index
@@ -374,9 +374,13 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 // -----
 
+// The following is a simple case of a tile offset like: (A*B + C + D) where B,C are Uniform and A,D are not. So
+// we expect that the Uniform offset (which can be added to the scalar pointer) will be simply C and the NonUniform
+// offset will be A*B+D
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  tt.func @tile_ptr(%arg1: !tt.ptr<f16>,  %arg5: i32 , %arg7: i32 )  {
+  // CHECK-LABEL: tt.func @tile_offset
+  tt.func @tile_offset(%arg1: !tt.ptr<f16>,  %arg5: i32 , %arg7: i32 )  {
     %c128_i32 = arith.constant 128 : i32
     %c256_i32 = arith.constant 256 : i32
     %1 = tt.get_program_id x : i32
@@ -402,8 +406,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: %[[variableOffset10:.*]] = tt.broadcast %[[variableOffset1]] : tensor<16x1xi32, #blocked> -> tensor<16x256xi32, #blocked>
     // CHECK: %[[variableOffset01:.*]] = tt.broadcast %[[variableOffset00]] : tensor<1x256xi32, #blocked> -> tensor<16x256xi32, #blocked>
     // CHECK: %[[variableOffset2:.*]] = arith.addi %[[variableOffset10]], %[[variableOffset01]]
-    // CHECK: %[[tilePtrTotalOffset:.*]] = arith.addi %{{.*}}, %[[pidOffset]] : i32
-    // CHECK: %[[tilePtr:.*]] = tt.addptr %arg0, %[[tilePtrTotalOffset]] : !tt.ptr<f16>, i32
+    // CHECK: %[[tilePtrTotalOffset0:.*]] = arith.addi %{{.*}}, %[[pidOffset]] : i32
+    // CHECK: %[[tilePtrTotalOffset1:.*]] = arith.addi %{{.*}}, %[[tilePtrTotalOffset0]] : i32
+    // CHECK: %[[tilePtr:.*]] = tt.addptr %arg0, %[[tilePtrTotalOffset1]] : !tt.ptr<f16>, i32
     // CHECK: %[[variableOffset3:.*]] = arith.extsi %[[variableOffset2]]
     // CHECK: %[[variableOffset4:.*]] = arith.addi %[[variableOffset3]], {{.*}}
     // CHECK: %[[variableOffset5:.*]] = arith.trunci %[[variableOffset4]]
@@ -411,6 +416,66 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: %[[ptr:.*]] = tt.addptr %[[tilePtrSplat]], %[[variableOffset5]]
     // CHECK: tt.load %[[ptr]]
     %61 = tt.load %46 : tensor<16x256x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// The following is a more complex case where also a multiplication is involved. It's useful to walk through the case.
+// We have that the offset to the pointer is the following:
+//   %12 = %10 + 11
+// This can be transformed in:
+//  = %7 + %9
+//  = %5*%6 + %8
+//  = %4*%arg1 + %8
+//  = (%3+%2)*%arg1 + %8
+//  = (%1 + %2) * %arg1 + %8
+//  = (U + N)*U + N
+// Where U means uniform (e.g., a splat) and N means NonUniform (e.g., a make_range)
+// The scalar offset we want is (%1*%arg1), while the variable offset should be (%2*%arg1 + %8)
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+    %c128_i32 = arith.constant 128 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c128_i32 : i32
+    %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+    %3 = tt.splat %1 : i32 -> tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+    %4 = arith.addi %3, %2 : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+    %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %6 = tt.splat %arg1 : i32 -> tensor<128x1xi32, #blocked>
+    %7 = arith.muli %5, %6 : tensor<128x1xi32, #blocked>
+    %8 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+    %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
+    %10 = tt.broadcast %7 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
+    %11 = tt.broadcast %9 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
+    %12 = arith.addi %10, %11 : tensor<128x16xi32, #blocked>
+    %13 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
+    %14 = tt.addptr %13, %12 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
+    %15 = tt.load %14 : tensor<128x16x!tt.ptr<f16>, #blocked>
+    // CHECK: %[[pid:.*]] = tt.get_program_id x : i32
+    // CHECK: %[[pidOffset:.*]] = arith.muli %[[pid]], {{.*}}: i32
+    // CHECK: %[[makeRange1:.*]] = tt.make_range
+    // CHECK: %[[variableOffset7:.*]] = tt.expand_dims %[[makeRange1]]
+    // CHECK: %[[splat:.*]] = tt.splat %arg1 : i32 -> tensor<128x1xi32, #blocked>
+    // CHECK: %[[variableOffset6:.*]] = arith.muli %[[variableOffset7]], %[[splat]]
+    // CHECK: %[[makeRange:.*]] = tt.make_range
+    // CHECK: %[[variableOffset5:.*]] = tt.expand_dims %[[makeRange]]
+    // CHECK: %[[variableOffset4:.*]] = tt.broadcast %[[variableOffset6]]
+    // CHECK: %[[variableOffset3:.*]] = tt.broadcast %[[variableOffset5]]
+    // CHECK: %[[variableOffset2:.*]] = arith.addi %[[variableOffset4]], %[[variableOffset3]]
+    // CHECK: %[[variableOffset1:.*]] = tt.splat {{.*}} : i64 -> tensor<128x16xi64, #blocked>
+    // CHECK: %[[scalarOffset1:.*]] = arith.addi %{{.*}}, %[[pidOffset]] : i32
+    // CHECK: %[[scalarOffset0:.*]] = arith.muli %[[scalarOffset1]], %arg1 : i32
+    // CHECK: %[[scalarOffset:.*]] = arith.addi %[[scalarOffset0]], {{.*}} : i32
+    // CHECK: %[[scalarPtrUpdate:.*]] = tt.addptr %arg0, %[[scalarOffset]] : !tt.ptr<f16>, i32
+    // CHECK: %[[variableOffset0:.*]] = arith.extsi %[[variableOffset2]]
+    // CHECK: %[[variableOffset:.*]] = arith.addi %[[variableOffset0]], %[[variableOffset1]] : tensor<128x16xi64, #blocked>
+    // CHECK: %[[variableOffsetTrunc:.*]] = arith.trunci %[[variableOffset]] : tensor<128x16xi64, #blocked> to tensor<128x16xi32, #blocked>
+    // CHECK: %[[scalarPtrSplat:.*]] = tt.splat %[[scalarPtrUpdate]]
+    // CHECK: %[[ptr:.*]] =  tt.addptr %[[scalarPtrSplat]], %[[variableOffsetTrunc]]
+    // CHECK: tt.load %[[ptr]]
     tt.return
   }
 }

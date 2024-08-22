@@ -57,6 +57,104 @@ static Value narrow64bitOffsetTo32bits(IRRewriter &rewriter, Location loc,
   return rewriter.create<arith::TruncIOp>(loc, rewriter.getI32Type(), offset);
 }
 
+// Helper function to determine if the given `op` is a constant tensor and in
+// that case return the scalar value.
+Value getScalarConstant(IRRewriter &rewriter, Location loc, Operation *op) {
+
+  // Check for splatness
+  if (auto splatOp = dyn_cast<triton::SplatOp>(op))
+    return splatOp.getSrc();
+
+  // Check for constant
+  DenseIntElementsAttr constVal;
+  if (auto constOp = dyn_cast<arith::ConstantOp>(op)) {
+    Value val = constOp.getResult();
+    if (matchPattern(val, m_Constant(&constVal)) && constVal.isSplat())
+      return rewriter.create<arith::ConstantOp>(
+          loc, constVal.getSplatValue<IntegerAttr>());
+  }
+  return Value();
+}
+
+// Very simplified scalar extraction. An offset can be composed by Unifrom (U)
+// and non-uniform(N) componends. A uniform component is basically a tensor
+// constant (or a splat). A NonUniform value is a `make_range` or whatever we
+// multiply with a `make_range` operation. We consider the following
+// expressions:
+//   offset = (U+U) -> ScalarOffset = (U+U)
+//   offset = (U+N) -> ScalarOffset = (U)
+//   offset = (N+N) -> ScalarOffset = 0
+//   offset = (U*(N+U)) -> ScalarOffset = U*U
+//   offset = (N*U) -> ScalarOffset = 0
+// We do not consider the more generic expression:
+//   offset = (N+U)*(N+U)
+// Or any other expression not involving * and +.
+Value extractScalarOffsetFromExpr(IRRewriter &rewriter, Location loc,
+                                  Operation *curOp, OpOperand &curOperand,
+                                  int64_t bitness,
+                                  bool &hasNonUniformComponent) {
+  if (Value scalarConst = getScalarConstant(rewriter, loc, curOp)) {
+    return scalarConst;
+  } else if (auto broadcastOp = dyn_cast<triton::BroadcastOp>(curOp)) {
+    // Keep going if you see broadcasts
+    return extractScalarOffsetFromExpr(
+        rewriter, loc, broadcastOp.getSrc().getDefiningOp(),
+        broadcastOp->getOpOperand(0), bitness, hasNonUniformComponent);
+  } else if (auto expandOp = dyn_cast<triton::ExpandDimsOp>(curOp)) {
+    // Keep going if you see expands
+    return extractScalarOffsetFromExpr(
+        rewriter, loc, expandOp.getSrc().getDefiningOp(),
+        expandOp->getOpOperand(0), bitness, hasNonUniformComponent);
+  } else if (auto addOp = dyn_cast<arith::AddIOp>(curOp)) {
+    // A+B case
+    if (Value lhsScalar =
+            getScalarConstant(rewriter, loc, addOp.getLhs().getDefiningOp())) {
+      curOperand.set(addOp.getRhs());
+      Value scalarOffset = extractScalarOffsetFromExpr(
+          rewriter, loc, addOp.getRhs().getDefiningOp(), addOp->getOpOperand(1),
+          bitness, hasNonUniformComponent);
+      return rewriter.create<arith::AddIOp>(loc, scalarOffset, lhsScalar);
+    } else if (Value rhsScalar = getScalarConstant(
+                   rewriter, loc, addOp.getLhs().getDefiningOp())) {
+      curOperand.set(addOp.getLhs());
+      Value scalarOffset = extractScalarOffsetFromExpr(
+          rewriter, loc, addOp.getLhs().getDefiningOp(), addOp->getOpOperand(0),
+          bitness, hasNonUniformComponent);
+      return rewriter.create<arith::AddIOp>(loc, scalarOffset, rhsScalar);
+    } else {
+      Value scalarOffsetLhs = extractScalarOffsetFromExpr(
+          rewriter, loc, addOp.getLhs().getDefiningOp(), addOp->getOpOperand(0),
+          bitness, hasNonUniformComponent);
+      Value scalarOffsetRhs = extractScalarOffsetFromExpr(
+          rewriter, loc, addOp.getRhs().getDefiningOp(), addOp->getOpOperand(1),
+          bitness, hasNonUniformComponent);
+      return rewriter.create<arith::AddIOp>(loc, scalarOffsetLhs,
+                                            scalarOffsetRhs);
+    }
+  } else if (auto mulOp = dyn_cast<arith::MulIOp>(curOp)) {
+    // A*B case
+    if (Value lhsScalar =
+            getScalarConstant(rewriter, loc, mulOp.getLhs().getDefiningOp())) {
+      Value scalarOffset = extractScalarOffsetFromExpr(
+          rewriter, loc, mulOp.getRhs().getDefiningOp(), mulOp->getOpOperand(1),
+          bitness, hasNonUniformComponent);
+      return rewriter.create<arith::MulIOp>(loc, scalarOffset, lhsScalar);
+    } else if (Value rhsScalar = getScalarConstant(
+                   rewriter, loc, mulOp.getRhs().getDefiningOp())) {
+      Value scalarOffset = extractScalarOffsetFromExpr(
+          rewriter, loc, mulOp.getLhs().getDefiningOp(), mulOp->getOpOperand(0),
+          bitness, hasNonUniformComponent);
+      return rewriter.create<arith::MulIOp>(loc, scalarOffset, rhsScalar);
+    } else {
+      hasNonUniformComponent = true;
+      return rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+    }
+  } else {
+    hasNonUniformComponent = true;
+    return rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+  }
+}
+
 // Try to extract a scalar `offset` by a (possibly) tensor offset. This will
 // potentially modify the `offset` field of the `addPtrOp` (which will be
 // potentially stripped off the non-uniform component)
@@ -67,77 +165,21 @@ Value getScalarOffset(IRRewriter &rewriter, Location loc,
   if (!isa<RankedTensorType>(offset.getType()))
     return offset;
 
-  // Eearly exit for constant
-  DenseIntElementsAttr constVal;
-  if (matchPattern(offset, m_Constant(&constVal)) && constVal.isSplat())
-    return rewriter.create<arith::ConstantOp>(
-        loc, constVal.getSplatValue<IntegerAttr>());
-
-  // Eearly exit for triton.splat
-  if (auto splatOp = dyn_cast<triton::SplatOp>(offset.getDefiningOp()))
-    return splatOp.getSrc();
+  // Early exist for the case of a constant tensor
+  if (Value scalarConst = getScalarConstant(rewriter, loc, addPtrOp))
+    return scalarConst;
 
   // Additional optimization to catch cases where `offset = f(non-splat, splat)`
   // and `f==AddIOp`. In this case we can get the non-splat contribution out of
   // the add and use that to update the scalar pointer. We use a queue of
   // <Operation, Operand> to traverse the offset contribution, in this way we
   // can propagate the non-splat component to the right place
-  Value scalarOffset = rewriter.create<arith::ConstantIntOp>(
-      loc, 0,
-      dyn_cast<RankedTensorType>(offset.getType())
-          .getElementType()
-          .getIntOrFloatBitWidth());
-  SmallVector<std::pair<Operation *, OpOperand &>> Queue{
-      {offset.getDefiningOp(), addPtrOp->getOpOperand(1)}};
-  while (!Queue.empty()) {
-    auto [curOp, curOperand] = Queue.pop_back_val();
-    if (!curOp)
-      continue;
-    if (auto broadcastOp = dyn_cast<triton::BroadcastOp>(curOp)) {
-      // Keep going if you see broadcasts
-      Queue.push_back(
-          {broadcastOp.getSrc().getDefiningOp(), broadcastOp->getOpOperand(0)});
-    } else if (auto expandOp = dyn_cast<triton::ExpandDimsOp>(curOp)) {
-      // Keep going if you see expands
-      Queue.push_back(
-          {expandOp.getSrc().getDefiningOp(), expandOp->getOpOperand(0)});
-    } else if (auto splatOp =
-                   dyn_cast<triton::SplatOp>(offset.getDefiningOp())) {
-      // If the operation is a splat, simply add into the scalar offset
-      scalarOffset =
-          rewriter.create<arith::AddIOp>(loc, scalarOffset, splatOp.getSrc());
-    } else if (auto addOp = dyn_cast<arith::AddIOp>(curOp)) {
-      // Core case: we have an add. Isolate (if any) the splat contributions and
-      // keep going for non-splat contributions.
-      if (auto lhsSplat =
-              dyn_cast<triton::SplatOp>(addOp.getLhs().getDefiningOp())) {
-        Value lhsScalar = lhsSplat.getSrc();
-        scalarOffset =
-            rewriter.create<arith::AddIOp>(loc, scalarOffset, lhsScalar);
-        curOperand.set(addOp.getRhs());
-        Queue.push_back(
-            {addOp.getRhs().getDefiningOp(), addOp->getOpOperand(1)});
-      } else if (auto rhsSplat = dyn_cast<triton::SplatOp>(
-                     addOp.getRhs().getDefiningOp())) {
-        Value rhsScalar = rhsSplat.getSrc();
-        scalarOffset =
-            rewriter.create<arith::AddIOp>(loc, scalarOffset, rhsScalar);
-        curOperand.set(addOp.getLhs());
-        Queue.push_back(
-            {addOp.getLhs().getDefiningOp(), addOp->getOpOperand(0)});
-      } else {
-        Queue.push_back(
-            {addOp.getLhs().getDefiningOp(), addOp->getOpOperand(0)});
-        Queue.push_back(
-            {addOp.getRhs().getDefiningOp(), addOp->getOpOperand(1)});
-      }
-    } else {
-      // If we meet operations for which we cannot continue, this means that the
-      // offset has still a non-uniform component
-      hasNonUniformComponent = true;
-    }
-  }
-  return scalarOffset;
+  int64_t bitness = dyn_cast<RankedTensorType>(offset.getType())
+                        .getElementType()
+                        .getIntOrFloatBitWidth();
+  return extractScalarOffsetFromExpr(
+      rewriter, loc, addPtrOp.getOffset().getDefiningOp(),
+      addPtrOp->getOpOperand(1), bitness, hasNonUniformComponent);
 }
 
 // Narrowing logic
