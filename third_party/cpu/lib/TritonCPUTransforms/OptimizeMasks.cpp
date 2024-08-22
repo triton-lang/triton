@@ -284,11 +284,7 @@ AffineExpr buildMinOrMaxExpr(Value val, bool isSigned, bool isMax,
 // Check if vector mask is all-ones by checking compared values ranges.
 // Only simplest cases are covered here, so affine expression is used
 // to represent a range for now.
-bool isAlwaysAllOnes(Value mask) {
-  auto maskDef = mask.getDefiningOp<arith::CmpIOp>();
-  if (!maskDef)
-    return false;
-
+bool isAlwaysAllOnes(arith::CmpIOp maskDef) {
   auto pred = maskDef.getPredicate();
   if (pred == arith::CmpIPredicate::eq || pred == arith::CmpIPredicate::ne)
     return false;
@@ -323,30 +319,16 @@ bool isAlwaysAllOnes(Value mask) {
   return false;
 }
 
-struct OptimizeMaskedLoad : public OpRewritePattern<vector::MaskedLoadOp> {
+struct OptimizeMask : public OpRewritePattern<arith::CmpIOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(vector::MaskedLoadOp op,
+  LogicalResult matchAndRewrite(arith::CmpIOp op,
                                 PatternRewriter &rewriter) const override {
-    if (!isAlwaysAllOnes(op.getMask()))
+    if (!isAlwaysAllOnes(op))
       return failure();
 
-    rewriter.replaceOpWithNewOp<vector::LoadOp>(op, op.getType(), op.getBase(),
-                                                op.getIndices());
-    return success();
-  }
-};
-
-struct OptimizeMaskedStore : public OpRewritePattern<vector::MaskedStoreOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(vector::MaskedStoreOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!isAlwaysAllOnes(op.getMask()))
-      return failure();
-
-    rewriter.replaceOpWithNewOp<vector::StoreOp>(op, op.getValueToStore(),
-                                                 op.getBase(), op.getIndices());
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, op.getType(), rewriter.getOneAttr(op.getType()));
     return success();
   }
 };
@@ -362,20 +344,11 @@ struct OptimizeMasks
     // TODO: This pass optimizes out masks applying a set of very strict
     // patterns. We should use more generic range and divisibility analysis
     // to cover more cases and remove dependency on other transformations.
-    RewritePatternSet patterns1(context);
-    patterns1.add<CdivToDiv>(context);
-    if (failed(mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns1))))
-      return signalPassFailure();
-
-    RewritePatternSet patterns2(context);
-    patterns2.add<ScaleInductionVariable>(context);
-    if (failed(mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns2))))
-      return signalPassFailure();
-
-    RewritePatternSet patterns3(context);
-    patterns3.add<OptimizeMaskedLoad>(context);
-    patterns3.add<OptimizeMaskedStore>(context);
-    if (failed(mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns3))))
+    RewritePatternSet patterns(context);
+    patterns.add<CdivToDiv>(context);
+    patterns.add<ScaleInductionVariable>(context);
+    patterns.add<OptimizeMask>(context);
+    if (failed(mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns))))
       return signalPassFailure();
 
     // TODO: if masks removal failed for loads/stores in a for-loop, we might
