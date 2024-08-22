@@ -392,7 +392,7 @@ struct MemoryOpConversion : public OpConversionPattern<OpT> {
     auto resMemRefTy =
         MemRefType::get(vecTy.getShape(), vecTy.getElementType());
     Value resMemRef = createAlloca(loc, resMemRefTy, allocaPoint, rewriter);
-    bool storeOtherInLoop = mask;
+    bool storeOtherInLoop = static_cast<bool>(mask);
     if (other && !canComputeScalarValue(other)) {
       SmallVector<Value> indices(vecTy.getRank(), zeroIdx);
       rewriter.create<vector::TransferWriteOp>(
