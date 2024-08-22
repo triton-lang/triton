@@ -95,6 +95,7 @@ configs = [
     for w in [4, 8]\
 ]
 
+
 def keep(conf):
     BLOCK_M = conf.kwargs["BLOCK_M"]
     BLOCK_N = conf.kwargs["BLOCK_N"]
@@ -271,25 +272,13 @@ def _tma_attn_fwd_inner(
 
 
 @triton.jit
-def _tma_attn_fwd(
-    Q,
-    K,
-    V,
-    q_desc_ptr,
-    k_desc_ptr,
-    v_desc_ptr,
-    o_desc_ptr,
-    m_desc_ptr,
-    sm_scale,
-    Out,  #
-    Z,
-    H,
-    N_CTX,  #
-    HEAD_DIM: tl.constexpr,  #
-    BLOCK_M: tl.constexpr,  #
-    BLOCK_N: tl.constexpr,  #
-    STAGE: tl.constexpr,  #
-):
+def _tma_attn_fwd(Q, K, V, q_desc_ptr, k_desc_ptr, v_desc_ptr, o_desc_ptr, m_desc_ptr, sm_scale, Out,  #
+                  Z, H, N_CTX,  #
+                  HEAD_DIM: tl.constexpr,  #
+                  BLOCK_M: tl.constexpr,  #
+                  BLOCK_N: tl.constexpr,  #
+                  STAGE: tl.constexpr,  #
+                  ):
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
@@ -345,66 +334,40 @@ def _tma_attn_fwd(
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
     # load q: it will stay in SRAM throughout
-    q = tl._experimental_descriptor_load(
-        q_desc_ptr, [off_hz * N_CTX + start_m * BLOCK_M, 0],
-        [BLOCK_M, HEAD_DIM],
-        Q.dtype.element_ty
-    )
+    q = tl._experimental_descriptor_load(q_desc_ptr, [off_hz * N_CTX + start_m * BLOCK_M, 0], [BLOCK_M, HEAD_DIM],
+                                         Q.dtype.element_ty)
 
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _tma_attn_fwd_inner(
-            acc,
-            l_i,
-            m_i,
-            q,
-            k_desc_ptr,
-            v_desc_ptr,  #
-            start_m,
-            qk_scale,  #
-            BLOCK_M,
-            HEAD_DIM,
-            BLOCK_N,  #
-            4 - STAGE,
-            offs_m,
-            offs_n,
-            off_hz,
-            N_CTX,
-            V.dtype.element_ty == tl.float8e5,  #
-        )
+        acc, l_i, m_i = _tma_attn_fwd_inner(acc, l_i, m_i, q, k_desc_ptr, v_desc_ptr,  #
+                                            start_m, qk_scale,  #
+                                            BLOCK_M, HEAD_DIM, BLOCK_N,  #
+                                            4 - STAGE, offs_m, offs_n, off_hz, N_CTX,
+                                            V.dtype.element_ty == tl.float8e5,  #
+                                            )
     # stage 2: on-band
     if STAGE & 2:
         # barrier makes it easier for compielr to schedule the
         # two loops independently
-        acc, l_i, m_i = _tma_attn_fwd_inner(
-            acc,
-            l_i,
-            m_i,
-            q,
-            k_desc_ptr,
-            v_desc_ptr,  #
-            start_m,
-            qk_scale,  #
-            BLOCK_M,
-            HEAD_DIM,
-            BLOCK_N,  #
-            2,
-            offs_m,
-            offs_n,
-            off_hz,
-            N_CTX,
-            V.dtype.element_ty == tl.float8e5,  #
-        )
+        acc, l_i, m_i = _tma_attn_fwd_inner(acc, l_i, m_i, q, k_desc_ptr, v_desc_ptr,  #
+                                            start_m, qk_scale,  #
+                                            BLOCK_M, HEAD_DIM, BLOCK_N,  #
+                                            2, offs_m, offs_n, off_hz, N_CTX, V.dtype.element_ty == tl.float8e5,  #
+                                            )
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
     tl._experimental_descriptor_store(
-        m_desc_ptr, m_i, [off_hz * N_CTX + start_m * BLOCK_M],
+        m_desc_ptr,
+        m_i,
+        [off_hz * N_CTX + start_m * BLOCK_M],
     )
     tl._experimental_descriptor_store(
-        o_desc_ptr, acc.to(Out.type.element_ty), [off_hz * N_CTX + start_m * BLOCK_M, 0],
+        o_desc_ptr,
+        acc.to(Out.type.element_ty),
+        [off_hz * N_CTX + start_m * BLOCK_M, 0],
     )
 
 
@@ -664,6 +627,7 @@ cached_desc_o = None
 cached_desc_m = None
 cached_args = None
 
+
 def get_fwd_tma_descriptors(*args):
     global cached_desc_q, cached_desc_k, cached_desc_v, cached_desc_o, cached_desc_m, cached_args
     if args != cached_args:
@@ -737,10 +701,11 @@ class _attention(torch.autograd.Function):
             }
             Z, H, N_CTX = k.shape[:3]
             dtype = q.dtype
-            desc_q, desc_k, desc_v, desc_o, desc_m = get_fwd_tma_descriptors(
-                q.data_ptr(), k.data_ptr(), v.data_ptr(), o.data_ptr(), M.data_ptr(),
-                Z, H, N_CTX, HEAD_DIM_Q, configs[dtype]["BLOCK_M"], configs[dtype]["BLOCK_N"], q.element_size(), M.element_size()
-            )
+            desc_q, desc_k, desc_v, desc_o, desc_m = get_fwd_tma_descriptors(q.data_ptr(), k.data_ptr(), v.data_ptr(),
+                                                                             o.data_ptr(), M.data_ptr(), Z, H, N_CTX,
+                                                                             HEAD_DIM_Q, configs[dtype]["BLOCK_M"],
+                                                                             configs[dtype]["BLOCK_N"],
+                                                                             q.element_size(), M.element_size())
             _tma_attn_fwd[grid](
                 q, k, v,  #
                 desc_q, desc_k, desc_v, desc_o, desc_m,  #
@@ -749,10 +714,10 @@ class _attention(torch.autograd.Function):
                 N_CTX=q.shape[2],  #
                 HEAD_DIM=HEAD_DIM_K,  #
                 STAGE=stage,  #
-                BLOCK_M=configs[dtype]["BLOCK_M"], #
-                BLOCK_N=configs[dtype]["BLOCK_N"], #
-                num_stages=configs[dtype]["num_stages"], #
-                num_warps=configs[dtype]["num_warps"], #
+                BLOCK_M=configs[dtype]["BLOCK_M"],  #
+                BLOCK_N=configs[dtype]["BLOCK_N"],  #
+                num_stages=configs[dtype]["num_stages"],  #
+                num_warps=configs[dtype]["num_warps"],  #
             )
         else:
             _attn_fwd[grid](
