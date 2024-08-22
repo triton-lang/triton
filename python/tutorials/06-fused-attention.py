@@ -16,10 +16,19 @@ import torch
 
 import triton
 import triton.language as tl
+import triton.tools.experimental_descriptor
 
 
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def supports_tma():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
 @triton.jit
@@ -85,7 +94,6 @@ configs = [
     for s in ([1] if is_hip() else [3, 4, 7])\
     for w in [4, 8]\
 ]
-
 
 def keep(conf):
     BLOCK_M = conf.kwargs["BLOCK_M"]
@@ -185,6 +193,219 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+
+
+@triton.jit
+def _tma_attn_fwd_inner(
+    acc,
+    l_i,
+    m_i,
+    q,  #
+    k_desc_ptr,
+    v_desc_ptr,  #
+    start_m,
+    qk_scale,  #
+    BLOCK_M: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    BLOCK_N: tl.constexpr,  #
+    STAGE: tl.constexpr,
+    offs_m: tl.constexpr,
+    offs_n: tl.constexpr,  #
+    offs_hz: tl.constexpr,
+    N_CTX: tl.constexpr,
+    fp8_v: tl.constexpr,
+):
+    # range of values handled by this stage
+    if STAGE == 1:
+        lo, hi = 0, start_m * BLOCK_M
+    elif STAGE == 2:
+        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
+        lo = tl.multiple_of(lo, BLOCK_M)
+    # causal = False
+    else:
+        lo, hi = 0, N_CTX
+    offs_kv = offs_hz * N_CTX + lo
+
+    # loop over k, v and update accumulator
+    for start_n in range(lo, hi, BLOCK_N):
+        start_n = tl.multiple_of(start_n, BLOCK_N)
+        # -- compute qk ----
+        k = tl._experimental_descriptor_load(
+            k_desc_ptr,
+            [offs_kv, 0],
+            [BLOCK_N, HEAD_DIM],
+            tl.float8e5 if fp8_v else tl.float16,
+        )
+        qk = tl.dot(q, k.T)
+        if STAGE == 2:
+            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
+            m_ij = tl.maximum(m_i, tl.max(qk, 1))
+            qk -= m_ij[:, None]
+        else:
+            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+            qk = qk * qk_scale - m_ij[:, None]
+        p = tl.math.exp2(qk)
+        l_ij = tl.sum(p, 1)
+        # -- update m_i and l_i
+        alpha = tl.math.exp2(m_i - m_ij)
+        l_i = l_i * alpha + l_ij
+        # -- update output accumulator --
+        acc = acc * alpha[:, None]
+        # update acc
+        v = tl._experimental_descriptor_load(
+            v_desc_ptr,
+            [offs_kv, 0],
+            [BLOCK_N, HEAD_DIM],
+            tl.float8e5 if fp8_v else tl.float16,
+        )
+        if fp8_v:
+            p = p.to(tl.float8e5)
+        else:
+            p = p.to(tl.float16)
+        acc = tl.dot(p, v, acc)
+        # update m_i and l_i
+        m_i = m_ij
+        offs_kv += BLOCK_N
+    return acc, l_i, m_i
+
+
+@triton.jit
+def _tma_attn_fwd(
+    Q,
+    K,
+    V,
+    q_desc_ptr,
+    k_desc_ptr,
+    v_desc_ptr,
+    o_desc_ptr,
+    m_desc_ptr,
+    sm_scale,
+    Out,  #
+    Z,
+    H,
+    N_CTX,  #
+    HEAD_DIM: tl.constexpr,  #
+    BLOCK_M: tl.constexpr,  #
+    BLOCK_N: tl.constexpr,  #
+    STAGE: tl.constexpr,  #
+):
+    tl.static_assert(BLOCK_N <= HEAD_DIM)
+    start_m = tl.program_id(0)
+    off_hz = tl.program_id(1)
+    tl.inline_asm_elementwise(
+        "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
+        "=r, l",
+        [q_desc_ptr],
+        dtype=tl.int32,
+        is_pure=False,
+        pack=1,
+    )
+    tl.inline_asm_elementwise(
+        "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
+        "=r, l",
+        [k_desc_ptr],
+        dtype=tl.int32,
+        is_pure=False,
+        pack=1,
+    )
+    tl.inline_asm_elementwise(
+        "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
+        "=r, l",
+        [v_desc_ptr],
+        dtype=tl.int32,
+        is_pure=False,
+        pack=1,
+    )
+    tl.inline_asm_elementwise(
+        "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
+        "=r, l",
+        [o_desc_ptr],
+        dtype=tl.int32,
+        is_pure=False,
+        pack=1,
+    )
+    tl.inline_asm_elementwise(
+        "fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg",
+        "=r, l",
+        [m_desc_ptr],
+        dtype=tl.int32,
+        is_pure=False,
+        pack=1,
+    )
+
+    # initialize offsets
+    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    # initialize pointer to m and l
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+    # load scales
+    qk_scale = sm_scale
+    qk_scale *= 1.44269504  # 1/log(2)
+    # load q: it will stay in SRAM throughout
+    q = tl._experimental_descriptor_load(
+        q_desc_ptr, [off_hz * N_CTX + start_m * BLOCK_M, 0],
+        [BLOCK_M, HEAD_DIM],
+        Q.dtype.element_ty
+    )
+
+    # stage 1: off-band
+    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
+    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
+    if STAGE & 1:
+        acc, l_i, m_i = _tma_attn_fwd_inner(
+            acc,
+            l_i,
+            m_i,
+            q,
+            k_desc_ptr,
+            v_desc_ptr,  #
+            start_m,
+            qk_scale,  #
+            BLOCK_M,
+            HEAD_DIM,
+            BLOCK_N,  #
+            4 - STAGE,
+            offs_m,
+            offs_n,
+            off_hz,
+            N_CTX,
+            V.dtype.element_ty == tl.float8e5,  #
+        )
+    # stage 2: on-band
+    if STAGE & 2:
+        # barrier makes it easier for compielr to schedule the
+        # two loops independently
+        acc, l_i, m_i = _tma_attn_fwd_inner(
+            acc,
+            l_i,
+            m_i,
+            q,
+            k_desc_ptr,
+            v_desc_ptr,  #
+            start_m,
+            qk_scale,  #
+            BLOCK_M,
+            HEAD_DIM,
+            BLOCK_N,  #
+            2,
+            offs_m,
+            offs_n,
+            off_hz,
+            N_CTX,
+            V.dtype.element_ty == tl.float8e5,  #
+        )
+    # epilogue
+    m_i += tl.math.log2(l_i)
+    acc = acc / l_i[:, None]
+    tl._experimental_descriptor_store(
+        m_desc_ptr, m_i, [off_hz * N_CTX + start_m * BLOCK_M],
+    )
+    tl._experimental_descriptor_store(
+        o_desc_ptr, acc.to(Out.type.element_ty), [off_hz * N_CTX + start_m * BLOCK_M, 0],
+    )
 
 
 @triton.jit
@@ -435,6 +656,60 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     tl.store(dq_ptrs, dq)
 
 
+# Cached fwd TMA descriptors
+cached_desc_q = None
+cached_desc_k = None
+cached_desc_v = None
+cached_desc_o = None
+cached_desc_m = None
+cached_args = None
+
+def get_fwd_tma_descriptors(*args):
+    global cached_desc_q, cached_desc_k, cached_desc_v, cached_desc_o, cached_desc_m, cached_args
+    if args != cached_args:
+        # reuse cached tma descriptors if input matches
+        q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, Z, H, N_CTX, HEAD_DIM, BLOCK_M, BLOCK_N, qkvo_element_size, m_element_size = args
+        cached_desc_q = triton.tools.experimental_descriptor.create_2d_tma_descriptor(
+            q_ptr,
+            Z * H * N_CTX,
+            HEAD_DIM,
+            BLOCK_M,
+            HEAD_DIM,
+            qkvo_element_size,
+        )
+        cached_desc_k = triton.tools.experimental_descriptor.create_2d_tma_descriptor(
+            k_ptr,
+            Z * H * N_CTX,
+            HEAD_DIM,
+            BLOCK_N,
+            HEAD_DIM,
+            qkvo_element_size,
+        )
+        cached_desc_v = triton.tools.experimental_descriptor.create_2d_tma_descriptor(
+            v_ptr,
+            Z * H * N_CTX,
+            HEAD_DIM,
+            BLOCK_N,
+            HEAD_DIM,
+            qkvo_element_size,
+        )
+        cached_desc_o = triton.tools.experimental_descriptor.create_2d_tma_descriptor(
+            o_ptr,
+            Z * H * N_CTX,
+            HEAD_DIM,
+            BLOCK_M,
+            HEAD_DIM,
+            qkvo_element_size,
+        )
+        cached_desc_m = triton.tools.experimental_descriptor.create_1d_tma_descriptor(
+            m_ptr,
+            Z * H * N_CTX,
+            BLOCK_M,
+            m_element_size,
+        )
+    return cached_desc_q, cached_desc_k, cached_desc_v, cached_desc_o, cached_desc_m
+
+
 class _attention(torch.autograd.Function):
 
     @staticmethod
@@ -455,17 +730,42 @@ class _attention(torch.autograd.Function):
 
         grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-        _attn_fwd[grid](
-            q, k, v, sm_scale, M, o,  #
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-            q.shape[0], q.shape[1],  #
-            N_CTX=q.shape[2],  #
-            HEAD_DIM=HEAD_DIM_K,  #
-            STAGE=stage,  #
-            **extra_kern_args)
+
+        if supports_tma() and q.dtype == torch.float16:
+            configs = {
+                torch.float16: {"BLOCK_M": 128, "BLOCK_N": 64, "num_stages": 2, "num_warps": 8},
+            }
+            Z, H, N_CTX = k.shape[:3]
+            dtype = q.dtype
+            desc_q, desc_k, desc_v, desc_o, desc_m = get_fwd_tma_descriptors(
+                q.data_ptr(), k.data_ptr(), v.data_ptr(), o.data_ptr(), M.data_ptr(),
+                Z, H, N_CTX, HEAD_DIM_Q, configs[dtype]["BLOCK_M"], configs[dtype]["BLOCK_N"], q.element_size(), M.element_size()
+            )
+            _tma_attn_fwd[grid](
+                q, k, v,  #
+                desc_q, desc_k, desc_v, desc_o, desc_m,  #
+                sm_scale, o,  #
+                q.shape[0], q.shape[1],  #
+                N_CTX=q.shape[2],  #
+                HEAD_DIM=HEAD_DIM_K,  #
+                STAGE=stage,  #
+                BLOCK_M=configs[dtype]["BLOCK_M"], #
+                BLOCK_N=configs[dtype]["BLOCK_N"], #
+                num_stages=configs[dtype]["num_stages"], #
+                num_warps=configs[dtype]["num_warps"], #
+            )
+        else:
+            _attn_fwd[grid](
+                q, k, v, sm_scale, M, o,  #
+                q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+                k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+                v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+                o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+                q.shape[0], q.shape[1],  #
+                N_CTX=q.shape[2],  #
+                HEAD_DIM=HEAD_DIM_K,  #
+                STAGE=stage,  #
+                **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
