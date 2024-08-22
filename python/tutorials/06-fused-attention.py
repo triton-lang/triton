@@ -866,7 +866,7 @@ for mode in ["fwd", "bwd"]:
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device="cuda"):
     assert mode in ["fwd", "bwd"]
-    warmup = 100
+    warmup = 25
     rep = 100
     dtype = torch.float16
     if "triton" in provider:
