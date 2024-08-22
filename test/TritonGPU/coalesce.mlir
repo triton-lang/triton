@@ -131,3 +131,13 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// -----
+
+
+module {
+  tt.func @int_min_does_not_underflow_in_analysis() -> i64 {
+    %int_min = arith.constant -9223372036854775808 : i64
+    tt.return %int_min : i64
+  }
+}
