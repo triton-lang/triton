@@ -77,8 +77,11 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
                                        srcType.getElementType(), newMfmaEnc);
   } else if (auto srcWmma = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(
                  srcType.getEncoding())) {
+    // TODO: support 2nd gen of WMMA
+    assert(srcWmma.getVersion() == 1);
     auto newWmmaEnc = triton::gpu::AMDWmmaEncodingAttr::get(
-        mod.getContext(), {warpsPerCtaX, warpsPerCtaY}, srcWmma.getCTALayout());
+        mod.getContext(), srcWmma.getVersion(), {warpsPerCtaX, warpsPerCtaY},
+        srcWmma.getCTALayout());
 
     newSrcType = RankedTensorType::get(srcType.getShape(),
                                        srcType.getElementType(), newWmmaEnc);
@@ -110,8 +113,8 @@ struct DecomposeUnsupportedAMDConversions
 
     triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
 
-    triton::gpu::decomposeTensorCoreToDotLayoutConversion<
-        triton::gpu::AMDMfmaEncodingAttr>(mod, isMfmaToDotShortcut);
+    triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
+                                                          isMfmaToDotShortcut);
 
     /* -------------------------------- */
     // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`

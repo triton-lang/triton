@@ -164,7 +164,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   // Manually constant-fold the layout where possible.
   SmallVector<std::pair<StringAttr, int32_t>> constantIns;
   for (auto [inDimName, idx] : indices) {
-    if (auto constant = dyn_cast<LLVM::ConstantOp>(idx.getDefiningOp())) {
+    if (auto constant = idx.getDefiningOp<LLVM::ConstantOp>()) {
       constantIns.push_back(
           {inDimName, cast<IntegerAttr>(constant.getValue()).getInt()});
     } else {
@@ -184,7 +184,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   }
 
   for (auto [inDimName, idx] : indices) {
-    if (isa<LLVM::ConstantOp>(idx.getDefiningOp())) {
+    if (idx.getDefiningOp<LLVM::ConstantOp>()) {
       continue;
     }
 
@@ -814,6 +814,8 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
       emitMfmaOffsetForCTA(mfmaLayout, offsets, 0, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
     } else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout)) {
+      // TODO: support 2nd gen of WMMA
+      assert(wmmaLayout.getVersion() == 1);
       emitWmmaOffsetForCTA(wmmaLayout, offsets, 0, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
     }

@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor, str_to_ty
-from ..language.core import _unwrap_if_constexpr
+from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type
 from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
@@ -373,7 +373,7 @@ class CodeGenerator(ast.NodeVisitor):
         if self.fn:
             raise self._unsupported(node, "nested function definition is not supported.")
         # initialize defaults
-        for i, default_value in enumerate(node.args.defaults):
+        for i, default_value in enumerate(node.args.defaults[::-1]):
             arg_node = node.args.args[-i - 1]
             annotation = arg_node.annotation
             name = arg_node.arg
@@ -409,6 +409,11 @@ class CodeGenerator(ast.NodeVisitor):
                 if i in self.attributes:
                     for name, value in self.attributes[i]:
                         self.fn.set_arg_attr(idx, name, value)
+
+                # Mark this argument as a pass-by-value TMA descriptor (nvidia)
+                if isinstance(self.prototype.param_types[idx], nv_tma_desc_type):
+                    self.fn.set_arg_attr(idx, "tt.nv_tma_desc", 1)
+
                 arg_values.append(tensor(self.fn.args(idx), self.prototype.param_types[idx]))
                 idx += 1
 
@@ -465,8 +470,11 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Assign(self, node):
         _names = []
-        for target in node.targets:
-            _names += [self.visit(target)]
+        if isinstance(node, ast.AnnAssign):
+            _names += [self.visit(node.target)]
+        else:
+            for target in node.targets:
+                _names += [self.visit(target)]
         if len(_names) > 1:
             raise self._unsupported(node, "simultaneous multiple assignment is not supported.")
         names = _names[0]

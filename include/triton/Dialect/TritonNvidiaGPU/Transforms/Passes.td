@@ -28,7 +28,8 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
   let summary = "plan CTA";
 
   let description = [{
-    Plan CTAs in CGA
+    This pass computes and applies "optimized" CTA tilings to DotOp, ReduceOp
+    and StoreLikeOps operations.
   }];
 
   let constructor = "mlir::createTritonNvidiaGPUPlanCTAPass()";
@@ -43,6 +44,8 @@ def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::M
   let summary = "Insert fences across generic and async proxy";
 
   let description = [{
+    This pass is to insert memory fences to ensure that memory operations are
+    properly ordered across generic and async operations.
   }];
 
   let constructor = "mlir::createTritonNvidiaGPUFenceInsertionPass()";

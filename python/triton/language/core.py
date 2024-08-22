@@ -568,7 +568,7 @@ class pointer_type(dtype):
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
 
     def __str__(self):
         return self.name
@@ -593,6 +593,13 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+
+
+class nv_tma_desc_type(pointer_type):
+
+    def __init__(self):
+        super().__init__(uint8, const=True, address_space=0)
+        self.name = 'nv_tma_desc_type'
 
 
 class block_type(dtype):
@@ -2201,6 +2208,14 @@ def max_constancy(input, values, _builder=None):
             raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
     return semantic.max_constancy(input, values)
+
+
+@builtin
+def assume(cond, _builder=None):
+    '''
+    Allow compiler to assume the :code:`cond` is True.
+    '''
+    return semantic.assume(_to_tensor(cond, _builder), _builder)
 
 
 # -----------------------

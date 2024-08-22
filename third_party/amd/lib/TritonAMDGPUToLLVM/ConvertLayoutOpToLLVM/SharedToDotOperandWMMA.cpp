@@ -33,8 +33,9 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 namespace SharedToDotOperandWMMA {
 
 /**
- * @brief This function maps particular load of wmma dot operand to element
- * indexes(row, col)
+ * @brief Following functions maps particular load of wmma dot operand to
+ * element indexes(row, col). For each WMMA generation separate function is
+ * used.
  *
  * Whole tensor is broken into "blocks" of warps along "non-K" axis.
  * One block could be processed by multiple warps.
@@ -64,7 +65,8 @@ namespace SharedToDotOperandWMMA {
  * @return vector (i-th element corresponds to i-th load instruction) of
  * 2-element vectors(tensor row and col).
  */
-llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
+llvm::SmallVector<llvm::SmallVector<Value>>
+computeTensorElemMappingInBlockWmma1(
     ConversionPatternRewriter &rewriter, Location loc,
     const ArrayRef<int64_t> &elemsPerInstr, Value warpId, Value laneId,
     int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
@@ -75,28 +77,55 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
   const int loadsPerThread = numOfElems / loadVecSize;
   llvm::SmallVector<llvm::SmallVector<Value>> mapping(numK * loadsPerThread);
 
-  Value _0 = i32_val(0);
-  Value nonKDim = i32_val(iNonKDim);
-  Value warpVOffset = mul(warpId, i32_val(elemsPerInstr[0]));
-
+  Value elemsPerInstrV = i32_val(elemsPerInstr[0]);
+  Value warpVOffset = mul(warpId, elemsPerInstrV);
+  Value sliceVOffset = add(urem(laneId, elemsPerInstrV), warpVOffset);
   auto rank = smemOffsets.size();
+  Value row = add(sliceVOffset, smemOffsets[rank - 2]);
 
   for (int tile = 0; tile < numK; ++tile) {
-    Value tileVOffset = _0;
     Value tileHOffset = i32_val(tile * elemsPerInstr[1]);
 
-    Value laneVOffset = laneId;
-    Value laneHOffset = _0;
-
     for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
-      Value elemVOffset = _0;
       Value elemHOffset = i32_val(loadId * loadVecSize);
+      Value sliceHOffset = add(tileHOffset, elemHOffset);
 
-      Value sliceVOffset =
-          add(add(add(tileVOffset, laneVOffset), elemVOffset), warpVOffset);
-      Value sliceHOffset = add(add(tileHOffset, laneHOffset), elemHOffset);
+      Value col = add(sliceHOffset, smemOffsets[rank - 1]);
+      mapping[loadsPerThread * tile + loadId] = {row, col};
+    }
+  }
 
-      Value row = add(sliceVOffset, smemOffsets[rank - 2]);
+  return mapping;
+}
+
+llvm::SmallVector<llvm::SmallVector<Value>>
+computeTensorElemMappingInBlockWmma2(
+    ConversionPatternRewriter &rewriter, Location loc,
+    const ArrayRef<int64_t> &elemsPerInstr, Value warpId, Value laneId,
+    int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
+    int loadVecSize, unsigned iNonKDim, [[maybe_unused]] unsigned iKDim) {
+  assert(reps.size() == 3);
+  assert(elemsPerInstr.size() == 2);
+  auto numK = reps[2];
+  const int loadsPerThread = numOfElems / loadVecSize;
+  llvm::SmallVector<llvm::SmallVector<Value>> mapping(numK * loadsPerThread);
+
+  Value rowsPerInstr = i32_val(elemsPerInstr[0]);
+  Value colsPerInstr = i32_val(elemsPerInstr[1]);
+  Value elemsPerThread = i32_val(elemsPerInstr[1] / 2);
+  Value warpVOffset = mul(warpId, rowsPerInstr);
+  Value sliceVOffset = add(urem(laneId, rowsPerInstr), warpVOffset);
+
+  auto rank = smemOffsets.size();
+  Value row = add(sliceVOffset, smemOffsets[rank - 2]);
+  Value laneHOffset = mul(udiv(laneId, colsPerInstr), elemsPerThread);
+
+  for (int tile = 0; tile < numK; ++tile) {
+    Value tileHOffset = add(laneHOffset, i32_val(tile * elemsPerInstr[1]));
+    for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
+      Value elemHOffset = i32_val(loadId * loadVecSize);
+      Value sliceHOffset = add(tileHOffset, elemHOffset);
+
       Value col = add(sliceHOffset, smemOffsets[rank - 1]);
 
       mapping[loadsPerThread * tile + loadId] = {row, col};
@@ -116,7 +145,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(encoding.getParent());
-  assert(wmmaLayout.getMNKDimPerWMMAInstr()[nonKDimIdx] == 16);
+  auto computeTensorElemMappingInBlock =
+      wmmaLayout.getVersion() == 1 ? computeTensorElemMappingInBlockWmma1
+                                   : computeTensorElemMappingInBlockWmma2;
+  assert(wmmaLayout.getMNKDimPerInstr()[nonKDimIdx] == 16);
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
 
   auto aTensorTy = cast<MemDescType>(tensor.getType());
@@ -128,27 +160,25 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   auto elemTy = aTensorTy.getElementType();
   int kWidth = encoding.getKWidth();
-  auto elemsPerInstr = wmmaLayout.getWMMAElemsPerInstrForOperands();
+  auto elemsPerInstr = wmmaLayout.getElemsPerInstrForOperands();
   auto wmmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
   auto wmmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
   assert(wmmaInstrNonK == 16);
 
-  auto numReps = wmmaLayout.getWMMARepForOperands(shape, elemTy, kWidth, opIdx);
+  auto numReps = wmmaLayout.getRepForOperands(shape, elemTy, kWidth, opIdx);
   auto numRepNonK = numReps[opIdx == 0 ? 1 : 2];
   auto numRepK = numReps[opIdx == 0 ? 2 : 1];
   auto repB = numReps[0];
 
   unsigned iWaveSize = triton::gpu::getWarpSize(wmmaLayout);
-  unsigned iNumLanes = iWaveSize / 2;
   assert(iWaveSize == 32);
   Value waveSize = i32_val(iWaveSize);
-  Value numLanes = i32_val(iNumLanes);
   Value linearWaveId = udiv(thread, waveSize);
-  Value lane = urem(thread, numLanes); // share elem between two threads
 
-  unsigned numElemsPerThreadPerRep = wmmaInstrK;
+  unsigned numElemsPerThreadPerRep =
+      wmmaLayout.getSizePerThreadForOperands(opIdx)[kDimIdx];
 
-  Value warp = udiv(thread, waveSize);
+  Value lane = urem(thread, waveSize);
   unsigned int maxNumWarps = shape[nonKDimIdx] / wmmaInstrNonK;
   int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
   int warpsPerBatch =

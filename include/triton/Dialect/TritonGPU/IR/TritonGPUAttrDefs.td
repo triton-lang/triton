@@ -525,6 +525,10 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
     InterfaceMethod<"Gets the number of contiguous elements per thread.",
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
+    InterfaceMethod<"Convert to LinearLayout.",
+                    "std::optional<LinearLayout>",
+                    "toLinearLayout",
+                    (ins "ArrayRef<int64_t>":$shape)>
   ];
 }
 
@@ -576,6 +580,8 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 
     SmallVector<unsigned> getSizePerThread() const;
     SmallVector<unsigned> getShapePerCTATile(ArrayRef<int64_t> tensorShape = ArrayRef<int64_t>()) const;
+
+    std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
 }
 
@@ -936,38 +942,75 @@ def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encod
   let description = [{
 An encoding for tensors that have been produced by WMMA matrix core instructions,
 available on AMD Radeon GPUs of RDNA architectures.
-
-A `warpsPerCTA` parameter characterizes data distribution between warps.
-An important limitation of WMMA for layout is a shape for tiles proccessed
-by a single warp. It is [16, 16].
-This encoding assumes specific access to matrix elements by threads.
+- A `version` parameter specifies instruction version to lower in. The data
+  distribution within one warp is also depends on it. Following architectures are
+  supported:
+  - 1: gfx11
+  - 2: gfx12
+- A `warpsPerCTA` parameter characterizes data distribution between warps.
+  An important limitation of WMMA for layout is a shape for tiles proccessed
+  by a single warp. It is [16, 16].
+  This encoding assumes specific access to matrix elements by threads.
 
 Example:
-Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
+Suppose we have a tensor with shape [32, 64], `warpsPerCTA` set to [2, 2].
+Matrix elements represent which lane owns the element. Currently only wave32 mode
+is supported.
 
-    warp 0 [16, 16]           warp 1 [16, 16]           warp 2 [16, 16]
------------/\----------   -----------/\----------   -----------/\----------
-[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
-[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
-[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
-[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
-...                       ...                       ...
-[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
-[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+// ----------------------------------- version = 1 ----------------------------------- //
 
-    warp 3 [16, 16]           warp 4 [16, 16]           warp 5 [16, 16]
------------/\----------   -----------/\----------   -----------/\----------
-[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
-[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
-[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
-[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
-...                       ...                       ...
-[0   1   2  ... 14  15]   [0   1   2  ... 14  15]   [0   1   2  ... 14  15]
-[16  17  18 ... 30  31]   [16  17  18 ... 30  31]   [16  17  18 ... 30  31]
+Row |                  warp 0                                    warp 2
+    |/-------------------^-------------------\ /-------------------^-------------------\
+0   |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
+1   |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
+2   |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
+3   |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
+    | ...                  ...                  ...                  ...
+14  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
+15  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
+
+    |                  warp 1                                    warp 3
+16  |/-------------------^-------------------\ /-------------------^-------------------\
+17  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
+18  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
+19  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
+20  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
+    | ...                  ...                  ...                  ...
+30  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
+31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
+
+// ----------------------------------- version = 2 ----------------------------------- //
+
+Row |       warp 0                warp 2
+    |/--------^---------\ /---------^--------\
+0   |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
+1   |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
+..  | ...                    ...
+6   |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
+7   |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
+8   |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+9   |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+..  | ...                  ...
+14  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+15  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+    |
+    |       warp 1                warp 3
+    |/--------^---------\ /---------^--------\
+16  |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
+17  |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
+..  | ...                    ...
+22  |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
+23  |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
+24  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+25  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+..  | ...                  ...
+30  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
   }];
 
   let parameters = (
     ins
+    "unsigned": $version,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     "CTALayoutAttr":$CTALayout
   );
@@ -981,14 +1024,18 @@ Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
-    SmallVector<int64_t> getWMMAElemsPerInstrForOperands() const;
-    SmallVector<int64_t> getWMMARepForOperands(ArrayRef<int64_t> operandShape,
+    SmallVector<int64_t> getElemsPerInstrForOperands() const;
+    SmallVector<int64_t> getRepForOperands(ArrayRef<int64_t> operandShape,
                                       Type elemType, int kWidth, int opIdx) const;
-    static SmallVector<unsigned> getMNKDimPerWMMAInstr();
+    static SmallVector<unsigned> getMNKDimPerInstr();
 
     SmallVector<unsigned> getContigPerThread() {
       auto rank = getWarpsPerCTA().size();
+      assert(rank == 2 || rank == 3);
       SmallVector<unsigned> contigPerThread(rank, 1);
+      if (getVersion() == 2) {
+        contigPerThread[rank - 2] = 8;
+      }
       return contigPerThread;
     };
   }];

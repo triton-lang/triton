@@ -282,7 +282,7 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
-    use_ttgir_loc = os.environ.get("USE_TTGIR_LOC", "0") == "1"
+    use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
@@ -293,11 +293,11 @@ def compile(src, target=None, options=None):
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
-        # use an env variable to parse ttgir from file
-        if use_ttgir_loc and ext == "ttgir":
-            ttgir_full_name = fn_cache_manager.get_file(ir_filename)
-            next_module.create_location_snapshot(ttgir_full_name)
-            print(f"Create new locations for {ttgir_full_name}")
+        # use an env variable to parse ir from file
+        if use_ir_loc == ext:
+            ir_full_name = fn_cache_manager.get_file(ir_filename)
+            next_module.create_location_snapshot(ir_full_name)
+            print(f"Creating new locations for {ir_full_name}")
         module = next_module
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,

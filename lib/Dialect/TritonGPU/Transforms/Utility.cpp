@@ -433,6 +433,19 @@ static std::optional<Attribute> inferSrcEncoding(triton::ReshapeOp op,
                                    op.getAllowReorder());
 }
 
+static bool isSingleValue(Value value) {
+  // Don't consider load as expensive if it is loading a scalar.
+  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
+    return tensorTy.getNumElements() == 1;
+  // TODO: Handle other cases.
+  // For example, when ptr is a tensor of single value.
+  // It means that ptr is a resultant of broadcast or generated through
+  // a chain of broadcast and other operations.
+  // Rematerialize it without considering contiguous memory access pattern is
+  // fine.
+  return true;
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (isa<triton::ScanOp>(op)) {
     // Scan only supports blocked encoding at the moment.
@@ -488,19 +501,6 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reshape, encoding);
 
   return std::nullopt;
-}
-
-bool isSingleValue(Value value) {
-  // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
-    return tensorTy.getNumElements() == 1;
-  // TODO: Handle other cases.
-  // For example, when ptr is a tensor of single value.
-  // It means that ptr is a resultant of broadcast or generated through
-  // a chain of broadcast and other operations.
-  // Rematerialize it without considering contiguous memory access pattern is
-  // fine.
-  return true;
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
@@ -673,12 +673,13 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   return newOp;
 }
 
-// Check if the convert will be a no-op in codegen.
+// Check if the convert will be performed by reordering registers.
 static bool isFreeConvert(Operation *op) {
   auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!convertOp)
     return false;
-  return isMmaToMmaShortcut(convertOp.getSrc().getType(), convertOp.getType());
+  return cvtReordersRegisters(convertOp.getSrc().getType(),
+                              convertOp.getType());
 }
 
 LogicalResult

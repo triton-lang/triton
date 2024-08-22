@@ -922,7 +922,7 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
   SmallVector<Value> warpsPerCTA;
   for (unsigned i = 0; i < rank; ++i)
     warpsPerCTA.push_back(i32_val(_warpsPerCTA[i]));
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
 
   Value threadId = getThreadId(rewriter, loc);
   Value warpSize = i32_val(triton::gpu::getWarpSize(wmmaLayout));
@@ -976,7 +976,7 @@ emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
   assert(rank == 2 || rank == 3);
 
   SmallVector<unsigned> numWarpsPerDim(rank, 1);
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
   SmallVector<unsigned> shapePerWarp(rank, 1);
   shapePerWarp[rank - 2] = mnkDim[0];
   shapePerWarp[rank - 1] = mnkDim[1];
@@ -1102,6 +1102,8 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
+    // TODO: support 2nd gen of WMMA
+    assert(wmmaLayout.getVersion() == 1);
     result = emitBaseIndexForWmmaLayout(loc, rewriter, wmmaLayout, type);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
@@ -1290,9 +1292,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
       idxCol = urem(idxCol, numElemsPerSwizzlingRowVal);
       strideRow = numElemsPerSwizzlingRowVal;
     }
-    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp())) {
-      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-              add.getRhs().getDefiningOp())) {
+    if (auto add = idxCol.getDefiningOp<LLVM::AddOp>()) {
+      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
         unsigned cst =
             cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (outVec * maxPhase);
@@ -1301,9 +1302,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
         immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
       }
     }
-    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp())) {
-      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-              add.getRhs().getDefiningOp())) {
+    if (auto add = idxRow.getDefiningOp<LLVM::AddOp>()) {
+      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
         unsigned cst =
             mlir::cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (perPhase * maxPhase);
