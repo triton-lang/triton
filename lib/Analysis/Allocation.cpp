@@ -115,38 +115,36 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   assert(!isMfmaToDotShortcut(srcTy, dstTy));
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  scratchConfig.order = outOrd;
 
   unsigned srcContigPerThread =
       getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
   unsigned dstContigPerThread =
       getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  unsigned innerDim = rank - 1;
-  scratchConfig.inVec = outOrd[0] != innerDim  ? 1
-                        : inOrd[0] != innerDim ? 1
-                                               : srcContigPerThread;
-  scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
 
+  scratchConfig.order.resize(rank);
+  std::iota(scratchConfig.order.rbegin(), scratchConfig.order.rend(), 0);
   // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
   // codegen.
   if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
     if (mma.getVersionMajor() == 1) {
-      scratchConfig.inVec = srcContigPerThread;
+      scratchConfig.order = inOrd;
     } else if (mlir::isa<BlockedEncodingAttr>(dstLayout)) {
       // when storing from mma layout and loading in blocked layout vectorizing
       // the load back gives better performance even if there is a
       // transposition.
-      scratchConfig.outVec = dstContigPerThread;
+      scratchConfig.order = outOrd;
     }
   }
+  scratchConfig.inVec =
+      inOrd[0] != scratchConfig.order[0] ? 1 : srcContigPerThread;
+  scratchConfig.outVec =
+      outOrd[0] != scratchConfig.order[0] ? 1 : dstContigPerThread;
 
   if (rank <= 1)
     return scratchConfig;
 
   auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
-  scratchConfig.paddedRepShape[outOrd[0]] += paddedSize;
+  scratchConfig.paddedRepShape[scratchConfig.order[0]] += paddedSize;
   return scratchConfig;
 }
 
