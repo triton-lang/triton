@@ -5,7 +5,7 @@ import pandas as pd
 try:
     import hatchet as ht
 except ImportError:
-    raise ImportError("Failed to import hachet. pip install llnl-hatchet to get the correct version.")
+    raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
 from hatchet.query import NegationQuery
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
