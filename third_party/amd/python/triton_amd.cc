@@ -1,3 +1,5 @@
+#include "AMDGPUToLLVM/AMDGPUToLLVMPass.h"
+#include "Dialect/AMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -64,6 +66,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUStreamPipelinePass);
   ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
                      mlir::createTritonAMDGPUStreamPipelineV2Pass, int);
+  ADD_PASS_WRAPPER_0("add_amdgpu_to_llvm",
+                     mlir::triton::createConvertAMDGPUToLLVMPass);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
@@ -96,6 +100,7 @@ void init_triton_amd(py::module &&m) {
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
+    registry.insert<mlir::triton::amdgpu::AMDGPUDialect>();
     // registry.insert<mlir::ROCDL::ROCDLDialect>();
     mlir::registerROCDLDialectTranslation(registry);
     context.appendDialectRegistry(registry);

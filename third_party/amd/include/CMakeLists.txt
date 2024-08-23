@@ -1,2 +1,4 @@
+add_subdirectory(AMDGPUToLLVM)
 add_subdirectory(TritonAMDGPUToLLVM)
 add_subdirectory(TritonAMDGPUTransforms)
+add_subdirectory(Dialect)
