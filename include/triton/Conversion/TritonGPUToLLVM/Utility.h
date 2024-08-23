@@ -388,17 +388,10 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
 
 /* ------------------------------------ */
 // Returns CTA level thread idx
-inline Value getThreadIdInCTA(RewriterBase &rewriter, Location loc) {
+inline Value getThreadId(RewriterBase &rewriter, Location loc) {
   Value tid =
       rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
-}
-
-// Returns CTA level thread idx.
-inline Value getThreadId(RewriterBase &rewriter, Location loc) {
-  Value tid = getThreadIdInCTA(rewriter, loc);
-  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  return tid;
 }
 
 // -----------------------------------------------------------------------
@@ -1299,9 +1292,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
       idxCol = urem(idxCol, numElemsPerSwizzlingRowVal);
       strideRow = numElemsPerSwizzlingRowVal;
     }
-    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp())) {
-      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-              add.getRhs().getDefiningOp())) {
+    if (auto add = idxCol.getDefiningOp<LLVM::AddOp>()) {
+      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
         unsigned cst =
             cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (outVec * maxPhase);
@@ -1310,9 +1302,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
         immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
       }
     }
-    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp())) {
-      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-              add.getRhs().getDefiningOp())) {
+    if (auto add = idxRow.getDefiningOp<LLVM::AddOp>()) {
+      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
         unsigned cst =
             mlir::cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (perPhase * maxPhase);

@@ -67,6 +67,42 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     return amendedFuncOp;
   }
 
+  // Map the MLIR attribute `tt.nv_tma_desc` to the appropriate LLVM and NVVM
+  // attributes.
+  static void handleByvalTmaDescArgs(LLVM::LLVMFuncOp &llvmFuncOp) {
+    const bool isKernel = LLVM::isKernel(llvmFuncOp);
+    for (unsigned i = 0; i < llvmFuncOp.getNumArguments(); ++i) {
+      const auto attrs = llvmFuncOp.getArgAttrDict(i);
+      if (!attrs) {
+        continue;
+      }
+
+      for (const auto &attr : attrs) {
+        if (attr.getName() == "tt.nv_tma_desc") {
+          const auto i32_type =
+              mlir::IntegerType::get(llvmFuncOp.getContext(), 32);
+          assert(attr.getValue() == mlir::IntegerAttr::get(i32_type, 1));
+          assert(isKernel &&
+                 "tt.nv_tma_desc is not supported for device functions");
+
+          // See
+          // https://github.com/google/jax/blob/main/jaxlib/mosaic/gpu/passes.cc
+          mlir::BlockArgument arg = llvmFuncOp.getArgument(i);
+          const auto byteType =
+              mlir::IntegerType::get(llvmFuncOp.getContext(), 8);
+          const auto arrayType = mlir::LLVM::LLVMArrayType::get(
+              llvmFuncOp.getContext(), byteType, 128);
+          llvmFuncOp.setArgAttr(i, "llvm.byval",
+                                mlir::TypeAttr::get(arrayType));
+          llvmFuncOp.setArgAttr(i, "nvvm.grid_constant",
+                                mlir::UnitAttr::get(llvmFuncOp.getContext()));
+          llvmFuncOp.setArgAttr(i, "llvm.align",
+                                mlir::IntegerAttr::get(i32_type, 64));
+        }
+      }
+    }
+  }
+
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -105,6 +141,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     newFuncOp->setAttr("nvvm.reqntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
     rewriter.eraseOp(funcOp);
+
+    // Add attributes for by-value TMA descriptor args (nvidia)
+    handleByvalTmaDescArgs(newFuncOp);
+
     return success();
   }
 
