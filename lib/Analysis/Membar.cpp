@@ -117,6 +117,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   BlockInfo curBlockInfo;
+  auto scratchBufferId = Allocation::InvalidBufferId;
   if (isa<triton::CallOp>(op)) {
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
@@ -145,17 +146,30 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
-    // Scratch buffer is considered as both shared memory write & read
-    auto bufferId = allocation->getBufferId(op);
-    if (bufferId != Allocation::InvalidBufferId) {
-      curBlockInfo.syncWriteIntervals.insert(
-          allocation->getAllocatedInterval(bufferId));
-      curBlockInfo.syncReadIntervals.insert(
-          allocation->getAllocatedInterval(bufferId));
-    }
+    scratchBufferId = allocation->getBufferId(op);
   }
 
-  if (blockInfo->isIntersected(curBlockInfo)) {
+  // Scratch buffer operations consist of a series of shared memory operations
+  // starting from a shared memory write, followed by a series of shared memory
+  // read/write operations, and ending with a shared memory read, i.e., shared
+  // memory write -> ... -> shared memory read.
+  if (scratchBufferId != Allocation::InvalidBufferId) {
+    if (!curBlockInfo.syncReadIntervals.empty() ||
+        !curBlockInfo.syncWriteIntervals.empty()) {
+      llvm::report_fatal_error(
+          "scratch buffer operations should not have any shared memory "
+          "dependencies");
+    }
+    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    curBlockInfo.syncWriteIntervals.insert(interval);
+    if (blockInfo->isIntersected(curBlockInfo)) {
+      builder->setInsertionPoint(op);
+      insertBarrier(op, builder);
+    }
+    // Ops with a scratch buffer internally syncs read/write on shared memory
+    blockInfo->sync();
+    curBlockInfo.syncReadIntervals.insert(interval);
+  } else if (blockInfo->isIntersected(curBlockInfo)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();

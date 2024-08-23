@@ -28,6 +28,7 @@ Creation Ops
     full
     zeros
     zeros_like
+    cast
 
 
 Shape Manipulation Ops

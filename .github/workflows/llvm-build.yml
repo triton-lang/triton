@@ -28,7 +28,6 @@ jobs:
         config:
         - {runner: 'Ubuntu 20.04', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'x64'}
         - {runner: 'Ubuntu 20.04 ARM64', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
-        - {runner: 'CentOS 7', runs_on: ['self-hosted', 'CPU'], target-os: 'centos', arch: 'x64'}
         - {runner: 'AlmaLinux 8', runs_on: ['self-hosted', 'CPU'], target-os: 'almalinux', arch: 'x64'}
         - {runner: 'MacOS X64', runs_on: 'macos-12', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-12', target-os: 'macos', arch: 'arm64'}
@@ -108,6 +107,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -131,6 +131,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -176,6 +177,7 @@ jobs:
         -DCMAKE_LINKER=$LINKER \
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
         -DLLVM_ENABLE_ZSTD=OFF \
+        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF \
         -DLLVM_INSTALL_UTILS=ON \
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
@@ -226,35 +228,12 @@ jobs:
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
         -DLLVM_USE_HOST_TOOLS=ON
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build install
 
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-
-    - name: Configure, Build, Test, and Install LLVM (CentOS)
-      if: matrix.config.target-os == 'centos'
-      run: |
-        # if this step crashes, it can leave behind a stale docker container
-        docker container prune -f
-        docker rmi -f $(docker images -q)
-
-        docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
-          -f llvm-build/.github/workflows/llvm-build/centos.Dockerfile .
-
-        # Create temporary container to copy cache and installed artifacts.
-        CONTAINER_ID=$(docker create llvm-build)
-        docker cp "${CONTAINER_ID}:/install" "${{ env.llvm_install_dir }}"
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-        # We remove the existing directory, otherwise docker will
-        # create a subdirectory inside the existing directory.
-        rm -rf "${{ env.SCCACHE_DIR }}"
-        docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
-        sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
-
-        docker rm "${CONTAINER_ID}"
 
     - name: Configure, Build, Test, and Install LLVM (AlmaLinux)
       if: matrix.config.target-os == 'almalinux'
@@ -297,9 +276,9 @@ jobs:
     - name: Upload LLVM Artifacts to Azure
       if: ${{ (github.repository == 'triton-lang/triton') }}
       run: |
-        az storage blob upload --account-name tritonlang --auth-mode login --container-name llvm-builds --file "${{ env.llvm_install_dir }}.tar.gz" --name "${{ env.llvm_install_dir }}.tar.gz" --overwrite
+        az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz" --overwrite
 
-        URL=$(az storage blob url --account-name tritonlang --auth-mode login --container-name llvm-builds --name "${{ env.llvm_install_dir }}.tar.gz")
+        URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name public --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz")
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout

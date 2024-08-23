@@ -35,8 +35,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {$3, $4}], [$5];", "b,r,l,r,r,r" {{.*}} : (i1, !llvm.ptr<3>, !llvm.ptr<1>, i32, i32, !llvm.ptr<3>) -> !llvm.void
   // CHECK-NOT: cp.async.bulk.tensor.2d.shared
   // CHECK: return
-  tt.func @tma_copy_global_to_local(%tma: !tt.ptr<i64>, %alloc: !tt.memdesc<128x128xf32, #shared1>, %x: i32, %barrier: !tt.memdesc<1xi64, #shared0>, %pred: i1) {
-    triton_nvidia_gpu.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.ptr<i64>, !tt.memdesc<1xi64, #shared0> -> !tt.memdesc<128x128xf32, #shared1>
+  tt.func @tma_copy_global_to_local(%tma: !tt.ptr<i64>, %alloc: !tt.memdesc<128x128xf32, #shared1, mutable>, %x: i32, %barrier: !tt.memdesc<1xi64, #shared0>, %pred: i1) {
+    triton_nvidia_gpu.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.ptr<i64>, !tt.memdesc<1xi64, #shared0> -> !tt.memdesc<128x128xf32, #shared1, mutable>
     tt.return
   }
 }
@@ -76,6 +76,18 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK: @$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], 16384;
   tt.func @expect_barrier(%barrier: !tt.memdesc<1xi64, #shared0, mutable>, %pred: i1) {
     triton_nvidia_gpu.barrier_expect %barrier, 16384, %pred : <1xi64, #shared0, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: byval_tma_desc
+  // CHECK: llvm.align = 64
+  // CHECK: llvm.byval = !llvm.array<128 x i8>
+  // CHECK: nvvm.grid_constant
+  tt.func @byval_tma_desc(%desc: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}) {
     tt.return
   }
 }

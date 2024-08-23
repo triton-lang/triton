@@ -444,6 +444,13 @@ void init_triton_ir(py::module &&m) {
                return py::none();
              return py::str(ret.getValue().str());
            })
+      .def("get_bool_attr",
+           [](Operation &self, const std::string &name) -> py::object {
+             auto ret = self.getAttrOfType<BoolAttr>(name);
+             if (!ret)
+               return py::none();
+             return py::bool_(ret.getValue());
+           })
       .def("get_flat_symbol_ref_attr",
            [](Operation &self, const std::string &name) -> py::object {
              auto ret = self.getAttrOfType<FlatSymbolRefAttr>(name);
@@ -1513,11 +1520,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_print",
            [](TritonOpBuilder &self, const std::string &prefix, bool hex,
-              const std::vector<Value> &values) -> void {
-             self.create<PrintOp>(
-                 StringAttr::get(self.getBuilder().getContext(),
-                                 llvm::StringRef(prefix)),
-                 hex, values);
+              const std::vector<Value> &values,
+              const std::vector<int32_t> &isSigned) -> void {
+             auto prefixAttr = StringAttr::get(self.getBuilder().getContext(),
+                                               llvm::StringRef(prefix));
+             self.create<PrintOp>(prefixAttr, hex, values, isSigned);
            })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
@@ -1532,6 +1539,10 @@ void init_triton_ir(py::module &&m) {
              auto lineNoAttr = self.getBuilder().getI32IntegerAttr(lineNo);
              self.create<AssertOp>(condition, messageAttr, fileNameAttr,
                                    funcNameAttr, lineNoAttr);
+           })
+      .def("create_assume",
+           [](TritonOpBuilder &self, Value &condition) {
+             self.create<LLVM::AssumeOp>(condition);
            })
       // Undef
       .def("create_undef",
@@ -1650,7 +1661,8 @@ void init_triton_ir(py::module &&m) {
                           });
 
           ::llvm::DebugFlag = true;
-          ::llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+          using namespace llvm;
+          setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
         }
 
         bool haveTiming = ::triton::tools::getBoolEnv("MLIR_ENABLE_TIMING");

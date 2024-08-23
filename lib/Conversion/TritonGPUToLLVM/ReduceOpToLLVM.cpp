@@ -49,7 +49,7 @@ public:
     }
 
     // Compute a shared memory base per operand.
-    auto smemShape = helper.getScratchConfig();
+    auto smemShape = helper.getScratchRepShape();
 
     SmallVector<Value> smemBases =
         getSmemBases(op, product<unsigned>(smemShape), rewriter);
@@ -278,7 +278,7 @@ private:
     Value laneId = urem(threadId, warpSize);
     auto srcShape = helper.getSrcShape();
     unsigned axis = op.getAxis();
-    auto smemShape = helper.getScratchConfig();
+    auto smemShape = helper.getScratchRepShape();
 
     auto threadsPerWarp =
         triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
@@ -318,7 +318,7 @@ private:
                                    ConversionPatternRewriter &rewriter) const {
     triton::ReduceOp op = helper.getOperation();
     auto srcLayout = helper.getSrcLayout();
-    auto smemShape = helper.getScratchConfig();
+    auto smemShape = helper.getScratchRepShape();
     unsigned elems = product<unsigned>(smemShape);
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
     Location loc = op.getLoc();

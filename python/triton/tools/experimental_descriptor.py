@@ -1,35 +1,32 @@
 import torch
 
 import triton
-import triton.language as tl
 
 
-@triton.jit
-def flush_TMA_cache(desc_ptr):
-    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
-                              [desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
+class TmaDescKernelParam:
+    TMA_DESC_SIZE = 128
+
+    def __init__(self, ptr, dims, block_dims, element_size):
+        self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.int8, device="cpu")
+        assert len(dims) == len(block_dims)
+        assert 1 <= len(dims) <= 2
+        assert self.desc.data_ptr() % 64 == 0
+
+        if len(dims) == 1:
+            triton.runtime.driver.active.utils.fill_1d_tma_descriptor(ptr, dims[0], block_dims[0], element_size,
+                                                                      self.desc.data_ptr())
+        else:
+            triton.runtime.driver.active.utils.fill_2d_tma_descriptor(ptr, dims[0], dims[1], block_dims[0],
+                                                                      block_dims[1], element_size, self.desc.data_ptr())
+
+    # Return a CUtensorMap* pointer in host memory
+    def tma_desc_cpu_ptr(self):
+        return self.desc.data_ptr()
 
 
 def create_1d_tma_descriptor(ptr, dim, block_dim, element_size):
-    TMA_SIZE = 128
-    desc = torch.empty(TMA_SIZE, dtype=torch.int8)
-    triton.runtime.driver.active.utils.fill_1d_tma_descriptor(ptr, dim, block_dim, element_size, desc.data_ptr())
-    gpu_desc = desc.cuda()
-    # TMA cache is not being flushed in between dispacthes, therefore we should
-    # manually flush the cache every time we create a new TMA descriptor to make
-    # sure the following dispatch don't use stale cache when accessing TMA.
-    flush_TMA_cache[(1, )](gpu_desc, num_warps=1)
-    return gpu_desc
+    return TmaDescKernelParam(ptr, [dim], [block_dim], element_size)
 
 
 def create_2d_tma_descriptor(ptr, dim1, dim0, block_dim1, block_dim0, element_size):
-    TMA_SIZE = 128
-    desc = torch.empty(TMA_SIZE, dtype=torch.int8)
-    triton.runtime.driver.active.utils.fill_2d_tma_descriptor(ptr, dim1, dim0, block_dim1, block_dim0, element_size,
-                                                              desc.data_ptr())
-    gpu_desc = desc.cuda()
-    # TMA cache is not being flushed in between dispacthes, therefore we should
-    # manually flush the cache every time we create a new TMA descriptor to make
-    # sure the following dispatch don't use stale cache when accessing TMA.
-    flush_TMA_cache[(1, )](gpu_desc, num_warps=1)
-    return gpu_desc
+    return TmaDescKernelParam(ptr, [dim1, dim0], [block_dim1, block_dim0], element_size)

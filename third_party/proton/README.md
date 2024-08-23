@@ -137,8 +137,11 @@ When profiling in the command line mode, the `proton.start` and `proton.finalize
 By default, proton profiles are in the *json* format and can be read by *Hatchet*. The following command visualizes the profile data on terminal.
 
 ```bash
+pip install llnl-hatchet
 proton-viewer -m time/s <profile.hatchet>
 ```
+
+NOTE: `pip install hatchet` does not work because the API is slightly different.
 
 More options can be found by running the following command.
 
@@ -173,8 +176,6 @@ Proton can register hooks to analyze the metadata of triton kernels, while nsys 
 ## Known Issues
 
 - CUDA Graph
-
-Proton does not yet support graph profiling on AMD GPUs.
 
 `hooks` cannot be used to accurately accumulate the number of FLOPs in CUDA graph mode profiling because kernels are captured and launched separately; metrics are not accumulated when kernels are launched in graph mode. This issue can be circumvented by using `scope` to supply FLOPs.
 

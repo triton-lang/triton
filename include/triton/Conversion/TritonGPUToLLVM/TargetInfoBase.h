@@ -54,6 +54,14 @@ public:
                           unsigned numLaneToReduce,
                           unsigned interleave) const = 0;
 
+  virtual bool canUseStMatrix(RankedTensorType srcTy,
+                              ArrayRef<unsigned> paddedRepShape,
+                              ArrayRef<unsigned> outOrd,
+                              unsigned accumNumReplicates,
+                              int swizzleByteWidth = 0) const = 0;
+
+  // TODO (Keren): Remove this function once layout conversion using stmatrix is
+  // handled by Linear Layout.
   virtual bool processReplicaUsingStMatrix(
       RewriterBase &rewriter, Location loc, Value smemBase,
       SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
@@ -68,6 +76,16 @@ public:
   // placeholders in the format string.
   virtual void printf(RewriterBase &rewriter, Value formatStrStart,
                       int formatStrByteCount, ValueRange args) const = 0;
+
+  // Emits LLVM code with |rewriter| to print a message, particularly useful for
+  // backend debug. |msg| is the message to print, |args| are the arguments to
+  // fill placeholders in the |msg|.
+  // NOTE: This function is used for backend debug. DO NOT DELETE.
+  // Example use: targetInfo.printf(rewriter,"index: %d, value: %f", {index,
+  // value});
+  virtual void printf(RewriterBase &rewriter, StringRef msg,
+                      ValueRange args) const = 0;
+
   // Emits LLVM code with |rewriter| to perform assertion failure with the given
   // |message| from the given |func| in |file|.
   virtual void assertFail(RewriterBase &rewriter, Location loc,

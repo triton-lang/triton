@@ -44,6 +44,10 @@ public:
                   triton::ReduceOp op, unsigned numLaneToReduce,
                   unsigned interleave) const override;
 
+  bool canUseStMatrix(RankedTensorType srcTy, ArrayRef<unsigned> paddedRepShape,
+                      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+                      int swizzleByteWidth) const override;
+
   bool processReplicaUsingStMatrix(RewriterBase &rewriter, Location loc,
                                    Value smemBase, SmallVector<Value> &vals,
                                    RankedTensorType srcTy, Type elemTy,
@@ -57,6 +61,10 @@ public:
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args) const override;
+
+  void printf(RewriterBase &rewriter, StringRef msg,
+              ValueRange args) const override;
+
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
 
