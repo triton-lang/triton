@@ -25,6 +25,10 @@ using ::mlir::LLVM::linearize;
 
 using namespace mlir::triton::gpu;
 
+// XXX(Keren): A temporary knob to control the use of legacy MMA conversion
+// because LinearLayout seems to have some performance issues.
+constexpr bool useLegacyMMAConversion = false;
+
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
 public:
@@ -376,6 +380,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         if (targetInfo.canUseStMatrix(srcTy, scratchConfig.paddedRepShape,
                                       scratchConfig.order,
                                       /*accumNumReplicates=*/1)) {
+          return false;
+        }
+        if (useLegacyMMAConversion) {
           return false;
         }
         return true;
