@@ -728,7 +728,7 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
   // which is different from the original layout, causing `divideRight` to fail!
   // As a result, we conservatively erase input dimensions only when the number
   // of output dimensions matches that of the divisor.
-  if (newOutDims.size() == divisor.getOutDimNames().size()) {
+  if (getNumOutDims() == divisor.getNumOutDims()) {
     for (auto inDimName : llvm::reverse(getInDimNames())) {
       if (newBases[inDimName].empty() && divisor.hasInDim(inDimName)) {
         newBases.erase(inDimName);
