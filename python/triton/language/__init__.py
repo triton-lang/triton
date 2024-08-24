@@ -31,6 +31,7 @@ from .core import (
     advance,
     arange,
     associative_scan,
+    assume,
     atomic_add,
     atomic_and,
     atomic_cas,
@@ -47,7 +48,6 @@ from .core import (
     cast,
     clamp,
     const,
-    const_pointer_type,
     constexpr,
     debug_barrier,
     device_assert,
@@ -84,6 +84,7 @@ from .core import (
     permute,
     pi32_t,
     pointer_type,
+    nv_tma_desc_type,
     program_id,
     range,
     reduce,
@@ -129,6 +130,7 @@ __all__ = [
     "argmax",
     "argmin",
     "associative_scan",
+    "assume",
     "atomic_add",
     "atomic_and",
     "atomic_cas",
@@ -148,7 +150,6 @@ __all__ = [
     "ceil",
     "clamp",
     "const",
-    "const_pointer_type",
     "constexpr",
     "cos",
     "cumprod",
@@ -207,6 +208,7 @@ __all__ = [
     "philox_impl",
     "pi32_t",
     "pointer_type",
+    "nv_tma_desc_type",
     "program_id",
     "rand",
     "rand4x",
@@ -253,12 +255,16 @@ __all__ = [
 def str_to_ty(name):
     if name[0] == "*":
         name = name[1:]
+        const = False
         if name[0] == "k":
             name = name[1:]
-            ty = str_to_ty(name)
-            return const_pointer_type(ty)
+            const = True
         ty = str_to_ty(name)
-        return pointer_type(ty)
+        return pointer_type(element_ty=ty, const=const)
+
+    if name == "nvTmaDesc":
+        return nv_tma_desc_type()
+
     tys = {
         "fp8e4nv": float8e4nv,
         "fp8e4b8": float8e4b8,

@@ -4,9 +4,9 @@ import os
 import torch
 
 
-def test_fn_dump(capfd):
+def test_fn_dump(capfd, device):
     N = 1024
-    src = torch.zeros(N, device='cuda')
+    src = torch.zeros(N, device=device)
 
     grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
 

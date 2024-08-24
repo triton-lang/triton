@@ -94,7 +94,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
   }
-  Value falseVal = rewriter.create<arith::ConstantOp>(
+  Value falseVal = rewriter.create<LLVM::ConstantOp>(
       loc, elemTy, rewriter.getZeroAttr(elemTy));
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
 }
@@ -128,6 +128,14 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
+  return false;
+}
+
+bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
+                                ArrayRef<unsigned> paddedRepShape,
+                                ArrayRef<unsigned> outOrd,
+                                unsigned accumNumReplicates,
+                                int swizzleByteWidth) const {
   return false;
 }
 
@@ -218,6 +226,18 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                     /*useStdError=*/false);
 }
 
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
+                        ValueRange args) const {
+  assert(!msg.empty() && "printf with empty string not supported");
+  llvm::SmallString<64> msgNewline(msg);
+  msgNewline.push_back('\n');
+  msgNewline.push_back('\0');
+  Value msgValue =
+      LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
+                              "printfFormat_", msgNewline);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+}
+
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
@@ -231,6 +251,9 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   printfImpl(msgValue, msgBuffer.size_in_bytes(), /*args=*/ValueRange(),
              rewriter, /*useStdError=*/true);
 
+  // Set block barrrier before aborting kernel, give a chance for all
+  // the threads in a block to check/print the assert failure.
+  barrier();
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
 }

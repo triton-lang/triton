@@ -55,7 +55,7 @@ void storeDistributedToSharedWithStMatrix(
     RankedTensorType tensorTy, Type elemTy, SmallVector<Value> &inVals,
     Value smemBase, ArrayRef<unsigned> paddedRepShape,
     ArrayRef<unsigned> origRepShape, Location loc, RewriterBase &rewriter,
-    int swizzlingByteWidth) {
+    int swizzleByteWidth) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
   auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   auto order = triton::gpu::getOrder(mmaLayout);
@@ -69,7 +69,7 @@ void storeDistributedToSharedWithStMatrix(
   std::array<int, 2> numRep = {ceil((int)origRepShape[0], instrM),
                                ceil((int)origRepShape[1], instrN)};
   int numBoxes = 1;
-  if (swizzlingByteWidth == 128) {
+  if (swizzleByteWidth == 128) {
     int contigDimSizeInByte =
         origRepShape[1] * elemTy.getIntOrFloatBitWidth() / 8;
     numBoxes = ceil<int>(contigDimSizeInByte, 128);
@@ -85,7 +85,7 @@ void storeDistributedToSharedWithStMatrix(
 
   // Compute the relative offset for each lane.
   Value stMatrixLaneOffset =
-      computeStMatrixAddr(lane, boxShape[1], loc, rewriter, swizzlingByteWidth);
+      computeStMatrixAddr(lane, boxShape[1], loc, rewriter, swizzleByteWidth);
   multiDimWarpId[0] = mul(multiDimWarpId[0], i32_val(mmaShape[0]));
   multiDimWarpId[1] = mul(multiDimWarpId[1], i32_val(mmaShape[1]));
   SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
@@ -103,8 +103,8 @@ void storeDistributedToSharedWithStMatrix(
       for (int box = 0; box < numBoxes; box++) {
         for (int k = 0; k < numNChunk; k++) {
           Value kOffset;
-          if (swizzlingByteWidth >= 64) {
-            int swizzleBits = swizzlingByteWidth == 128 ? 6 : 2;
+          if (swizzleByteWidth >= 64) {
+            int swizzleBits = swizzleByteWidth == 128 ? 6 : 2;
             Value o = lshr(and_(lane, i32_val(swizzleBits)), i32_val(1));
             Value kV = xor_(o, i32_val(k));
             kOffset = mul(kV, i32_val(m8n8x4Stride));
@@ -125,17 +125,17 @@ void storeDistributedToSharedWithStMatrix(
   }
 }
 
-bool isStMatrixCompatible(RankedTensorType tensorTy, int swizzlingByteWidth) {
+bool isStMatrixCompatible(RankedTensorType tensorTy, int swizzleByteWidth) {
   auto mmaLayout =
       mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   if (!mmaLayout || !mmaLayout.isHopper())
     return false;
   if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
     return false;
-  if (swizzlingByteWidth > 0 && mmaLayout.getInstrShape()[1] < 64)
+  if (swizzleByteWidth > 0 && mmaLayout.getInstrShape()[1] < 64)
     return false;
-  if (swizzlingByteWidth != 0 && swizzlingByteWidth != 32 &&
-      swizzlingByteWidth != 64 && swizzlingByteWidth != 128)
+  if (swizzleByteWidth != 0 && swizzleByteWidth != 32 &&
+      swizzleByteWidth != 64 && swizzleByteWidth != 128)
     return false;
   return true;
 }
@@ -385,8 +385,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   auto st = builder.create<>("st")
                 ->o("shared::cta", ctaId.has_value())
                 .o("shared", !ctaId.has_value())
-                .b(elemBitwidth)
-                .v(vec, /*predicate=*/vec > 1);
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
 
   PTXBuilder::Operand *valOpr;
@@ -579,17 +579,28 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   }
   return false;
 }
+
+bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
+                                ArrayRef<unsigned> paddedRepShape,
+                                ArrayRef<unsigned> outOrd,
+                                unsigned accumNumReplicates,
+                                int swizzleByteWidth) const {
+  return isStMatrixCompatible(srcTy, swizzleByteWidth) &&
+         accumNumReplicates == 1 && outOrd[0] == 1 &&
+         paddedRepShape[1] % 8 == 0;
+}
+
 bool TargetInfo::processReplicaUsingStMatrix(
     RewriterBase &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzlingByteWidth) const {
-  if (isStMatrixCompatible(srcTy, swizzlingByteWidth) &&
-      accumNumReplicates == 1 && outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
+    int swizzleByteWidth) const {
+  if (canUseStMatrix(srcTy, paddedRepShape, outOrd, accumNumReplicates,
+                     swizzleByteWidth)) {
     storeDistributedToSharedWithStMatrix(srcTy, elemTy, vals, smemBase,
                                          paddedRepShape, origRepShape, loc,
-                                         rewriter, swizzlingByteWidth);
+                                         rewriter, swizzleByteWidth);
     return true;
   }
   return false;
@@ -641,6 +652,18 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
 
   SmallVector<Value> operands{formatStrStart, bufferPtr};
   call(funcOp, operands);
+}
+
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
+                        ValueRange args) const {
+  assert(!msg.empty() && "printf with empty string not supported");
+  llvm::SmallString<64> msgNewline(msg);
+  msgNewline.push_back('\n');
+  msgNewline.push_back('\0');
+  Value msgValue =
+      LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
+                              "printfFormat_", msgNewline);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
 }
 
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,

@@ -274,10 +274,8 @@ jobs:
             echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
           fi
           cd python/test/unit
-          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=runtime --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           python3 -m pytest -s -n 8 language/test_subprocess.py
-          # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -s runtime/
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
@@ -286,13 +284,14 @@ jobs:
           python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
       - name: Run interpreter tests
-        if: ${{matrix.runner[0] == 'self-hosted' && matrix.runner[1] == 'H100'}}
+        if: ${{ matrix.runner[0] == 'h100-runner-set' }}
         env:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
           python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py language/test_subprocess.py \
+           language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
+           runtime/test_autotuner.py::test_kwargs[False]\
            ../../tutorials/06-fused-attention.py::test_op --device cpu
 
       - &run-cpp-unittests-step
@@ -344,8 +343,10 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
 
+    name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
+
     container:
-      image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.1.2
+      image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.4
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
@@ -385,23 +386,13 @@ jobs:
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
-          ## test_subprocess.py is flaky on the AMD CI.
-          ## TODO (lixun) find a solution and re-enable it.
-          pytest --capture=tee-sys -rfs -n 16 language \
-                 hopper/test_mixed_io.py \
-                 hopper/test_gemm.py \
-                 hopper/test_tma_store_gemm.py \
-                 hopper/test_persistent_warp_specialized_fused-attention.py \
-                 --ignore=language/test_line_info.py \
-                 --ignore=language/test_subprocess.py
+          pytest --capture=tee-sys -rfs -n 16 language runtime \
+                 --ignore=language/test_line_info.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
-
-          # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest -s runtime
 
       - name: Run Proton tests
         run: |
@@ -411,6 +402,11 @@ jobs:
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
       - *inspect-cache-directories-step
+
+      - name: Clean up caches
+        run: |
+          rm -rf ~/.triton
+          rm -rf ~/.cache
 
   Build-Tests:
     needs: Runner-Preparation

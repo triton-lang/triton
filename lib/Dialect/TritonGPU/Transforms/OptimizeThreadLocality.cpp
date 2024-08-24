@@ -147,7 +147,7 @@ class TritonGPUOptimizeThreadLocalityPass
         return;
       auto argNum = yieldOpOperand.getOperandNumber();
       auto oldAccum = forOp.getInitArgs()[argNum];
-      auto cstOp = dyn_cast<arith::ConstantOp>(oldAccum.getDefiningOp());
+      auto cstOp = oldAccum.getDefiningOp<arith::ConstantOp>();
       if (!cstOp)
         return;
       reduceOps.insert(reduce);

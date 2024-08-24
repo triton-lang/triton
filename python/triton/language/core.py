@@ -558,17 +558,17 @@ _DtypeClass = dtype
 
 class pointer_type(dtype):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1):
+    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False):
         element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
         self.address_space = address_space
-
-        self.name = f'pointer<{element_ty}>'
+        self.const = const
+        self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
 
     def __str__(self):
         return self.name
@@ -579,10 +579,13 @@ class pointer_type(dtype):
     def is_ptr(self):
         return True
 
+    def is_const(self):
+        return self.const
+
     def __eq__(self, other: pointer_type) -> bool:
         if not isinstance(other, pointer_type):
             return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space
+        return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
 
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
@@ -592,21 +595,11 @@ class pointer_type(dtype):
         return self
 
 
-class const_pointer_type(pointer_type):
+class nv_tma_desc_type(pointer_type):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1):
-        super().__init__(element_ty, address_space)
-
-    def __str__(self):
-        return f'const_pointer<{self.element_ty}>'
-
-    def is_const(self):
-        return True
-
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, const_pointer_type):
-            return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space
+    def __init__(self):
+        super().__init__(uint8, const=True, address_space=0)
+        self.name = 'nv_tma_desc_type'
 
 
 class block_type(dtype):
@@ -1167,7 +1160,7 @@ def program_id(axis, _builder=None):
     #     pid1 = program_id(1, _builder)
     #     pid2 = program_id(2, _builder)
     #     npg0 = num_programs(0, _builder)
-    #     npg1 = num_programs(0, _builder)
+    #     npg1 = num_programs(1, _builder)
     #     return pid0 + pid1*npg0 + pid2*npg0*npg1
     axis = _constexpr_to_value(axis)
     return semantic.program_id(axis, _builder)
@@ -1601,7 +1594,7 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type other: Block, optional
     :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
     :type boundary_check: tuple of ints, optional
-    :param padding_option: should be one of {"", "zero", "nan"}, do padding while out of bound
+    :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
         cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
@@ -2217,6 +2210,14 @@ def max_constancy(input, values, _builder=None):
     return semantic.max_constancy(input, values)
 
 
+@builtin
+def assume(cond, _builder=None):
+    '''
+    Allow compiler to assume the :code:`cond` is True.
+    '''
+    return semantic.assume(_to_tensor(cond, _builder), _builder)
+
+
 # -----------------------
 # Debugging functions
 # -----------------------
@@ -2497,17 +2498,17 @@ class static_range:
     """
 
     def __init__(self, arg1, arg2=None, step=None):
-        assert isinstance(arg1, constexpr)
+        assert isinstance(arg1, constexpr), f"{arg1} used as tl.static_range start value is not a constexpr"
         if step is None:
             self.step = constexpr(1)
         else:
-            assert isinstance(step, constexpr)
+            assert isinstance(step, constexpr), f"{step} used as tl.static_range step value is not a constexpr"
             self.step = step
         if arg2 is None:
             self.start = constexpr(0)
             self.end = arg1
         else:
-            assert isinstance(arg2, constexpr)
+            assert isinstance(arg2, constexpr), f"{arg2} used as tl.static_range end value is not a constexpr"
             self.start = arg1
             self.end = arg2
 
