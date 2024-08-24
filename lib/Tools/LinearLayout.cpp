@@ -189,7 +189,9 @@ void assertCommonDimsSameOrder(T &&outerDims, U &&innerDims) {
   if (outerCommonDims != innerCommonDims) {
     llvm::report_fatal_error("All in/out dimensions common to both layouts "
                              "must appear in the same relative order, but they "
-                             "don't.\n");
+                             "don't.\nOuter:" +
+                             Twine(outer.toString()) +
+                             "\nInner: " + inner.toString());
   }
 }
 
@@ -655,13 +657,17 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
                          divisor.getInDimSizeLog2(inDim));
   }
 
-  // Record size 1 out-dims caused by the division.
-  llvm::MapVector<StringAttr, int32_t> newOutDims = outDims;
-  llvm::DenseSet<size_t> sizeOneOutDimIndices;
+  // Check if the size of the new out-dims are large enough.
   for (auto [outDimName, outDimSize] : divisor.outDims) {
     if (newOutDims[outDimName] < outDimSize) {
       return std::nullopt;
     }
+  }
+
+  // Record size 1 out-dims caused by the division.
+  llvm::MapVector<StringAttr, int32_t> newOutDims = outDims;
+  llvm::DenseSet<size_t> sizeOneOutDimIndices;
+  for (auto [outDimName, outDimSize] : divisor.outDims) {
     auto newOutDimSize = newOutDims[outDimName] / outDimSize;
     if (newOutDimSize == 1) {
       sizeOneOutDimIndices.insert(getOutDimIndex(outDimName));
