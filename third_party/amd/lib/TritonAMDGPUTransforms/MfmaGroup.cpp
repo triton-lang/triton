@@ -2,7 +2,8 @@
 
 namespace mlir {
 
-static MfmaTypeId convertTypesToId(mlir::Type dataTypeA, mlir::Type dataTypeB) {
+static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
+                                          mlir::Type dataTypeB) {
   if (dataTypeA.isF32() && dataTypeB.isF32()) {
     return MfmaTypeId::Fp32TyId;
   }
@@ -26,6 +27,9 @@ static MfmaTypeId convertTypesToId(mlir::Type dataTypeA, mlir::Type dataTypeB) {
   }
   if (dataTypeA.isFloat8E5M2FNUZ() && dataTypeB.isFloat8E5M2FNUZ()) {
     return MfmaTypeId::Bf8Bf8TyId;
+  }
+  if (dataTypeA.isFloat8E5M2() && dataTypeB.isFloat8E5M2()) {
+    return MfmaTypeId::Fp16TyId;
   }
   llvm_unreachable("Unsupported input argument type.");
 }
@@ -205,16 +209,48 @@ auto getMfmaInsnGroupAttrMap = []() -> const MfmaInsnGroupMap & {
   return MfmaInsnMap;
 };
 
+std::pair<mlir::Type, mlir::Type> TypesFromMfmaId(mlir::MLIRContext *ctx,
+                                                  MfmaTypeId id) {
+  auto f8e5m2 = Float8E5M2Type::get(ctx);
+  auto f8e4m3fnuz = Float8E4M3FNUZType::get(ctx);
+  auto f8e5m2fnuz = Float8E5M2FNUZType::get(ctx);
+  auto f16 = Float16Type::get(ctx);
+  auto bf16 = BFloat16Type::get(ctx);
+  auto f32 = Float32Type::get(ctx);
+  auto i8 = IntegerType::get(ctx, 8, IntegerType::Signed);
+  switch (id) {
+  case MfmaTypeId::Fp32TyId:
+    return {f32, f32};
+  case MfmaTypeId::Fp16TyId:
+    return {f16, f16};
+  case MfmaTypeId::Bf16TyId:
+    return {bf16, bf16};
+  case MfmaTypeId::I8TyId:
+    return {i8, i8};
+  case MfmaTypeId::Fp8Fp8TyId:
+    return {f8e4m3fnuz, f8e4m3fnuz};
+  case MfmaTypeId::Fp8Bf8TyId:
+    return {f8e4m3fnuz, f8e5m2fnuz};
+  case MfmaTypeId::Bf8Fp8TyId:
+    return {f8e5m2fnuz, f8e4m3fnuz};
+  case MfmaTypeId::Bf8Bf8TyId:
+    return {f8e5m2fnuz, f8e5m2fnuz};
+  }
+  assert(false && "unsupported MfmaTypeId");
+}
+
 FailureOr<MfmaInsn> MfmaInsn::selectMfma(unsigned mDim, unsigned nDim,
                                          Type elementTypeA, Type elementTypeB,
                                          int mfmaVersion) {
   auto mfmaInsnAttrMap = getMfmaInsnGroupAttrMap();
-  MfmaInsnGroupSelectKey key = {
-      mDim, nDim, convertTypesToId(elementTypeA, elementTypeB), mfmaVersion};
+  MfmaTypeId mfmaId = chooseAppropriateMfmaId(elementTypeA, elementTypeB);
+  MfmaInsnGroupSelectKey key = {mDim, nDim, mfmaId, mfmaVersion};
   auto it = mfmaInsnAttrMap.find(key);
   if (it == mfmaInsnAttrMap.end())
     return failure();
-  return MfmaInsn(elementTypeA, elementTypeB, (*it).second);
+  auto [instrElementTypeA, instrElementTypeB] =
+      TypesFromMfmaId(elementTypeA.getContext(), mfmaId);
+  return MfmaInsn(instrElementTypeA, instrElementTypeB, it->second);
 }
 
 MfmaInsn::MfmaInsn(Type elementTypeA, Type elementTypeB,
@@ -226,4 +262,6 @@ unsigned MfmaInsn::getMDim() { return attr.m; }
 unsigned MfmaInsn::getNDim() { return attr.n; }
 StringRef MfmaInsn::getInsnName() { return attr.insn; }
 unsigned MfmaInsn::getKBase() { return attr.kBase; }
+Type MfmaInsn::getElementTypeA() { return elementTypeA; }
+Type MfmaInsn::getElementTypeB() { return elementTypeB; }
 } // namespace mlir
