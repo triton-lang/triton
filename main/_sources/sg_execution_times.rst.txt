@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**04:21.515** total execution time for 9 files **from all galleries**:
+**04:17.812** total execution time for 9 files **from all galleries**:
 
 .. container::
 
@@ -33,29 +33,29 @@ Computation times
      - Time
      - Mem (MB)
    * - :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``../python/tutorials/03-matrix-multiplication.py``)
-     - 02:17.867
+     - 02:16.285
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``../python/tutorials/06-fused-attention.py``)
-     - 00:55.399
+     - 00:54.251
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``../python/tutorials/05-layer-norm.py``)
-     - 00:29.236
+     - 00:28.487
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``../python/tutorials/02-fused-softmax.py``)
-     - 00:25.947
+     - 00:23.341
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``../python/tutorials/01-vector-add.py``)
-     - 00:06.610
+     - 00:09.300
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_08-grouped-gemm.py` (``../python/tutorials/08-grouped-gemm.py``)
-     - 00:03.572
+     - 00:03.430
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_09-persistent-matmul.py` (``../python/tutorials/09-persistent-matmul.py``)
-     - 00:01.954
+     - 00:01.811
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``../python/tutorials/04-low-memory-dropout.py``)
-     - 00:00.707
+     - 00:00.670
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_07-extern-functions.py` (``../python/tutorials/07-extern-functions.py``)
-     - 00:00.224
+     - 00:00.235
      - 0.0

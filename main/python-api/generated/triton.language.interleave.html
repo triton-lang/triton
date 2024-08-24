@@ -134,7 +134,7 @@
 <dt class="sig sig-object py" id="triton.language.interleave">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">interleave</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.interleave" title="Link to this definition">¶</a></dt>
 <dd><p>Interleaves the values of two tensors along their last dimension. The two tensors must have the same shape.
-Equivalent to <cite>tl.join(a, b).reshape(a.shape[-1:] + [2 * a.shape[-1]])</cite></p>
+Equivalent to <cite>tl.join(a, b).reshape(a.shape[:-1] + [2 * a.shape[-1]])</cite></p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
