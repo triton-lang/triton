@@ -575,24 +575,29 @@ public:
     return *this;
   }
 
-  // divideLeft and divideRight are the inverses of operator*.
+  // divideLeft and divideRight are the inverses of the operator*.
   //
-  // If c = a * b, then a' = c.divideRight(b) and b' = c.divideLeft(a).
-  // a' * b = c and a * b' = c.
+  // Size-zero dimensions are effectively ignored by the operator*: `a*b ==
+  // a'*b` if (and only if) `a` and `a'` are the same, ignoring any size-zero
+  // input and output dimensions that are present in `b`.  Therefore, if we want
+  // divideRight to be the inverse of operator*, there are many possible values
+  // that we could return for `(a*b).divideRight(b)` which would satisfy
+  // `((a*b).divideRight(b))*b == a*b`.
   //
-  // Note that `a'` and `a` may not have exactly the same input/output
-  // dimensions. `a` may contain additional empty input dimensions compared to
-  // `a'`. For example:
+  // In the following example, we have `a*b == a'*b` when "in1" is an empty
+  // dimension that maps everything to 0:
   //
   //   a = L("in1", "in2") -> ("out1", "out2")
   //   a' = L("in1") -> ("out1")
   //   b = L("in2") -> ("out2")
   //
-  // c = a * b = a' * b if "in1" is an empty dimension that maps everything
-  // to 0.
+  // divideLeft and divideRight resolve this ambiguity by always returning the
+  // "canonical" quotient, namely the one with the fewest possible size-zero
+  // input and output dimensions.
   //
   // TODO(jlebar): Implement divideLeft.
-  // std::optional<LinearLayout> divideLeft(const LinearLayout &divisor);
+  // std::optional<LinearLayout> divideLeft(const LinearLayout
+  // &divisor);
   std::optional<LinearLayout> divideRight(const LinearLayout &divisor);
 
   // Gets a layout with only these in/out dimensions.
