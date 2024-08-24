@@ -10,9 +10,6 @@ static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
   if (dataTypeA.isF16() && dataTypeB.isF16()) {
     return MfmaTypeId::Fp16TyId;
   }
-  if (dataTypeA.isFloat8E5M2() && dataTypeB.isFloat8E5M2()) {
-    return MfmaTypeId::Fp16TyId;
-  }
   if (dataTypeA.isBF16() && dataTypeB.isBF16()) {
     return MfmaTypeId::Bf16TyId;
   }
@@ -30,6 +27,9 @@ static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
   }
   if (dataTypeA.isFloat8E5M2FNUZ() && dataTypeB.isFloat8E5M2FNUZ()) {
     return MfmaTypeId::Bf8Bf8TyId;
+  }
+  if (dataTypeA.isFloat8E5M2() && dataTypeB.isFloat8E5M2()) {
+    return MfmaTypeId::Fp16TyId;
   }
   llvm_unreachable("Unsupported input argument type.");
 }
@@ -250,7 +250,7 @@ FailureOr<MfmaInsn> MfmaInsn::selectMfma(unsigned mDim, unsigned nDim,
     return failure();
   auto [instrElementTypeA, instrElementTypeB] =
       TypesFromMfmaId(elementTypeA.getContext(), mfmaId);
-  return MfmaInsn(instrElementTypeA, instrElementTypeB, (*it).second);
+  return MfmaInsn(instrElementTypeA, instrElementTypeB, it->second);
 }
 
 MfmaInsn::MfmaInsn(Type elementTypeA, Type elementTypeB,
