@@ -575,7 +575,7 @@ public:
     return *this;
   }
 
-  // divideLeft and divideRight are the inverses of the operator*.
+  // divideLeft and divideRight are the inverses of operator*.
   //
   // Size-zero dimensions are effectively ignored by the operator*: `a*b ==
   // a'*b` if (and only if) `a` and `a'` are the same, ignoring any size-zero
