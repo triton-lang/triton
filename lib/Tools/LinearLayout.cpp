@@ -661,11 +661,11 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
   // If yes, we can divide the out-dims.
   // If no, we return nullopt to indicate that the division is not possible.
   llvm::MapVector<StringAttr, int32_t> newOutDims = outDims;
-  for (auto [outDimName, outDimSize] : divisor.outDims) {
+  for (const auto [outDimName, outDimSize] : divisor.outDims) {
     if (newOutDims[outDimName] < outDimSize) {
       return std::nullopt;
     }
-    newOutDims[outDimName] = newOutDims[outDimName] / outDimSize;
+    newOutDims[outDimName] /= outDimSize;
   }
 
   LDBG("Checking candidate_quotient * divisor == *this");
@@ -740,7 +740,7 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
   //   "out1", "out2", "out3"]
   // This result matches the original out-dims(o).
   llvm::SmallVector<size_t> emptyOutDimIndices;
-  for (auto [outDimName, outDimSize] : llvm::reverse(outDims)) {
+  for (const auto [outDimName, outDimSize] : llvm::reverse(outDims)) {
     if (newOutDims.contains(outDimName) && !divisor.hasOutDim(outDimName)) {
       break;
     }
