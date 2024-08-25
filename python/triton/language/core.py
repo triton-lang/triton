@@ -481,6 +481,20 @@ class dtype:
     def is_const():
         return False
 
+    def get_int_max_value(self):
+        if self.is_int_signed():
+            return 2**(self.int_bitwidth - 1) - 1
+        if self.is_int_unsigned():
+            return 2**self.int_bitwidth - 1
+        assert False
+
+    def get_int_min_value(self):
+        if self.is_int_signed():
+            return -2**(self.int_bitwidth - 1)
+        if self.is_int_unsigned():
+            return 0
+        assert False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False

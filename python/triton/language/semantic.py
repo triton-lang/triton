@@ -128,6 +128,25 @@ def binary_op_type_checking_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir.bui
     return lhs, rhs
 
 
+def binary_op_overflow_checking_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder, binary_op: callable):
+    lhs_sca_ty = lhs.type.scalar
+    rhs_sca_ty = rhs.type.scalar
+    assert lhs_sca_ty == rhs_sca_ty
+    assert lhs_sca_ty.is_int()
+    assert rhs_sca_ty.is_int()
+    lhs = cast(lhs, tl.int64, builder)
+    rhs = cast(rhs, tl.int64, builder)
+    ret = binary_op(lhs, rhs, builder)
+    max_value = lhs_sca_ty.get_int_max_value()
+    max_value = tl.tensor(builder.get_int64(max_value), tl.int64)
+    min_value = lhs_sca_ty.get_int_min_value()
+    min_value = tl.tensor(builder.get_int64(min_value), tl.int64)
+    cond = and_(less_equal(ret, max_value, builder), greater_equal(ret, min_value, builder), builder)
+    cond = splat(cond, [1], builder)
+    msg = "integer overflow detected"
+    builder.create_assert(cond.handle, msg, "unknown", "unknown", 0)
+
+
 def add(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, True)
     input_scalar_ty = input.type.scalar
@@ -148,6 +167,8 @@ def add(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
     # int + int
     elif input_scalar_ty.is_int():
+        if input_scalar_ty.int_bitwidth < 64:
+            binary_op_overflow_checking_impl(input, other, builder, add)
         return tl.tensor(builder.create_add(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {input_scalar_ty}")
 
