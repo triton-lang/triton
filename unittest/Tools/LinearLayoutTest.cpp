@@ -634,7 +634,9 @@ TEST_F(LinearLayoutTest, DivideRight_EliminateOutDim) {
       },
       {S("out1"), S("out2")});
   LinearLayout l5({{S("in1"), {{1}, {2}}}}, {S("out2")});
-  LinearLayout l6({{S("in1"), {}}}, {S("out1")});
+  using BasesArray =
+      ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>>;
+  LinearLayout l6(BasesArray{}, {S("out1")});
   ASSERT_EQ(l6 * l5, l4);
   EXPECT_EQ(l4.divideRight(l5), l6);
 }
