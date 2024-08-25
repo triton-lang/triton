@@ -697,13 +697,15 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
   newBases = candidateQuotient->bases;
   newOutDims = candidateQuotient->outDims;
 
-  // We remove only the trailing empty out-dims.
+  // We only remove the trailing empty output dimensions from `quotient`.
   //
   // In the multiplication `quotient * divisor == result`, the output dimensions
-  // of `quotient` always precede those of `divisor` in `result`.  The following
-  // loop iterates through the output dimensions of `result` from right to left.
+  // of `quotient` always come before those of `divisor` in `result`.  Removing
+  // any non-trailing empty dimensions from `quotient` would change the
+  // order of the output dimensions in `result`.
   //
-  // During the iteration, the following conditions are checked:
+  // The following loop iterates through the output dimensions of `result` from
+  // right to left.  During the iteration, the following conditions are checked:
   //
   //   1. If an output dimension exists only in `divisor` and not in `quotient`,
   //   the loop continues.
