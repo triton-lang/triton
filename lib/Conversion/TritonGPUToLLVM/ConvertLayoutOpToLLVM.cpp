@@ -345,8 +345,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                    const LinearLayout &dstLayout,
                                    OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
+    // TODO(Keren): implement warp shuffle instead of using the general approach
+    // that uses shared memory
+    return transferWithinBlockOrGroup(op, srcLayout, dstLayout, adaptor,
+                                      rewriter);
   }
 
   LogicalResult
