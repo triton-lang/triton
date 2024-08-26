@@ -377,7 +377,7 @@ if TORCH_HAS_FP8 and is_cuda():
     b = torch.randn((512, 512), device="cuda", dtype=torch.float16)
     a = a.to(torch.float8_e5m2)
     # pre-transpose b for efficiency.
-    b = b.T
+    b = b.T.contiguous().T
     b = b.to(torch.float8_e5m2)
     triton_output = matmul(a, b)
     torch_output = torch.matmul(a.to(torch.float16), b.to(torch.float16))
@@ -401,13 +401,13 @@ if TORCH_HAS_FP8 and is_cuda():
 ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
 
 configs = []
-for fp8_inputs in [False, True]:
+for fp8_inputs in [True]:
     if fp8_inputs and (not TORCH_HAS_FP8 or not is_cuda()):
         continue
     configs.append(
         triton.testing.Benchmark(
-            x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
-            x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
+            x_names=["K"],  # Argument names to use as an x-axis for the plot
+            x_vals=[512 * i for i in range(1, 17)],  # Different possible values for `x_name`
             line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
             # Possible values for `line_arg`
             # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
@@ -422,12 +422,13 @@ for fp8_inputs in [False, True]:
 
 
 @triton.testing.perf_report(configs)
-def benchmark(M, N, K, provider, fp8_inputs):
+def benchmark(K, provider, fp8_inputs):
+    M, N = 8192, 8192
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
     if TORCH_HAS_FP8 and fp8_inputs:
         a = a.to(torch.float8_e5m2)
-        b = b.T
+        b = b.T.contiguous().T
         b = b.to(torch.float8_e5m2)
     quantiles = [0.5, 0.2, 0.8]
     if provider == ref_lib.lower():
