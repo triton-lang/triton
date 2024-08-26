@@ -577,14 +577,14 @@ public:
 
   // divideLeft and divideRight are the inverses of operator*.
   //
-  // Size-zero dimensions are effectively ignored by the operator*: `a*b ==
-  // a'*b` if (and only if) `a` and `a'` are the same, ignoring any size-zero
-  // input and output dimensions that are present in `b`.  Therefore, if we want
-  // divideRight to be the inverse of operator*, there are many possible values
-  // that we could return for `(a*b).divideRight(b)` which would satisfy
-  // `((a*b).divideRight(b))*b == a*b`.
+  // Consider `a = c.divideRight(b)`, where `a` is a linear layout with
+  // `in-dims(a) == in-dims(b)` and `out-dims(a) == out-dims(c)`. We may remove
+  // some empty dimensions from `a` to form `a'` and still have `a' * b == c`.
+  // Therefore, there are multiple possible values that we could return for
+  // `(a * b).divideRight(b)` which would satisfy
+  // `((a * b).divideRight(b)) * b == a * b`.
   //
-  // In the following example, we have `a*b == a'*b` when "in1" is an empty
+  // In the following example, we have `a * b == a' * b` when "in1" is an empty
   // dimension that maps everything to 0:
   //
   //   a = L("in1", "in2") -> ("out1", "out2")

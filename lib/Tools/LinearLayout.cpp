@@ -165,7 +165,7 @@ void assertDimsSubsetIgnoringOrder(T &&small, U &&big) {
   }
 }
 
-// Check that elements common to both outerDimsRange and innerDimsRange
+// Check that elements common to both aDims and bDims
 // appear in the same relative order.
 template <typename T, typename U>
 void assertCommonDimsSameOrder(T &&aDims, U &&bDims) {
