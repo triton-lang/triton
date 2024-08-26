@@ -1402,8 +1402,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
         transitiveOperand =
             cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
                 .getOperand(blockArg.getArgNumber() - 1);
-      }
-      if (Operation *def = transitiveOperand.getDefiningOp()) {
+      } else if (Operation *def = transitiveOperand.getDefiningOp()) {
         transitiveOperand = def->getOperand(0);
       }
     }
