@@ -470,13 +470,13 @@ with open(nvidia_version_path, "r") as nvidia_version_file:
     NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
 
 download_and_copy(
-    name="ptxas",
-    src_path="bin/ptxas",
-    variable="TRITON_PTXAS_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
+    name="ptxas", src_path="bin/ptxas", variable="TRITON_PTXAS_PATH", version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
-)
+    ((lambda version_major, version_minor1, version_minor2:
+      f"https://anaconda.org/nvidia/cuda-nvcc-tools/{version}/download/linux-{arch}/cuda-nvcc-tools-{version}-0.tar.bz2"
+      if int(version_major) >= 12 and int(version_minor1) >= 5 else
+      f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
+     (*version.split('.'))))
 download_and_copy(
     name="cuobjdump",
     src_path="bin/cuobjdump",
