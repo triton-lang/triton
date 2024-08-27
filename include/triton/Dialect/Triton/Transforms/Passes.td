@@ -24,6 +24,14 @@ def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp">
   let dependentDialects = ["mlir::arith::ArithDialect"];
 }
 
+def TritonDisableAsserts : Pass</*cli-args*/"triton-disable-asserts", "mlir::ModuleOp"> {
+  let summary = "disable device-side assertions";
+
+  let constructor = "mlir::triton::createDisableAssertsPass()";
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonReorderBroadcast : Pass</*cli-arg*/"triton-reorder-broadcast", /*Op*/"mlir::ModuleOp"> {
   let summary = "Moves broadcast and splat after elementwise operations";
   let description = [{

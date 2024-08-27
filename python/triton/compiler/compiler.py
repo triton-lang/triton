@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
-from .._C.libtriton import get_cache_invalidating_env_vars, ir
+from .._C.libtriton import get_cache_invalidating_env_vars, ir, passes
 from ..backends import backends
 from ..backends.compiler import GPUTarget
 from .. import __version__
@@ -224,6 +224,14 @@ def filter_traceback(e: BaseException):
         e.__traceback__ = frames[0]
 
 
+def remove_debug_info(mod):
+    pm = ir.pass_manager(mod.context)
+    passes.ttir.add_disable_asserts(pm)
+    passes.common.add_symbol_dce(pm)
+    pm.run(mod)
+    return mod
+
+
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.active.get_current_target()
@@ -284,6 +292,8 @@ def compile(src, target=None, options=None):
     except Exception as e:
         filter_traceback(e)
         raise
+    if not options.debug:
+        module = remove_debug_info(module)
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)

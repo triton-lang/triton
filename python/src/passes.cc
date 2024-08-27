@@ -35,6 +35,7 @@ void init_triton_passes_common(py::module &&m) {
 
 void init_triton_passes_ttir(py::module &&m) {
   using namespace mlir::triton;
+  ADD_PASS_WRAPPER_0("add_disable_asserts", createDisableAssertsPass);
   ADD_PASS_WRAPPER_0("add_combine", createCombineOpsPass);
   ADD_PASS_WRAPPER_0("add_reorder_broadcast", createReorderBroadcastPass);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",

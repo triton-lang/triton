@@ -4,6 +4,7 @@ add_public_tablegen_target(TritonCombineIncGen)
 
 add_triton_library(TritonTransforms
   Combine.cpp
+  DisableAsserts.cpp
   ReorderBroadcast.cpp
   RewriteTensorPointer.cpp
 
