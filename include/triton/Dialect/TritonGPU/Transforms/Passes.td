@@ -179,4 +179,17 @@ def TritonGPUOptimizeAccumulatorInit: Pass<"tritongpu-optimize-accumulator-init"
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPULoopScheduling: Pass<"tritongpu-loop-scheduling", "mlir::ModuleOp"> {
+  let summary = "Generate loop scheduling for SWP";
+
+  let description = "This pass sets up stages and clustering for software pipelining.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"3",
+           "number of pipeline stages">
+  ];
+}
 #endif
