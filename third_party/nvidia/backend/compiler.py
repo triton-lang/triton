@@ -3,7 +3,8 @@ from triton._C.libtriton import ir, passes, llvm, nvidia
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional
+from types import ModuleType
 import hashlib
 import re
 import tempfile
@@ -157,6 +158,10 @@ class CUDABackend(BaseBackend):
             "min_dot_size": min_dot_size(self.target)
         }
         return codegen_fns
+
+    def get_module_map(self) -> Dict[str, ModuleType]:
+        from triton.language.extra.cuda import libdevice
+        return {"triton.language.extra.libdevice": libdevice}
 
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)

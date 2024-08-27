@@ -2,9 +2,12 @@ import argparse
 from collections import namedtuple
 import json
 import pandas as pd
-import hatchet as ht
+try:
+    import hatchet as ht
+    from hatchet.query import NegationQuery
+except ImportError:
+    raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
-from hatchet.query import NegationQuery
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
 

@@ -188,8 +188,8 @@ class ContainsReturnChecker(ast.NodeVisitor):
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, attributes, constants, function_name, jit_fn: JITFunction, options,
-                 codegen_fns, debug=None, module=None, is_kernel=False, function_types: Optional[Dict] = None,
-                 noinline=False, file_name: Optional[str] = None, begin_line=0):
+                 codegen_fns, module_map, debug=None, module=None, is_kernel=False,
+                 function_types: Optional[Dict] = None, noinline=False, file_name: Optional[str] = None, begin_line=0):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
@@ -201,10 +201,23 @@ class CodeGenerator(ast.NodeVisitor):
         # Convert custom types not natively supported on HW.
         # convert_custom_types(intput_tensor, dtype, fp_downcast_rounding=None, _builder=None)
         self.builder.codegen_fns = codegen_fns
+        self.builder.module_map = {} if module_map is None else module_map
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
-        self.gscope = gscope
+
+        self.gscope = {}
+        for k, v in gscope.items():
+            if isinstance(v, ModuleType):
+                self.gscope[k] = module_map.get(v.__name__, v)
+                continue
+
+            module_name = getattr(v, "__module__", "")
+            if module_name in module_map:
+                self.gscope[k] = getattr(module_map[module_name], k)
+            else:
+                self.gscope[k] = v
+
         self.lscope = {}
         self.attributes = attributes
         self.constants = constants
@@ -1054,7 +1067,8 @@ class CodeGenerator(ast.NodeVisitor):
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
-                                      options=self.builder.options, codegen_fns=self.builder.codegen_fns, debug=debug)
+                                      options=self.builder.options, codegen_fns=self.builder.codegen_fns,
+                                      module_map=self.builder.module_map, debug=debug)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1257,7 +1271,7 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, specialization, context, options, codegen_fns):
+def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     attrs = specialization.attrs
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
@@ -1277,7 +1291,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns):
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,
                               jit_fn=fn, attributes=new_attrs, is_kernel=True, file_name=file_name,
-                              begin_line=begin_line, options=options, codegen_fns=codegen_fns)
+                              begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())
 
     ret = generator.module
