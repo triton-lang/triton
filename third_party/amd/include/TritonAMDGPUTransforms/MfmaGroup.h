@@ -86,6 +86,8 @@ public:
   unsigned getNDim();
   StringRef getInsnName();
   unsigned getKBase();
+  Type getElementTypeA();
+  Type getElementTypeB();
 };
 } // namespace mlir
 

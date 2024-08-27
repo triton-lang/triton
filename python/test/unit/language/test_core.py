@@ -3082,7 +3082,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
      for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
-     for input_precision in ["ieee" if is_hip() else "tf32"]
+     for input_precision in ["tf32" if is_cuda() else "ieee"]
      for col_a in [True, False]
      for col_b in [True, False]
      for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
@@ -3338,7 +3338,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
             if out_dtype_str == "float16":
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
-        input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
+        input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
         if triton.runtime.driver.active.utils.get_device_properties(
@@ -5235,10 +5235,6 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         if in_type_str != 'float8e5':
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
-        ## TODO: Figure out why block size (128, 256, 128) fails on MI300
-        if ("gfx94" in get_arch()) and BLOCK_M == 128:
-            pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
-
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
@@ -5469,7 +5465,7 @@ def maxnreg_noinline2(X):
 
 def test_maxnreg(device):
     assert not is_interpreter(), "this test won't work with the interpreter"
-    if is_hip():
+    if not is_cuda():
         pytest.skip('maxnreg only works on CUDA')
 
     # triton kernel
