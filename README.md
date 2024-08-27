@@ -119,7 +119,7 @@ arbitrary LLVM version.
 
     - Do a local build. Run command `pip install -e python`
     - Get the full path to the `compile_commands.json` file produced by the build:
-      `find python/build -name 'compile_commands.json' | xargs readlink -f`. 
+      `find python/build -name 'compile_commands.json' | xargs readlink -f`.
       You might get a full path similar to `/Users/{username}/triton/python/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
     - In vscode, install the
       [C/C++
