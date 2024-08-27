@@ -48,12 +48,15 @@ def ptx_get_version(cuda_version) -> int:
     assert isinstance(cuda_version, str)
     major, minor = map(int, cuda_version.split('.'))
     if major == 12:
-        return 80 + minor
+        if minor < 6:
+            return 80 + minor
+        elif minor == 6:
+            return 85
     if major == 11:
         return 70 + minor
     if major == 10:
         return 63 + minor
-    raise RuntimeError("Triton only support CUDA 10.0 or higher")
+    raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 
 @functools.lru_cache()
