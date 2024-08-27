@@ -494,7 +494,7 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 download_and_copy(
-    name="cudacrt", src_path="include", variable="TRITON_CUDACRT_PATH", version=NVIDIA_TOOLCHAIN_VERSION,
+    name="cudacrt", src_path="targets/*/include", variable="TRITON_CUDACRT_PATH", version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-crt-dev_linux-{arch}/{version}/download/noarch/cuda-crt-dev_linux-{arch}-{version}-0.tar.bz2"
