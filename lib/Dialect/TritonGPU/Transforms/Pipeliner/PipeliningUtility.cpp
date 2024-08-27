@@ -166,3 +166,47 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
   for (Operation *op : opsToDelete)
     op->erase();
 }
+
+llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+mlir::triton::loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
+  llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+      loadOpToIndLevelAndUse;
+  DenseSet<Operation *> seen;
+
+  std::function<void(Operation * op, int, Operation *)> dfs =
+      [&](Operation *op, int distance, Operation *use) {
+        if (!seen.insert(op).second)
+          return;
+        if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
+          // TODO: What if there are multiple uses at different distances?
+          loadOpToIndLevelAndUse.push_back(std::make_tuple(op, distance, use));
+          use = op;
+          distance++;
+        }
+        for (Value operand : op->getOperands()) {
+          Value v = operand;
+          Operation *defOp = v.getDefiningOp();
+          if (defOp && defOp->getBlock() == op->getBlock()) {
+            dfs(defOp, distance, use);
+          }
+        }
+      };
+
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!op.hasTrait<OpTrait::DotLike>())
+      continue;
+    seen.clear();
+    dfs(&op, 0, &op);
+  }
+
+  // If the loop has numStages attribute, also consider pipelining other loads
+  // that are not directly used by dot ops.
+  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
+    for (Operation &op : forOp.getBody()->without_terminator()) {
+      if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op))
+        dfs(&op, 0, &op);
+    }
+  }
+
+  return loadOpToIndLevelAndUse;
+}
