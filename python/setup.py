@@ -267,7 +267,7 @@ def get_thirdparty_packages(packages: list):
     return thirdparty_cmake_args
 
 
-def download_and_copy(name, src_path, variable, version, url_func):
+def download_and_copy(name, src_path, dst_path, variable, version, url_func):
     if is_offline_build():
         return
     triton_cache_path = get_triton_cache_path()
@@ -279,11 +279,11 @@ def download_and_copy(name, src_path, variable, version, url_func):
         arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
     except KeyError:
         arch = platform.machine()
-    platform_name = "sbsa-linux" if arch == "aarch64" else "x86_64-linux"
-    src_path = src_path(platform_name, version) if callable(src_path) else src_path
     url = url_func(arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
-    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
+    platform_name = "sbsa-linux" if arch == "aarch64" else "x86_64-linux"
+    src_path = src_path(platform_name, version) if callable(src_path) else src_path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
     if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
@@ -472,8 +472,8 @@ with open(nvidia_version_path, "r") as nvidia_version_file:
     NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
 
 download_and_copy(
-    name="ptxas", src_path="bin/ptxas", variable="TRITON_PTXAS_PATH", version=NVIDIA_TOOLCHAIN_VERSION,
-    url_func=lambda arch, version:
+    name="ptxas", src_path="bin/ptxas", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION, url_func=lambda arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-nvcc-tools/{version}/download/linux-{arch}/cuda-nvcc-tools-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
@@ -482,6 +482,7 @@ download_and_copy(
 download_and_copy(
     name="cuobjdump",
     src_path="bin/cuobjdump",
+    dst_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
@@ -490,6 +491,7 @@ download_and_copy(
 download_and_copy(
     name="nvdisasm",
     src_path="bin/nvdisasm",
+    dst_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
@@ -499,7 +501,7 @@ download_and_copy(
     name="cudacrt", src_path=lambda platform, version: (
         (lambda version_major, version_minor1, version_minor2, : f"targets/{platform}/include"
          if int(version_major) >= 12 and int(version_minor1) >= 5 else "include")(*version.split('.'))),
-    variable="TRITON_CUDACRT_PATH", version=NVIDIA_TOOLCHAIN_VERSION, url_func=lambda arch, version:
+    dst_path="include", variable="TRITON_CUDACRT_PATH", version=NVIDIA_TOOLCHAIN_VERSION, url_func=lambda arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-crt-dev_linux-{arch}/{version}/download/noarch/cuda-crt-dev_linux-{arch}-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
@@ -508,6 +510,7 @@ download_and_copy(
 download_and_copy(
     name="cudart",
     src_path="include",
+    dst_path="include",
     variable="TRITON_CUDART_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
@@ -516,6 +519,7 @@ download_and_copy(
 download_and_copy(
     name="cupti",
     src_path="include",
+    dst_path="include",
     variable="TRITON_CUPTI_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
