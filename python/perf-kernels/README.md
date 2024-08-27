@@ -73,3 +73,7 @@ used `tl.dot` with minimum block size equal to $16$.
 ## `softmax.py`
 
 Kernel that implements Softmax over a row of tensor.
+
+## `rmsnorm.py`
+
+Kernel that implements RMS Norm over a row of tensor.
