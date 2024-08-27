@@ -497,7 +497,7 @@ download_and_copy(
     name="cudacrt", src_path="include", variable="TRITON_CUDACRT_PATH", version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     ((lambda version_major, version_minor1, version_minor2:
-      f"https://anaconda.org/nvidia/cuda-crt-tools/{version}/download/linux-{arch}/cuda-crt-tools-{version}-0.tar.bz2"
+      f"https://anaconda.org/nvidia/cuda-crt-dev_linux-{arch}/{version}/download/noarch/cuda-crt-dev_linux-{arch}-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
       f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
      (*version.split('.'))))
