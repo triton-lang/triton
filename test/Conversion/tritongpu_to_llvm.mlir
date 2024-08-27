@@ -17,6 +17,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK-LABEL: basic_load
   tt.func @basic_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // CHECK: llvm.inline_asm
+    // CHECK-SAME: mov.u32 $0, $1;
+    // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,r,l,b"
     // CHECK: llvm.inline_asm
     %1 = tt.load %a_ptr_init, %cst, %cst_0 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
@@ -707,39 +709,39 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: convert_layout_blocked_blocked
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -754,15 +756,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: convert_layout_blocked_blocked_vec
   tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -777,21 +779,21 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: convert_layout_blocked_blocked_multi_rep
   tt.func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.inline_asm
+    // CHECK: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
+    // CHECK: llvm.inline_asm
+    // CHECK: ld.shared
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
     tt.return
   }

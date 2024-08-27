@@ -25,6 +25,10 @@ using ::mlir::LLVM::linearize;
 
 using namespace mlir::triton::gpu;
 
+// XXX(Keren): A temporary knob to control the use of legacy MMA conversion
+// because LinearLayout seems to have some performance issues.
+constexpr bool useLegacyMMAConversion = false;
+
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
 public:
@@ -341,8 +345,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                    const LinearLayout &dstLayout,
                                    OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
+    // TODO(Keren): implement warp shuffle instead of using the general approach
+    // that uses shared memory
+    return transferWithinBlockOrGroup(op, srcLayout, dstLayout, adaptor,
+                                      rewriter);
   }
 
   LogicalResult
@@ -376,6 +382,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         if (targetInfo.canUseStMatrix(srcTy, scratchConfig.paddedRepShape,
                                       scratchConfig.order,
                                       /*accumNumReplicates=*/1)) {
+          return false;
+        }
+        if (useLegacyMMAConversion) {
           return false;
         }
         return true;

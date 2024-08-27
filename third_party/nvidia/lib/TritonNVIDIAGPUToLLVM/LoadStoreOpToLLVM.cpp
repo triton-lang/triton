@@ -245,10 +245,43 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
+      // If there is a `other` value, use it to init.
+      bool init = other == nullptr;
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto *opr = ptxBuilder.newOperand(writeConstraint,
-                                          /*init=*/true); // =r operations
+                                          init); // =r operations
         dstsOpr->listAppend(opr);
+      }
+
+      if (other) {
+        for (size_t ii = 0; ii < nWords; ++ii) {
+          // PTX doesn't support mov.u8, so we need to use mov.u16
+          PTXInstr &mov =
+              ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
+
+          size_t size = width / valueElemNBits;
+
+          auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
+          Value v = undef(vecTy);
+          for (size_t s = 0; s < size; ++s) {
+            Value falseVal = otherElems[vecStart + ii * size + s];
+            Value sVal = createIndexAttrConstant(
+                rewriter, loc, typeConverter->getIndexType(), s);
+            v = insert_element(vecTy, v, falseVal, sVal);
+          }
+          v = bitcast(v, IntegerType::get(getContext(), width));
+
+          PTXInstr::Operand *opr{};
+
+          if (otherIsSplatConstInt) {
+            for (size_t s = 0; s < 32; s += valueElemNBits)
+              splatVal |= splatVal << valueElemNBits;
+            opr = ptxBuilder.newConstantOperand(splatVal);
+          } else
+            opr = ptxBuilder.newOperand(v, readConstraint);
+
+          mov(dstsOpr->listGet(ii), opr);
+        }
       }
 
       auto *addrOpr =
@@ -278,37 +311,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         ld(dstsOpr, addrOpr).predicate(pred, "b");
       else
         ld(dstsOpr, addrOpr, evictOpr).predicate(pred, "b");
-
-      if (other) {
-        for (size_t ii = 0; ii < nWords; ++ii) {
-          // PTX doesn't support mov.u8, so we need to use mov.u16
-          PTXInstr &mov =
-              ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
-
-          size_t size = width / valueElemNBits;
-
-          auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
-          Value v = undef(vecTy);
-          for (size_t s = 0; s < size; ++s) {
-            Value falseVal = otherElems[vecStart + ii * size + s];
-            Value sVal = createIndexAttrConstant(
-                rewriter, loc, typeConverter->getIndexType(), s);
-            v = insert_element(vecTy, v, falseVal, sVal);
-          }
-          v = bitcast(v, IntegerType::get(getContext(), width));
-
-          PTXInstr::Operand *opr{};
-
-          if (otherIsSplatConstInt) {
-            for (size_t s = 0; s < 32; s += valueElemNBits)
-              splatVal |= splatVal << valueElemNBits;
-            opr = ptxBuilder.newConstantOperand(splatVal);
-          } else
-            opr = ptxBuilder.newOperand(v, readConstraint);
-
-          mov(dstsOpr->listGet(ii), opr).predicateNot(pred, "b");
-        }
-      }
 
       // Create inline ASM signature
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));

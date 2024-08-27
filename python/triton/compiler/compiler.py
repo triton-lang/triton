@@ -288,9 +288,8 @@ def compile(src, target=None, options=None):
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
-        if (fn_override_manager is not None and fn_override_manager.has_file(ir_filename)):
-            print(f"\nOverriding kernel with file {ir_filename}")
-            full_name = fn_override_manager.get_file(ir_filename)
+        if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
+            print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
