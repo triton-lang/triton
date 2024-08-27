@@ -17,34 +17,68 @@ using namespace mlir;
 namespace mlir::triton::AMD {
 
 // -----------------------------------------------------------------------------
-//
+// Pointer canonicalizer utility class
 // -----------------------------------------------------------------------------
 // This class iterates through the argument of the `funcOp`, if the argument is
-// a pointer, it starts a walk to replace the pointer through all the IR with an
-// offset. Only when the pointer is really needed the offset is added to the
-// base pointer and passed to the operation that needs the pointer (usually a
-// load or a store)
+// a pointer, starts a walk through its transitive uses to build a in-memory
+// data structure to record the current offset to that pointer. Only when the
+// pointer is really loaded/stored we materialize the base pointer with the
+// offset.
 //
 // Let's suppose that `arg0` is a pointer. The algorithm works like that:
-// a) At the beginning the offset is zero, and we associate with `arg0` a
-//    `FatPtr{arg0, offset}`
-// b) Follow the pointer through the IR, and replace any
-//    `tt.addptr(%ptr, %offset)` with
-//    `add(%fatPoniters[ptr].basePtr, %fatPointers[ptr].offset)`.
-// c) When you meet the `tt.load(%ptr)` or `tt.store(%ptr)` instructions,
+//
+// a) At the beginning the offset is a tensor initialized to zero, and we
+// associate with `%arg0` a `FatPtr{basePtr=%arg0, offset=0}`. Through the
+// algorithm `FatPtr.basePtr` represents the scalar base pointer (all the
+// uniform updates will go into that) and `FatPtr.offset` represents the tensor
+// offset (all the non-uniform updates will go into that)
+//
+//
+// b) Follow the pointer through the IR. When we meet:
+//    `%ptr = tt.addptr(%arg0, %offset)`
+//
+//    Isolate the uniform and the non-uniform contributions of %offset =
+//    (%u_offset, %nu_offset) and update the scalar pointer and the tensor
+//    offset
+//    ```
+//    %s_ptr = addi(%fatPoniters[ptr].basePtr, %u_offset)
+//    %t_offset = addi(%fatPoniters[ptr].offset, %nu_offset)
+//    %fatPointers[%ptr0] = FatPtr{base=%s_ptr, offset=%t_offset}
+//    ```
+// c) When we meet the `tt.load(%ptr)` or `tt.store(%ptr)` instructions,
 //    replace that instruction with:
-//    `%fat_ptr = tt.addptr(%fatPointers[ptr].basePtr,
-//    %fatPointers[ptr].offset)`
+//    `t_ptr = tt.splat(%fatPointers[%ptr].basePtr)
+//    `%fat_ptr = tt.addptr(t_ptr, %fatPointers[ptr].offset)`
 //    `%data = tt.load(%fat_ptr)`
 //
 class PointerCanonicalizer {
+public:
+  PointerCanonicalizer(ModuleOp moduleOp)
+      : mod(moduleOp), rewriter(moduleOp.getContext()) {}
+
+  // Propagate fat pointers in all the functions of the module
+  LogicalResult run();
+
 private:
-  // This is the internal representation of a fat pointer: `fatPtr = basePtr +
-  // offset`.
+  // A fat pointer is represented as `basePtr + offset` internally.
   struct FatPtr {
+    // Scalar base pointer. Needs to be `tt.splat`ed before used
     Value basePtr;
+    // Tensor offset
     Value offset;
+    // Flag to express if we can narrow the uses of the offset down to 32 bits.
     bool canNarrow = false;
+
+    // Utility copy functions
+    FatPtr copy(Value newBasePtr, Value newOffset) {
+      return FatPtr{newBasePtr, newOffset, canNarrow};
+    };
+    FatPtr copyWithBase(Value newOffset) {
+      return FatPtr{basePtr, newOffset, canNarrow};
+    }
+    FatPtr copyWithOffset(Value newBase) {
+      return FatPtr{newBase, offset, canNarrow};
+    }
   };
 
   // Rewrite any operation that needs a pointer
@@ -80,6 +114,53 @@ private:
   LogicalResult rewriteBranchOp(cf::BranchOp branchOp, Location curLoc,
                                 OpOperand *operand, Value &nextPtr);
 
+  // Extract the scalar/uniform offset from a `tt.addptr` operation
+  Value getScalarOffset(Location loc, triton::AddPtrOp addPtrOp,
+                        bool &hasNonUniformComponent);
+
+  // Simplified scalar extraction. An offset can be composed by Unifrom (U)
+  // and non-uniform(N) components. A uniform component is basically a tensor
+  // constant (or a splat). A NonUniform value is a `make_range` or whatever we
+  // multiply with a `make_range` operation. We consider the following
+  // expressions:
+  //   offset = (U+U) -> ScalarOffset = (U+U)
+  //   offset = (U+N) -> ScalarOffset = (U)
+  //   offset = (N+N) -> ScalarOffset = 0
+  //   offset = (U*(N+U)) -> ScalarOffset = U*U
+  //   offset = (N*U) -> ScalarOffset = 0
+  // We do not consider the more generic expression:
+  //   offset = (N+U)*(N+U)
+  // Or any other expression not involving * and +.
+  //
+  // The function accepts the `rewriter`, the `location` and start recursing at
+  // the `curOperand` offset used by the `curOp` operation.
+  //
+  // E.g., in  the following IR:
+  // ```
+  //   %offset = arith.add %uniform, %non_uniform
+  //   %ptr0 = addptr %ptr, %offset`
+  // ```
+  // `arith.add` is the current op and `%offset` is the operand.
+  //
+  // Note that if we have the above use-def chain, we can rewrite this as :
+  // ```
+  // %ptr0 = addptr %ptr, %uniform : !ptr<f32>
+  // %ptr1 = addptr %ptr0, %non_uniform : tensor<..x !ptr<f32>>
+  // ```
+  //
+  //  We also pass the bitness of the offset and a boolean
+  //  `hasNonUniformComponent` initialized to `false` to flag if the remaining
+  //  tree of operations with root in `curOp` has still some non-uniform
+  //  component.
+  Value extractScalarOffsetFromExpr(Location loc, Operation *curOp,
+                                    OpOperand &curOperand, int64_t bitness,
+                                    bool &hasNonUniformComponent);
+
+  // Extract the offset from a binary operator
+  Value extractScalarOffsetFromAddOrMul(Location loc, Operation *binOp,
+                                        OpOperand &curOperand, int64_t bitness,
+                                        bool &hasNonUniformComponent);
+
   // Return either the operation or its rewritten op
   template <typename OpTy>
   OpTy resolveOp(Operation *op,
@@ -90,18 +171,7 @@ private:
     return resolvedOp;
   }
 
-public:
-  PointerCanonicalizer(ModuleOp moduleOp)
-      : mod(moduleOp), rewriter(moduleOp.getContext()) {}
-
-  // Propagate fat pointers in all the functions of the module
-  LogicalResult run();
-
-private:
-  // IR Rewriter
   mlir::IRRewriter rewriter;
-
-  // Actual moduleOp
   ModuleOp mod;
 
   // Symbol table: association between pointers and fatPointers

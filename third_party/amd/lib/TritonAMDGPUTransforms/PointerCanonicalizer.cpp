@@ -15,7 +15,9 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/TypeSize.h"
 #include <limits>
 
 #define DEBUG_TYPE "tritonamdgpu-canonicalize-pointers"
@@ -76,90 +78,119 @@ Value getScalarConstant(IRRewriter &rewriter, Location loc, Operation *op) {
   return Value();
 }
 
-// Very simplified scalar extraction. An offset can be composed by Unifrom (U)
-// and non-uniform(N) componends. A uniform component is basically a tensor
-// constant (or a splat). A NonUniform value is a `make_range` or whatever we
-// multiply with a `make_range` operation. We consider the following
-// expressions:
-//   offset = (U+U) -> ScalarOffset = (U+U)
-//   offset = (U+N) -> ScalarOffset = (U)
-//   offset = (N+N) -> ScalarOffset = 0
-//   offset = (U*(N+U)) -> ScalarOffset = U*U
-//   offset = (N*U) -> ScalarOffset = 0
-// We do not consider the more generic expression:
-//   offset = (N+U)*(N+U)
-// Or any other expression not involving * and +.
-Value extractScalarOffsetFromExpr(IRRewriter &rewriter, Location loc,
-                                  Operation *curOp, OpOperand &curOperand,
-                                  int64_t bitness,
-                                  bool &hasNonUniformComponent) {
-  if (Value scalarConst = getScalarConstant(rewriter, loc, curOp)) {
-    return scalarConst;
-  } else if (auto broadcastOp = dyn_cast<triton::BroadcastOp>(curOp)) {
-    // Keep going if you see broadcasts
-    return extractScalarOffsetFromExpr(
-        rewriter, loc, broadcastOp.getSrc().getDefiningOp(),
-        broadcastOp->getOpOperand(0), bitness, hasNonUniformComponent);
-  } else if (auto expandOp = dyn_cast<triton::ExpandDimsOp>(curOp)) {
-    // Keep going if you see expands
-    return extractScalarOffsetFromExpr(
-        rewriter, loc, expandOp.getSrc().getDefiningOp(),
-        expandOp->getOpOperand(0), bitness, hasNonUniformComponent);
-  } else if (auto addOp = dyn_cast<arith::AddIOp>(curOp)) {
-    // A+B case
-    if (Value lhsScalar =
-            getScalarConstant(rewriter, loc, addOp.getLhs().getDefiningOp())) {
-      curOperand.set(addOp.getRhs());
-      Value scalarOffset = extractScalarOffsetFromExpr(
-          rewriter, loc, addOp.getRhs().getDefiningOp(), addOp->getOpOperand(1),
-          bitness, hasNonUniformComponent);
-      return rewriter.create<arith::AddIOp>(loc, scalarOffset, lhsScalar);
-    } else if (Value rhsScalar = getScalarConstant(
-                   rewriter, loc, addOp.getLhs().getDefiningOp())) {
-      curOperand.set(addOp.getLhs());
-      Value scalarOffset = extractScalarOffsetFromExpr(
-          rewriter, loc, addOp.getLhs().getDefiningOp(), addOp->getOpOperand(0),
-          bitness, hasNonUniformComponent);
-      return rewriter.create<arith::AddIOp>(loc, scalarOffset, rhsScalar);
-    } else {
-      Value scalarOffsetLhs = extractScalarOffsetFromExpr(
-          rewriter, loc, addOp.getLhs().getDefiningOp(), addOp->getOpOperand(0),
-          bitness, hasNonUniformComponent);
-      Value scalarOffsetRhs = extractScalarOffsetFromExpr(
-          rewriter, loc, addOp.getRhs().getDefiningOp(), addOp->getOpOperand(1),
-          bitness, hasNonUniformComponent);
-      return rewriter.create<arith::AddIOp>(loc, scalarOffsetLhs,
-                                            scalarOffsetRhs);
-    }
-  } else if (auto mulOp = dyn_cast<arith::MulIOp>(curOp)) {
-    // A*B case
-    if (Value lhsScalar =
-            getScalarConstant(rewriter, loc, mulOp.getLhs().getDefiningOp())) {
-      Value scalarOffset = extractScalarOffsetFromExpr(
-          rewriter, loc, mulOp.getRhs().getDefiningOp(), mulOp->getOpOperand(1),
-          bitness, hasNonUniformComponent);
-      return rewriter.create<arith::MulIOp>(loc, scalarOffset, lhsScalar);
-    } else if (Value rhsScalar = getScalarConstant(
-                   rewriter, loc, mulOp.getRhs().getDefiningOp())) {
-      Value scalarOffset = extractScalarOffsetFromExpr(
-          rewriter, loc, mulOp.getLhs().getDefiningOp(), mulOp->getOpOperand(0),
-          bitness, hasNonUniformComponent);
-      return rewriter.create<arith::MulIOp>(loc, scalarOffset, rhsScalar);
-    } else {
-      hasNonUniformComponent = true;
-      return rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
-    }
-  } else {
+// Narrowing logic
+// For now we allow to narrow down to 32 bits only in the following case:
+// - `baseOffset` is 32-bits and `addOffset`(64-bits) is zero
+bool canNarrowOffset(Value baseOffset, Value addOffset) {
+  Type addOffsetType = getElementTypeOrSelf(addOffset);
+  Operation *baseOp = baseOffset.getDefiningOp();
+  bool isBaseOffsetZero = baseOp && isa<triton::SplatOp>(baseOp);
+  return (isBaseOffsetZero && addOffsetType.isInteger(32));
+}
+
+} // namespace
+
+// Offset extraction logic for a binary op A*B or A+B
+Value PointerCanonicalizer::extractScalarOffsetFromAddOrMul(
+    Location loc, Operation *binOp, OpOperand &curOperand, int64_t bitness,
+    bool &hasNonUniformComponent) {
+
+  assert((isa<arith::MulIOp, arith::AddIOp>(binOp)) &&
+         "Only arith.addi or arith.muli ops are supported");
+
+  // Common useful variables
+  OpOperand &lhsOperand = binOp->getOpOperand(0);
+  OpOperand &rhsOperand = binOp->getOpOperand(1);
+  Operation *lhsOp = lhsOperand.get().getDefiningOp();
+  Operation *rhsOp = rhsOperand.get().getDefiningOp();
+
+  // Useful creator function
+  auto createBinOp = [&](Value lhs, Value rhs) -> Value {
+    if (isa<arith::AddIOp>(binOp))
+      return rewriter.create<arith::AddIOp>(loc, lhs, rhs);
+    else
+      return rewriter.create<arith::MulIOp>(loc, lhs, rhs);
+  };
+
+  // Propagate addition. If the binary operation is a arith.add, we
+  // can simply replace its use with the uniform operand. I.e., if we
+  // have:
+  // ```
+  //   %a = arith.addi %u, %nu
+  //   %ptr0 = addptr %ptr, %a
+  // ```
+  // We can replace this with:
+  // ```
+  //   %scalar_offset = %u
+  //   %ptr0 = addptr %ptr, %nu
+  // ```
+  auto propagateNonUniformOffset = [&](Value nonUniformOffset) {
+    if (isa<arith::AddIOp>(binOp))
+      curOperand.set(nonUniformOffset);
+  };
+
+  // If one out lhs or rhs is a scalar, set the current operand to the
+  // non-scalar value and keep extracting
+  if (Value lhsScalar = getScalarConstant(rewriter, loc, lhsOp)) {
+    propagateNonUniformOffset(rhsOperand.get());
+    Value scalarOffset = extractScalarOffsetFromExpr(
+        loc, rhsOp, rhsOperand, bitness, hasNonUniformComponent);
+    return createBinOp(scalarOffset, lhsScalar);
+  } else if (Value rhsScalar = getScalarConstant(rewriter, loc, rhsOp)) {
+    propagateNonUniformOffset(lhsOperand.get());
+    Value scalarOffset = extractScalarOffsetFromExpr(
+        loc, lhsOp, lhsOperand, bitness, hasNonUniformComponent);
+    return createBinOp(scalarOffset, rhsScalar);
+  } else if (isa<arith::MulIOp>(binOp)) {
+    // Stop if this is a non-scalar * non-scalar
     hasNonUniformComponent = true;
     return rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+  } else {
+    // Keep extracting otherwise
+    Value scalarOffsetLhs = extractScalarOffsetFromExpr(
+        loc, lhsOp, lhsOperand, bitness, hasNonUniformComponent);
+    Value scalarOffsetRhs = extractScalarOffsetFromExpr(
+        loc, rhsOp, rhsOperand, bitness, hasNonUniformComponent);
+    return createBinOp(scalarOffsetLhs, scalarOffsetRhs);
   }
+}
+
+Value PointerCanonicalizer::extractScalarOffsetFromExpr(
+    Location loc, Operation *curOp, OpOperand &curOperand, int64_t bitness,
+    bool &hasNonUniformComponent) {
+  if (Value scalarConst = getScalarConstant(rewriter, loc, curOp))
+    return scalarConst;
+
+  Value scalarOffset =
+      llvm::TypeSwitch<Operation *, Value>(curOp)
+          .Case<triton::BroadcastOp>([&](triton::BroadcastOp broadcastOp) {
+            return extractScalarOffsetFromExpr(
+                loc, broadcastOp.getSrc().getDefiningOp(),
+                broadcastOp->getOpOperand(0), bitness, hasNonUniformComponent);
+          })
+          .Case<triton::ExpandDimsOp>([&](triton::ExpandDimsOp expandOp) {
+            return extractScalarOffsetFromExpr(
+                loc, expandOp.getSrc().getDefiningOp(),
+                expandOp->getOpOperand(0), bitness, hasNonUniformComponent);
+          })
+          .Case<arith::AddIOp, arith::MulIOp>([&](Operation *op) {
+            return extractScalarOffsetFromAddOrMul(loc, op, curOperand, bitness,
+                                                   hasNonUniformComponent);
+          })
+          .Default([&](Operation *op) {
+            hasNonUniformComponent = true;
+            return rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+          });
+
+  return scalarOffset;
 }
 
 // Try to extract a scalar `offset` by a (possibly) tensor offset. This will
 // potentially modify the `offset` field of the `addPtrOp` (which will be
 // potentially stripped off the non-uniform component)
-Value getScalarOffset(IRRewriter &rewriter, Location loc,
-                      triton::AddPtrOp addPtrOp, bool &hasNonUniformComponent) {
+Value PointerCanonicalizer::getScalarOffset(Location loc,
+                                            triton::AddPtrOp addPtrOp,
+                                            bool &hasNonUniformComponent) {
   hasNonUniformComponent = false;
   Value offset = addPtrOp.getOffset();
   if (!isa<RankedTensorType>(offset.getType()))
@@ -170,29 +201,16 @@ Value getScalarOffset(IRRewriter &rewriter, Location loc,
     return scalarConst;
 
   // Additional optimization to catch cases where `offset = f(non-splat, splat)`
-  // and `f==AddIOp`. In this case we can get the non-splat contribution out of
-  // the add and use that to update the scalar pointer. We use a queue of
+  // and `f=={AddIOp,MulIOp}`. In this case we can get the splat contribution
+  // out of the add and use that to update the scalar pointer. We use a queue of
   // <Operation, Operand> to traverse the offset contribution, in this way we
   // can propagate the non-splat component to the right place
-  int64_t bitness = dyn_cast<RankedTensorType>(offset.getType())
-                        .getElementType()
-                        .getIntOrFloatBitWidth();
-  return extractScalarOffsetFromExpr(
-      rewriter, loc, addPtrOp.getOffset().getDefiningOp(),
-      addPtrOp->getOpOperand(1), bitness, hasNonUniformComponent);
+  int64_t bitness =
+      cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth();
+  return extractScalarOffsetFromExpr(loc, addPtrOp.getOffset().getDefiningOp(),
+                                     addPtrOp->getOpOperand(1), bitness,
+                                     hasNonUniformComponent);
 }
-
-// Narrowing logic
-// For now we allow to narrow down to 32 bits only in the following case:
-//   %newOffset = %offset(32-bit) + %zero(64-bit)
-bool canNarrowOffset(Value baseOffset, Value addOffset) {
-  Type addOffsetType = getElementTypeOrSelf(addOffset);
-  Operation *baseOp = baseOffset.getDefiningOp();
-  bool isBaseOffsetZero = baseOp && isa<triton::SplatOp>(baseOp);
-  return (isBaseOffsetZero && addOffsetType.isInteger(32));
-}
-
-} // namespace
 
 // Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
 // obtained by splatting the scalar pointer using the `fatPtr.offset` shape.
@@ -224,7 +242,7 @@ LogicalResult PointerCanonicalizer::materializeFatPointer(Operation *op,
   if (isa<RankedTensorType>(ptr.getType())) {
     // Splat the base pointer
     Value tensorPtr = createTensorPointer(fatPtr, loc);
-    // This is creating `tt.addptr(%tensorBasePtr, %fatPtr.offset)
+    // Add the tensor offset to the base pointer
     newPtr = rewriter.create<triton::AddPtrOp>(loc, tensorPtr.getType(),
                                                tensorPtr, offset);
   }
@@ -252,7 +270,7 @@ LogicalResult PointerCanonicalizer::rewriteSplatOp(triton::SplatOp splatOp,
   // The shape of the fat pointer is contained within the offset. We don't
   // need to keep the `splat` operation here.
   opToDelete.insert(splatOp);
-  pointers[nextPtr] = FatPtr{splatOp.getSrc(), offset, fatPtr.canNarrow};
+  pointers[nextPtr] = fatPtr.copy(splatOp.getSrc(), offset);
   return success();
 }
 
@@ -273,7 +291,7 @@ PointerCanonicalizer::rewriteBroadcastOp(triton::BroadcastOp broadcastOp,
       ptrShape, offsetType.getElementType(), outType.getEncoding());
   Value offset = rewriter.create<triton::BroadcastOp>(curLoc, newOffsetType,
                                                       fatPtr.offset);
-  pointers[nextPtr] = FatPtr{fatPtr.basePtr, offset, fatPtr.canNarrow};
+  pointers[nextPtr] = fatPtr.copyWithBase(offset);
   return success();
 }
 
@@ -285,7 +303,7 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
   Value newPtr = fatPtr.basePtr;
   bool hasNonUniformComponent = false;
   Value scalarOffset =
-      getScalarOffset(rewriter, curLoc, addPtrOp, hasNonUniformComponent);
+      getScalarOffset(curLoc, addPtrOp, hasNonUniformComponent);
   if (!isZeroConst(scalarOffset)) {
     // Scalar pointer update
     newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
@@ -334,7 +352,7 @@ LogicalResult PointerCanonicalizer::rewriteForOp(scf::ForOp forOp,
   // This is making sure we propagate the visit from the forOp result
   nextPtr = newForOp.getTiedLoopResult(forOperand);
 
-  // This is making sure we visit the uses withint the forOp region
+  // This is making sure we visit the uses within the forOp region
   Value arg = newForOp.getTiedLoopRegionIterArg(forOperand);
   size_t numIterArgs = newForOp.getNumRegionIterArgs();
   pointers[arg] =
@@ -344,11 +362,10 @@ LogicalResult PointerCanonicalizer::rewriteForOp(scf::ForOp forOp,
     queue.push_back(&use);
 
   // This is setting the fat pointer for the users of the loop
-  // and then propagatin the result
+  // and then propagate the result
   size_t numResults = newForOp->getNumResults();
-  pointers[nextPtr] =
-      FatPtr{newForOp->getResult(numResults - 2),
-             newForOp.getResult(numResults - 1), fatPtr.canNarrow};
+  pointers[nextPtr] = fatPtr.copy(newForOp->getResult(numResults - 2),
+                                  newForOp.getResult(numResults - 1));
 
   opToDelete.insert(forOp);
   return success();
@@ -382,9 +399,8 @@ LogicalResult PointerCanonicalizer::rewriteYieldOp(scf::YieldOp yieldOp,
           rewriter, ifOp, {fatPtr.basePtr.getType(), fatPtr.offset.getType()});
       nextPtr = newIfOp.getResult(operandNum);
       size_t numResults = newIfOp->getNumResults();
-      pointers[nextPtr] =
-          FatPtr{newIfOp->getResult(numResults - 2),
-                 newIfOp.getResult(numResults - 1), fatPtr.canNarrow};
+      pointers[nextPtr] = fatPtr.copy(newIfOp->getResult(numResults - 2),
+                                      newIfOp.getResult(numResults - 1));
       opToDelete.insert(ifOp);
     }
 
@@ -400,9 +416,8 @@ LogicalResult PointerCanonicalizer::rewriteYieldOp(scf::YieldOp yieldOp,
         {fatPtr.basePtr.getType(), fatPtr.offset.getType()});
     nextPtr = newWhileOp.getResult(operandNum);
     size_t numResults = newWhileOp->getNumResults();
-    pointers[nextPtr] =
-        FatPtr{newWhileOp->getResult(numResults - 2),
-               newWhileOp->getResult(numResults - 1), fatPtr.canNarrow};
+    pointers[nextPtr] = fatPtr.copy(newWhileOp->getResult(numResults - 2),
+                                    newWhileOp->getResult(numResults - 1));
     rewriteOpMap[whileOp] = newWhileOp;
     opToDelete.insert(whileOp.getOperation());
     yieldOp.setOperand(operandNum, newWhileOp.getAfterArguments()[operandNum]);
@@ -430,9 +445,8 @@ LogicalResult PointerCanonicalizer::rewriteWhileOp(scf::WhileOp whileOp,
   // Propagate inside the BeforeRegion
   size_t numArguments = newWhileOp.getBeforeBody()->getNumArguments();
   pointers[arg] =
-      FatPtr{newWhileOp.getBeforeBody()->getArgument(numArguments - 2),
-             newWhileOp.getBeforeBody()->getArgument(numArguments - 1),
-             fatPtr.canNarrow};
+      fatPtr.copy(newWhileOp.getBeforeBody()->getArgument(numArguments - 2),
+                  newWhileOp.getBeforeBody()->getArgument(numArguments - 1));
   nextPtr = arg;
   rewriteOpMap[whileOp] = newWhileOp;
   opToDelete.insert(whileOp);
@@ -452,8 +466,7 @@ PointerCanonicalizer::rewriteConditionOp(scf::ConditionOp conditionOp,
   FatPtr fatPtr = pointers[curOperand->get()];
   Value offset = fatPtr.offset;
   Value basePtr = fatPtr.basePtr;
-  auto whileOp = dyn_cast<scf::WhileOp>(conditionOp->getParentOp());
-  assert(whileOp && "ConditionOp inside an operation different from WhileOp");
+  auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
 
   // Update the condition op
   auto afterBlock = whileOp.getAfterBody();
@@ -466,9 +479,8 @@ PointerCanonicalizer::rewriteConditionOp(scf::ConditionOp conditionOp,
   size_t numArguments = afterBlock->getNumArguments();
   conditionOp.setOperand(operandNum,
                          whileOp.getRegionIterArgs()[operandNum - 1]);
-  pointers[nextPtr] =
-      FatPtr{afterBlock->getArgument(numArguments - 2),
-             afterBlock->getArgument(numArguments - 1), fatPtr.canNarrow};
+  pointers[nextPtr] = fatPtr.copy(afterBlock->getArgument(numArguments - 2),
+                                  afterBlock->getArgument(numArguments - 1));
   return success();
 }
 
@@ -523,7 +535,7 @@ LogicalResult PointerCanonicalizer::rewriteCondBranchOp(
       nextPtr = falseDestArg;
       Value basePtrArg = falseDest->addArgument(basePtr.getType(), curLoc);
       Value offsetArg = falseDest->addArgument(offset.getType(), curLoc);
-      pointers[nextPtr] = FatPtr{basePtrArg, offsetArg, fatPtr.canNarrow};
+      pointers[nextPtr] = fatPtr.copy(basePtrArg, offsetArg);
     }
   } else {
     trueOperands.push_back(basePtr);
@@ -533,7 +545,7 @@ LogicalResult PointerCanonicalizer::rewriteCondBranchOp(
       nextPtr = trueDestArg;
       Value basePtrArg = trueDest->addArgument(basePtr.getType(), curLoc);
       Value offsetArg = trueDest->addArgument(offset.getType(), curLoc);
-      pointers[nextPtr] = FatPtr{basePtrArg, offsetArg, fatPtr.canNarrow};
+      pointers[nextPtr] = fatPtr.copy(basePtrArg, offsetArg);
     }
   }
 
@@ -590,42 +602,46 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
     LogicalResult res = success();
     Value nextPtr;
     // We need to propagate the fat pointer throughout the IR
-    if (auto splatOp = dyn_cast<triton::SplatOp>(curOp)) {
-      res = rewriteSplatOp(splatOp, curLoc, nextPtr);
-    } else if (auto broadcastOp = dyn_cast<triton::BroadcastOp>(curOp)) {
-      res = rewriteBroadcastOp(broadcastOp, curLoc, nextPtr);
-    } else if (auto addPtrOp = dyn_cast<triton::AddPtrOp>(curOp)) {
-      res = rewriteAddPtrOp(addPtrOp, curLoc, nextPtr);
-    } else if (auto forOp = resolveOp<scf::ForOp>(curOp, rewriteOpMap)) {
-      res = rewriteForOp(forOp, curLoc, curOperand, nextPtr);
-    } else if (auto yieldOp = dyn_cast<scf::YieldOp>(curOp)) {
-      res = rewriteYieldOp(yieldOp, curLoc, curOperand, nextPtr);
-    } else if (auto whileOp = resolveOp<scf::WhileOp>(curOp, rewriteOpMap)) {
-      res = rewriteWhileOp(whileOp, curLoc, curOperand, nextPtr);
-    } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(curOp)) {
-      res = rewriteConditionOp(conditionOp, curLoc, curOperand, nextPtr);
-    } else if (auto condBrOp = dyn_cast<cf::CondBranchOp>(curOp)) {
-      res = rewriteCondBranchOp(condBrOp, curLoc, curOperand, nextPtr);
-    } else if (auto branchOp = dyn_cast<cf::BranchOp>(curOp)) {
-      res = rewriteBranchOp(branchOp, curLoc, curOperand, nextPtr);
-      // All the uses of the pointer need to materialize the fat pointer
-    } else if (auto loadOp = dyn_cast<triton::LoadOp>(curOp)) {
-      res = materializeFatPointer(curOp, curLoc, loadOp.getPtr());
-      opToDelete.insert(loadOp);
-    } else if (auto storeOp = dyn_cast<triton::StoreOp>(curOp)) {
-      res = materializeFatPointer(curOp, curLoc, storeOp.getPtr());
-    } else if (auto atomicRmwOp = dyn_cast<triton::AtomicRMWOp>(curOp)) {
-      res = materializeFatPointer(curOp, curLoc, atomicRmwOp.getPtr());
-    } else if (auto atomicCasOp = dyn_cast<triton::AtomicCASOp>(curOp)) {
-      res = materializeFatPointer(curOp, curLoc, atomicCasOp.getPtr());
-    } else if (auto ptrCastOp = dyn_cast<triton::PtrToIntOp>(curOp)) {
-      res = materializeFatPointer(curOp, curLoc, ptrCastOp.getSrc());
-    } else {
-      // If we meet an unsupported operation, materialize the fat pointer and
-      // continue.
-      LDBG("Unknown op during pointer canonicalization: " << *curOp);
-      res = materializeFatPointer(curOp, curLoc, curOperand->get());
-    }
+    llvm::TypeSwitch<Operation *>(curOp)
+        .Case<triton::SplatOp>([&](triton::SplatOp splatOp) {
+          res = rewriteSplatOp(splatOp, curLoc, nextPtr);
+        })
+        .Case<triton::BroadcastOp>([&](triton::BroadcastOp broadcastOp) {
+          res = rewriteBroadcastOp(broadcastOp, curLoc, nextPtr);
+        })
+        .Case<triton::AddPtrOp>([&](triton::AddPtrOp addPtrOp) {
+          res = rewriteAddPtrOp(addPtrOp, curLoc, nextPtr);
+        })
+        .Case<scf::ForOp>([&](scf::ForOp) {
+          res = rewriteForOp(resolveOp<scf::ForOp>(curOp, rewriteOpMap), curLoc,
+                             curOperand, nextPtr);
+        })
+        .Case<scf::YieldOp>([&](scf::YieldOp yieldOp) {
+          res = rewriteYieldOp(yieldOp, curLoc, curOperand, nextPtr);
+        })
+        .Case<scf::WhileOp>([&](scf::WhileOp) {
+          res = rewriteWhileOp(resolveOp<scf::WhileOp>(curOp, rewriteOpMap),
+                               curLoc, curOperand, nextPtr);
+        })
+        .Case<scf::ConditionOp>([&](scf::ConditionOp conditionOp) {
+          res = rewriteConditionOp(conditionOp, curLoc, curOperand, nextPtr);
+        })
+        .Case<cf::CondBranchOp>([&](cf::CondBranchOp condBrOp) {
+          res = rewriteCondBranchOp(condBrOp, curLoc, curOperand, nextPtr);
+        })
+        .Case<cf::BranchOp>([&](cf::BranchOp branchOp) {
+          res = rewriteBranchOp(branchOp, curLoc, curOperand, nextPtr);
+        })
+        .Case<triton::LoadOp, triton::StoreOp, triton::AtomicCASOp,
+              triton::AtomicRMWOp, triton::PtrToIntOp>([&](Operation *op) {
+          res = materializeFatPointer(curOp, curLoc, op->getOperand(0));
+        })
+        .Default([&](Operation *op) {
+          // If we meet an unsupported operation, materialize the fat pointer
+          // and continue.
+          LDBG("Unknown op during pointer canonicalization: " << *curOp);
+          res = materializeFatPointer(op, curLoc, curOperand->get());
+        });
 
     // Keep propagating the fat pointer down the IR
     if (nextPtr)
