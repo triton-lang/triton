@@ -379,7 +379,7 @@ jobs:
           if [ ! -d "${SHARED_LIB_DIR}" ]; then
             echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
           fi
-          pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
+          MLIR_ENABLE_DUMP=1 pytest -vvv --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 16 language runtime \
                  --ignore=language/test_line_info.py
