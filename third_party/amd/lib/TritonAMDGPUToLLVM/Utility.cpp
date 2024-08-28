@@ -2,7 +2,9 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::getFunctionType;
@@ -35,6 +37,19 @@ std::string mangleFunc(std::string name, Type type) {
   }
   return mangled;
 }
+
+// Create a constant vector mask of length `vec` with the same `pred` value
+Value createVectorMaskFromPredicate(RewriterBase& rewriter, Location loc,
+                                    Value pred, int64_t vec) {
+  auto vecMaskTy = LLVM::getFixedVectorType(rewriter.getI1Type(), vec);
+  Value maskVal = undef(vecMaskTy);
+  for (size_t s = 0; s < vec; ++s) {
+    Value indexVal = rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64IntegerAttr(s));
+    maskVal = insert_element(vecMaskTy, maskVal, pred, indexVal);
+  }
+  return maskVal;
+}
+
 } // namespace
 
 namespace mlir::LLVM::AMD {
@@ -157,6 +172,18 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm) {
+
+  // If we not volatile, then use llvm.masked.load
+  if (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE){
+    int64_t vec = cast<VectorType>(elemTy).getNumElements();
+    Value maskVal = createVectorMaskFromPredicate(
+        rewriter, loc, pred, vec);
+    bool nt = (cm ==triton::CacheModifier::CG);
+    return rewriter.create<LLVM::MaskedLoadOp>(
+        loc, elemTy, ptr, maskVal, falseVal, vec, nt);
+
+  }
+
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
   auto getLoadNameRaw = [](triton::CacheModifier cm) {
@@ -172,8 +199,8 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
     }
   };
 
+  // Otherwise, we need to revert to if-load solution
   auto funcName = mangleFunc(getLoadNameRaw(cm), funcType);
-
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
   auto loadVal =
@@ -185,6 +212,14 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, triton::CacheModifier cm) {
+  Type elemTy = ptr.getType();
+  // If we use no cache modifier, simply issue a masked store
+  if (cm == triton::CacheModifier::NONE){
+    int64_t vec = cast<VectorType>(elemTy).getNumElements();
+    Value maskVal = createVectorMaskFromPredicate(
+        rewriter, loc, pred, vec);
+    rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal, vec);
+  }
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
