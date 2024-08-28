@@ -91,8 +91,7 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
     if (!mask)
       return failure();
 
-    auto constantMask =
-        llvm::dyn_cast_or_null<arith::ConstantOp>(mask.getDefiningOp());
+    auto constantMask = mask.getDefiningOp<arith::ConstantOp>();
     if (!constantMask)
       return failure();
 
@@ -159,8 +158,7 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
     if (!mask)
       return failure();
 
-    auto constantMask =
-        llvm::dyn_cast_or_null<arith::ConstantOp>(mask.getDefiningOp());
+    auto constantMask = mask.getDefiningOp<arith::ConstantOp>();
     if (!constantMask)
       return failure();
 

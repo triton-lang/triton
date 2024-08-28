@@ -25,6 +25,10 @@ using ::mlir::LLVM::linearize;
 
 using namespace mlir::triton::gpu;
 
+// XXX(Keren): A temporary knob to control the use of legacy MMA conversion
+// because LinearLayout seems to have some performance issues.
+constexpr bool useLegacyMMAConversion = false;
+
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
 public:
@@ -341,8 +345,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                    const LinearLayout &dstLayout,
                                    OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
+    // TODO(Keren): implement warp shuffle instead of using the general approach
+    // that uses shared memory
+    return transferWithinBlockOrGroup(op, srcLayout, dstLayout, adaptor,
+                                      rewriter);
   }
 
   LogicalResult
@@ -357,11 +363,32 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
 
-    // TODO(jlebar): For now we handle only blocked/slice ->
-    // blocked/slice conversions.  Once we have ldmatrix support in
-    // load/storeDistributedToShared, we can remove this constraint.
+    // TODO (Keren): Currently, we handle general mma/blocked/slice ->
+    // mma/blocked/slice conversions.
+    // The following tasks must be completed before we can remove the layoutIsOK
+    // check:
+    // 1. Support for AMD's MFMA and WMMA
+    // 2. Implementation of NVIDIA's stmatrix
+    // 3. Handling NVIDIA's MMA layout when CTA per CGA > 1
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
+      if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
+        if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
+          return false;
+        }
+        auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
+        if (targetInfo.canUseStMatrix(srcTy, scratchConfig.paddedRepShape,
+                                      scratchConfig.order,
+                                      /*accumNumReplicates=*/1)) {
+          return false;
+        }
+        if (useLegacyMMAConversion) {
+          return false;
+        }
+        return true;
+      }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
       }
@@ -370,12 +397,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
       return false;
     };
-    if (!layoutIsOK(op.getSrc().getType().getEncoding()) ||
-        !layoutIsOK(op.getType().getEncoding())) {
+    if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
       return failure();
     }
 
-    assert(cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+    assert(cvtNeedsSharedMemory(srcTy, dstTy));
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -384,7 +410,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // We munge the input values by converting i<n> (n<8) elements to i8 and
     // pointers to i64. This is necessary because TargetInfo::loadDShared and
     // storeDShared can't handle vectors of pointers or sub-byte elements.
-    RankedTensorType srcTy = op.getSrc().getType();
     auto elemTy = srcTy.getElementType();
     auto isSubByteInt =
         elemTy.isInteger() && elemTy.getIntOrFloatBitWidth() < 8;
@@ -451,7 +476,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Input dims: [offset, iteration, block]
     // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
     LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
-        ctx, tensorShape, scratchConfig.repShape);
+        ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
 
     // Layout for the store from registers to shared memory.
     //
@@ -488,17 +513,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(scratchConfig.inVec * iterations <= inVals.size());
     assert(scratchConfig.outVec * iterations <= outSize);
 
-    // There's only one dimension that has been padded
+    // Check only one dimension has been padded.
+    // This means the difference between the padded shape and the original shape
+    // should only be in one dimension, specifically in
+    // `scratchConfig.order[0]`.
     auto rank = scratchConfig.repShape.size();
-    auto paddedStride = 1;
-    auto paddedSize = 0;
-    for (size_t i = 0; i < rank; ++i) {
-      if (scratchConfig.repShape[i] != scratchConfig.paddedRepShape[i]) {
-        paddedStride = scratchConfig.repShape[i];
-        paddedSize = scratchConfig.paddedRepShape[i] - paddedStride;
-        break;
+    for (auto i = 0; i < rank; i++) {
+      if (i == scratchConfig.order[0]) {
+        continue;
       }
+      assert(scratchConfig.repShape[i] == scratchConfig.paddedRepShape[i]);
     }
+    auto paddedStride = scratchConfig.repShape[scratchConfig.order[0]];
+    auto paddedSize =
+        scratchConfig.paddedRepShape[scratchConfig.order[0]] - paddedStride;
 
     // Linear layout function is split in two parts below:
     //

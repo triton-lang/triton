@@ -388,17 +388,10 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
 
 /* ------------------------------------ */
 // Returns CTA level thread idx
-inline Value getThreadIdInCTA(RewriterBase &rewriter, Location loc) {
+inline Value getThreadId(RewriterBase &rewriter, Location loc) {
   Value tid =
       rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
-}
-
-// Returns CTA level thread idx.
-inline Value getThreadId(RewriterBase &rewriter, Location loc) {
-  Value tid = getThreadIdInCTA(rewriter, loc);
-  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  return tid;
 }
 
 // -----------------------------------------------------------------------
@@ -909,10 +902,12 @@ inline void emitWmmaOffsetForCTA(const AMDWmmaEncodingAttr &wmmaLayout,
   auto rank = shapePerCta.size();
   assert(rank == 2 || rank == 3);
   SmallVector<unsigned> elemOffset(rank, 0);
+  auto elemStride = wmmaLayout.getVersion() == 1 ? 2 : 1;
   if (rank == 3)
     elemOffset[0] = ctaBatchOffset;
   for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-    elemOffset[rank - 2] = ctaOffsetX * shapePerCta[rank - 2] + 2 * elem;
+    elemOffset[rank - 2] =
+        ctaOffsetX * shapePerCta[rank - 2] + elemStride * elem;
     elemOffset[rank - 1] = ctaOffsetY * shapePerCta[rank - 1];
     offsets.push_back(elemOffset);
   }
@@ -958,8 +953,17 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
 
   SmallVector<Value> multiDimBase(rank);
 
-  multiDimBase[rank - 2] =
-      add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0);
+  auto ver = wmmaLayout.getVersion();
+  if (ver == 1) {
+    multiDimBase[rank - 2] =
+        add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0);
+  } else {
+    assert(ver == 2);
+    multiDimBase[rank - 2] =
+        add(mul(udiv(threadIdPerWarp, i32_val(mnkDim[2])),
+                i32_val(wmmaLayout.getSizePerThread()[rank - 2])),
+            offWarp0);
+  }
   multiDimBase[rank - 1] = add(laneId, offWarp1);
 
   // TODO: It is assumed when rank = 3, warpsPerCTA is set to
@@ -1109,8 +1113,6 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
-    // TODO: support 2nd gen of WMMA
-    assert(wmmaLayout.getVersion() == 1);
     result = emitBaseIndexForWmmaLayout(loc, rewriter, wmmaLayout, type);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
@@ -1299,9 +1301,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
       idxCol = urem(idxCol, numElemsPerSwizzlingRowVal);
       strideRow = numElemsPerSwizzlingRowVal;
     }
-    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp())) {
-      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-              add.getRhs().getDefiningOp())) {
+    if (auto add = idxCol.getDefiningOp<LLVM::AddOp>()) {
+      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
         unsigned cst =
             cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (outVec * maxPhase);
@@ -1310,9 +1311,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
         immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
       }
     }
-    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp())) {
-      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-              add.getRhs().getDefiningOp())) {
+    if (auto add = idxRow.getDefiningOp<LLVM::AddOp>()) {
+      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
         unsigned cst =
             mlir::cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (perPhase * maxPhase);

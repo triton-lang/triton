@@ -425,6 +425,7 @@ bool supportMFMATypes(Type a, Type b) {
   if (a.getIntOrFloatBitWidth() != b.getIntOrFloatBitWidth())
     return false;
 
+  auto F8E5M2 = TypeID::get<Float8E5M2Type>();
   auto F8E4M3FNUZ = TypeID::get<Float8E4M3FNUZType>();
   auto F8E5M2FNUZ = TypeID::get<Float8E5M2FNUZType>();
   auto F16 = TypeID::get<Float16Type>();
@@ -435,6 +436,7 @@ bool supportMFMATypes(Type a, Type b) {
       {F32, F32},
       {F16, F16},
       {BF16, BF16},
+      {F8E5M2, F8E5M2},
       {F8E4M3FNUZ, F8E4M3FNUZ},
       {F8E4M3FNUZ, F8E5M2FNUZ},
       {F8E5M2FNUZ, F8E4M3FNUZ},

@@ -72,10 +72,9 @@ bool isCrossCTAConversion(const LinearLayout &layout);
 //     offsets <- get offsets using the intermediate linear layout
 //     load registers[vecIdx * loadVec, (vecIdx + 1) * loadVec)] from shared
 //     memory
-LinearLayout
-chooseShemLayoutForRegToRegConversion(MLIRContext *ctx,
-                                      ArrayRef<unsigned> tensorShape,
-                                      ArrayRef<unsigned> repShape);
+LinearLayout chooseShemLayoutForRegToRegConversion(
+    MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
+    ArrayRef<unsigned> repShape, ArrayRef<unsigned> order);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

@@ -45,3 +45,39 @@ def test_mma_remark(capfd):
     assert "remark: Warning: can't use MMA V3 for the dot op" in captured.err, "expect MMA V3 remark"
     assert "note: see current operation:" in captured.err
     os.environ['MLIR_ENABLE_REMARK'] = '0'
+
+
+def test_remark_vectorization(capfd):
+    os.environ["MLIR_ENABLE_REMARK"] = "1"
+
+    @triton.jit
+    def ldst_vec(in_ptr0, in_ptr1, in_ptr2, in_ptr3, out_ptr0, XBLOCK: tl.constexpr):
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)[:]
+        x0 = xindex % 9
+        x2 = (xindex // 3456) % 512
+        x1 = (xindex // 9) % 384
+        x4 = xindex
+        tmp0 = tl.load(in_ptr0 + (x2 + (512 * x0)), None, eviction_policy="evict_last")
+        tmp1 = tmp0 + 520
+        tmp2 = tmp0 < 0
+        tmp3 = tl.where(tmp2, tmp1, tmp0)
+        tmp9 = (-4) + tmp3
+        tmp12 = tl.full([1], 512, tl.int64)
+        tmp14 = tmp9 < tmp12
+        tmp16 = tl.load(in_ptr3 + (x1), tmp14, eviction_policy="evict_last", other=0.0)
+        tmp18 = tmp16.to(tl.float32)
+        tmp19 = tmp18.to(tl.float32)
+        tmp20 = tl.full(tmp19.shape, 0.0, tmp19.dtype)
+        tmp21 = tl.where(tmp14, tmp19, tmp20)
+        tmp22 = tmp21.to(tl.float32)
+        tl.store(out_ptr0 + (x4), tmp22, None)
+
+    XBLOCK = 1024
+    triton.compile(
+        triton.compiler.ASTSource(fn=ldst_vec, signature={0: '*i64', 1: '*i64', 2: '*fp16', 3: '*fp32', 4: '*fp16'},
+                                  constants={"XBLOCK": XBLOCK}), options={"num_warps": 1})
+
+    _, err = capfd.readouterr()
+    assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
+    os.environ["MLIR_ENABLE_REMARK"] = "0"
