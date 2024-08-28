@@ -306,8 +306,8 @@ public:
       a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
       b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
       newDot = rewriter.create<triton::nvidia_gpu::WarpGroupDotOp>(
-          dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.getInputPrecision(),
-          dotOp.getMaxNumImpreciseAcc(), false);
+          dotOp.getLoc(), newRetType, a, b, newAcc, nullptr,
+          dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc(), false);
     } else {
       // convert operands
       int minBitwidth =
