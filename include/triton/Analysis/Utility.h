@@ -203,6 +203,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool atomicNeedsSharedMemory(Value result);
 
+bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstT);
+
 bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
