@@ -902,10 +902,12 @@ inline void emitWmmaOffsetForCTA(const AMDWmmaEncodingAttr &wmmaLayout,
   auto rank = shapePerCta.size();
   assert(rank == 2 || rank == 3);
   SmallVector<unsigned> elemOffset(rank, 0);
+  auto elemStride = wmmaLayout.getVersion() == 1 ? 2 : 1;
   if (rank == 3)
     elemOffset[0] = ctaBatchOffset;
   for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-    elemOffset[rank - 2] = ctaOffsetX * shapePerCta[rank - 2] + 2 * elem;
+    elemOffset[rank - 2] =
+        ctaOffsetX * shapePerCta[rank - 2] + elemStride * elem;
     elemOffset[rank - 1] = ctaOffsetY * shapePerCta[rank - 1];
     offsets.push_back(elemOffset);
   }
@@ -951,8 +953,17 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
 
   SmallVector<Value> multiDimBase(rank);
 
-  multiDimBase[rank - 2] =
-      add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0);
+  auto ver = wmmaLayout.getVersion();
+  if (ver == 1) {
+    multiDimBase[rank - 2] =
+        add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0);
+  } else {
+    assert(ver == 2);
+    multiDimBase[rank - 2] =
+        add(mul(udiv(threadIdPerWarp, i32_val(mnkDim[2])),
+                i32_val(wmmaLayout.getSizePerThread()[rank - 2])),
+            offWarp0);
+  }
   multiDimBase[rank - 1] = add(laneId, offWarp1);
 
   // TODO: It is assumed when rank = 3, warpsPerCTA is set to
@@ -1102,8 +1113,6 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
-    // TODO: support 2nd gen of WMMA
-    assert(wmmaLayout.getVersion() == 1);
     result = emitBaseIndexForWmmaLayout(loc, rewriter, wmmaLayout, type);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
