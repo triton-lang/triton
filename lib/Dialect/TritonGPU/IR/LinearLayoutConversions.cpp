@@ -565,17 +565,35 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   // For wmma with 16x16 output, each of the 32 threads holds 8 elements.
   //
-  // For the register (i.e., element) dimension, these 8 elements are along
-  // the matrix C's M dimension, with 1 consecutive elements spanning 1 row
-  // and then the next 1 row being a gap.
+  // The first version of WMMA layout has following specific:
+  // for the register (i.e., element) dimension, these 8 elements are
+  // along the matrix C's M dimension, with 1 consecutive elements
+  // spanning 1 row and then the next 1 row being a gap.
   //
   // For the lane (i.e., thread) dimension, these threads are along the
   // matrix C's N dimension, with 16 consecutive threads covering a whole
   // row and the next 16 threads start at the next row.
-  LinearLayout tileLayout(
-      {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
-       {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
-      {outDimNames[order[0]], outDimNames[order[1]]});
+  //
+  // The second version of wmma layout is less tricky:
+  // for the register dimension 8 elements are along the matrix C's M
+  // dimension. First 16 lanes take 0-8 elems along M, second 16 take 8-15.
+  // We have 16 pair of threads in each warp, one pair covers the whole
+  // column.
+  //
+  // Please also check explaining comments in TritonGPUAttrDefs.td at the
+  // AMDWmmaEncodingAttr section.
+  unsigned ver = getVersion();
+  assert(ver == 1 || ver == 2);
+  LinearLayout tileLayout =
+      ver == 1
+          ? LinearLayout(
+                {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
+                 {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
+                {outDimNames[order[0]], outDimNames[order[1]]})
+          : LinearLayout(
+                {{kRegister, {{0, 1}, {0, 2}, {0, 4}}},
+                 {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}}},
+                {outDimNames[order[0]], outDimNames[order[1]]});
 
   if (hasBatchDim) {
     assert(order[2] == 0);
