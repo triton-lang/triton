@@ -163,12 +163,12 @@ Value PointerCanonicalizer::extractScalarOffsetFromExpr(
 
   Value scalarOffset =
       llvm::TypeSwitch<Operation *, Value>(curOp)
-          .Case<triton::BroadcastOp>([&](triton::BroadcastOp broadcastOp) {
+          .Case<triton::BroadcastOp>([&](auto broadcastOp) {
             return extractScalarOffsetFromExpr(
                 loc, broadcastOp.getSrc().getDefiningOp(),
                 broadcastOp->getOpOperand(0), bitness, hasNonUniformComponent);
           })
-          .Case<triton::ExpandDimsOp>([&](triton::ExpandDimsOp expandOp) {
+          .Case<triton::ExpandDimsOp>([&](auto expandOp) {
             return extractScalarOffsetFromExpr(
                 loc, expandOp.getSrc().getDefiningOp(),
                 expandOp->getOpOperand(0), bitness, hasNonUniformComponent);
@@ -603,33 +603,33 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
     Value nextPtr;
     // We need to propagate the fat pointer throughout the IR
     llvm::TypeSwitch<Operation *>(curOp)
-        .Case<triton::SplatOp>([&](triton::SplatOp splatOp) {
+        .Case<triton::SplatOp>([&](auto splatOp) {
           res = rewriteSplatOp(splatOp, curLoc, nextPtr);
         })
-        .Case<triton::BroadcastOp>([&](triton::BroadcastOp broadcastOp) {
+        .Case<triton::BroadcastOp>([&](auto broadcastOp) {
           res = rewriteBroadcastOp(broadcastOp, curLoc, nextPtr);
         })
-        .Case<triton::AddPtrOp>([&](triton::AddPtrOp addPtrOp) {
+        .Case<triton::AddPtrOp>([&](auto addPtrOp) {
           res = rewriteAddPtrOp(addPtrOp, curLoc, nextPtr);
         })
-        .Case<scf::ForOp>([&](scf::ForOp) {
-          res = rewriteForOp(resolveOp<scf::ForOp>(curOp, rewriteOpMap), curLoc,
+        .Case<scf::ForOp>([&](auto forOp) {
+          res = rewriteForOp(resolveOp<scf::ForOp>(forOp, rewriteOpMap), curLoc,
                              curOperand, nextPtr);
         })
-        .Case<scf::YieldOp>([&](scf::YieldOp yieldOp) {
+        .Case<scf::YieldOp>([&](auto yieldOp) {
           res = rewriteYieldOp(yieldOp, curLoc, curOperand, nextPtr);
         })
-        .Case<scf::WhileOp>([&](scf::WhileOp) {
-          res = rewriteWhileOp(resolveOp<scf::WhileOp>(curOp, rewriteOpMap),
+        .Case<scf::WhileOp>([&](auto whileOp) {
+          res = rewriteWhileOp(resolveOp<scf::WhileOp>(whileOp, rewriteOpMap),
                                curLoc, curOperand, nextPtr);
         })
-        .Case<scf::ConditionOp>([&](scf::ConditionOp conditionOp) {
+        .Case<scf::ConditionOp>([&](auto conditionOp) {
           res = rewriteConditionOp(conditionOp, curLoc, curOperand, nextPtr);
         })
-        .Case<cf::CondBranchOp>([&](cf::CondBranchOp condBrOp) {
+        .Case<cf::CondBranchOp>([&](auto condBrOp) {
           res = rewriteCondBranchOp(condBrOp, curLoc, curOperand, nextPtr);
         })
-        .Case<cf::BranchOp>([&](cf::BranchOp branchOp) {
+        .Case<cf::BranchOp>([&](auto branchOp) {
           res = rewriteBranchOp(branchOp, curLoc, curOperand, nextPtr);
         })
         .Case<triton::LoadOp, triton::StoreOp, triton::AtomicCASOp,

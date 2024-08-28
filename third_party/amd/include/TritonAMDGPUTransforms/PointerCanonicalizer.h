@@ -28,10 +28,10 @@ namespace mlir::triton::AMD {
 // Let's suppose that `arg0` is a pointer. The algorithm works like that:
 //
 // a) At the beginning the offset is a tensor initialized to zero, and we
-// associate with `%arg0` a `FatPtr{basePtr=%arg0, offset=0}`. Through the
-// algorithm `FatPtr.basePtr` represents the scalar base pointer (all the
-// uniform updates will go into that) and `FatPtr.offset` represents the tensor
-// offset (all the non-uniform updates will go into that)
+//    associate with `%arg0` a `FatPtr{basePtr=%arg0, offset=0}`. Through the
+//    algorithm `FatPtr.basePtr` represents the scalar base pointer (all the
+//    uniform updates will go into that) and `FatPtr.offset` represents the
+//    tensor offset (all the non-uniform updates will go into that)
 //
 //
 // b) Follow the pointer through the IR. When we meet:
@@ -47,13 +47,13 @@ namespace mlir::triton::AMD {
 //    ```
 // c) When we meet the `tt.load(%ptr)` or `tt.store(%ptr)` instructions,
 //    replace that instruction with:
-//    `t_ptr = tt.splat(%fatPointers[%ptr].basePtr)
-//    `%fat_ptr = tt.addptr(t_ptr, %fatPointers[ptr].offset)`
+//    `%t_ptr = tt.splat(%fatPointers[%ptr].basePtr)
+//    `%fat_ptr = tt.addptr(%t_ptr, %fatPointers[ptr].offset)`
 //    `%data = tt.load(%fat_ptr)`
 //
 class PointerCanonicalizer {
 public:
-  PointerCanonicalizer(ModuleOp moduleOp)
+  explicit PointerCanonicalizer(ModuleOp moduleOp)
       : mod(moduleOp), rewriter(moduleOp.getContext()) {}
 
   // Propagate fat pointers in all the functions of the module
@@ -66,7 +66,7 @@ private:
     Value basePtr;
     // Tensor offset
     Value offset;
-    // Flag to express if we can narrow the uses of the offset down to 32 bits.
+    // Flag to express if we can narrow the uses of the offset down to 32 bits
     bool canNarrow = false;
 
     // Utility copy functions
@@ -118,11 +118,11 @@ private:
   Value getScalarOffset(Location loc, triton::AddPtrOp addPtrOp,
                         bool &hasNonUniformComponent);
 
-  // Simplified scalar extraction. An offset can be composed by Unifrom (U)
-  // and non-uniform(N) components. A uniform component is basically a tensor
-  // constant (or a splat). A NonUniform value is a `make_range` or whatever we
-  // multiply with a `make_range` operation. We consider the following
-  // expressions:
+  // Perform simplified scalar extraction. An offset can be composed by Unifrom
+  // (U) and non-uniform(N) components. A uniform component is basically a
+  // tensor constant (or a splat). A NonUniform value is a `make_range` or
+  // whatever we multiply with a `make_range` operation. We consider the
+  // following expressions:
   //   offset = (U+U) -> ScalarOffset = (U+U)
   //   offset = (U+N) -> ScalarOffset = (U)
   //   offset = (N+N) -> ScalarOffset = 0
