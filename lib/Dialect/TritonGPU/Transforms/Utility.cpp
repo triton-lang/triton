@@ -734,8 +734,11 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
           continue;
         enqueue(result, encoding);
       }
-      if (!isFreeConvert(definingOp) &&
-          canFoldIntoConversion(definingOp, encoding))
+      if (isFreeConvert(definingOp)) {
+        enqueue(definingOp->getOperand(0), encoding);
+        continue;
+      }
+      if (canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;

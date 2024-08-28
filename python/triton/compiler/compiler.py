@@ -109,8 +109,9 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, context):
-        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+    def make_ir(self, options, codegen_fns, module_map, context):
+        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
 
     def parse_options(self):
         return dict()
@@ -132,7 +133,7 @@ class IRSource:
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, context):
+    def make_ir(self, options, codegen_fns, module_map, context):
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
@@ -277,8 +278,9 @@ def compile(src, target=None, options=None):
     ir.load_dialects(context)
     backend.load_dialects(context)
     codegen_fns = backend.get_codegen_implementation()
+    module_map = backend.get_module_map()
     try:
-        module = src.make_ir(options, codegen_fns, context)
+        module = src.make_ir(options, codegen_fns, module_map, context)
     except Exception as e:
         filter_traceback(e)
         raise
@@ -286,9 +288,8 @@ def compile(src, target=None, options=None):
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
-        if (fn_override_manager is not None and fn_override_manager.has_file(ir_filename)):
-            print(f"\nOverriding kernel with file {ir_filename}")
-            full_name = fn_override_manager.get_file(ir_filename)
+        if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
+            print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:

@@ -1070,6 +1070,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     coarseSchedule.dump();
   });
 
+  tt::CoarseSchedule::Cluster afterPrologue =
+      schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
+  LLVM_DEBUG({
+    LDBG("Coarse schedule with prologue and epilogue:");
+    coarseSchedule.dump();
+  });
+
   SmallVector<Value> barriers;
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
@@ -1077,13 +1084,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
 
   LLVM_DEBUG({
     LDBG("Coarse schedule with async loads:");
-    coarseSchedule.dump();
-  });
-
-  tt::CoarseSchedule::Cluster afterPrologue =
-      schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
-  LLVM_DEBUG({
-    LDBG("Coarse schedule with prologue and epilogue:");
     coarseSchedule.dump();
   });
 
@@ -1402,8 +1402,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
         transitiveOperand =
             cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
                 .getOperand(blockArg.getArgNumber() - 1);
-      }
-      if (Operation *def = transitiveOperand.getDefiningOp()) {
+      } else if (Operation *def = transitiveOperand.getDefiningOp()) {
         transitiveOperand = def->getOperand(0);
       }
     }
