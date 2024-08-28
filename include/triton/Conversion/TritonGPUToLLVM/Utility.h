@@ -102,6 +102,8 @@ using namespace mlir::triton;
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
+#define call_intrinsic(...)                                                    \
+  rewriter.create<LLVM::CallIntrinsicOp>(loc, __VA_ARGS__)
 
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
