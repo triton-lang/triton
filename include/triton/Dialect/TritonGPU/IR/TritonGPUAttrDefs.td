@@ -797,6 +797,15 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperands",
                     (ins "unsigned":$opIdx)>,
+
+    InterfaceMethod<"Return element sizes per thread for dot operands.", "SmallVector<unsigned>",
+      "getElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
+                                           "Type":$eltTy,
+                                           "unsigned":$opIdx),
+                                           /*methodBody=*/[{}],
+                                           /*defaultImplementation=*/[{
+                                            llvm_unreachable("getElemsPerThreadForOperands is not supported.");
+                                          }]>,
   ];
 }
 
