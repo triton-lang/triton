@@ -863,3 +863,14 @@ tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = 
   }
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @int_min_does_not_underflow_in_analysis
+module {
+  tt.func @int_min_does_not_underflow_in_analysis() -> i64 {
+    // CHECK: divisibility = [4611686018427387904]
+    %int_min = arith.constant -9223372036854775808 : i64
+    tt.return %int_min : i64
+  }
+}
