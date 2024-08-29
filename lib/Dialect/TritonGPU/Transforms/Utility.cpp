@@ -45,8 +45,9 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     SmallVector<unsigned> validN;
 
     // MMAv3 with larger instruction shape is preferred.
-    if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FNUZ() ||
-        eltType.isF16() || eltType.isBF16() || eltType.isF32()) {
+    if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FN() ||
+        eltType.isFloat8E4M3FNUZ() || eltType.isF16() || eltType.isBF16() ||
+        eltType.isF32()) {
       validN.assign({256, 248, 240, 232, 224, 216, 208, 200, 192, 184, 176,
                      168, 160, 152, 144, 136, 128, 120, 112, 104, 96,  88,
                      80,  72,  64,  56,  48,  40,  32,  24,  16,  8});
