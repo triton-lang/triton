@@ -5,7 +5,8 @@ import tempfile
 from pathlib import Path
 
 from dataclasses import dataclass
-from typing import Any, Tuple
+from types import ModuleType
+from typing import Any, Dict, Tuple
 
 from triton._C.libtriton import cpu, ir, llvm, passes
 from triton.backends.compiler import BaseBackend, GPUTarget
@@ -72,6 +73,10 @@ class CPUBackend(BaseBackend):
     def get_codegen_implementation(self):
         codegen_fns = {"min_dot_size": min_dot_size(self.target)}
         return codegen_fns
+
+    def get_module_map(self) -> Dict[str, ModuleType]:
+        from triton.language.extra.cpu import libdevice
+        return {"triton.language.extra.libdevice": libdevice}
 
     def load_dialects(self, ctx):
         cpu.load_dialects(ctx)
