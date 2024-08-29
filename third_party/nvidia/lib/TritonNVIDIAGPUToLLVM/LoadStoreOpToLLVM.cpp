@@ -254,6 +254,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       }
 
       if (other) {
+        if (otherIsSplatConstInt) {
+          for (size_t s = valueElemNBits; s < movWidth; s += valueElemNBits) {
+            splatVal |= splatVal << valueElemNBits;
+          }
+        }
+
         for (size_t ii = 0; ii < nWords; ++ii) {
           // PTX doesn't support mov.u8, so we need to use mov.u16
           PTXInstr &mov =
@@ -274,8 +280,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           PTXInstr::Operand *opr{};
 
           if (otherIsSplatConstInt) {
-            for (size_t s = 0; s < 32; s += valueElemNBits)
-              splatVal |= splatVal << valueElemNBits;
             opr = ptxBuilder.newConstantOperand(splatVal);
           } else
             opr = ptxBuilder.newOperand(v, readConstraint);
