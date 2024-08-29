@@ -3613,7 +3613,7 @@ def test_const(device, choose_const, constexpr, mode):
             elif mode == "if":
                 error = "Mismatched type for final_out"
             elif mode == "ternary":
-                error = "ternary expression with dynamic condition has inconsistent type"
+                error = "Ternary expression with dynamic condition has inconsistent type"
             else:
                 assert mode == "direct" and choose_const
                 error = "Cannot store to a constant pointer"
