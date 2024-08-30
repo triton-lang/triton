@@ -58,7 +58,7 @@ triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
     return triton::nvgpu::WGMMAEltType::s8;
   } else if (aTy.isFloat8E5M2()) {
     return triton::nvgpu::WGMMAEltType::e5m2;
-  } else if (aTy.isFloat8E4M3FNUZ()) {
+  } else if (aTy.isFloat8E4M3FN()) {
     return triton::nvgpu::WGMMAEltType::e4m3;
   } else {
     llvm::report_fatal_error("Unsupported mma operand type found");
