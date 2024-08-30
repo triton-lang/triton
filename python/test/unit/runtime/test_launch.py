@@ -1,10 +1,5 @@
 import gc
-# import importlib
-# import os
-# import sys
-# import tempfile
-# import textwrap
-# import time
+import pytest
 import tracemalloc
 
 import torch
@@ -12,27 +7,34 @@ import torch
 import triton
 import triton.language as tl
 
-# from typing import Tuple
 
+@pytest.mark.parametrize("use_global", [True, False])
+def test_metadata(use_global) -> None:
 
-def test_metadata() -> None:
+    used_local_metadata_fn = False
+    used_global_metadata_fn = False
 
-    used_hook = False
+    def local_launch_metadata(grid, kernel, args):
+        nonlocal used_local_metadata_fn
+        used_local_metadata_fn = True
+        ret = {"grid": grid, "value": args["x"]}
+        return ret
 
-    def _launch_metadata(grid, kernel, args):
-        ret = dict()
-        ret["grid"] = grid
-        ret["value"] = args["x"]
+    def global_launch_metadata(grid, kernel, args):
+        nonlocal used_global_metadata_fn
+        used_global_metadata_fn = True
+        ret = {"grid": grid, "value": args["x"]}
         return ret
 
     def hook(launch_metadata):
-        nonlocal used_hook
         metadata = launch_metadata.get()
         assert metadata["grid"] == (1, 3, 2)
         assert metadata["value"] == 6
-        used_hook = True
 
-    @triton.jit(launch_metadata=_launch_metadata)
+    metadata_fn = local_launch_metadata if not use_global else None
+    triton.compiler.CompiledKernel.global_launch_metadata_hook = global_launch_metadata if use_global else None
+
+    @triton.jit(launch_metadata=metadata_fn)
     def kernel(x):
         pass
 
@@ -40,7 +42,10 @@ def test_metadata() -> None:
     triton.compiler.CompiledKernel.launch_enter_hook = hook
     kernel[(1, 3, 2)](6)
     triton.compiler.CompiledKernel.launch_enter_hook = None
-    assert used_hook
+    if use_global:
+        assert used_global_metadata_fn
+    if not use_global:
+        assert used_local_metadata_fn
 
 
 def test_memory_leak() -> None:

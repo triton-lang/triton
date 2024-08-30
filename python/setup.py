@@ -371,10 +371,14 @@ class CMakeBuild(build_ext):
     def get_proton_cmake_args(self):
         cmake_args = get_thirdparty_packages([get_json_package_info()])
         cmake_args += self.get_pybind11_cmake_args()
-        cupti_include_dir = get_env_with_keys(["TRITON_CUPTI_PATH"])
+        cupti_include_dir = get_env_with_keys(["TRITON_CUPTI_INCLUDE_PATH"])
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
+        cupti_lib_dir = get_env_with_keys(["TRITON_CUPTI_LIB_PATH"])
+        if cupti_lib_dir == "":
+            cupti_lib_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "lib", "cupti")
+        cmake_args += ["-DCUPTI_LIB_DIR=" + cupti_lib_dir]
         roctracer_include_dir = get_env_with_keys(["ROCTRACER_INCLUDE_PATH"])
         if roctracer_include_dir == "":
             roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
@@ -475,9 +479,13 @@ with open(nvidia_version_path, "r") as nvidia_version_file:
     # parse this json file to get the version of the nvidia toolchain
     NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
 
-platform_dependent_src_path = lambda platform, version: (
-    (lambda version_major, version_minor1, version_minor2, : f"targets/{platform}/include"
-     if int(version_major) >= 12 and int(version_minor1) >= 5 else "include")(*version.split('.')))
+
+def get_platform_dependent_src_path(subdir):
+    return lambda platform, version: (
+        (lambda version_major, version_minor1, version_minor2, : f"targets/{platform}/{subdir}"
+         if int(version_major) >= 12 and int(version_minor1) >= 5 else subdir)(*version.split('.')))
+
+
 download_and_copy(
     name="ptxas", src_path="bin/ptxas", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["ptxas"], url_func=lambda arch, version:
@@ -505,24 +513,32 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 download_and_copy(
-    name="cudacrt", src_path=platform_dependent_src_path, dst_path="include", variable="TRITON_CUDACRT_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"], url_func=lambda arch, version:
+    name="cudacrt", src_path=get_platform_dependent_src_path("include"), dst_path="include",
+    variable="TRITON_CUDACRT_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"], url_func=lambda arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-crt-dev_linux-{arch}/{version}/download/noarch/cuda-crt-dev_linux-{arch}-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
       f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
      (*version.split('.'))))
 download_and_copy(
-    name="cudart", src_path=platform_dependent_src_path, dst_path="include", variable="TRITON_CUDART_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cudart"], url_func=lambda arch, version:
+    name="cudart", src_path=get_platform_dependent_src_path("include"), dst_path="include",
+    variable="TRITON_CUDART_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cudart"], url_func=lambda arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-cudart-dev_linux-{arch}/{version}/download/noarch/cuda-cudart-dev_linux-{arch}-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
       f"https://anaconda.org/nvidia/cuda-cudart-dev/{version}/download/linux-{arch}/cuda-cudart-dev-{version}-0.tar.bz2"
       )(*version.split('.'))))
 download_and_copy(
-    name="cupti", src_path=platform_dependent_src_path, dst_path="include", variable="TRITON_CUPTI_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cupti"], url_func=lambda arch, version:
+    name="cupti", src_path=get_platform_dependent_src_path("include"), dst_path="include",
+    variable="TRITON_CUPTI_INCLUDE_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cupti"], url_func=lambda arch, version:
+    ((lambda version_major, version_minor1, version_minor2:
+      f"https://anaconda.org/nvidia/cuda-cupti-dev/{version}/download/linux-{arch}/cuda-cupti-dev-{version}-0.tar.bz2"
+      if int(version_major) >= 12 and int(version_minor1) >= 5 else
+      f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2")
+     (*version.split('.'))))
+download_and_copy(
+    name="cupti", src_path=get_platform_dependent_src_path("lib"), dst_path="lib/cupti",
+    variable="TRITON_CUPTI_LIB_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cupti"], url_func=lambda arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-cupti-dev/{version}/download/linux-{arch}/cuda-cupti-dev-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
