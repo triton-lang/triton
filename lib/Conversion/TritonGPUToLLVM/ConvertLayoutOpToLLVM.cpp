@@ -478,9 +478,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     std::optional<LinearLayout> stMatrixSharedLayout;
     auto srcTy = op.getSrc().getType();
-    if (targetInfo.canUseStMatrix(
-            srcTy, scratchConfig.repShape, scratchConfig.order,
-            /*accumNumReplicates=*/sharedLayout.getOutDimSize(kIteration))) {
+    auto numIterations = sharedLayout.hasOutDim(kIteration)
+                             ? sharedLayout.getOutDimSize(kIteration)
+                             : 1;
+    if (targetInfo.canUseStMatrix(srcTy, scratchConfig.repShape,
+                                  scratchConfig.order, numIterations)) {
       stMatrixSharedLayout = chooseShemLayoutForStMatrixConversion(
           ctx, getCTALayout(srcTy.getEncoding()), scratchConfig.repShape,
           scratchConfig.order, /*swizzleByteWidth=*/0,
