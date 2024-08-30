@@ -772,4 +772,61 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
       {{kOffset, totalOffsets}, {kIteration, totalIters}, {kBlock, 1}});
 }
 
+LinearLayout chooseShemLayoutForStMatrixConversion(
+    MLIRContext *ctx, Attribute ctaLayout, ArrayRef<unsigned> shape,
+    ArrayRef<unsigned> order, int swizzleByteWidth, int elemBitWidth) {
+  auto rank = shape.size();
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  // Construct bases for a the layout's 2-dimensional tile.
+  assert(shape.size() >= 2);
+  int colDim = shape[0];
+  int rowDim = shape[1];
+
+  int tileRows = 8;
+  int tileCols = 8 * swizzleByteWidth / elemBitWidth;
+
+  int vec = 8 * 16 / elemBitWidth;
+
+  int perPhase = 1;
+  int maxPhase = 1;
+  if (swizzleByteWidth == 32) {
+    maxPhase = 2;
+    perPhase = 4;
+  } else if (swizzleByteWidth == 64) {
+    maxPhase = 4;
+    perPhase = 2;
+  } else if (swizzleByteWidth == 128) {
+    maxPhase = 8;
+    perPhase = 1;
+  } else {
+    llvm::report_fatal_error("Illegal swizzle byte width: " +
+                             llvm::Twine(std::to_string(swizzleByteWidth)));
+  }
+
+  StringAttr colDimName = outDimNames[colDim];
+  StringAttr rowDimName = outDimNames[rowDim];
+
+  std::vector<std::vector<int>> bases2D;
+  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
+    bases2D.push_back({0, 1 << logCol});
+  }
+  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
+    int row = 1 << logRow;
+    bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+  }
+  LinearLayout tileLayout =
+      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
+
+  // Add the remaining dimensions.
+  for (int i = 2; i < rank; i++) {
+    int dim = order[i];
+    tileLayout *=
+        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
+  }
+
+  return combineCtaCgaWithShape(tileLayout, cast<CTALayoutAttr>(ctaLayout),
+                                convertType<int64_t>(shape));
+}
+
 } // namespace mlir::triton::gpu

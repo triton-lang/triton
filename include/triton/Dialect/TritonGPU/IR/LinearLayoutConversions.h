@@ -75,6 +75,10 @@ bool isCrossCTAConversion(const LinearLayout &layout);
 LinearLayout chooseShemLayoutForRegToRegConversion(
     MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order);
+
+LinearLayout chooseShemLayoutForStMatrixConversion(
+    MLIRContext *ctx, Attribute cgaLayout, ArrayRef<unsigned> shape,
+    ArrayRef<unsigned> order, int swizzleByteWidth, int elemBitWidth);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

@@ -53,9 +53,13 @@ public:
 
 private:
   bool isSupported(Attribute srcLayout, Attribute dstLayout) const {
-    return isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout) &&
+    return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+               srcLayout) &&
+           isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+               dstLayout) &&
            !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
   }
+
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
@@ -378,12 +382,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
           return false;
         }
-        auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-        if (targetInfo.canUseStMatrix(srcTy, scratchConfig.paddedRepShape,
-                                      scratchConfig.order,
-                                      /*accumNumReplicates=*/1)) {
-          return false;
-        }
         if (useLegacyMMAConversion) {
           return false;
         }
@@ -477,6 +475,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
     LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
         ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
+
+    std::optional<LinearLayout> stMatrixSharedLayout;
+    auto srcTy = op.getSrc().getType();
+    if (targetInfo.canUseStMatrix(
+            srcTy, scratchConfig.repShape, scratchConfig.order,
+            /*accumNumReplicates=*/sharedLayout.getOutDimSize(kIteration))) {
+      stMatrixSharedLayout = chooseShemLayoutForStMatrixConversion(
+          ctx, getCTALayout(srcTy.getEncoding()), scratchConfig.repShape,
+          scratchConfig.order, /*swizzleByteWidth=*/0,
+          /*elemBitWidth=*/srcTy.getElementTypeBitWidth());
+    }
 
     // Layout for the store from registers to shared memory.
     //
@@ -578,8 +587,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       auto &inRegs = inRegsForIter[i];
       auto &outRegs = outRegsForIter[i];
 
-      for (int j = 0; j < inVals.size() / iterations;
-           j += scratchConfig.inVec) {
+      auto inVec = stMatrixSharedLayout.has_value()
+                       ? 8 * 16 / srcTy.getElementTypeBitWidth()
+                       : scratchConfig.inVec;
+      for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
         auto vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
         SmallVector<Value> inValsVec;
@@ -587,7 +598,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           inValsVec.push_back(inVals[inRegSlice + k]);
         Value valsVec = packLLVector(loc, inValsVec, rewriter);
         targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                /*pred=*/true_val());
+                                /*pred=*/true_val(),
+                                /*stMatrix=*/stMatrixSharedLayout.has_value());
       }
 
       barrier();

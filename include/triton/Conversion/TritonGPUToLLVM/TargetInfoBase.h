@@ -21,15 +21,16 @@ public:
   //
   // Assumes the address is aligned to the width of `val`.
   virtual void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                            std::optional<Value> ctaId, Value val,
-                            Value pred) const = 0;
+                            std::optional<Value> ctaId, Value val, Value pred,
+                            bool stMatrix = false) const = 0;
   virtual Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                             std::optional<Value> ctaId, Type elemTy,
                             Value pred) const = 0;
 
   void storeShared(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-                   Value pred) const {
-    storeDShared(rewriter, loc, ptr, /*ctaId=*/std::nullopt, val, pred);
+                   Value pred, bool stMatrix = false) const {
+    storeDShared(rewriter, loc, ptr, /*ctaId=*/std::nullopt, val, pred,
+                 stMatrix);
   }
   Value loadShared(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
                    Value pred) const {

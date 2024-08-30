@@ -17,8 +17,8 @@ public:
                Value cmp) const override;
 
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Value val,
-                    Value pred) const override;
+                    std::optional<Value> ctaId, Value val, Value pred,
+                    bool stMatrix) const override;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;

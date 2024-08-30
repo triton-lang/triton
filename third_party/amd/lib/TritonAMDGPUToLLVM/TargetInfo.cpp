@@ -78,11 +78,14 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Value val,
-                              Value pred) const {
+                              std::optional<Value> ctaId, Value val, Value pred,
+                              bool stMatrix) const {
   if (ctaId.has_value()) {
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
+  }
+  if (stMatrix) {
+    llvm::report_fatal_error("AMDGPU does not support stmatrix");
   }
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
