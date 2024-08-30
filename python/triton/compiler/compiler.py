@@ -343,6 +343,9 @@ class CompiledKernel:
     # TODO: move out of this namespace since it's a runtime thing
     launch_enter_hook = None
     launch_exit_hook = None
+    # We prefer using each Triton function's launch_metadata function. However, if users cannot annotate functions
+    # (e.g., if they are generated automatically by TorchInductor), we can use a global hook to provide launch metadata
+    global_launch_metadata_hook = None
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
@@ -396,7 +399,12 @@ class CompiledKernel:
         if CompiledKernel.launch_enter_hook is None:
             return None
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
-        if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
+        if not isinstance(self.src, ASTSource):
+            return ret
+        # Prioritize the launch metadata function from the function if it exists
+        # Otherwise we use the global hook
+        metadata_fn = self.src.fn.launch_metadata or CompiledKernel.global_launch_metadata_hook
+        if metadata_fn is None:
             return ret
         arg_dict = {}
         arg_idx = 0
@@ -406,7 +414,7 @@ class CompiledKernel:
             else:
                 arg_dict[arg_name] = args[arg_idx]
                 arg_idx += 1
-        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
+        ret.add(metadata_fn, (grid, self.metadata, arg_dict))
         return ret
 
     def __getitem__(self, grid):

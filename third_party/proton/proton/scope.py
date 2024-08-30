@@ -5,7 +5,7 @@ from typing import Optional, Union
 from .flags import get_profiling_on
 from triton._C.libproton import proton as libproton
 
-_local = threading.local()
+thread_local = threading.local()
 
 MetricValueType = Union[float, int]
 PropertyValueType = Union[float, int, str]
@@ -80,9 +80,9 @@ def enter_scope(name: str, *, triton_op: bool = False, metrics: Optional[dict[st
     if not get_profiling_on():
         return -1
     id = libproton.record_scope()
-    if not hasattr(_local, "scopes"):
-        _local.scopes = []
-    _local.scopes.append((id, name))
+    if not hasattr(thread_local, "scopes"):
+        thread_local.scopes = []
+    thread_local.scopes.append((id, name))
     if triton_op:
         libproton.enter_op(id, name)
     else:
@@ -97,7 +97,7 @@ def enter_scope(name: str, *, triton_op: bool = False, metrics: Optional[dict[st
 def exit_scope(triton_op: bool = False) -> int:
     if not get_profiling_on():
         return -1
-    id, name = _local.scopes.pop()
+    id, name = thread_local.scopes.pop()
     if triton_op:
         libproton.exit_op(id, name)
     else:
