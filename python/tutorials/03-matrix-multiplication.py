@@ -153,6 +153,7 @@ import torch
 
 import triton
 import triton.language as tl
+import triton.profiler as proton
 
 
 def is_cuda():
@@ -229,6 +230,19 @@ def get_autotune_config():
         return get_hip_autotune_config()
 
 
+def _matmul_launch_metadata(grid, kernel, args):
+    ret = {}
+    M, N, K = args["M"], args["N"], args["K"]
+    ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
+    ret["flops8"] = 2. * M * N * K
+    if "c_ptr" in args:
+        bytes_per_elem = args["c_ptr"].element_size()
+    else:
+        bytes_per_elem = 1 if args["FP8_OUTPUT"] else 2
+    ret["bytes"] = bytes_per_elem * (M * K + N * K)
+    return ret
+
+
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
 #   - A list of `triton.Config` objects that define different configurations of
 #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
@@ -238,7 +252,7 @@ def get_autotune_config():
     configs=get_autotune_config(),
     key=['M', 'N', 'K'],
 )
-@triton.jit
+@triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
@@ -348,6 +362,125 @@ def matmul(a, b, activation=""):
     return c
 
 
+@triton.autotune(
+    configs=get_autotune_config(),
+    key=['M', 'N', 'K'],
+)
+@triton.jit(launch_metadata=_matmul_launch_metadata)
+def matmul_persistent_kernel(
+        # Pointers to matrices
+        a_ptr, b_ptr, c_ptr,
+        # Matrix dimensions
+        M, N, K,
+        # The stride variables represent how much to increase the ptr by when moving by 1
+        # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+        # by to get the element one row down (A has M rows).
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,
+        # Meta-parameters
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
+        GROUP_SIZE_M: tl.constexpr,  #
+        NUM_SMS: tl.constexpr,  #
+        ACTIVATION: tl.constexpr  #
+):
+    """Kernel for computing the matmul C = A x B.
+    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
+    """
+    # -----------------------------------------------------------
+    # Map program ids `pid` to the block of C it should compute.
+    # This is done in a grouped ordering to promote L2 data reuse.
+    # See above `L2 Cache Optimizations` section for details.
+    start_pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_tiles = num_pid_m * num_pid_n
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = start_pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pre_pid_m = first_pid_m + ((start_pid % num_pid_in_group) % group_size_m)
+    pre_pid_n = (start_pid % num_pid_in_group) // group_size_m
+
+    # ----------------------------------------------------------
+    # Create pointers for the first blocks of A and B.
+    # We will advance this pointer as we move in the K direction
+    # and accumulate
+    # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
+    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
+    # See above `Pointer Arithmetic` section for details
+    offs_am = (pre_pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    offs_bn = (pre_pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+    # -----------------------------------------------------------
+    # Iterate to compute a block of the C matrix.
+    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
+    # of fp32 values for higher accuracy.
+    # `accumulator` will be converted back to fp16 after the loop.
+    for tile_id in range(start_pid, num_tiles, NUM_SMS):
+        group_id = tile_id // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_m = first_pid_m + ((tile_id % num_pid_in_group) % group_size_m)
+        pid_n = (tile_id % num_pid_in_group) // group_size_m
+
+        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+        offs_k = tl.arange(0, BLOCK_SIZE_K)
+        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+            # Load the next block of A and B, generate a mask by checking the K dimension.
+            # If it is out of bounds, set it to 0.
+            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+            # We accumulate along the K dimension.
+            accumulator = tl.dot(a, b, accumulator)
+            # Advance the ptrs to the next K block.
+            a_ptrs += BLOCK_SIZE_K * stride_ak
+            b_ptrs += BLOCK_SIZE_K * stride_bk
+        # You can fuse arbitrary activation functions here
+        # while the accumulator is still in FP32!
+        if ACTIVATION == "leaky_relu":
+            accumulator = leaky_relu(accumulator)
+        c = accumulator.to(tl.float16)
+
+        # -----------------------------------------------------------
+        # Write back the block of the output matrix C with masks.
+        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+        tl.store(c_ptrs, c, mask=c_mask)
+
+
+def persistent_matmul(a, b, activation=""):
+    # Check constraints.
+    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+    assert a.is_contiguous(), "Matrix A must be contiguous"
+    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    M, K = a.shape
+    K, N = b.shape
+    # Allocates output.
+    c = torch.empty((M, N), device=a.device, dtype=torch.float16)
+    # 1D launch kernel where each block gets its own program.
+    grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
+    matmul_persistent_kernel[grid](
+        a, b, c,  #
+        M, N, K,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        ACTIVATION=activation,  #
+        NUM_SMS=NUM_SMS)
+    return c
+
+
 # %%
 # Unit Test
 # ---------
@@ -357,7 +490,7 @@ def matmul(a, b, activation=""):
 torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b)
+triton_output = persistent_matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output_with_fp16_inputs={triton_output}")
 print(f"torch_output_with_fp16_inputs={torch_output}")
@@ -379,7 +512,7 @@ if TORCH_HAS_FP8 and is_cuda():
     # pre-transpose b for efficiency.
     b = b.T.contiguous().T
     b = b.to(torch.float8_e5m2)
-    triton_output = matmul(a, b)
+    triton_output = persistent_matmul(a, b)
     torch_output = torch.matmul(a.to(torch.float16), b.to(torch.float16))
     print(f"triton_output_with_fp8_inputs={triton_output}")
     print(f"torch_output_with_fp8_inputs={torch_output}")
@@ -439,4 +572,25 @@ def benchmark(K, provider, fp8_inputs):
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+# benchmark.run(show_plots=True, print_data=True)
+
+proton.start("matmul", hook="triton")
+for K in range(512, 8192 + 1, 512):
+    warmup = 1000
+    reps = 100
+    M = 8192
+    N = 8192
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(torch.float8_e5m2)
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
+
+    b = b.T.contiguous().T
+    b = b.to(torch.float8_e5m2)
+    # Warmup
+    for _ in range(warmup):
+        persistent_matmul(a, b)
+    # Benchmark
+    proton.activate(0)
+    for _ in range(reps):
+        persistent_matmul(a, b)
+    proton.deactivate(0)
+proton.finalize()

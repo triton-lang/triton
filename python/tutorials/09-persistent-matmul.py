@@ -8,7 +8,6 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 """
 
 import argparse
-import time
 
 import torch
 import triton
@@ -394,7 +393,8 @@ def torch_matmul(a, b):
     return c
 
 
-def bench(K, dtype, reps=10):
+def bench(K, dtype, reps=1000):
+    warmup = 10000
     M = 8192
     N = 8192
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
@@ -402,26 +402,47 @@ def bench(K, dtype, reps=10):
 
     b = b.T.contiguous()
 
-    proton.activate(0)
-
     if cublas is not None:
+        for _ in range(warmup):
+            cublas_matmul(a, b)
+        proton.activate(0)
         for _ in range(reps):
             cublas_matmul(a, b)
-        time.sleep(0.01)
+        proton.deactivate(0)
+        #time.sleep(0.01)
     if dtype == torch.float16:
+        for _ in range(warmup):
+            torch_matmul(a, b)
+        proton.activate(0)
         for _ in range(reps):
             torch_matmul(a, b)
-            time.sleep(0.01)
+            #time.sleep(0.01)
+        proton.deactivate(0)
+
+    for _ in range(warmup):
+        matmul(a, b.T)
+    proton.activate(0)
     for _ in range(reps):
         matmul(a, b.T)
-        time.sleep(0.01)
+        #time.sleep(0.01)
+    proton.deactivate(0)
+
+    for _ in range(warmup):
+        matmul_persistent(a, b.T)
+    proton.activate(0)
     for _ in range(reps):
         matmul_persistent(a, b.T)
-        time.sleep(0.01)
+        #time.sleep(0.01)
+    proton.deactivate(0)
+
     if supports_tma():
+        for _ in range(warmup):
+            matmul_tma_persistent(a, b)
+        proton.activate(0)
         for _ in range(reps):
             matmul_tma_persistent(a, b)
-            time.sleep(0.01)
+            #time.sleep(0.01)
+        proton.deactivate(0)
 
     proton.deactivate(0)
 
