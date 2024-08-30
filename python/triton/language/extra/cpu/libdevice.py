@@ -1,4 +1,7 @@
+import triton.language as tl
 from triton.language import core
+from triton.language.core import builtin
+from triton import jit
 
 
 @core.extern
@@ -119,3 +122,69 @@ def tan(arg0, _builder=None):
 @core.extern
 def tanh(arg0, _builder=None):
     return core.tensor(_builder.create_tanh(arg0.handle), arg0.type)
+
+
+@jit
+def _const(v, dtype):
+    """
+    Create a tensor with a single value of type :dtype.
+    """
+    return tl.full((1, ), v, dtype)
+
+
+@jit
+def _is_special_float(arg0, uint_dtype, kind: tl.constexpr):
+    # By default, Triton assumes constexprs are int32. Thus, when we do operations with constants,
+    # we end up auto-promoting smaller integer types to int32, which is undesirable. Thus we
+    # explicitly cast them to our desired type here.
+    one = _const(1, uint_dtype)
+    zero = _const(0, uint_dtype)
+
+    bitwidth: tl.constexpr = arg0.dtype.primitive_bitwidth
+    exponent_width: tl.constexpr = bitwidth - 1 - arg0.dtype.fp_mantissa_width
+    mantissa_width: tl.constexpr = arg0.dtype.fp_mantissa_width
+
+    uintval = arg0.to(uint_dtype, bitcast=True)
+    exponent = uintval << one >> _const(mantissa_width, uint_dtype) + one
+    exp_is_all_ones = exponent == (one << _const(exponent_width, uint_dtype)) - one
+    shifted_mantissa = uintval << _const(exponent_width, uint_dtype) + one
+
+    if kind == "nan":
+        return exp_is_all_ones & (shifted_mantissa != zero)
+    elif kind == "inf":
+        return exp_is_all_ones & (shifted_mantissa == zero)
+    else:
+        raise ValueError(f"Unexpected kind {kind}")
+
+
+@builtin
+def isnan(arg0, _builder=None, _generator=None):
+    if not arg0.dtype.is_floating():
+        raise ValueError("isnan expects a floating point type")
+    bitwidth = arg0.dtype.primitive_bitwidth
+    uint_dtype = tl.core.get_int_dtype(bitwidth, signed=False)
+    return _generator.call_JitFunction(_is_special_float, (arg0, uint_dtype, "nan"), kwargs={})
+
+
+@builtin
+def isinf(arg0, _builder=None, _generator=None):
+    if not arg0.dtype.is_floating():
+        raise ValueError("isinf expects a floating point type")
+    bitwidth = arg0.dtype.primitive_bitwidth
+    uint_dtype = tl.core.get_int_dtype(bitwidth, signed=False)
+    return _generator.call_JitFunction(_is_special_float, (arg0, uint_dtype, "inf"), kwargs={})
+
+
+@jit
+def _signbit(arg0, uint_dtype: tl.constexpr):
+    bitwidth: tl.constexpr = arg0.dtype.primitive_bitwidth
+    return arg0.to(uint_dtype, bitcast=True) >> (bitwidth - 1)
+
+
+@builtin
+def signbit(arg0, _builder=None, _generator=None):
+    if not arg0.dtype.is_floating():
+        raise ValueError("signbit expects a floating point type")
+    bitwidth = arg0.dtype.primitive_bitwidth
+    uint_dtype = tl.core.get_int_dtype(bitwidth, signed=False)
+    return _generator.call_JitFunction(_signbit, (arg0, uint_dtype), kwargs={})

@@ -6,6 +6,8 @@ import triton
 import triton.language as tl
 from triton.language.extra import libdevice
 
+torch.manual_seed(0)
+
 
 def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
@@ -22,7 +24,7 @@ float_dtypes = ['bfloat16', 'float16', 'float32', 'float64']
 @pytest.mark.parametrize("dtype_str", float_dtypes)
 @pytest.mark.parametrize("math_fn", [
     "acos", "acosh", "asin", "asinh", "atan", "atanh", "cbrt", "cos", "cosh", "erf", "exp", "exp2", "expm1", "floor",
-    "log", "log1p", "log2", "log10", "rsqrt", "sin", "sinh", "sqrt", "tan", "tanh"
+    "isnan", "isinf", "log", "log1p", "log2", "log10", "rsqrt", "signbit", "sin", "sinh", "sqrt", "tan", "tanh"
 ])
 @pytest.mark.parametrize("size", [1, 4, 16, 64])
 def test_libdevice(dtype_str, math_fn, size, device):
@@ -37,9 +39,23 @@ def test_libdevice(dtype_str, math_fn, size, device):
         tl.store(dst + idxs, y)
 
     src = torch.rand((size, ), dtype=getattr(torch, dtype_str), device=device)
+
     if math_fn == "acosh":
         src = src.abs() + 1
-    res = torch.empty(src.shape, dtype=getattr(torch, dtype_str), device=device)
+    if math_fn == "isnan" or math_fn == "isinf":
+        indices = torch.randint(low=0, high=size, size=(size // 2, ), device=device)
+        for i in indices:
+            if math_fn == "isnan":
+                src[i] = float("nan")
+            else:
+                src[i] = float(("+" if i % 2 else "-") + "inf")
+
+    if math_fn in ["isnan", "isinf", "signbit"]:
+        out_dtype = torch.bool
+    else:
+        out_dtype = getattr(torch, dtype_str)
+
+    res = torch.empty(src.shape, dtype=out_dtype, device=device)
     kernel[(1, )](src, res, MATH_FN=math_fn, BLOCK_SIZE=size)
     if math_fn == "cbrt":
         ref = src.pow(1 / 3)
