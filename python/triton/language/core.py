@@ -378,7 +378,7 @@ class dtype:
                 self.primitive_bitwidth = 32
                 self.exponent_bias = 127
             elif name == 'fp64':
-                self.fp_mantissa_width = 53
+                self.fp_mantissa_width = 52
                 self.primitive_bitwidth = 64
                 self.exponent_bias = 1023
             else:

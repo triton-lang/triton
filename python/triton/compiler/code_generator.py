@@ -609,7 +609,7 @@ class CodeGenerator(ast.NodeVisitor):
             then_ty = then_defs[name].type
             else_ty = else_defs[name].type
             assert then_ty == else_ty, \
-                f'mismatched type for {name} between then block ({then_ty}) '\
+                f'Mismatched type for {name} between then block ({then_ty}) '\
                 f'and else block ({else_ty})'
             names.append(name)
             ret_types.append(then_ty)
@@ -731,7 +731,7 @@ class CodeGenerator(ast.NodeVisitor):
                 self._set_insertion_point_and_loc(ip, last_loc)
 
                 assert then_val.type == else_val.type, \
-                    f'ternary expression with dynamic condition has inconsistent types {then_val.type} and {else_val.type}'
+                    f'Ternary expression with dynamic condition has inconsistent types {then_val.type} and {else_val.type}'
                 ret_type = then_val.type
 
                 ret_type_ir = [ret_type.to_ir(self.builder)] if ret_type != language.void else []
