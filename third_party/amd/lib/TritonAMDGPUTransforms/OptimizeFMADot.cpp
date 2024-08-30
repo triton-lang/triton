@@ -317,25 +317,19 @@ class OptimizeFMADotPattern : public mlir::RewritePattern {
     //   cShaped    (1xMxN cOrigLayout) -broadcast->
     //   cBatched   (SxMxN cOrigLayout) -layout_convert->
     //   cBatchedOp (SxMxN cLayout)
-    auto cOrig = dotOp.getC();
+    TypedAttr zeroValueAttr;
     auto cElTy = dotOp.getC().getType().getElementType();
-    auto optCShapedType = splitTypeDim(cOrigType, 0, 1, cOrig.getLoc());
-    if (!optCShapedType.has_value())
-      return failure();
-    auto cShapedType = optCShapedType.value();
-    auto cShapedLayout = cShapedType.getEncoding();
-    rewriter.setInsertionPoint(dotOp);
-    assert(!triton::gpu::isExpensiveView(cOrig.getType(), cShapedType));
-    auto cShaped =
-        rewriter.create<triton::ReshapeOp>(dotLoc, cShapedType, cOrig, false);
-    auto cBatchedType =
-        RankedTensorType::get({kSplit, m, n}, cElTy, cShapedLayout);
-    auto cBatched =
-        rewriter.create<triton::BroadcastOp>(dotLoc, cBatchedType, cShaped);
     auto cBatchedOpType =
-        RankedTensorType::get({kSplit, m, n}, cElTy, cBatchedOpLayout);
-    auto cBatchedOp = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        dotLoc, cBatchedOpType, cBatched);
+        RankedTensorType::get({splitK, m, n}, cElTy, cBatchedOpLayout);
+    if (cElTy.isInteger()) {
+      // zeroValueAttr = rewriter.getIntegerAttr(cElTy, 0);
+      zeroValueAttr = mlir::DenseIntElementsAttr::get(cBatchedOpType, 0);
+    } else {
+      // zeroValueAttr = rewriter.getFloatAttr(cElTy, 0);
+      zeroValueAttr = mlir::DenseFPElementsAttr::get(cBatchedOpType, 0.0f);
+    }
+    Value cBatchedOp = rewriter.create<arith::ConstantOp>(
+        dotLoc, cBatchedOpType, zeroValueAttr);
 
     // Create new dot and reduction
     rewriter.setInsertionPoint(dotOp);
@@ -346,9 +340,18 @@ class OptimizeFMADotPattern : public mlir::RewritePattern {
 
     auto reduceOp = rewriter.create<triton::ReduceOp>(
         dotLoc, ArrayRef<Value>{newDot.getD()}, 0);
-    auto reduceConvert =
-        rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
-            dotOp, cOrigType, reduceOp.getResult());
+    auto reduceConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        dotLoc, cOrigType, reduceOp.getResult());
+
+    // Add C operand to dot result
+    auto cOrig = dotOp.getC();
+    if (cElTy.isInteger()) {
+      rewriter.replaceOpWithNewOp<arith::AddIOp>(dotOp, reduceConvert, cOrig);
+    } else {
+      rewriter.replaceOpWithNewOp<arith::AddFOp>(dotOp, reduceConvert, cOrig);
+    }
+
+    // Fill in reduction body
 
     auto reduceBody = rewriter.createBlock(&reduceOp.getRegion(), {},
                                            {cElTy, cElTy}, {dotLoc, dotLoc});
@@ -362,6 +365,7 @@ class OptimizeFMADotPattern : public mlir::RewritePattern {
       reduceOperation =
           rewriter.create<arith::AddFOp>(dotLoc, blockArgs[0], blockArgs[1]);
     rewriter.create<triton::ReduceReturnOp>(dotLoc, reduceOperation);
+
     return success();
   }
 
