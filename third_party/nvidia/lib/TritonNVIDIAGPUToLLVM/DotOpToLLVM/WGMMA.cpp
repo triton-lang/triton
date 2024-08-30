@@ -264,6 +264,30 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 
 // Return a vector of Value of the accumulator start at startIndex and pack the
 // values into 32bits in case the accumulator is fp16.
+//
+// `elements` contains all loaded register values for operand A.
+// This consists of operand A for possibly multiple wgmma instructions.
+// For each wgmma, each warp in a warp group feeds a single "warp matrix"
+// Each warp matrix consists of 2x2 "quads".
+// Each thread holds several elements in each quad. Right before a wgmma,
+// the sum of bitwidth of
+// the elements in each quad should add up to 32.
+//
+// These values are stored unrolled in `elements`.
+// The ordering of dimensions is as follows:
+// batch (only 1 batch for Hopper currently)
+// matM (m-index of the "warp matrix")
+// matK (k-index of the "warp matrix")
+// quadM (m-index of the "quad" in the core matrix)
+// quadK (k-index of the "quad" in the core matrix)
+// vecIdx (index of the element in the quad; this is always along the k-dim)
+//
+// This ordering is decided when a tensor in DotOpEnc is lowered into llvm.
+// For WGMMA this happens in both SharedToDotOperand and MMAToDotOperand.
+// Thus, both lowerings must obey this above ordering for the below code to be correct.
+//
+// Additionally, note that WGMMA expects quadK ordered before quadM (i.e.
+// iterate along m-dim first); see loadI and mmaI.
 llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Location loc,
                                  const SmallVector<Value> &elements,
@@ -281,20 +305,24 @@ llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
   }
   Type elementType = elements[0].getType();
   int numElemsPer32Bits = 32 / elementType.getIntOrFloatBitWidth();
+  assert(numElements == 4 * numElemsPer32Bits);
 
   // For FP16 and BF16 we need to pack accumulator into 32-bit integers.
-  int num32BitValues = numElements / numElemsPer32Bits;
-  llvm::SmallVector<Value> mmaOut(num32BitValues);
+  llvm::SmallVector<Value> mmaOut(4);
   Type packTy = vec_ty(elementType, numElemsPer32Bits);
-  for (int i = 0; i < num32BitValues; ++i) {
-    Value pack = rewriter.create<LLVM::UndefOp>(loc, packTy);
-    for (int j = 0; j < numElemsPer32Bits; ++j) {
-      Value element = elements[startIndex + i * numElemsPer32Bits + j];
-      pack = insert_element(packTy, pack, element, i32_val(j));
+  for (int quadK = 0; quadK < 2; quadK++)
+    for (int quadM = 0; quadM < 2; quadM++) {
+      int loadI = quadM * 2 + quadK;
+      int mmaI = quadK * 2 + quadM;
+      Value pack = rewriter.create<LLVM::UndefOp>(loc, packTy);
+      for (int j = 0; j < numElemsPer32Bits; ++j) {
+        Value element = elements[startIndex + loadI * numElemsPer32Bits + j];
+        pack = insert_element(packTy, pack, element, i32_val(j));
+      }
+      pack = bitcast(pack, rewriter.getIntegerType(32));
+      mmaOut[mmaI] = pack;
     }
-    pack = bitcast(pack, rewriter.getIntegerType(32));
-    mmaOut[i] = pack;
-  }
+
   return mmaOut;
 }
 

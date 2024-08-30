@@ -36,14 +36,10 @@ public:
         op.getType().getEncoding());
     MemDescType srcType = op.getSrc().getType();
     auto sharedEncoding = cast<SharedEncodingAttr>(srcType.getEncoding());
-    if (!dstDotOp)
+    if (!dstDotOp || !sharedEncoding.getHasLeadingOffset())
       return failure();
-
-    auto parentEnc = cast<NvidiaMmaEncodingAttr>(dstDotOp.getParent()) ;
-    if (!parentEnc || parentEnc.getVersionMajor() == 3 || !sharedEncoding.getHasLeadingOffset())
-      return failure();
-
     RankedTensorType type = op.getType();
+    auto parentEnc = dstDotOp.getParent();
     int numWarps = triton::gpu::getNumWarpsPerCTA(parentEnc);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
