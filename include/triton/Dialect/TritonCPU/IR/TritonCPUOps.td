@@ -96,4 +96,15 @@ def TTC_PrintOp : TTC_Op<"print", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let hasVerifier = 1;
 }
 
+def TT_AssertOp : TTC_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "For correctness checking";
+  let description = [{
+    Takes a condition tensor, a message string, a file string, a function string, and a line number.
+    If the condition is false, the message is printed, and the program is aborted.
+  }];
+  let arguments = (ins I1:$condition, StrAttr:$message, StrAttr:$file, StrAttr:$func, I32Attr:$line);
+  let assemblyFormat = "$condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)";
+}
+
+
 #endif

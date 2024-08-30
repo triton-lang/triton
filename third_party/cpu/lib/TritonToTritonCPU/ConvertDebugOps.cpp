@@ -32,7 +32,10 @@ public:
     addLegalDialect<TritonDialect>();
     addLegalDialect<TritonCPUDialect>();
 
+    addLegalOp<arith::ConstantOp>();
+
     addIllegalOp<triton::PrintOp>();
+    addIllegalOp<triton::AssertOp>();
   }
 };
 
@@ -65,6 +68,27 @@ struct PrintOpConversion : public OpConversionPattern<triton::PrintOp> {
   }
 };
 
+struct AssertOpConversion : public OpConversionPattern<triton::AssertOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::AssertOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value acc = rewriter.create<arith::ConstantOp>(loc, i1_ty,
+                                                   rewriter.getOneAttr(i1_ty));
+    Value condition = rewriter.getRemappedValue(op.getCondition());
+    SmallVector<bool> dimsToReduce(
+        cast<VectorType>(condition.getType()).getRank(), true);
+    condition = rewriter.create<vector::MultiDimReductionOp>(
+        loc, condition, acc, dimsToReduce, vector::CombiningKind::AND);
+    rewriter.replaceOpWithNewOp<triton::cpu::AssertOp>(
+        op, condition, op.getMessage(), op.getFile(), op.getFunc(),
+        op.getLine());
+    return success();
+  }
+};
+
 struct ConvertDebugOps
     : public triton::impl::ConvertDebugOpsBase<ConvertDebugOps> {
   using ConvertDebugOpsBase::ConvertDebugOpsBase;
@@ -79,6 +103,7 @@ struct ConvertDebugOps
     DebugOpsConversionTarget convTarget(*context, typeConverter);
     RewritePatternSet patterns(context);
     patterns.add<PrintOpConversion>(typeConverter, context);
+    patterns.add<AssertOpConversion>(typeConverter, context);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <iomanip>
 #include <iostream>
@@ -148,9 +149,14 @@ void printFormattedElement(std::stringstream &ss, void *vec, size_t index,
 
 extern "C" {
 
-EXPORT void triton_assert(bool cond, char *c) {
-  if (!cond)
-    fprintf(stderr, "%s\n", c);
+EXPORT void triton_assert(int32_t pid0, int32_t pid1, int32_t pid2, bool cond,
+                          const char *message, const char *file, int32_t line,
+                          const char *function) {
+  if (cond)
+    return;
+  fprintf(stderr, "%s:%u: %s: block: [%u, %u, %u] Assertion `%s` failed.\n",
+          file, line, function, pid0, pid1, pid2, message);
+  abort();
 }
 
 // Print the pid prefix like the GPU ad interpreter. And vectors are printed
