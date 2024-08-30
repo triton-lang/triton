@@ -24,6 +24,7 @@ include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::SharedMemory">;
 
 //
 // Op Base
@@ -1133,7 +1134,7 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [
 }
 
 def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
-  MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
     let summary = "store value based on descriptor";
     let description = [{
       This operation will be lowered to Nvidia TMA store operation on targets supporting it.
@@ -1153,6 +1154,206 @@ def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
     let assemblyFormat = [{
       $desc_ptr `[` $indices `]` `,` $src
       attr-dict `:` qualified(type($desc_ptr)) `,` type($src)
+    }];
+}
+
+def TT_ExperimentalTensormapAllocOp: TT_Op<
+    "experimental_tensormap_alloc",
+    [MemoryEffects<[MemAlloc<SharedMemory>]>]
+> {
+  let summary = "Allocate an uninitialized tensormap object";
+  let assemblyFormat = [{$template_ptr attr-dict `:` functional-type(operands, results)}];
+
+  let arguments = (ins TT_PtrType:$template_ptr);
+  let results = (outs TT_PtrType:$desc);
+}
+
+def TT_ExperimentalTensormapDeallocOp: TT_Op<
+    "experimental_tensormap_dealloc",
+    [MemoryEffects<[MemFree<SharedMemory>]>]
+> {
+  let summary = "Deallocate an uninitialized tensormap object";
+  let arguments = (ins TT_PtrType:$desc);
+  let assemblyFormat = [{$desc attr-dict `:` functional-type(operands, results)}];
+}
+
+def TT_ExperimentalTensormapReplaceGlobalAddressOp : TT_Op<
+  "experimental_tensormap_replace_global_address",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        TT_PtrType:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceRankOp : TT_Op<
+  "experimental_tensormap_replace_rank",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceBoxDimOp : TT_Op<
+  "experimental_tensormap_replace_box_dim",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$ord,
+        I32:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceGlobalDimOp : TT_Op<
+  "experimental_tensormap_replace_global_dim",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$ord,
+        I32:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceGlobalStrideOp : TT_Op<
+  "experimental_tensormap_replace_global_stride",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$ord,
+        I64:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceElementStrideOp : TT_Op<
+  "experimental_tensormap_replace_element_stride",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$ord,
+        I32:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceElemTypeOp : TT_Op<
+  "experimental_tensormap_replace_elem_type",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceInterleaveLayoutOp : TT_Op<
+  "experimental_tensormap_replace_interleave_layout",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceSwizzleModeOp : TT_Op<
+  "experimental_tensormap_replace_swizzle_mode",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapReplaceFillModeOp : TT_Op<
+  "experimental_tensormap_replace_fill_mode",
+  [MemoryEffects<[MemWrite<SharedMemory>]>]
+> {
+    let summary = "Mutate a TMA descriptor inplace";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        ConfinedAttr<I32Attr, [IntNonNegative]>:$new_val
+    );
+    let assemblyFormat = [{
+      $desc_ptr `,` $new_val attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapCpFenceproxyOp : TT_Op<
+  "experimental_tensormap_cp_fenceproxy",
+  [MemoryEffects<[MemRead<SharedMemory>, MemWrite<GlobalMemory>]>]
+> {
+    let summary = "Copy tensormap from shared to global memory";
+    let arguments = (
+        ins
+        TT_PtrType:$out_ptr,
+        TT_PtrType:$in_ptr
+    );
+    let assemblyFormat = [{
+      $out_ptr `,` $in_ptr attr-dict `:` functional-type(operands, results)
+    }];
+}
+
+def TT_ExperimentalTensormapFenceproxyAcquireOp: TT_Op<
+  "experimental_tensormap_fenceproxy_acquire",
+  [MemoryEffects<[MemWrite<GlobalMemory>]>]
+> {
+    let summary = "Acquire fence on a tensormap object";
+    let arguments = (ins TT_PtrType:$desc_ptr);
+    let assemblyFormat = [{
+      $desc_ptr attr-dict `:` qualified(type($desc_ptr))
     }];
 }
 

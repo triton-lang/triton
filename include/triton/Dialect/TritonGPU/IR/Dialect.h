@@ -19,10 +19,6 @@ namespace mlir {
 namespace triton {
 namespace gpu {
 
-struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
-  StringRef getName() final { return "<SharedMemory>"; }
-};
-
 unsigned getTotalElemsPerThread(Type type);
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,

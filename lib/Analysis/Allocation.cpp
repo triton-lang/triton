@@ -198,6 +198,14 @@ private:
           kAlignment = 1024;
         allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
                                                              kAlignment);
+      } else if (auto alloc =
+                     result
+                         .getDefiningOp<triton::ExperimentalTensormapAllocOp>();
+                 alloc) {
+        constexpr auto kTmaDescSize = 128;
+        constexpr auto kTmaDescAlign = 128;
+        allocation->addBuffer<BufferT::BufferKind::Explicit>(
+            result, kTmaDescSize, kTmaDescAlign);
       }
     }
   }

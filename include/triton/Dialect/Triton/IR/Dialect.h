@@ -27,6 +27,10 @@ struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
   StringRef getName() final { return "<GlobalMemory>"; }
 };
 
+struct SharedMemory : public SideEffects::Resource::Base<GlobalMemory> {
+  StringRef getName() final { return "<GlobalMemory>"; }
+};
+
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {
 public:

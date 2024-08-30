@@ -941,6 +941,9 @@ class TensorWrapper:
     def copy_(self, other):
         self.base.copy_(other.base)
 
+    def clone(self):
+        return TensorWrapper(self.base.clone(), self.dtype)
+
     def to(self, device):
         return TensorWrapper(self.base.to(device), self.dtype)
 

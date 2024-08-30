@@ -1,4 +1,4 @@
-﻿#include <pybind11/functional.h>
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -1269,7 +1269,7 @@ void init_triton_ir(py::module &&m) {
                                   evictionPolicy);
            })
       .def("create_descriptor_load",
-           [](TritonOpBuilder &self, Value &desc_ptr,
+           [](TritonOpBuilder &self, Value desc_ptr,
               std::vector<Value> &indices, Type type,
               CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> Value {
@@ -1277,10 +1277,84 @@ void init_triton_ir(py::module &&m) {
                  type, desc_ptr, indices, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_store",
-           [](TritonOpBuilder &self, Value &desc_ptr, Value value,
+           [](TritonOpBuilder &self, Value desc_ptr, Value value,
               std::vector<Value> &indices) -> void {
              self.create<ExperimentalDescriptorStoreOp>(desc_ptr, value,
                                                         indices);
+           })
+      .def("create_tensormap_alloc",
+           [](TritonOpBuilder &self, Value template_ptr) -> Value {
+             auto *context = self.getBuilder().getContext();
+             auto I8 = mlir::IntegerType::get(context, 8);
+             auto ptr_ty =
+                 mlir::triton::PointerType::get(I8, /*addressSpace=*/3);
+             return self.create<ExperimentalTensormapAllocOp>(ptr_ty,
+                                                              template_ptr);
+           })
+      .def("create_tensormap_dealloc",
+           [](TritonOpBuilder &self, Value tensormap) {
+             self.create<ExperimentalTensormapDeallocOp>(tensormap);
+           })
+      .def("create_tensormap_replace_global_address",
+           [](TritonOpBuilder &self, Value desc_ptr, Value new_val) {
+             self.create<ExperimentalTensormapReplaceGlobalAddressOp>(desc_ptr,
+                                                                      new_val);
+           })
+      .def("create_tensormap_replace_rank",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t new_val) {
+             self.create<ExperimentalTensormapReplaceRankOp>(desc_ptr, new_val);
+           })
+      .def("create_tensormap_replace_box_dim",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t ord,
+              Value new_val) {
+             self.create<ExperimentalTensormapReplaceBoxDimOp>(desc_ptr, ord,
+                                                               new_val);
+           })
+      .def("create_tensormap_replace_global_dim",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t ord,
+              Value new_val) {
+             self.create<ExperimentalTensormapReplaceGlobalDimOp>(desc_ptr, ord,
+                                                                  new_val);
+           })
+      .def("create_tensormap_replace_global_stride",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t ord,
+              Value new_val) {
+             self.create<ExperimentalTensormapReplaceGlobalStrideOp>(
+                 desc_ptr, ord, new_val);
+           })
+      .def("create_tensormap_replace_element_stride",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t ord,
+              Value new_val) {
+             self.create<ExperimentalTensormapReplaceElementStrideOp>(
+                 desc_ptr, ord, new_val);
+           })
+      .def("create_tensormap_replace_elemtype",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t new_val) {
+             self.create<ExperimentalTensormapReplaceElemTypeOp>(desc_ptr,
+                                                                 new_val);
+           })
+      .def("create_tensormap_replace_interleave_layout",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t new_val) {
+             self.create<ExperimentalTensormapReplaceInterleaveLayoutOp>(
+                 desc_ptr, new_val);
+           })
+      .def("create_tensormap_replace_swizzle_mode",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t new_val) {
+             self.create<ExperimentalTensormapReplaceSwizzleModeOp>(desc_ptr,
+                                                                    new_val);
+           })
+      .def("create_tensormap_replace_fill_mode",
+           [](TritonOpBuilder &self, Value desc_ptr, int32_t new_val) {
+             self.create<ExperimentalTensormapReplaceFillModeOp>(desc_ptr,
+                                                                 new_val);
+           })
+      .def("create_tensormap_cp_fenceproxy",
+           [](TritonOpBuilder &self, Value out_ptr, Value in_ptr) {
+             self.create<ExperimentalTensormapCpFenceproxyOp>(out_ptr, in_ptr);
+           })
+      .def("create_tensormap_fenceproxy_acquire",
+           [](TritonOpBuilder &self, Value desc_ptr) {
+             self.create<ExperimentalTensormapFenceproxyAcquireOp>(desc_ptr);
            })
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,

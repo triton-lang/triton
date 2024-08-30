@@ -2889,11 +2889,11 @@ void LocalAllocOp::getEffects(
   if (!getType().getMutableMemory() && !op->hasAttr("allocation.offset"))
     return;
   effects.emplace_back(MemoryEffects::Allocate::get(),
-                       mlir::triton::gpu::SharedMemory::get());
+                       mlir::triton::SharedMemory::get());
   if (getSrc())
     effects.emplace_back(MemoryEffects::Write::get(),
                          getOperation()->getOpResult(0),
-                         mlir::triton::gpu::SharedMemory::get());
+                         mlir::triton::SharedMemory::get());
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
@@ -2931,7 +2931,7 @@ void LocalLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+                       mlir::triton::SharedMemory::get());
 }
 
 // LocalStoreOp
@@ -2945,7 +2945,7 @@ void LocalStoreOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+                       mlir::triton::SharedMemory::get());
 }
 
 // AsyncCopyGlobalToLocalOp
@@ -2961,7 +2961,7 @@ void AsyncCopyGlobalToLocalOp::getEffects(
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+                       mlir::triton::SharedMemory::get());
 }
 
 LogicalResult MemDescSubviewOp::verify() {
