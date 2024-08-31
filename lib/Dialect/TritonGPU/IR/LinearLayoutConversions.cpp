@@ -806,6 +806,7 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   if (repShape[1] >= 64) {
     basesReg.emplace_back(std::vector<int>{0, 32});
   }
+  basesReg.emplace_back(std::vector<int>{0, 0});
   // {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}};
   std::vector<std::vector<int>> basesThread;
   if (repShape[0] >= 2) {
