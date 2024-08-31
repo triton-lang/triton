@@ -813,7 +813,8 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   auto ret = layout.transposeIns({S("offsetTileCol"), S("offsetTileRow"),
                                   S("tileCol"), S("tileRow"), S("repCol"),
                                   S("repRow"), S("iterCol"), S("iterRow")});
-  auto totalOffsets = tileCols * tileRows * numTilesCol * numTilesRow;
+  auto totalOffsets =
+      tileCols * tileRows * numTilesCol * numTilesRow * numRepsCol * numRepsRow;
   auto totalIters = numItersCol * numItersRow;
   return ret.reshapeIns({{S("offset"), totalOffsets},
                          {S("iteration"), totalIters},
