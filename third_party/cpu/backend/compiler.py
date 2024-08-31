@@ -215,14 +215,7 @@ class CPUBackend(BaseBackend):
             asm_path = os.path.join(tmpdir, "kernel.s")
             Path(asm_path).write_text(src)
             lib_dirs = cpu_driver.library_dirs
-            libs = ["gcc", "m", "TritonCPURuntime"]
-            # TRITON_CPU_USE_SLEEF=1 - use system libsleef
-            # TRITON_CPU_USE_SLEEF=path - use libsleef from the specified path
-            use_sleef = os.environ.get("TRITON_CPU_USE_SLEEF", "0")
-            if use_sleef != "0":
-                if os.path.isdir(use_sleef):
-                    lib_dirs.append(use_sleef)
-                libs.append("sleef")
+            libs = ["gcc", "m", "TritonCPURuntime", "sleef"]
             so = _build("kernel", asm_path, tmpdir, lib_dirs, cpu_driver.include_dirs, libs)
             with open(so, "rb") as f:
                 return f.read()

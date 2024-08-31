@@ -1,0 +1,3 @@
+[submodule "sleef"]
+	path = third_party/sleef
+	url = https://github.com/shibatch/sleef
