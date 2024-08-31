@@ -482,11 +482,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                  : 1;
         targetInfo.canUseStMatrix(op.getSrc().getType(), scratchConfig.repShape,
                                   scratchConfig.order, numIterations)) {
-      auto warpsPerCTA = getWarpsPerCTAWithUniqueData(
-          op.getSrc().getType().getEncoding(), op.getType().getShape());
       stMatrixSharedLayout = chooseShemLayoutForStMatrixConversion(
           ctx, tensorShape, scratchConfig.repShape, scratchConfig.order,
-          warpsPerCTA);
+          getWarpsPerCTA(op.getSrc().getType().getEncoding()));
     }
 
     // Layout for the store from registers to shared memory.

@@ -785,7 +785,6 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   StringAttr kThread = S("thread");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
-  StringAttr kIteration = S("iteration");
   StringAttr kCol = S("col");
   StringAttr kRow = S("row");
   std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
@@ -797,12 +796,9 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   auto numWarpsRow = warpsPerCTA[0];
   layout *= LinearLayout::identity1D(numWarpsCol, kWarp, kCol);
   layout *= LinearLayout::identity1D(numWarpsRow, kWarp, kRow);
-  auto iterationsCol = tensorShape[0] / repShape[0];
-  auto iterationsRow = tensorShape[1] / repShape[1];
-  layout *= LinearLayout::identity1D(iterationsCol, kIteration, kCol);
-  layout *= LinearLayout::identity1D(iterationsRow, kIteration, kRow);
   auto totalOffsetSize = layout.getTotalOutDimSize();
-  return layout.reshapeOuts({{S("offset"), totalOffsetSize}});
+  return layout.reshapeOuts(
+      {{S("offset"), totalOffsetSize}, {S("iteration"), 1}});
 }
 
 } // namespace mlir::triton::gpu
