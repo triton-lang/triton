@@ -791,28 +791,28 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   StringAttr kRow = S("row");
   // {{0, 1}, {0, 2}, {0, 4}}
   std::vector<std::vector<int>> basesReg;
-  if (repShape[0] >= 2) {
+  if (repShape[1] >= 2) {
     if (srcLayout.getInDimSize(kReg) >= 2) {
       basesReg.emplace_back(std::vector<int>{0, 1});
     } else {
       basesReg.emplace_back(std::vector<int>{0, 0});
     }
   }
-  if (repShape[0] >= 4) {
+  if (repShape[1] >= 4) {
     if (srcLayout.getInDimSize(kReg) >= 4) {
       basesReg.emplace_back(std::vector<int>{0, 2});
     } else {
       basesReg.emplace_back(std::vector<int>{0, 0});
     }
   }
-  if (repShape[0] >= 8) {
+  if (repShape[1] >= 8) {
     if (srcLayout.getInDimSize(kReg) >= 8) {
       basesReg.emplace_back(std::vector<int>{0, 4});
     } else {
       basesReg.emplace_back(std::vector<int>{0, 0});
     }
   }
-  if (repShape[0] >= 32) {
+  if (repShape[1] >= 32) {
     if (srcLayout.getInDimSize(kReg) >= 16) {
       basesReg.emplace_back(std::vector<int>{0, 16});
     } else {
