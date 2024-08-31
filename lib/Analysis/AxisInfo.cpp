@@ -172,8 +172,8 @@ private:
 
   void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
     propagateIfChanged(
-        lattice,
-        lattice->join(AxisInfo::getPessimisticValueState(lattice->getPoint())));
+        lattice, lattice->join(
+                     AxisInfo::getPessimisticValueState(lattice->getAnchor())));
   }
 
   void visitNonControlFlowArguments(
