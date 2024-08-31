@@ -787,9 +787,33 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   StringAttr kBlock = S("block");
   StringAttr kCol = S("col");
   StringAttr kRow = S("row");
-  std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
+  std::vector<std::vector<int>> basesReg;
+  if (repShape[1] >= 2) {
+    basesReg.emplace_back(std::vector<int>{0, 1});
+  }
+  if (repShape[1] >= 4) {
+    basesReg.emplace_back(std::vector<int>{0, 2});
+  }
+  if (repShape[1] >= 8) {
+    basesReg.emplace_back(std::vector<int>{0, 4});
+  }
   std::vector<std::vector<int>> basesThread = {
       {1, 0}, {2, 0}, {4, 0}, {0, 8}, {8, 0}};
+  if (repShape[0] >= 2) {
+    basesThread.emplace_back(std::vector<int>{1, 0});
+  }
+  if (repShape[0] >= 4) {
+    basesThread.emplace_back(std::vector<int>{2, 0});
+  }
+  if (repShape[0] >= 8) {
+    basesThread.emplace_back(std::vector<int>{4, 0});
+  }
+  if (repShape[1] >= 16) {
+    basesThread.emplace_back(std::vector<int>{0, 8});
+  }
+  if (repShape[0] >= 16) {
+    basesThread.emplace_back(std::vector<int>{8, 0});
+  }
   LinearLayout layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesThread}}, {kCol, kRow});
   auto numWarpsCol = warpsPerCTA[1];
