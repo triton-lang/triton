@@ -773,60 +773,51 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 }
 
 LinearLayout chooseShemLayoutForStMatrixConversion(
-    MLIRContext *ctx, Attribute ctaLayout, ArrayRef<unsigned> shape,
-    ArrayRef<unsigned> order, int swizzleByteWidth, int elemBitWidth) {
-  auto rank = shape.size();
+    MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
+    ArrayRef<unsigned> repShape, ArrayRef<unsigned> order) {
+  auto rank = repShape.size();
   auto outDimNames = standardOutDimNames(ctx, rank);
 
   // Construct bases for a the layout's 2-dimensional tile.
-  assert(shape.size() >= 2);
-  int colDim = shape[0];
-  int rowDim = shape[1];
+  assert(repShape.size() == 2);
+  int colDim = repShape[0];
+  int rowDim = repShape[1];
 
+  // We only support 8x8 tiles repeated 4 times.
   int tileRows = 8;
-  int tileCols = 8 * swizzleByteWidth / elemBitWidth;
+  int tileCols = 8;
+  int numTilesRow = 2;
+  int numTilesCol = 2;
+  int numRepsRow = ceil(rowDim, (tileRows * numTilesRow));
+  int numRepsCol = ceil(colDim, (tileCols * numTilesCol));
+  int numItersRow = ceil(rowDim, tileRows);
+  int numItersCol = ceil(colDim, tileCols);
 
-  int vec = 8 * 16 / elemBitWidth;
-
-  int perPhase = 1;
-  int maxPhase = 1;
-  if (swizzleByteWidth == 32) {
-    maxPhase = 2;
-    perPhase = 4;
-  } else if (swizzleByteWidth == 64) {
-    maxPhase = 4;
-    perPhase = 2;
-  } else if (swizzleByteWidth == 128) {
-    maxPhase = 8;
-    perPhase = 1;
-  } else {
-    llvm::report_fatal_error("Illegal swizzle byte width: " +
-                             llvm::Twine(std::to_string(swizzleByteWidth)));
-  }
-
-  StringAttr colDimName = outDimNames[colDim];
-  StringAttr rowDimName = outDimNames[rowDim];
-
-  std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
-    bases2D.push_back({0, 1 << logCol});
-  }
-  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
-    int row = 1 << logRow;
-    bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
-  }
-  LinearLayout tileLayout =
-      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
-
-  // Add the remaining dimensions.
-  for (int i = 2; i < rank; i++) {
-    int dim = order[i];
-    tileLayout *=
-        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
-  }
-
-  return combineCtaCgaWithShape(tileLayout, cast<CTALayoutAttr>(ctaLayout),
-                                convertType<int64_t>(shape));
+  LinearLayout layout = LinearLayout::empty();
+  layout *= LinearLayout::identity1D(tileCols, S("offsetTileCol"),
+                                     outDimNames[order[0]]);
+  layout *= LinearLayout::identity1D(numTilesCol, S("tileCol"),
+                                     outDimNames[order[0]]);
+  layout *=
+      LinearLayout::identity1D(numRepsCol, S("repCol"), outDimNames[order[0]]);
+  layout *= LinearLayout::identity1D(numItersCol, S("iterCol"),
+                                     outDimNames[order[0]]);
+  layout *= LinearLayout::identity1D(tileRows, S("offsetTileRow"),
+                                     outDimNames[order[1]]);
+  layout *= LinearLayout::identity1D(numTilesRow, S("tileRow"),
+                                     outDimNames[order[1]]);
+  layout *=
+      LinearLayout::identity1D(numRepsRow, S("repRow"), outDimNames[order[1]]);
+  layout *= LinearLayout::identity1D(numItersRow, S("iterRow"),
+                                     outDimNames[order[1]]);
+  auto ret = layout.transposeIns({S("offsetTileCol"), S("offsetTileRow"),
+                                  S("tileCol"), S("tileRow"), S("repCol"),
+                                  S("repRow"), S("iterCol"), S("iterRow")});
+  auto totalOffsets = tileCols * tileRows * numTilesCol * numTilesRow;
+  auto totalIters = numItersCol * numItersRow;
+  return ret.reshapeIns({{S("offset"), totalOffsets},
+                         {S("iteration"), totalIters},
+                         {S("block"), 1}});
 }
 
 } // namespace mlir::triton::gpu

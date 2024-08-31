@@ -77,8 +77,8 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order);
 
 LinearLayout chooseShemLayoutForStMatrixConversion(
-    MLIRContext *ctx, Attribute cgaLayout, ArrayRef<unsigned> shape,
-    ArrayRef<unsigned> order, int swizzleByteWidth, int elemBitWidth);
+    MLIRContext *ctx, ArrayRef<unsigned> tensorShape, ArrayRef<unsigned> shape,
+    ArrayRef<unsigned> order);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

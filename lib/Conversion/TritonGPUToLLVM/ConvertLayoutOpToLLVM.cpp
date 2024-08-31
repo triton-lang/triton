@@ -477,16 +477,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
 
     std::optional<LinearLayout> stMatrixSharedLayout;
-    auto srcTy = op.getSrc().getType();
-    auto numIterations = sharedLayout.hasOutDim(kIteration)
-                             ? sharedLayout.getOutDimSize(kIteration)
-                             : 1;
-    if (targetInfo.canUseStMatrix(srcTy, scratchConfig.repShape,
+    if (auto numIterations = sharedLayout.hasOutDim(kIteration)
+                                 ? sharedLayout.getOutDimSize(kIteration)
+                                 : 1;
+        targetInfo.canUseStMatrix(op.getSrc().getType(), scratchConfig.repShape,
                                   scratchConfig.order, numIterations)) {
       stMatrixSharedLayout = chooseShemLayoutForStMatrixConversion(
-          ctx, getCTALayout(srcTy.getEncoding()), scratchConfig.repShape,
-          scratchConfig.order, /*swizzleByteWidth=*/0,
-          /*elemBitWidth=*/srcTy.getElementTypeBitWidth());
+          ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
     }
 
     // Layout for the store from registers to shared memory.
@@ -590,7 +587,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       auto &outRegs = outRegsForIter[i];
 
       auto inVec = stMatrixSharedLayout.has_value()
-                       ? 8 * 16 / srcTy.getElementTypeBitWidth()
+                       ? 8 * 16 / op.getSrc().getType().getElementTypeBitWidth()
                        : scratchConfig.inVec;
       for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
