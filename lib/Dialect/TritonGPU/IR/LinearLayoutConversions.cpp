@@ -777,6 +777,7 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order,
     ArrayRef<unsigned> warpsPerCTA) {
   assert(order.size() == 2 && order[0] == 1);
+  // 4x8x8 = 16x16
   //           col0-7       col8-15
   // row0-7    Thread0-7   Thread8-15
   // row8-15   Thread16-23 Thread24-31
@@ -789,7 +790,7 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   StringAttr kRow = S("row");
   std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
   std::vector<std::vector<int>> basesThread = {
-      {1, 0}, {2, 0}, {4, 0}, {0, 8}, {16, 0}};
+      {1, 0}, {2, 0}, {4, 0}, {0, 8}, {8, 0}};
   LinearLayout layout =
       LinearLayout({{kReg, basesReg}, {kThread, basesThread}}, {kCol, kRow});
   auto numWarpsCol = warpsPerCTA[1];
