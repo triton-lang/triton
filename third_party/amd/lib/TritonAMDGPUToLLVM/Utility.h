@@ -22,6 +22,9 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                int axis);
 
+Value llGetNum(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               int axis);
+
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,

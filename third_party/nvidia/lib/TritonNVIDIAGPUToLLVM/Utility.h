@@ -45,6 +45,9 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                int axis);
 
+Value llGetNum(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               int axis);
+
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, RewriterBase &rewriter);
 

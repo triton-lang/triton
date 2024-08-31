@@ -17,7 +17,6 @@ add_triton_library(TritonAMDGPUToLLVM
     DecomposeUnsupportedConversions.cpp
     OptimizeLDSUsage.cpp
     OptimizeLDSUtility.cpp
-    SPMDOpToLLVM.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen

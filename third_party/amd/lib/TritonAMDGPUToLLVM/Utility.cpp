@@ -155,6 +155,18 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
+Value llGetNum(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               int axis) {
+  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                                  mlir::gpu::Dimension::y,
+                                                  mlir::gpu::Dimension::z};
+  assert(axis >= 0);
+  assert(axis < 3);
+  assert(moduleOp);
+  Value blockId = rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[axis]);
+  return rewriter.create<arith::TruncIOp>(loc, i32_ty, blockId);
+}
+
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, bool nt) {
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));

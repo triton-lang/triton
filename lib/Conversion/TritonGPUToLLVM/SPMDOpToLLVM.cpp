@@ -28,6 +28,27 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct GetNumProgramsOpConversion
+    : public ConvertOpToLLVMPattern<triton::GetNumProgramsOp> {
+  explicit GetNumProgramsOpConversion(LLVMTypeConverter &typeConverter,
+                                      const TargetInfoBase &targetInfo,
+                                      PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::GetNumProgramsOp>(typeConverter,
+                                                         benefit),
+        targetInfo(targetInfo) {}
+  LogicalResult
+  matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value numPrograms = targetInfo.programNum(rewriter, op->getLoc(),
+                                              op->getParentOfType<ModuleOp>(),
+                                              op.getAxisAsInt());
+    rewriter.replaceOp(op, numPrograms);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
 } // namespace
 
 void mlir::triton::populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
@@ -35,4 +56,5 @@ void mlir::triton::populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                                const TargetInfoBase &targetInfo,
                                                PatternBenefit benefit) {
   patterns.add<GetProgramIdOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<GetNumProgramsOpConversion>(typeConverter, targetInfo, benefit);
 }

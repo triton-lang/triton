@@ -77,6 +77,23 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
   return getSRegValue(rewriter, loc, sreg);
 }
 
+Value llGetNum(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               int axis) {
+  assert(axis >= 0);
+  assert(axis < 3);
+  assert(moduleOp);
+
+  // It is not easy to get the compute capability here, so we use numCTAs to
+  // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
+  // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted to
+  // "%nclusterid".
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+
+  std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
+  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
+  return getSRegValue(rewriter, loc, sreg);
+}
+
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   PTXBuilder builder;
   auto &mov = builder.create("mov")->o("u32");

@@ -539,6 +539,12 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
+
+Value TargetInfo::programNum(RewriterBase &rewriter, Location loc,
+                             ModuleOp moduleOp, int axis) const {
+  return LLVM::NVIDIA::llGetNum(loc, rewriter, moduleOp, axis);
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
