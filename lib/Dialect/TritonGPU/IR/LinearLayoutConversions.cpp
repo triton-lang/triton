@@ -781,7 +781,7 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   //           col0-7       col8-15
   // row0-7    Thread0-7   Thread8-15
   // row8-15   Thread16-23 Thread24-31
-  StringAttr kReg = S("register");
+  StringAttr kReg = S("lane");
   StringAttr kThread = S("thread");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
@@ -796,6 +796,8 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   auto numWarpsRow = warpsPerCTA[0];
   layout *= LinearLayout::identity1D(numWarpsCol, kWarp, kCol);
   layout *= LinearLayout::identity1D(numWarpsRow, kWarp, kRow);
+  layout *= LinearLayout::identity1D(1, kBlock, kCol);
+  layout *= LinearLayout::identity1D(1, kBlock, kRow);
   auto totalOffsetSize = layout.getTotalOutDimSize();
   return layout.reshapeOuts(
       {{S("offset"), totalOffsetSize}, {S("iteration"), 1}});
