@@ -837,8 +837,16 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
       LinearLayout({{kReg, basesReg}, {kLane, basesThread}}, {kCol, kRow});
   auto numWarpsCol = warpsPerCTA[1];
   auto numWarpsRow = warpsPerCTA[0];
-  layout *= LinearLayout::identity1D(numWarpsCol, kWarp, kCol);
-  layout *= LinearLayout::identity1D(numWarpsRow, kWarp, kRow);
+  if (repShape[1] > 64) {
+    layout *= LinearLayout::identity1D(numWarpsCol, kWarp, kCol);
+  } else {
+    layout *= LinearLayout::zeros1D(numWarpsCol, kWarp, kCol);
+  }
+  if (repShape[0] > 16) {
+    layout *= LinearLayout::identity1D(numWarpsRow, kWarp, kRow);
+  } else {
+    layout *= LinearLayout::zeros1D(numWarpsRow, kWarp, kRow);
+  }
   layout *= LinearLayout::identity1D(1, kBlock, kCol);
   layout *= LinearLayout::identity1D(1, kBlock, kRow);
   auto totalOffsetSize = layout.getTotalOutDimSize();
