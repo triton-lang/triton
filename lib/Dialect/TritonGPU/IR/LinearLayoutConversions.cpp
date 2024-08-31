@@ -781,8 +781,8 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   assert(order.size() == 2 && order[0] == 1);
   // 4x8x8 = 16x16
   //           col0-7       col8-15
-  // row0-7    Thread0-7   Thread8-15
-  // row8-15   Thread16-23 Thread24-31
+  // row0-7    Thread0-7  Thread16-23
+  // row8-15   Thread8-15 Thread24-31
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
@@ -806,7 +806,7 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   if (repShape[1] >= 64) {
     basesReg.emplace_back(std::vector<int>{0, 32});
   }
-  // {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {8, 0}};
+  // {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}};
   std::vector<std::vector<int>> basesThread;
   if (repShape[0] >= 2) {
     basesThread.emplace_back(std::vector<int>{1, 0});
@@ -823,13 +823,13 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   } else {
     basesThread.emplace_back(std::vector<int>{0, 0});
   }
-  if (repShape[1] >= 16) {
-    basesThread.emplace_back(std::vector<int>{0, 8});
+  if (repShape[0] >= 16) {
+    basesThread.emplace_back(std::vector<int>{8, 0});
   } else {
     basesThread.emplace_back(std::vector<int>{0, 0});
   }
-  if (repShape[0] >= 16) {
-    basesThread.emplace_back(std::vector<int>{8, 0});
+  if (repShape[1] >= 16) {
+    basesThread.emplace_back(std::vector<int>{0, 8});
   } else {
     basesThread.emplace_back(std::vector<int>{0, 0});
   }
