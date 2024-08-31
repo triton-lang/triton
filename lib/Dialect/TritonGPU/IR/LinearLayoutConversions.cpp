@@ -787,6 +787,7 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   StringAttr kBlock = S("block");
   StringAttr kCol = S("col");
   StringAttr kRow = S("row");
+  // {{0, 1}, {0, 2}, {0, 4}}
   std::vector<std::vector<int>> basesReg;
   if (repShape[1] >= 2) {
     basesReg.emplace_back(std::vector<int>{0, 1});
@@ -797,8 +798,8 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   if (repShape[1] >= 8) {
     basesReg.emplace_back(std::vector<int>{0, 4});
   }
-  std::vector<std::vector<int>> basesThread = {
-      {1, 0}, {2, 0}, {4, 0}, {0, 8}, {8, 0}};
+  // {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {8, 0}};
+  std::vector<std::vector<int>> basesThread;
   if (repShape[0] >= 2) {
     basesThread.emplace_back(std::vector<int>{1, 0});
   }
