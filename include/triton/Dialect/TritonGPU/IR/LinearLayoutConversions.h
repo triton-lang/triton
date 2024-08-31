@@ -77,7 +77,7 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order);
 
 LinearLayout chooseShemLayoutForStMatrixConversion(
-    MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
+    MLIRContext *ctx, const LinearLayout &srcLayout,
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order,
     ArrayRef<unsigned> warpsPerCTA);
 } // namespace mlir::triton::gpu

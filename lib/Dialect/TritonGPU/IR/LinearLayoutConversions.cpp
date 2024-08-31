@@ -773,9 +773,11 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 }
 
 LinearLayout chooseShemLayoutForStMatrixConversion(
-    MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
+    MLIRContext *ctx, const LinearLayout &srcLayout,
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order,
     ArrayRef<unsigned> warpsPerCTA) {
+  auto tensorShape = std::vector<int>{srcLayout.getOutDimSize(S("dim0")),
+                                      srcLayout.getOutDimSize(S("dim1"))};
   assert(order.size() == 2 && order[0] == 1);
   // 4x8x8 = 16x16
   //           col0-7       col8-15
@@ -789,31 +791,77 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   StringAttr kRow = S("row");
   // {{0, 1}, {0, 2}, {0, 4}}
   std::vector<std::vector<int>> basesReg;
-  if (repShape[1] >= 2) {
-    basesReg.emplace_back(std::vector<int>{0, 1});
+  if (repShape[0] >= 2) {
+    if (srcLayout.getInDimSize(kReg) >= 2) {
+      basesReg.emplace_back(std::vector<int>{0, 1});
+    } else {
+      basesReg.emplace_back(std::vector<int>{0, 0});
+    }
   }
-  if (repShape[1] >= 4) {
-    basesReg.emplace_back(std::vector<int>{0, 2});
+  if (repShape[0] >= 4) {
+    if (srcLayout.getInDimSize(kReg) >= 4) {
+      basesReg.emplace_back(std::vector<int>{0, 2});
+    } else {
+      basesReg.emplace_back(std::vector<int>{0, 0});
+    }
   }
-  if (repShape[1] >= 8) {
-    basesReg.emplace_back(std::vector<int>{0, 4});
+  if (repShape[0] >= 8) {
+    if (srcLayout.getInDimSize(kReg) >= 8) {
+      basesReg.emplace_back(std::vector<int>{0, 4});
+    } else {
+      basesReg.emplace_back(std::vector<int>{0, 0});
+    }
+  }
+  if (repShape[0] >= 32) {
+    if (srcLayout.getInDimSize(kReg) >= 16) {
+      basesReg.emplace_back(std::vector<int>{0, 16});
+    } else {
+      basesReg.emplace_back(std::vector<int>{0, 0});
+    }
+  }
+  if (repShape[1] >= 64) {
+    if (srcLayout.getInDimSize(kReg) >= 32) {
+      basesReg.emplace_back(std::vector<int>{0, 32});
+    } else {
+      basesReg.emplace_back(std::vector<int>{0, 0});
+    }
   }
   // {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {8, 0}};
   std::vector<std::vector<int>> basesThread;
   if (repShape[0] >= 2) {
-    basesThread.emplace_back(std::vector<int>{1, 0});
+    if (srcLayout.getInDimSize(kLane) >= 2) {
+      basesThread.emplace_back(std::vector<int>{1, 0});
+    } else {
+      basesThread.emplace_back(std::vector<int>{0, 0});
+    }
   }
   if (repShape[0] >= 4) {
-    basesThread.emplace_back(std::vector<int>{2, 0});
+    if (srcLayout.getInDimSize(kLane) >= 4) {
+      basesThread.emplace_back(std::vector<int>{2, 0});
+    } else {
+      basesThread.emplace_back(std::vector<int>{0, 0});
+    }
   }
   if (repShape[0] >= 8) {
-    basesThread.emplace_back(std::vector<int>{4, 0});
+    if (srcLayout.getInDimSize(kLane) >= 8) {
+      basesThread.emplace_back(std::vector<int>{4, 0});
+    } else {
+      basesThread.emplace_back(std::vector<int>{0, 0});
+    }
   }
   if (repShape[1] >= 16) {
-    basesThread.emplace_back(std::vector<int>{0, 8});
+    if (srcLayout.getInDimSize(kLane) >= 16) {
+      basesThread.emplace_back(std::vector<int>{0, 8});
+    } else {
+      basesThread.emplace_back(std::vector<int>{0, 0});
+    }
   }
   if (repShape[0] >= 16) {
-    basesThread.emplace_back(std::vector<int>{8, 0});
+    if (srcLayout.getInDimSize(kLane) >= 16) {
+      basesThread.emplace_back(std::vector<int>{8, 0});
+    } else {
+      basesThread.emplace_back(std::vector<int>{0, 0});
+    }
   }
   LinearLayout layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesThread}}, {kCol, kRow});

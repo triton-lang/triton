@@ -483,7 +483,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         targetInfo.canUseStMatrix(op.getSrc().getType(), scratchConfig.repShape,
                                   scratchConfig.order, numIterations)) {
       stMatrixSharedLayout = chooseShemLayoutForStMatrixConversion(
-          ctx, tensorShape, scratchConfig.repShape, scratchConfig.order,
+          ctx, srcLayout, scratchConfig.repShape, scratchConfig.order,
           getWarpsPerCTA(op.getSrc().getType().getEncoding()));
     }
 
