@@ -774,51 +774,31 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 
 LinearLayout chooseShemLayoutForStMatrixConversion(
     MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
-    ArrayRef<unsigned> repShape, ArrayRef<unsigned> order) {
-  auto rank = repShape.size();
-  auto outDimNames = standardOutDimNames(ctx, rank);
-
-  // Construct bases for a the layout's 2-dimensional tile.
-  assert(repShape.size() == 2);
-  int colDim = repShape[0];
-  int rowDim = repShape[1];
-
-  // We only support 8x8 tiles repeated 4 times.
-  int tileRows = 8;
-  int tileCols = 8;
-  int numTilesRow = 2;
-  int numTilesCol = 2;
-  int numRepsRow = ceil(rowDim, (tileRows * numTilesRow));
-  int numRepsCol = ceil(colDim, (tileCols * numTilesCol));
-  int numItersRow = ceil(rowDim, tileRows);
-  int numItersCol = ceil(colDim, tileCols);
-
-  LinearLayout layout = LinearLayout::empty();
-  layout *= LinearLayout::identity1D(tileCols, S("offsetTileCol"),
-                                     outDimNames[order[0]]);
-  layout *= LinearLayout::identity1D(numTilesCol, S("tileCol"),
-                                     outDimNames[order[0]]);
-  layout *=
-      LinearLayout::identity1D(numRepsCol, S("repCol"), outDimNames[order[0]]);
-  layout *= LinearLayout::identity1D(numItersCol, S("iterCol"),
-                                     outDimNames[order[0]]);
-  layout *= LinearLayout::identity1D(tileRows, S("offsetTileRow"),
-                                     outDimNames[order[1]]);
-  layout *= LinearLayout::identity1D(numTilesRow, S("tileRow"),
-                                     outDimNames[order[1]]);
-  layout *=
-      LinearLayout::identity1D(numRepsRow, S("repRow"), outDimNames[order[1]]);
-  layout *= LinearLayout::identity1D(numItersRow, S("iterRow"),
-                                     outDimNames[order[1]]);
-  auto ret = layout.transposeIns({S("offsetTileCol"), S("offsetTileRow"),
-                                  S("tileCol"), S("tileRow"), S("repCol"),
-                                  S("repRow"), S("iterCol"), S("iterRow")});
-  auto totalOffsets =
-      tileCols * tileRows * numTilesCol * numTilesRow * numRepsCol * numRepsRow;
-  auto totalIters = numItersCol * numItersRow;
-  return ret.reshapeIns({{S("offset"), totalOffsets},
-                         {S("iteration"), totalIters},
-                         {S("block"), 1}});
+    ArrayRef<unsigned> repShape, ArrayRef<unsigned> order,
+    ArrayRef<unsigned> warpsPerCTA) {
+  assert(order.size() == 2 && order[0] == 1);
+  //           col0-7       col8-15
+  // row0-7    Thread0-7   Thread8-15
+  // row8-15   Thread16-23 Thread24-31
+  StringAttr kThread = S("thread");
+  StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
+  StringAttr kIteration = S("iteration");
+  StringAttr kCol = S("col");
+  StringAttr kRow = S("row");
+  std::vector<std::vector<int>> basesThread = {
+      {1, 0}, {2, 0}, {4, 0}, {0, 8}, {16, 0}};
+  LinearLayout layout = LinearLayout({{kThread, basesThread}}, {kCol, kRow});
+  auto numWarpsCol = warpsPerCTA[1];
+  auto numWarpsRow = warpsPerCTA[0];
+  layout *= LinearLayout::identity1D(numWarpsCol, kWarp, kCol);
+  layout *= LinearLayout::identity1D(numWarpsRow, kWarp, kRow);
+  auto iterationsCol = tensorShape[0] / repShape[0];
+  auto iterationsRow = tensorShape[1] / repShape[1];
+  layout *= LinearLayout::identity1D(iterationsCol, kIteration, kCol);
+  layout *= LinearLayout::identity1D(iterationsRow, kIteration, kRow);
+  auto totalOffsetSize = layout.getTotalOutDimSize();
+  return layout.reshapeOuts({{S("offset"), totalOffsetSize}});
 }
 
 } // namespace mlir::triton::gpu
