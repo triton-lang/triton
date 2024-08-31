@@ -586,9 +586,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       auto &inRegs = inRegsForIter[i];
       auto &outRegs = outRegsForIter[i];
 
-      auto inVec = stMatrixSharedLayout.has_value()
-                       ? 8 * 16 / op.getSrc().getType().getElementTypeBitWidth()
-                       : scratchConfig.inVec;
+      auto inVec = stMatrixSharedLayout.has_value() ? 8 : scratchConfig.inVec;
       for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
         auto vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
