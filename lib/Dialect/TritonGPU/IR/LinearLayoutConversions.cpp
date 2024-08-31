@@ -780,15 +780,18 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   //           col0-7       col8-15
   // row0-7    Thread0-7   Thread8-15
   // row8-15   Thread16-23 Thread24-31
+  StringAttr kReg = S("register");
   StringAttr kThread = S("thread");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
   StringAttr kIteration = S("iteration");
   StringAttr kCol = S("col");
   StringAttr kRow = S("row");
+  std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
   std::vector<std::vector<int>> basesThread = {
       {1, 0}, {2, 0}, {4, 0}, {0, 8}, {16, 0}};
-  LinearLayout layout = LinearLayout({{kThread, basesThread}}, {kCol, kRow});
+  LinearLayout layout =
+      LinearLayout({{kReg, basesReg}, {kThread, basesThread}}, {kCol, kRow});
   auto numWarpsCol = warpsPerCTA[1];
   auto numWarpsRow = warpsPerCTA[0];
   layout *= LinearLayout::identity1D(numWarpsCol, kWarp, kCol);

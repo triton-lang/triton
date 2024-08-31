@@ -498,6 +498,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     const int shmemAllocatedNumElems =
         getNumScratchElements(scratchConfig.paddedRepShape);
     assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+    if (stMatrixSharedLayout.has_value()) {
+      shmemStoreLayout = *stMatrixSharedLayout;
+    }
 
     // Layout for the load from shmem to registers.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
@@ -593,16 +596,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
         Value vecAddr;
-        if (stMatrixSharedLayout.has_value()) {
-          vecAddr = applyLinearLayout(loc, rewriter, *stMatrixSharedLayout,
-                                      {{kLane, laneId},
-                                       {kWarp, warpId},
-                                       {kBlock, i32_val(0)},
-                                       {kIteration, i32_val(i)}})[0]
-                        .second;
-        } else {
-          vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
-        }
+        vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
         SmallVector<Value> inValsVec;
         for (int k = 0; k < scratchConfig.inVec; k++)
           inValsVec.push_back(inVals[inRegSlice + k]);
