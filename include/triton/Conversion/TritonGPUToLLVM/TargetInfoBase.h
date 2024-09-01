@@ -55,12 +55,6 @@ public:
                           unsigned numLaneToReduce,
                           unsigned interleave) const = 0;
 
-  virtual bool canUseStMatrix(RankedTensorType srcTy,
-                              ArrayRef<unsigned> paddedRepShape,
-                              ArrayRef<unsigned> outOrd,
-                              unsigned accumNumReplicates,
-                              int swizzleByteWidth = 0) const = 0;
-
   // TODO (Keren): Remove this function once layout conversion using stmatrix is
   // handled by Linear Layout.
   virtual bool processReplicaUsingStMatrix(

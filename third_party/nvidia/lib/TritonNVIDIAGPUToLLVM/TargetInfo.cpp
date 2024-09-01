@@ -586,24 +586,14 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return false;
 }
 
-bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
-                                ArrayRef<unsigned> paddedRepShape,
-                                ArrayRef<unsigned> outOrd,
-                                unsigned accumNumReplicates,
-                                int swizzleByteWidth) const {
-  return isStMatrixCompatible(srcTy, swizzleByteWidth) &&
-         accumNumReplicates == 1 && outOrd[0] == 1 &&
-         paddedRepShape[1] % 8 == 0;
-}
-
 bool TargetInfo::processReplicaUsingStMatrix(
     RewriterBase &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
     int swizzleByteWidth) const {
-  if (canUseStMatrix(srcTy, paddedRepShape, outOrd, accumNumReplicates,
-                     swizzleByteWidth)) {
+  if (isStMatrixCompatible(srcTy, swizzleByteWidth) &&
+      accumNumReplicates == 1 && outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
     storeDistributedToSharedWithStMatrix(srcTy, elemTy, vals, smemBase,
                                          paddedRepShape, origRepShape, loc,
                                          rewriter, swizzleByteWidth);

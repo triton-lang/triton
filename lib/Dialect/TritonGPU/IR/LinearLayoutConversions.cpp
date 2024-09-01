@@ -821,7 +821,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   std::vector<std::vector<int>> basesLane = {
       {1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}};
   LinearLayout layout =
-      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kRow, kCol});
+      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
 
   // Expand the `register` dimension so the size of columns matches `n`.
   int m = mma.getInstrShape()[0];
@@ -831,16 +831,13 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
       LinearLayout::identity1D(n / layout.getOutDimSize(kCol), kReg, kCol);
 
   // Expand the `warp` dimension according to warpsPerCTA.
-  //
-  // It's weird that this is order [0,1] when MMAv2's warpsPerCTA is [1,0], but
-  // this really does seem to be correct.
   layout *=
-      identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol})
-          .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
+      identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol});
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
-  return ret.reshapeOuts(
-      {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+  return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
+      .reshapeOuts(
+          {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
 } // namespace mlir::triton::gpu

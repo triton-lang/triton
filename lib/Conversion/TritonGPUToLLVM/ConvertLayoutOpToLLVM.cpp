@@ -589,8 +589,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                        : scratchConfig.inVec;
       for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
-        Value vecAddr;
-        vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
+        Value vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
         SmallVector<Value> inValsVec;
         for (int k = 0; k < inVec; k++)
           inValsVec.push_back(inVals[inRegSlice + k]);

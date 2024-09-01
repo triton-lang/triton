@@ -134,14 +134,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return false;
 }
 
-bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
-                                ArrayRef<unsigned> paddedRepShape,
-                                ArrayRef<unsigned> outOrd,
-                                unsigned accumNumReplicates,
-                                int swizzleByteWidth) const {
-  return false;
-}
-
 bool TargetInfo::processReplicaUsingStMatrix(
     RewriterBase &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
