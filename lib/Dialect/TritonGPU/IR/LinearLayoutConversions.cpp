@@ -832,7 +832,8 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
 
   // Expand the `warp` dimension according to warpsPerCTA.
   layout *=
-      identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol});
+      identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol})
+          .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
