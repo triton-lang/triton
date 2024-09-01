@@ -201,7 +201,7 @@ class HIPBackend(BaseBackend):
         ##    depends on the value of kernel arg `allow_flush_denorm`.
         ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
         ##    For now it is used as a controller for developers only.
-        __HIP_FTZ = True
+        __HIP_FTZ = (os.environ.get("TRITON_FTZ", "1") != "0")
         amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
