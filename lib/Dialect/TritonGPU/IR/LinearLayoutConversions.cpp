@@ -795,6 +795,9 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 
 namespace {
 
+// TODO (Keren): Currently, we have more restrictions than necessary when using
+// stmatrix.  These restrictions are retained from legacy code, and we could
+// relax some of them in the future.
 bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
                     ArrayRef<unsigned> paddedRepShape,
                     ArrayRef<unsigned> order) {
@@ -841,9 +844,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
 
   // Expand the `register` dimension so the size of columns matches `n`.
   auto mma = dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
-  int m = mma.getInstrShape()[0];
   int n = mma.getInstrShape()[1];
-  int k = mma.getInstrShape()[2];
   layout *=
       LinearLayout::identity1D(n / layout.getOutDimSize(kCol), kReg, kCol);
 

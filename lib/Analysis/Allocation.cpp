@@ -142,6 +142,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
     }
   }
 
+  // No padding is required if the tensor is rank-1, or if all dimensions except
+  // the first accessed dimension are 1.
   if (rank <= 1 || product(repShape) == repShape[outOrd[0]])
     return scratchConfig;
 

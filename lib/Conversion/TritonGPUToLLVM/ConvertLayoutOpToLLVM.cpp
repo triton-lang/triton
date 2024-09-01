@@ -375,8 +375,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // The following tasks must be completed before we can remove the layoutIsOK
     // check:
     // 1. Support for AMD's MFMA and WMMA
-    // 2. Implementation of NVIDIA's stmatrix
-    // 3. Handling NVIDIA's MMA layout when CTA per CGA > 1
+    // 2. Handling NVIDIA's MMA layout when CTA per CGA > 1
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
         if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
