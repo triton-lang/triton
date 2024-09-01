@@ -476,29 +476,23 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
         ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
 
-    std::optional<LinearLayout> stMatrixSharedLayout;
-    if (auto numIterations = sharedLayout.hasOutDim(kIteration)
-                                 ? sharedLayout.getOutDimSize(kIteration)
-                                 : 1;
-        targetInfo.canUseStMatrix(op.getSrc().getType(), scratchConfig.repShape,
-                                  scratchConfig.order, numIterations)) {
-      stMatrixSharedLayout = chooseShemLayoutForStMatrixConversion(
-          ctx, srcLayout, scratchConfig.repShape, scratchConfig.order,
-          getWarpsPerCTA(op.getSrc().getType().getEncoding()));
-    }
+    std::optional<LinearLayout> stMatrixSharedLayout =
+        chooseStMatrixLayoutForRegToRegConversion(
+            ctx, op.getSrc().getType(), scratchConfig.repShape,
+            scratchConfig.paddedRepShape, scratchConfig.order);
 
     // Layout for the store from registers to shared memory.
     //
     // Note: If two threads in the same warp write to the same shmem offset, the
     // hardware resolves that without a stall or a bank conflict.  Therefore we
     // don't need to avoid duplicate writes.
-    LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
+    LinearLayout shmemStoreLayout =
+        stMatrixSharedLayout.has_value()
+            ? *stMatrixSharedLayout
+            : srcLayout.invertAndCompose(sharedLayout);
     const int shmemAllocatedNumElems =
         getNumScratchElements(scratchConfig.paddedRepShape);
     assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
-    if (stMatrixSharedLayout.has_value()) {
-      shmemStoreLayout = *stMatrixSharedLayout;
-    }
 
     // Layout for the load from shmem to registers.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
@@ -590,7 +584,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       auto &inRegs = inRegsForIter[i];
       auto &outRegs = outRegsForIter[i];
 
-      auto inVec = stMatrixSharedLayout.has_value() ? 8 : scratchConfig.inVec;
+      auto inVec = stMatrixSharedLayout.has_value()
+                       ? stMatrixSharedLayout->getNumConsecutiveInOut()
+                       : scratchConfig.inVec;
       for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
         Value vecAddr;

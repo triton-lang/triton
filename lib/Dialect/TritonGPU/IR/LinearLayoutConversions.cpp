@@ -772,13 +772,40 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
       {{kOffset, totalOffsets}, {kIteration, totalIters}, {kBlock, 1}});
 }
 
-LinearLayout chooseShemLayoutForStMatrixConversion(
-    MLIRContext *ctx, const LinearLayout &srcLayout,
-    ArrayRef<unsigned> repShape, ArrayRef<unsigned> order,
-    ArrayRef<unsigned> warpsPerCTA) {
-  auto tensorShape = std::vector<int>{srcLayout.getOutDimSize(S("dim0")),
-                                      srcLayout.getOutDimSize(S("dim1"))};
-  assert(order.size() == 2 && order[0] == 1);
+namespace {
+
+bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+                    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
+                    unsigned accumNumReplicates) {
+  auto mmaLayout =
+      mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  if (!mmaLayout || !mmaLayout.isHopper())
+    return false;
+  if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
+    return false;
+  if (order[0] != 1)
+    return false;
+
+  auto tensorShape = tensorTy.getShape();
+  if (tensorShape.size() != 2)
+    return false;
+  auto numReps = ceil<unsigned>(tensorShape[1], repShape[1]) *
+                 ceil<unsigned>(tensorShape[0], repShape[0]);
+  if (numReps > 1)
+    return false;
+  if (paddedRepShape[1] % 8 != 0)
+    return false;
+  return true;
+}
+
+} // anonymous namespace
+
+std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
+    MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order) {
+  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order, 1))
+    return std::nullopt;
+
   // 4x8x8 = 16x16
   //           col0-7       col8-15
   // row0-7    Thread0-7  Thread16-23
@@ -786,73 +813,34 @@ LinearLayout chooseShemLayoutForStMatrixConversion(
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
-  StringAttr kBlock = S("block");
   StringAttr kCol = S("col");
   StringAttr kRow = S("row");
-  // {{0, 1}, {0, 2}, {0, 4}}
-  std::vector<std::vector<int>> basesReg;
-  if (repShape[1] >= 2) {
-    basesReg.emplace_back(std::vector<int>{0, 1});
-  }
-  if (repShape[1] >= 4) {
-    basesReg.emplace_back(std::vector<int>{0, 2});
-  }
-  if (repShape[1] >= 8) {
-    basesReg.emplace_back(std::vector<int>{0, 4});
-  }
-  if (repShape[1] >= 32) {
-    basesReg.emplace_back(std::vector<int>{0, 16});
-  }
-  if (repShape[1] >= 64) {
-    basesReg.emplace_back(std::vector<int>{0, 32});
-  }
-  basesReg.emplace_back(std::vector<int>{0, 0});
-  // {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}};
-  std::vector<std::vector<int>> basesThread;
-  if (repShape[0] >= 2) {
-    basesThread.emplace_back(std::vector<int>{1, 0});
-  } else {
-    basesThread.emplace_back(std::vector<int>{0, 0});
-  }
-  if (repShape[0] >= 4) {
-    basesThread.emplace_back(std::vector<int>{2, 0});
-  } else {
-    basesThread.emplace_back(std::vector<int>{0, 0});
-  }
-  if (repShape[0] >= 8) {
-    basesThread.emplace_back(std::vector<int>{4, 0});
-  } else {
-    basesThread.emplace_back(std::vector<int>{0, 0});
-  }
-  if (repShape[0] >= 16) {
-    basesThread.emplace_back(std::vector<int>{8, 0});
-  } else {
-    basesThread.emplace_back(std::vector<int>{0, 0});
-  }
-  if (repShape[1] >= 16) {
-    basesThread.emplace_back(std::vector<int>{0, 8});
-  } else {
-    basesThread.emplace_back(std::vector<int>{0, 0});
-  }
+
+  auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
+  std::vector<std::vector<int>> basesLane = {
+      {1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}};
   LinearLayout layout =
-      LinearLayout({{kReg, basesReg}, {kLane, basesThread}}, {kCol, kRow});
-  auto numWarpsCol = warpsPerCTA[1];
-  auto numWarpsRow = warpsPerCTA[0];
-  if (repShape[1] > 64) {
-    layout *= LinearLayout::identity1D(numWarpsCol, kWarp, kCol);
-  } else {
-    layout *= LinearLayout::zeros1D(numWarpsCol, kWarp, kCol);
-  }
-  if (repShape[0] > 16) {
-    layout *= LinearLayout::identity1D(numWarpsRow, kWarp, kRow);
-  } else {
-    layout *= LinearLayout::zeros1D(numWarpsRow, kWarp, kRow);
-  }
-  layout *= LinearLayout::identity1D(1, kBlock, kCol);
-  layout *= LinearLayout::identity1D(1, kBlock, kRow);
-  auto totalOffsetSize = layout.getTotalOutDimSize();
-  return layout.reshapeOuts(
-      {{S("offset"), totalOffsetSize}, {S("iteration"), 1}});
+      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
+
+  // Expand the `register` dimension so the size of columns matches `n`.
+  int m = mma.getInstrShape()[0];
+  int n = mma.getInstrShape()[1];
+  int k = mma.getInstrShape()[2];
+  layout *=
+      LinearLayout::identity1D(n / layout.getOutDimSize(kCol), kReg, kCol);
+
+  // Expand the `warp` dimension according to warpsPerCTA.
+  //
+  // It's weird that this is order [0,1] when MMAv2's warpsPerCTA is [1,0], but
+  // this really does seem to be correct.
+  layout *=
+      identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol})
+          .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
+  auto ret =
+      combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
+  return ret.reshapeOuts(
+      {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
 } // namespace mlir::triton::gpu
