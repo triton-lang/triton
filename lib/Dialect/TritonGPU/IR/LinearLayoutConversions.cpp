@@ -817,9 +817,9 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   StringAttr kRow = S("dim0");
 
   auto mma = dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
-  std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
+  std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane = {
-      {1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}};
+      {0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}};
   LinearLayout layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
 
