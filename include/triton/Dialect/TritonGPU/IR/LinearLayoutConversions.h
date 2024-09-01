@@ -76,6 +76,41 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
     MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order);
 
+// This function constructs a linear layout that maps the
+// <register, lane, warp, block> hierarchy to <shared memory offset, iteration>.
+// The primary goal is to efficiently store 2D tiles of a tensor into shared
+// memory, with each thread responsible for storing `N` elements.
+//
+// Unlike standard vectorized stores, such as `st.shared.v4 %vec_reg,
+// [%offset]`, where `%vec_reg` contains 4 registers that store consecutive data
+// elements, the `stmatrix` instruction allows `N` registers to point to
+// different locations within a tensor block.
+//
+// For instance, the `stmatrix %mat_reg, [%offset]` instruction on NVIDIA GPUs
+// enables `%mat_reg` to store `N` elements that do not need to be consecutive.
+// However, it is crucial that the starting address (`%offset`) is aligned to
+// `N` * `elemBitWidth`. The `%offsets` for each thread are calculated based on
+// the provided tensor encoding. Currently, this implementation supports only
+// the NVIDIA MMAv3 encoding format.
+//
+// The `stmatrix.x4` instruction is a specific example that repeats the data
+// layout four times for each warp. In this format, each `stmatrix.x4`
+// instruction stores 8 16-bit elements per thread, resulting in a total of 8 *
+// 32 = 256 elements per warp, or 16 * 16 elements per warp when distributed
+// across four 8x8 tiles. Each thread’s `%offset` points to an address aligned
+// with 8 * 16 bits. However, the values in `%mat_reg` are a vector of
+// non-consecutive elements, composed of 4 pairs of consecutive elements. These
+// matrix addresses are distributed as follows:
+//
+//              col[0-7]     col[8-15]
+//   row[0-7]  lane[0-7]    lane[16-23]
+//   row[8-15] lane[8-15]   lane[24-31]
+//
+// The matrix elements for thread 0 are distributed in the following pattern:
+//
+//           col0       col8
+//   row0  reg[0-1]   reg[4-5]
+//   row8  reg[2-3]   reg[6-7]
 std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order);

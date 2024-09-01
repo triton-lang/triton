@@ -806,17 +806,12 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order))
     return std::nullopt;
 
-  // 4x8x8 = 16x16
-  //           col0-7       col8-15
-  // row0-7    Thread0-7  Thread16-23
-  // row8-15   Thread8-15 Thread24-31
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
   StringAttr kCol = S("dim1");
   StringAttr kRow = S("dim0");
 
-  auto mma = dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane = {
       {0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}};
@@ -824,6 +819,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
       LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
 
   // Expand the `register` dimension so the size of columns matches `n`.
+  auto mma = dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   int m = mma.getInstrShape()[0];
   int n = mma.getInstrShape()[1];
   int k = mma.getInstrShape()[2];
