@@ -129,10 +129,10 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                                : srcContigPerThread;
   scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
 
-  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
-  // codegen.
   if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
     if (mma.getVersionMajor() == 1) {
+      // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
+      // codegen.
       scratchConfig.inVec = srcContigPerThread;
     } else if (mlir::isa<BlockedEncodingAttr>(dstLayout)) {
       // when storing from mma layout and loading in blocked layout vectorizing
@@ -142,7 +142,7 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
     }
   }
 
-  if (rank <= 1)
+  if (rank <= 1 || product(repShape) == repShape[outOrd[0]])
     return scratchConfig;
 
   auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);

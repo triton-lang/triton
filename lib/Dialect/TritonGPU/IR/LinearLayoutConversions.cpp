@@ -775,8 +775,8 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 namespace {
 
 bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-                    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
-                    unsigned accumNumReplicates) {
+                    ArrayRef<unsigned> paddedRepShape,
+                    ArrayRef<unsigned> order) {
   auto mmaLayout =
       mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   if (!mmaLayout || !mmaLayout.isHopper())
@@ -803,7 +803,7 @@ bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
 std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order) {
-  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order, 1))
+  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order))
     return std::nullopt;
 
   // 4x8x8 = 16x16
@@ -813,15 +813,15 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
-  StringAttr kCol = S("col");
-  StringAttr kRow = S("row");
+  StringAttr kCol = S("dim1");
+  StringAttr kRow = S("dim0");
 
-  auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  auto mma = dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
   std::vector<std::vector<int>> basesLane = {
       {1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}};
   LinearLayout layout =
-      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
+      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kRow, kCol});
 
   // Expand the `register` dimension so the size of columns matches `n`.
   int m = mma.getInstrShape()[0];
