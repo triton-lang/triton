@@ -99,7 +99,8 @@ jobs:
             python/test/unit/runtime/test_cache.py \
             python/test/unit/cpu/test_libdevice.py \
             python/test/unit/cpu/test_libmvec.py \
-            python/test/unit/cpu/test_opt.py
+            python/test/unit/cpu/test_opt.py \
+            python/test/unit/test_debug_dump.py
 
       - name: Run lit tests
         run: |
