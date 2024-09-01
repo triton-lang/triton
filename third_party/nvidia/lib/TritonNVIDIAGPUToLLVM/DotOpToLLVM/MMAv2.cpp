@@ -81,9 +81,9 @@ enum class TensorCoreType : uint8_t {
   FP32_TF32_TF32_FP32,
   FP16_FP16_FP16_FP16,
   FP32_FP8E5M2_FP8E5M2_FP32,
-  FP32_FP8E5M2_FP8E4M3FNUZ_FP32,
-  FP32_FP8E4M3FNUZ_FP8E5M2_FP32,
-  FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32,
+  FP32_FP8E5M2_FP8E4M3FN_FP32,
+  FP32_FP8E4M3FN_FP8E5M2_FP32,
+  FP32_FP8E4M3FN_FP8E4M3FN_FP32,
   // integer tensor core instr
   INT32_INT1_INT1_INT32, // Not implemented
   INT32_INT4_INT4_INT32, // Not implemented
@@ -112,9 +112,9 @@ Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   case TensorCoreType::FP16_FP16_FP16_FP16:
     return fp16x2Pack2Ty;
   case TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32:
-  case TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32:
-  case TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32:
-  case TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32:
+  case TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32:
+  case TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32:
+  case TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32:
     return fp32x4Ty;
   case TensorCoreType::INT32_INT8_INT8_INT32:
     return i32x4Ty;
@@ -140,14 +140,14 @@ TensorCoreType getMmaType(triton::DotOp op) {
         bTy.getElementType().isFloat8E5M2())
       return TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32;
     if (aTy.getElementType().isFloat8E5M2() &&
-        bTy.getElementType().isFloat8E4M3FNUZ())
-      return TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32;
-    if (aTy.getElementType().isFloat8E4M3FNUZ() &&
+        bTy.getElementType().isFloat8E4M3FN())
+      return TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32;
+    if (aTy.getElementType().isFloat8E4M3FN() &&
         bTy.getElementType().isFloat8E5M2())
-      return TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32;
-    if (aTy.getElementType().isFloat8E4M3FNUZ() &&
-        bTy.getElementType().isFloat8E4M3FNUZ())
-      return TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32;
+      return TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32;
+    if (aTy.getElementType().isFloat8E4M3FN() &&
+        bTy.getElementType().isFloat8E4M3FN())
+      return TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32;
     if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
         op.getInputPrecision() == InputPrecision::TF32)
       return TensorCoreType::FP32_TF32_TF32_FP32;
@@ -193,11 +193,11 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
 
     {TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32"},
-    {TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32,
+    {TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e4m3.f32"},
-    {TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32,
+    {TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32"},
-    {TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32,
+    {TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"},
 };
 
