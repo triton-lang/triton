@@ -596,7 +596,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         Value vecAddr;
         vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
         SmallVector<Value> inValsVec;
-        for (int k = 0; k < scratchConfig.inVec; k++)
+        for (int k = 0; k < inVec; k++)
           inValsVec.push_back(inVals[inRegSlice + k]);
         Value valsVec = packLLVector(loc, inValsVec, rewriter);
         targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
