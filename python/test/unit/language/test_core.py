@@ -5058,6 +5058,11 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         pytest.skip("test_mma2mma is not supported in HIP")
 
     src_layout, _ = mma_pair
+    if is_cuda():
+        cc = torch.cuda.get_device_capability()
+        if cc[0] < 9 and src_layout.version[0] >= 3:
+            pytest.skip("Skip testing MMAv3 on devices with CC < 9")
+
     num_warps = np.cumprod(src_layout.warps_per_cta)[-1]
     # TODO(Keren): Remove the intermediate layout once we have resolved the redundantDataMask issue for WGMMA
     warps_per_cta = src_layout.warps_per_cta

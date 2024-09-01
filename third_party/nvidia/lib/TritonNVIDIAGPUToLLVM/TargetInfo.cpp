@@ -299,7 +299,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   if (!isa<VectorType>(val.getType())) {
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, {val}, rewriter),
-                 pred, false);
+                 pred, /*stMatrix=*/false);
     return;
   }
 
@@ -323,7 +323,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       v = zext(int_ty(8), bitcast(v, int_ty(elemBitwidth)));
     }
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
-                 pred, false);
+                 pred, /*stMatrix=*/false);
     return;
   }
 
@@ -333,7 +333,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       v = bitcast(v, int_ty(elemBitwidth));
     }
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
-                 pred, false);
+                 pred, /*stMatrix=*/false);
     return;
   }
 
@@ -354,7 +354,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       newVals.push_back(bitcast(v, i32_ty));
     }
     storeDShared(rewriter, loc, ptr, ctaId,
-                 packLLVector(loc, newVals, rewriter), pred, false);
+                 packLLVector(loc, newVals, rewriter), pred,
+                 /*stMatrix=*/false);
     return;
   }
 
@@ -371,7 +372,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       storeDShared(
           rewriter, loc, newPtr, ctaId,
           packLLVector(loc, ArrayRef(vals).slice(i * maxVec, maxVec), rewriter),
-          pred, false);
+          pred, /*stMatrix=*/false);
     }
     return;
   }
