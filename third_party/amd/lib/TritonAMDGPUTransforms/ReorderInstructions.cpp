@@ -97,12 +97,8 @@ public:
       kv.first->moveBefore(kv.second);
     opToMove.clear();
 
-    // Note: below ConvertlayoutOp reordering has
-    // been copied from the common reorder pass.
-    // Consider to merge when we get more common code.
-
-    // sink conversion after the last dealloc
-    // before the first use ancestor in its block
+    // Sink conversion after the last dealloc but before the first use ancestor
+    // in its block. This helps to avoid unnecessary shared memory allocation.
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto curr = mlir::Block::iterator(op);
       for (; &*curr != getFirstUse(op); curr++)
