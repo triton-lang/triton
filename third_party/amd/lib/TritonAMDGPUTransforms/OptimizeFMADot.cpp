@@ -317,17 +317,10 @@ class OptimizeFMADotPattern : public mlir::RewritePattern {
     //   cShaped    (1xMxN cOrigLayout) -broadcast->
     //   cBatched   (SxMxN cOrigLayout) -layout_convert->
     //   cBatchedOp (SxMxN cLayout)
-    TypedAttr zeroValueAttr;
     auto cElTy = dotOp.getC().getType().getElementType();
     auto cBatchedOpType =
-        RankedTensorType::get({splitK, m, n}, cElTy, cBatchedOpLayout);
-    if (cElTy.isInteger()) {
-      // zeroValueAttr = rewriter.getIntegerAttr(cElTy, 0);
-      zeroValueAttr = mlir::DenseIntElementsAttr::get(cBatchedOpType, 0);
-    } else {
-      // zeroValueAttr = rewriter.getFloatAttr(cElTy, 0);
-      zeroValueAttr = mlir::DenseFPElementsAttr::get(cBatchedOpType, 0.0f);
-    }
+        RankedTensorType::get({kSplit, m, n}, cElTy, cBatchedOpLayout);
+    TypedAttr zeroValueAttr = rewriter.getZeroAttr(cBatchedOpType);
     Value cBatchedOp = rewriter.create<arith::ConstantOp>(
         dotLoc, cBatchedOpType, zeroValueAttr);
 
