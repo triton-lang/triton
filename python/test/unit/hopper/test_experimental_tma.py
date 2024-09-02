@@ -24,7 +24,7 @@ def unwrap_tensor(t: torch.Tensor | triton.runtime.jit.TensorWrapper):
     return t
 
 
-tma_dtypes = list(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
+tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 
 
 @pytest.mark.parametrize("byval_tma", [True, False])
