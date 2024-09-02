@@ -26,6 +26,8 @@ from setuptools.command.develop import develop
 from setuptools.command.egg_info import egg_info
 from wheel.bdist_wheel import bdist_wheel
 
+import pybind11
+
 
 @dataclass
 class Backend:
@@ -141,16 +143,6 @@ class Package(NamedTuple):
     include_flag: str
     lib_flag: str
     syspath_var_name: str
-
-
-# pybind11
-def get_pybind11_package_info():
-    pybind11_version_path = os.path.join(get_base_dir(), "cmake", "pybind11-version.txt")
-    with open(pybind11_version_path, "r") as pybind11_version_file:
-        version = pybind11_version_file.read().strip()
-    name = f"pybind11-{version}"
-    url = f"https://github.com/pybind/pybind11/archive/refs/tags/v{version}.tar.gz"
-    return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 
 # json
@@ -368,8 +360,17 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
+    def get_pybind11_cmake_args(self):
+        pybind11_sys_path = get_env_with_keys(["PYBIND11_SYSPATH"])
+        if pybind11_sys_path:
+            pybind11_include_dir = os.path.join(pybind11_sys_path, "include")
+        else:
+            pybind11_include_dir = pybind11.get_include()
+        return [f"-DPYBIND11_INCLUDE_DIR={pybind11_include_dir}"]
+
     def get_proton_cmake_args(self):
-        cmake_args = get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
+        cmake_args = get_thirdparty_packages([get_json_package_info()])
+        cmake_args += self.get_pybind11_cmake_args()
         cupti_include_dir = get_env_with_keys(["TRITON_CUPTI_PATH"])
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
@@ -384,7 +385,8 @@ class CMakeBuild(build_ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
         # lit is used by the test suite
-        thirdparty_cmake_args = get_thirdparty_packages([get_pybind11_package_info(), get_llvm_package_info()])
+        thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
+        thirdparty_cmake_args += self.get_pybind11_cmake_args()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         if not os.path.exists(self.build_temp):

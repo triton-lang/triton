@@ -63,6 +63,19 @@ class TritonAMDGPUReorderInstructionsPass
 public:
   TritonAMDGPUReorderInstructionsPass() = default;
 
+  Operation *getFirstUse(Operation *op) {
+    std::vector<Operation *> users;
+    for (auto user : op->getUsers()) {
+      if (Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user))
+        users.push_back(ancestor);
+    }
+    auto minOpIt = std::min_element(users.begin(), users.end(),
+                                    [](mlir::Operation *a, mlir::Operation *b) {
+                                      return a->isBeforeInBlock(b);
+                                    });
+    return minOpIt != users.end() ? *minOpIt : nullptr;
+  }
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
@@ -83,6 +96,15 @@ public:
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
     opToMove.clear();
+
+    // Sink conversion after the last dealloc but before the first use ancestor
+    // in its block. This helps to avoid unnecessary shared memory allocation.
+    m.walk([&](triton::gpu::ConvertLayoutOp op) {
+      auto curr = mlir::Block::iterator(op);
+      for (; &*curr != getFirstUse(op); curr++)
+        if (isa<triton::gpu::LocalDeallocOp>(&*curr))
+          op->moveAfter(&*curr);
+    });
 
     // Move transpositions just after their definition.
     m.walk([&](triton::TransOp op) {
