@@ -1318,20 +1318,18 @@ def _str_to_dot_input_precision(input_precision, builder):
 
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optional[str], max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
-
-    def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
-        if lhs_dtype.is_int() or rhs_dtype.is_int():
-            assert lhs_dtype.int_bit_width == 1 and rhs_dtype.int_bit_width == 1, f"Both operands must be either int8 or uint8. Operand type ({lhs_dtype}, {rhs_dtype})"
-        elif lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
-            # All combinations of supported fp8 x fp8 are permitted
-            return
-        else:
-            assert lhs_dtype in (tl.float16, tl.bfloat16, tl.float32), f"Unsupported lhs dtype {lhs_dtype}"
-            assert rhs_dtype in (tl.float16, tl.bfloat16, tl.float32), f"Unsupported rhs dtype {lhs_dtype}"
-            assert lhs_dtype == rhs_dtype, f"Both operands must be same dtype. Got {lhs_dtype} and {rhs_dtype}"
-
     assert lhs.type.is_block() and rhs.type.is_block()
-    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
+
+    if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+        # All combinations of supported fp8 x fp8 are permitted
+        pass
+    else:
+        assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
+                             tl.float32), f"Unsupported lhs dtype {lhs.dtype}"
+        assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
+                             tl.float32), f"Unsupported rhs dtype {rhs.dtype}"
+        assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)
