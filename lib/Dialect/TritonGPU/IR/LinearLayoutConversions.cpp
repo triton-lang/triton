@@ -813,9 +813,9 @@ bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
   auto tensorShape = tensorTy.getShape();
   if (tensorShape.size() != 2)
     return false;
-  auto numReps = ceil<unsigned>(tensorShape[1], repShape[1]) *
-                 ceil<unsigned>(tensorShape[0], repShape[0]);
-  if (numReps > 1)
+  auto numIterations = ceil<unsigned>(tensorShape[1], repShape[1]) *
+                       ceil<unsigned>(tensorShape[0], repShape[0]);
+  if (numIterations > 1)
     return false;
   if (paddedRepShape[1] % 8 != 0)
     return false;
