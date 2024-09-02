@@ -81,7 +81,7 @@ class HIPBackend(BaseBackend):
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
             if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
                 supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
-            args["supported_fp8_dtypes"] = sorted(tuple(supported_fp8_dtypes))
+            args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
