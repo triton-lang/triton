@@ -520,14 +520,16 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-cudart-dev/{version}/download/linux-{arch}/cuda-cudart-dev-{version}-0.tar.bz2",
 )
 download_and_copy(
-    name="cupti",
-    src_path="include",
-    dst_path="include",
-    variable="TRITON_CUPTI_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2",
-)
+    name="cupti", src_path=lambda platform, version: (
+        (lambda version_major, version_minor1, version_minor2, : f"targets/{platform}/include"
+         if int(version_major) >= 12 and int(version_minor1) >= 5 else "include")
+        (*version.split('.'))), dst_path="include", variable="TRITON_CUPTI_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["cupti"], url_func=lambda arch, version:
+    ((lambda version_major, version_minor1, version_minor2:
+      f"https://anaconda.org/nvidia/cuda-cupti-dev/{version}/download/linux-{arch}/cuda-cupti-dev-{version}-0.tar.bz2"
+      if int(version_major) >= 12 and int(version_minor1) >= 5 else
+      f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2")
+     (*version.split('.'))))
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
