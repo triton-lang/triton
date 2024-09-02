@@ -312,6 +312,31 @@ tt.func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK-NEXT: size = 512
 }
 
+// CHECK-LABEL: atomic_scalar
+tt.func @atomic_scalar(%arg3: !tt.ptr<i32>) -> i32 {
+  // CHECK: offset = 0, size = 8192
+  // CHECK: scratch offset = 8192, size = 4
+  // CHECK: size = 8196
+  %c0_i32 = arith.constant 0 : i32
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+  %4 = tt.atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return %4 : i32
+}
+
+// CHECK-LABEL: atomic_scalar_no_use
+tt.func @atomic_scalar_no_use(%arg3: !tt.ptr<i32>) {
+  // CHECK: offset = 0, size = 8192
+  // CHECK: size = 8192
+  %c0_i32 = arith.constant 0 : i32
+  %1 = arith.constant dense<1.0> : tensor<128x32xf16, #AL>
+  %2 = triton_gpu.local_alloc %1 : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory>
+  %4 = tt.atomic_cas acq_rel, gpu, %arg3, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  %3 = triton_gpu.local_load %2 : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return
+}
+
 // B0 -> (B1) -> B0
 // Memory used by B1 can be reused by B0.
 // CHECK-LABEL: if

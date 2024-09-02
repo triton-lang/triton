@@ -189,7 +189,6 @@ jobs:
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
           echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
           echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
@@ -204,9 +203,8 @@ jobs:
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
-            ~/.triton/pybind11
             ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
 
       # Cache ~/.triton/cache because the vast majority of unit test time is
       # spent compiling.  Triton won't (well, should not) use these cached files
@@ -386,11 +384,8 @@ jobs:
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
-          ## test_subprocess.py is flaky on the AMD CI.
-          ## TODO (lixun) find a solution and re-enable it.
           pytest --capture=tee-sys -rfs -n 16 language runtime \
-                 --ignore=language/test_line_info.py \
-                 --ignore=language/test_subprocess.py
+                 --ignore=language/test_line_info.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
@@ -443,7 +438,7 @@ jobs:
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit pybind11
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_CCACHE: "true"

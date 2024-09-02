@@ -2,7 +2,11 @@ import argparse
 from collections import namedtuple
 import json
 import pandas as pd
-import hatchet as ht
+try:
+    import hatchet as ht
+    from hatchet.query import NegationQuery
+except ImportError:
+    raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
@@ -153,6 +157,29 @@ def format_frames(gf, format):
     return gf
 
 
+def filter_frames(gf, include=None, exclude=None, threshold=None, metric=None):
+    if include:
+        query = f"""
+MATCH ("*")->(".", p)->("*")
+WHERE p."name" =~ "{include}"
+"""
+        gf = gf.filter(query, squash=True)
+    if exclude:
+        inclusion_query = f"""
+MATCH (".", p)->("*")
+WHERE p."name" =~ "{exclude}"
+"""
+        query = NegationQuery(inclusion_query)
+        gf = gf.filter(query, squash=True)
+    # filter out metadata computation
+    query = [{"name": f"^(?!{COMPUTE_METADATA_SCOPE_NAME}).*"}]
+    gf = gf.filter(query, squash=True)
+    if threshold:
+        query = ["*", {metric: f">= {threshold}"}]
+        gf = gf.filter(query, squash=True)
+    return gf
+
+
 def parse(metrics, filename, include, exclude, threshold, depth, format):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
@@ -160,19 +187,18 @@ def parse(metrics, filename, include, exclude, threshold, depth, format):
         assert len(raw_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
         metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
-        if include or exclude:
-            # make regex do negative match
-            name_filter = f"^(?!{exclude}).*" if exclude else include
-            query = ["*", {"name": name_filter}]
-            gf = gf.filter(query, squash=True)
-        # filter out metadata computation
-        query = [{"name": f"^(?!{COMPUTE_METADATA_SCOPE_NAME}).*"}]
-        gf = gf.filter(query, squash=True)
-        if threshold:
-            # TODO: generalize to support multiple metrics
-            query = ["*", {metrics[0]: f">= {threshold}"}]
-            gf = gf.filter(query, squash=True)
+        # TODO: generalize to support multiple metrics, not just the first one
+        gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
+        emitWarnings(gf, metrics)
+
+
+def emitWarnings(gf, metrics):
+    if "bytes (inc)" in metrics:
+        byte_values = gf.dataframe["bytes (inc)"].values
+        min_byte_value = np.nanmin(byte_values)
+        if min_byte_value < 0:
+            print("Warning: Negative byte values detected, this is usually the result of a datatype overflow\n")
 
 
 def show_metrics(file_name):
@@ -220,14 +246,25 @@ There are two modes:
         "--include",
         type=str,
         default=None,
-        help="Include frames(kernels) that match the given regular expression",
+        help=
+        """Find frames that match the given regular expression and return all nodes in the paths that pass through the matching frames.
+For example, the following command will display all paths that contain frames that contains "test":
+```
+proton-viewer -i ".*test.*" path/to/file.json
+```
+""",
     )
     argparser.add_argument(
         "-e",
         "--exclude",
         type=str,
         default=None,
-        help="Exclude frames(kernels) that match the given regular expression",
+        help="""Exclude frames that match the given regular expression and their children.
+For example, the following command will exclude all paths that contain frames that contains "test":
+```
+proton-viewer -e ".*test.*" path/to/file.json
+```
+""",
     )
     argparser.add_argument(
         "-t",

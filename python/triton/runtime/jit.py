@@ -306,6 +306,8 @@ def mangle_type(arg, is_const=False):
             return "i64"
     elif isinstance(arg, float):
         return "fp32"
+    elif hasattr(arg, "tma_desc_cpu_ptr"):
+        return "nvTmaDesc"
     else:
         # dtypes are hashable so we can memoize this mapping:
         dsk = (arg.dtype, is_const)
@@ -440,6 +442,9 @@ for v in list(type_canonicalisation_dict.values()):
 class JITFunction(KernelInterface[T]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
+    # Hook to signal that a kernel is done compiling and inspect compiled function.
+    # cache_hook will always be called before compilation and compiled_hook after.
+    compiled_hook = None
     divisibility = 16
 
     @staticmethod
@@ -523,8 +528,11 @@ class JITFunction(KernelInterface[T]):
         constants,
         options,
         configs,
+        is_warmup,
+        before,
     ):
-        if JITFunction.cache_hook is None:
+        hook = JITFunction.cache_hook if before else JITFunction.compiled_hook
+        if hook is None:
             return False
 
         name = self.fn.__name__
@@ -553,14 +561,15 @@ class JITFunction(KernelInterface[T]):
             'extern_libs': options.extern_libs,
             'configs': configs,
             'specialization_data': specialization_data,
+            'is_warmup': is_warmup,
         }
 
-        return JITFunction.cache_hook(
+        return hook(
             key=key,
             repr=repr,
             fn=JitFunctionInfo(module, name, self),
             compile={"key": key, **kwargs},
-            is_manual_warmup=False,
+            is_manual_warmup=is_warmup,
             already_compiled=False,
         )
 
@@ -641,7 +650,7 @@ class JITFunction(KernelInterface[T]):
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
-            if self._call_hook(key, signature, device, constants, options, configs):
+            if self._call_hook(key, signature, device, constants, options, configs, warmup, before=True):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constants, configs[0])
@@ -651,6 +660,7 @@ class JITFunction(KernelInterface[T]):
                 options=options.__dict__,
             )
             self.cache[device][key] = kernel
+            self._call_hook(key, signature, device, constants, options, configs, warmup, before=False)
 
         # Check that used global values have not changed.
         not_present = object()

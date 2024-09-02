@@ -1464,26 +1464,33 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
     # triton kernel
 
     @triton.jit
-    def kernel(Z, X, AXIS: tl.constexpr, SHAPE0: tl.constexpr, SHAPE1: tl.constexpr):
+    def kernel(Z, X, OLD, AXIS: tl.constexpr, SHAPE0: tl.constexpr, SHAPE1: tl.constexpr):
         off0 = tl.arange(0, SHAPE0)
         off1 = tl.arange(0, SHAPE1)
         x = tl.load(X + off0[:, None] * SHAPE1 + off1[None, :])
         z = tl.sum(x, axis=AXIS)
         if AXIS == 1:
-            tl.atomic_add(Z + off0, z)
+            old = tl.atomic_add(Z + off0, z)
+            tl.store(OLD + off0, old)
         else:
-            tl.atomic_add(Z + off1, z)
+            old = tl.atomic_add(Z + off1, z)
+            tl.store(OLD + off1, old)
 
     rs = RandomState(17)
     x = numpy_random((shape0, shape1), dtype_str=dtype_x_str, rs=rs)
-    # reference result
-    z_ref = np.sum(x, axis=axis, keepdims=False)
+    z_shape = (shape0, ) if axis == 1 else (shape1, )
+    z = numpy_random(z_shape, dtype_str=dtype_x_str, rs=rs)
+    old = np.zeros(z_shape, dtype=getattr(np, dtype_x_str))
+    # reference results
+    z_ref = z + np.sum(x, axis=axis, keepdims=False)
+    old_ref = np.copy(z)
     # triton result
     x_tri = to_triton(x, device=device)
-    z_shape = (shape0, ) if axis == 1 else (shape1, )
-    z_tri = to_triton(np.zeros(z_shape, dtype=getattr(np, dtype_x_str)), device=device)
-    kernel[(1, )](z_tri, x_tri, axis, shape0, shape1, num_ctas=num_ctas)
+    z_tri = to_triton(z, device=device)
+    old_tri = to_triton(old, device=device)
+    kernel[(1, )](z_tri, x_tri, old_tri, axis, shape0, shape1, num_ctas=num_ctas)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
+    np.testing.assert_equal(old_ref, to_numpy(old_tri))
 
 
 @pytest.mark.interpreter
@@ -1527,6 +1534,10 @@ def test_atomic_cas(sem, num_ctas, device):
             pass
 
         tl.store(ptrs, tl.load(ptrs) + 1.0)
+
+        # insert barrier to set a fence between tl.store and
+        # tl.atomic_xchg in a block.
+        tl.debug_barrier()
 
         # release lock
         tl.atomic_xchg(Lock, 0)
@@ -3071,7 +3082,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
      for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
-     for input_precision in ["ieee" if is_hip() else "tf32"]
+     for input_precision in ["tf32" if is_cuda() else "ieee"]
      for col_a in [True, False]
      for col_b in [True, False]
      for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
@@ -3327,7 +3338,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
             if out_dtype_str == "float16":
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
-        input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
+        input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
         if triton.runtime.driver.active.utils.get_device_properties(
@@ -3595,12 +3606,19 @@ def test_const(device, choose_const, constexpr, mode):
         with pytest.raises(triton.CompilationError) as exc_info:
             patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
         if constexpr:
-            assert "Cannot store to a constant pointer" in str(exc_info.value.__cause__), "Wrong error message!"
-        elif not constexpr and mode == "call":
-            assert "Inconsistent return types" in str(exc_info.value.__cause__), "Wrong error message!"
+            error = "Cannot store to a constant pointer"
         else:
-            # TODO: Add error messages for the other cases
-            pass
+            if mode == "call":
+                error = "Inconsistent return types"
+            elif mode == "if":
+                error = "Mismatched type for final_out"
+            elif mode == "ternary":
+                error = "Ternary expression with dynamic condition has inconsistent type"
+            else:
+                assert mode == "direct" and choose_const
+                error = "Cannot store to a constant pointer"
+        error_msg = exc_info.value.error_message or str(exc_info.value.__cause__)
+        assert error in error_msg, "Wrong error message!"
     else:
         patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
         assert torch.all(input == output)
@@ -5005,23 +5023,30 @@ mma_pairs = [
         MmaLayout((2, 1), [2, 8], [1, 1], [1, 1], [0, 1], [16, 8]),
         MmaLayout((2, 1), [8, 2], [1, 1], [1, 1], [0, 1], [16, 8]),
     ],
-    # Mma -> mma support is TODO on Hopper (and Volta)
-    # [
-    #     MmaLayout((3, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8, 16]),
-    #     MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 8, 16]),
-    # ],
-    # [
-    #     MmaLayout((3, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 8, 16]),
-    #     MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 8, 16]),
-    # ],
-    # [
-    #     MmaLayout((3, 1), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8, 16]),
-    #     MmaLayout((3, 1), [4, 1], [1, 1], [1, 1], [0, 1], [16, 8, 16]),
-    # ],
-    # [
-    #     MmaLayout((3, 1), [2, 8], [1, 1], [1, 1], [0, 1], [16, 8, 16]),
-    #     MmaLayout((3, 1), [8, 2], [1, 1], [1, 1], [0, 1], [16, 8, 16]),
-    # ],
+    [
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 32, 32]),
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 64, 32]),
+    ],
+    [
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 64, 32]),
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 32, 32]),
+    ],
+    [
+        MmaLayout((3, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 32, 32]),
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 64, 32]),
+    ],
+    [
+        MmaLayout((3, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 64, 32]),
+        MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 32, 32]),
+    ],
+    [
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 64, 16]),
+    ],
+    [
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 64, 16]),
+        MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
+    ],
 ]
 
 
@@ -5034,11 +5059,16 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
 
     src_layout, _ = mma_pair
     num_warps = np.cumprod(src_layout.warps_per_cta)[-1]
+    # TODO(Keren): Remove the intermediate layout once we have resolved the redundantDataMask issue for WGMMA
+    warps_per_cta = src_layout.warps_per_cta
+    interm = BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [warps_per_cta[0], warps_per_cta[1]], [0, 1], [1, 1],
+                           [1, 1], [0, 1])
 
     def do_test(src_layout, dst_layout):
         layouts = f"""
         #src = {src_layout}
         #dst = {dst_layout}
+        #interm = {interm}
         """
 
         conversion = f"""
@@ -5061,10 +5091,12 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #src>
         %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #src>, tensor<{M}x{N}xi32, #src>
         %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<f16>, #src>
-        %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #dst>
+        %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #interm>
         """ + conversion + f"""
-        %14 = tt.addptr %3, %12 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>, tensor<{M}x{N}xi32, #dst>
-        tt.store %14, %13 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>
+        %15 = triton_gpu.convert_layout %12 : tensor<{M}x{N}xi32, #dst> -> tensor<{M}x{N}xi32, #interm>
+        %16 = triton_gpu.convert_layout %13 : tensor<{M}x{N}xf16, #dst> -> tensor<{M}x{N}xf16, #interm>
+        %17 = tt.addptr %3, %15 : tensor<{M}x{N}x!tt.ptr<f16>, #interm>, tensor<{M}x{N}xi32, #interm>
+        tt.store %17, %16 : tensor<{M}x{N}x!tt.ptr<f16>, #interm>
         tt.return
         }}
         }}
@@ -5209,10 +5241,6 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     elif is_hip():
         if in_type_str != 'float8e5':
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
-
-        ## TODO: Figure out why block size (128, 256, 128) fails on MI300
-        if ("gfx94" in get_arch()) and BLOCK_M == 128:
-            pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
@@ -5444,7 +5472,7 @@ def maxnreg_noinline2(X):
 
 def test_maxnreg(device):
     assert not is_interpreter(), "this test won't work with the interpreter"
-    if is_hip():
+    if not is_cuda():
         pytest.skip('maxnreg only works on CUDA')
 
     # triton kernel
@@ -5526,7 +5554,7 @@ def test_num_programs(device):
 
 
 @pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
-def test_math_extern(dtype_str):
+def test_math_extern(dtype_str, device):
     if is_interpreter():
         pytest.skip('math_extern does not work in the interpreter mode')
 
@@ -5550,8 +5578,8 @@ def test_math_extern(dtype_str):
 
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     y_ref = np.tanh(x)
-    x_tri = to_triton(x, device='cuda')
-    y_tri = to_triton(numpy_random(shape, dtype_str=dtype_str, rs=rs), device='cuda')
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(numpy_random(shape, dtype_str=dtype_str, rs=rs), device=device)
     kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)

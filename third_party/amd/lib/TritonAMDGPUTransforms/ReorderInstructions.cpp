@@ -32,8 +32,8 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
   if (auto ld = dyn_cast<triton::LoadOp>(move))
     src = ld.getPtr();
 
-  auto ipnt = block->begin();
-  for (auto bi = ipnt; bi != block->end(); ++bi) {
+  auto ipnt = block->end();
+  for (auto bi = block->begin(); bi != block->end(); ++bi) {
     auto *op = &*bi;
     if (op == move) // Don't move later than current location
       break;
@@ -46,7 +46,7 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
             ipnt = bi;
         }
       }
-      // Atomics used for global syncronization.
+      // Atomics used for global synchronization.
       if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
         ipnt = bi;
       // Break at loops.
@@ -63,9 +63,21 @@ class TritonAMDGPUReorderInstructionsPass
 public:
   TritonAMDGPUReorderInstructionsPass() = default;
 
+  Operation *getFirstUse(Operation *op) {
+    std::vector<Operation *> users;
+    for (auto user : op->getUsers()) {
+      if (Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user))
+        users.push_back(ancestor);
+    }
+    auto minOpIt = std::min_element(users.begin(), users.end(),
+                                    [](mlir::Operation *a, mlir::Operation *b) {
+                                      return a->isBeforeInBlock(b);
+                                    });
+    return minOpIt != users.end() ? *minOpIt : nullptr;
+  }
+
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    mlir::DominanceInfo dom(m);
 
     // Sink shared memory loads and layout conversions into loops to decrease
     // register pressure when possible.
@@ -85,14 +97,13 @@ public:
       kv.first->moveBefore(kv.second);
     opToMove.clear();
 
-    // Move LocalLoadOp and LocalAllocOp immediately after their operands.
-    // This enables issuing them as early as possible.
-    m.walk([&](Operation *op) {
-      if (!isa<ttg::LocalLoadOp, ttg::LocalAllocOp>(op) ||
-          op->getNumOperands() < 1)
-        return;
-      if (Operation *argOp = op->getOperand(0).getDefiningOp())
-        op->moveAfter(argOp);
+    // Sink conversion after the last dealloc but before the first use ancestor
+    // in its block. This helps to avoid unnecessary shared memory allocation.
+    m.walk([&](triton::gpu::ConvertLayoutOp op) {
+      auto curr = mlir::Block::iterator(op);
+      for (; &*curr != getFirstUse(op); curr++)
+        if (isa<triton::gpu::LocalDeallocOp>(&*curr))
+          op->moveAfter(&*curr);
     });
 
     // Move transpositions just after their definition.
@@ -131,7 +142,7 @@ public:
       mlir::getBackwardSlice(op, &backwardSet, options);
       backwardSet.insert(op);
 
-      // Don't move a local_store if it's source is a load from
+      // Don't move a local_store if its source is a load from
       // the same iteration.
       if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
         continue;
@@ -140,12 +151,19 @@ public:
       // Remove ops that already precede the insertion point. This is done
       // before moves happen to avoid `Operation::isBeforeInBlock` N^2
       // complexity.
+
       SmallVector<Operation *> dfg = backwardSet.takeVector();
-      llvm::erase_if(
-          dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
-      // Move ops to insertion point.
-      for (auto *op : llvm::reverse(dfg))
-        op->moveAfter(block, ipoint);
+      if (ipoint != block->end()) {
+        // Move ops to insertion point.
+        llvm::erase_if(
+            dfg, [&](Operation *op) { return !ipoint->isBeforeInBlock(op); });
+        for (auto *dfgop : llvm::reverse(dfg))
+          dfgop->moveAfter(block, ipoint);
+      } else {
+        // Move ops to block begin.
+        for (auto *dfgop : llvm::reverse(dfg))
+          dfgop->moveBefore(block, block->begin());
+      }
     }
   }
 };

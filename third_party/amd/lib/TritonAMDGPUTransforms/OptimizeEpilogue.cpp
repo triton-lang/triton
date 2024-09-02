@@ -112,7 +112,7 @@ public:
       chainedOps.push_back(chainedOp);
     }
 
-    auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(val.getDefiningOp());
+    auto cvtOp = val.getDefiningOp<triton::gpu::ConvertLayoutOp>();
     if (!cvtOp)
       return mlir::failure();
 

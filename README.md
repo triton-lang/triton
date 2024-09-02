@@ -117,9 +117,10 @@ arbitrary LLVM version.
   (probably because, in our build, users don't invoke cmake directly, but
   instead use setup.py).  Teach vscode how to compile Triton as follows.
 
-    - Do a local build.
+    - Do a local build. Run command `pip install -e python`
     - Get the full path to the `compile_commands.json` file produced by the build:
-      `find python/build -name 'compile_commands.json | xargs readlink -f'`
+      `find python/build -name 'compile_commands.json' | xargs readlink -f`.
+      You might get a full path similar to `/Users/{username}/triton/python/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
     - In vscode, install the
       [C/C++
       extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
@@ -193,10 +194,11 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   separated values to be specified (eg
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
-- `USE_TTGIR_LOC=1` reparses the ttgir such that the location information will
-  be the line number of the ttgir instead of line number of the python file.
-  This can provide a direct mapping from ttgir to llir/ptx. When used with
-  performance tools, it can provide a breakdown on ttgir instructions.
+- `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
+  will be the line number of the IR file with that particular extension,
+  instead of line number of the python file. This can provide a direct mapping
+  from the IR to llir/ptx. When used with performance tools, it can provide a
+  breakdown on IR instructions.
 - `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
   spent for each kernel after autotuning is complete.
 - `DISABLE_LLVM_OPT` will disable llvm optimizations for make_llir and make_ptx

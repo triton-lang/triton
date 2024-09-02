@@ -378,7 +378,7 @@ class dtype:
                 self.primitive_bitwidth = 32
                 self.exponent_bias = 127
             elif name == 'fp64':
-                self.fp_mantissa_width = 53
+                self.fp_mantissa_width = 52
                 self.primitive_bitwidth = 64
                 self.exponent_bias = 1023
             else:
@@ -568,7 +568,7 @@ class pointer_type(dtype):
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
 
     def __str__(self):
         return self.name
@@ -593,6 +593,13 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+
+
+class nv_tma_desc_type(pointer_type):
+
+    def __init__(self):
+        super().__init__(uint8, const=True, address_space=0)
+        self.name = 'nv_tma_desc_type'
 
 
 class block_type(dtype):
