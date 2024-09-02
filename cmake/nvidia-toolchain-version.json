@@ -1,8 +1,8 @@
 {
-  "ptxas": "12.6.20",
-  "cuobjdump": "12.6.20",
-  "nvdisasm": "12.6.20",
-  "cudacrt": "12.6.20",
-  "cudart": "12.6.37",
-  "cupti": "12.6.37"
+  "ptxas": "12.4.99",
+  "cuobjdump": "12.4.99",
+  "nvdisasm": "12.4.99",
+  "cudacrt": "12.4.99",
+  "cudart": "12.4.99",
+  "cupti": "12.4.99"
 }
