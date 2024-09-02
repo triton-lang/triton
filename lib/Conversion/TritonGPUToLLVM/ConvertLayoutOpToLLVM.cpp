@@ -475,6 +475,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
         ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
 
+    // Input dims: [reg, lane, warp]
+    // Output dims: [offset, iteration]
     std::optional<LinearLayout> stMatrixSharedLayout =
         chooseStMatrixLayoutForRegToRegConversion(
             ctx, op.getSrc().getType(), scratchConfig.repShape,
@@ -583,6 +585,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       auto &inRegs = inRegsForIter[i];
       auto &outRegs = outRegsForIter[i];
 
+      // When using `stmatrix`, we can store `inVec` elements even if they are
+      // not contiguous
       auto inVec = stMatrixSharedLayout.has_value()
                        ? stMatrixSharedLayout->getNumConsecutiveInOut()
                        : scratchConfig.inVec;
