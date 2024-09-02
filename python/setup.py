@@ -10,6 +10,7 @@ import sysconfig
 import tarfile
 import zipfile
 import urllib.request
+import json
 from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
@@ -467,13 +468,14 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.txt")
+nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
 with open(nvidia_version_path, "r") as nvidia_version_file:
-    NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
+    # parse this json file to get the version of the nvidia toolchain
+    NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
 
 download_and_copy(
     name="ptxas", src_path="bin/ptxas", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION, url_func=lambda arch, version:
+    version=NVIDIA_TOOLCHAIN_VERSION["ptxas"], url_func=lambda arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-nvcc-tools/{version}/download/linux-{arch}/cuda-nvcc-tools-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
@@ -484,7 +486,7 @@ download_and_copy(
     src_path="bin/cuobjdump",
     dst_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
+    version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
@@ -493,7 +495,7 @@ download_and_copy(
     src_path="bin/nvdisasm",
     dst_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
+    version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
@@ -512,7 +514,7 @@ download_and_copy(
     src_path="include",
     dst_path="include",
     variable="TRITON_CUDART_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
+    version=NVIDIA_TOOLCHAIN_VERSION["cudart"],
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-cudart-dev/{version}/download/linux-{arch}/cuda-cudart-dev-{version}-0.tar.bz2",
 )
@@ -521,7 +523,7 @@ download_and_copy(
     src_path="include",
     dst_path="include",
     variable="TRITON_CUPTI_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
+    version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2",
 )
