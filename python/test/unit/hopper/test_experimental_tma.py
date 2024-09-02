@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
-from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton
+from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma
 
 
 def create_tma_desc_gmem_ptr(ptr, dims, block_dims, element_size):
@@ -27,11 +27,9 @@ def unwrap_tensor(t: torch.Tensor | triton.runtime.jit.TensorWrapper):
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 
 
+@requires_tma
 @pytest.mark.parametrize("byval_tma", [True, False])
 def test_experimetal_descriptor_load(byval_tma):
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
-        pytest.skip("Test requires Hopper target.")
-        return
     device = "cuda"
     SIZE = 128
 
@@ -82,13 +80,11 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
 
 
+@requires_tma
 @pytest.mark.parametrize("num_stages", [1, 4])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
 @pytest.mark.parametrize("byval_tma", [True, False])
 def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tma):
-    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 9:
-        pytest.skip("Test requires Hopper target.")
-        return
     device = "cuda"
     M, N, K = 8192, 8192, 1024
     torch.manual_seed(42)
@@ -154,6 +150,7 @@ def device_tensormap_kernel2d(in_ptr, out_ptr, in_desc, out_desc, ready_flag, M,
     tl._experimental_descriptor_store(out_desc, x, [moffset, noffset])
 
 
+@requires_tma
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 def test_device_tensormap2d(dtype_str):
     M_BLOCK, N_BLOCK = 32, 64
@@ -217,6 +214,7 @@ def device_tensormap_kernel1d(in_ptr, out_ptr, in_desc, out_desc, ready_flag, nu
     tl._experimental_descriptor_store(out_desc, x, [offset])
 
 
+@requires_tma
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 def test_device_tensormap1d(dtype_str):
     BLOCK = 256

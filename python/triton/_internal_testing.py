@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
+import pytest
 
 from numpy.random import RandomState
 from typing import Optional, Union
@@ -86,3 +87,14 @@ def to_numpy(x):
         return x.cpu().numpy()
     else:
         raise ValueError(f"Not a triton-compatible tensor: {x}")
+
+
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def supports_tma():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+
+
+requires_tma = pytest.mark.skipif(not supports_tma(), reason="Requires TMA support (NVIDIA Hopper or higher)")
