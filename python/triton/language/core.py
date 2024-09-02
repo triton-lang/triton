@@ -496,34 +496,10 @@ class dtype:
     def scalar(self):
         return self
 
-    def check_fp8_types(self):
-        import triton
-        import torch
-
-        def is_interpreter():
-            return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-        def is_cuda():
-            return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-        def is_hip():
-            return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "hip"
-
-        def is_on_mi300():
-            return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942')
-
-        cc = torch.cuda.get_device_capability(0)
-        if self.is_fp8e4nv() and is_cuda() and cc < (9, 0):
-            raise ValueError(f'{self.name} not supported for capability <9.0. '
-                             'Got {}'.format(*cc))
-        if self.name in ('fp8e4nv', 'fp8e4b15') and is_hip():
-            raise ValueError(f"{self.name} not supported on ROCm")
-
-        if self.name in ('fp8e4b8', 'fp8e5b16') and (is_cuda() or not is_on_mi300()):
-            raise ValueError(f"{self.name} only supported on AMDGPU MI300")
-
     def to_ir(self, builder: ir.builder) -> ir.type:
-        self.check_fp8_types()
+        if self.name.startswith("fp8") and self.name not in builder.options.supported_fp8_dtypes:
+            raise ValueError(f'type {self} not supported in this architecture. '
+                             f'The supported fp8 dtypes are {builder.options.supported_fp8_dtypes}')
 
         if self.name == 'void':
             return builder.get_void_ty()

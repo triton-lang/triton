@@ -758,9 +758,6 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
             raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                              "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
 
-    if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
-        assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
-
     if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
         assert builder.codegen_fns.get(
             "convert_custom_types") is not None, "target doesn't provide conversion for this type."
@@ -1323,36 +1320,15 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
-        if not options.allow_fp8e4nv:
-            assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(
-            ), "Dot op does not support fp8e4nv on CUDA arch < 90"
-            if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
-                return
-            assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
+        if lhs_dtype.is_int() or rhs_dtype.is_int():
+            assert lhs_dtype.int_bit_width == 1 and rhs_dtype.int_bit_width == 1, f"Both operands must be either int8 or uint8. Operand type ({lhs_dtype}, {rhs_dtype})"
+        elif lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            return
         else:
-            if lhs_dtype.is_int() or rhs_dtype.is_int():
-                assert lhs_dtype == rhs_dtype, f"Both operands must be same type. First operand ({lhs_dtype}) and second operand ({rhs_dtype})"
-                assert lhs_dtype.is_int8() or lhs_dtype.is_uint8(
-                ), f"Both operands must be either int8 or uint8. Operand type ({lhs_dtype})"
-            elif lhs_dtype.is_fp8() or rhs_dtype.is_fp8():
-                if options.allow_fp8e4b15:
-                    allowed_types = ['fp8e4nv', 'fp8e5', 'fp8e4b15']
-                else:
-                    allowed_types = ['fp8e4nv', 'fp8e5']
-
-                def _validate_dtype(dtype, allowed_types, operand_name):
-                    if not any(getattr(dtype, f'is_{dtype_name}')() for dtype_name in allowed_types):
-                        supported_types = ', '.join(allowed_types)
-                        raise AssertionError(f"Only supports {supported_types}. {operand_name} ({dtype})")
-
-                _validate_dtype(lhs_dtype, allowed_types, "First operand")
-                _validate_dtype(rhs_dtype, allowed_types, "Second operand")
-            else:
-                assert lhs_dtype.is_fp16() or lhs_dtype.is_bf16() or lhs_dtype.is_fp32() or lhs_dtype.is_int1(
-                ), f"Unsupported dtype {lhs_dtype}"
-                assert rhs_dtype.is_fp16() or rhs_dtype.is_bf16() or rhs_dtype.is_fp32() or rhs_dtype.is_int1(
-                ), f"Unsupported dtype {rhs_dtype}"
-                assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
+            assert lhs_dtype in (tl.float16, tl.bfloat16, tl.float32), f"Unsupported lhs dtype {lhs_dtype}"
+            assert rhs_dtype in (tl.float16, tl.bfloat16, tl.float32), f"Unsupported rhs dtype {lhs_dtype}"
+            assert lhs_dtype == rhs_dtype, f"Both operands must be same dtype. Got {lhs_dtype} and {rhs_dtype}"
 
     assert lhs.type.is_block() and rhs.type.is_block()
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
