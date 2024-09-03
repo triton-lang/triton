@@ -291,15 +291,15 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Value val, Value pred,
-                              bool stMatrix) const {
+                              std::optional<Value> ctaId, Value val,
+                              Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
 
   if (!isa<VectorType>(val.getType())) {
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, {val}, rewriter),
-                 pred, /*stMatrix=*/false);
+                 pred);
     return;
   }
 
@@ -309,12 +309,6 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
   assert(llvm::isPowerOf2_32(vec));
 
-  if (stMatrix) {
-    stMatrixm8n8x4(i32_val(0), unpackLLVector(loc, val, rewriter), 0, ptr,
-                   elemTy, loc, rewriter);
-    return;
-  }
-
   if (elemBitwidth < 8) {
     assert(vec == 1 &&
            "don't know how to load/store vectors of sub-byte elems");
@@ -323,7 +317,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       v = zext(int_ty(8), bitcast(v, int_ty(elemBitwidth)));
     }
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
-                 pred, /*stMatrix=*/false);
+                 pred);
     return;
   }
 
@@ -333,7 +327,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       v = bitcast(v, int_ty(elemBitwidth));
     }
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
-                 pred, /*stMatrix=*/false);
+                 pred);
     return;
   }
 
@@ -354,8 +348,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       newVals.push_back(bitcast(v, i32_ty));
     }
     storeDShared(rewriter, loc, ptr, ctaId,
-                 packLLVector(loc, newVals, rewriter), pred,
-                 /*stMatrix=*/false);
+                 packLLVector(loc, newVals, rewriter), pred);
     return;
   }
 
@@ -372,7 +365,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
       storeDShared(
           rewriter, loc, newPtr, ctaId,
           packLLVector(loc, ArrayRef(vals).slice(i * maxVec, maxVec), rewriter),
-          pred, /*stMatrix=*/false);
+          pred);
     }
     return;
   }
@@ -585,6 +578,14 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     }
   }
   return false;
+}
+
+void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr, Value val) const {
+  auto vecTy = cast<VectorType>(val.getType());
+  Type elemTy = vecTy.getElementType();
+  stMatrixm8n8x4(i32_val(0), unpackLLVector(loc, val, rewriter), 0, ptr, elemTy,
+                 loc, rewriter);
 }
 
 bool TargetInfo::processReplicaUsingStMatrix(

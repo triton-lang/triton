@@ -92,7 +92,7 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 // However, it is crucial that the address (`%offset`) of each row in a tensor
 // tile should be aligned to `N` * `elemBitWidth`.  The `%offset` of each thread
 // is calculated based on the provided tensor encoding.
-
+//
 // Currently, we support only the NVIDIA MMAv3 encoding and the `stmatrix.x4`
 // instruction.  Each `stmatrix.x4` instruction stores eight 16-bit elements per
 // thread, resulting in a total of 8 * 32 = 256 elements per warp, or 16 * 16
@@ -111,6 +111,10 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 //           col0       col8
 //   row0  reg[0-1]   reg[4-5]
 //   row8  reg[2-3]   reg[6-7]
+//
+// TODO(Keren): We should replace tensorTy with a LinearLayout and the element
+// bit width of the tensor in the future to support more flexible tensor
+// encodings
 std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order);

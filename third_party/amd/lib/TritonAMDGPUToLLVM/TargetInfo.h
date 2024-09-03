@@ -22,11 +22,13 @@ public:
                Value cmp) const override;
 
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Value val, Value pred,
-                    bool stMatrix) const override;
+                    std::optional<Value> ctaId, Value val,
+                    Value pred) const override;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
+  void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
+                         Value val) const override;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
