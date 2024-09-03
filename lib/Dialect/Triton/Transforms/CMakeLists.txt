@@ -6,6 +6,7 @@ add_triton_library(TritonTransforms
   Combine.cpp
   ReorderBroadcast.cpp
   RewriteTensorPointer.cpp
+  LoopUnroll.cpp
 
   DEPENDS
   TritonTransformsIncGen

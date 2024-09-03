@@ -50,4 +50,13 @@ def TritonRewriteTensorPointer : Pass</*cli-arg*/"triton-rewrite-tensor-pointer"
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Loop unroller";
+  let description = [{
+    unroll scf loops
+  }];
+  let constructor = "mlir::triton::createLoopUnrollPass()";
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 #endif
