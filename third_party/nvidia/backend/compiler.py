@@ -265,7 +265,7 @@ class CUDABackend(BaseBackend):
         features = get_features(options)
         triple = 'nvptx64-nvidia-cuda'
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
-        if os.environ.get("TRITON_FTZ", "1") != "0":
+        if os.environ.get("TRITON_DENORM_FTZ", "1") != "0":
             nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
         # Set maxnreg on all kernels, if it was provided.
