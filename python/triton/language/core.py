@@ -1964,7 +1964,7 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
 
     :param input: the input values
     :type input: Tensor
-    :param axis: the dimension along which the reduction should be done
+    :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool"""
