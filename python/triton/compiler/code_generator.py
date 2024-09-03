@@ -410,7 +410,8 @@ class CodeGenerator(ast.NodeVisitor):
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
         arg_values = []
-        idx = 0
+        ir_idx = 0
+        ast_idx = 0
         for i in range(len(arg_names)):
             if i in self.constants:
                 cst = self.constants[i]
@@ -421,18 +422,23 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 if i in self.attributes:
                     for name, value in self.attributes[i]:
-                        self.fn.set_arg_attr(idx, name, value)
+                        self.fn.set_arg_attr(ir_idx, name, value)
+                curr_ast_type = self.prototype.param_types[ast_idx]
 
                 # Mark this argument as a pass-by-value TMA descriptor (nvidia)
-                if isinstance(self.prototype.param_types[idx], nv_tma_desc_type):
-                    self.fn.set_arg_attr(idx, "tt.nv_tma_desc", 1)
+                if isinstance(curr_ast_type, nv_tma_desc_type):
+                    self.fn.set_arg_attr(ir_idx, "tt.nv_tma_desc", 1)
 
-                arg_values.append(tensor(self.fn.args(idx), self.prototype.param_types[idx]))
-                idx += 1
+                next_ir_idx = ir_idx + curr_ast_type.num_composite_types
+                ir_args = [self.fn.args(i) for i in range(ir_idx, next_ir_idx)]
+                arg_values.append(curr_ast_type.make_ast_value(ir_args))
+                ir_idx = next_ir_idx
+                ast_idx = ast_idx + 1
 
-        insert_pt = self.builder.get_insertion_block()
+        # bind arguments to symbols
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
+        insert_pt = self.builder.get_insertion_block()
         self.builder.set_insertion_point_to_start(entry)
         # visit function body
         self.visit_compound_statement(node.body)

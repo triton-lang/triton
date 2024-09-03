@@ -308,6 +308,8 @@ def mangle_type(arg, is_const=False):
         return "fp32"
     elif hasattr(arg, "tma_desc_cpu_ptr"):
         return "nvTmaDesc"
+    elif isinstance(arg, tuple):
+        return "[" + ",".join(map(mangle_type, arg)) + "]"
     else:
         # dtypes are hashable so we can memoize this mapping:
         dsk = (arg.dtype, is_const)

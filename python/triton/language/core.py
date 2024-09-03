@@ -662,10 +662,37 @@ class function_type(dtype):
     def __str__(self):
         return f'fn ({self.param_types}) -> {self.ret_types}'
 
+    @staticmethod
+    def flatten(lst):
+        for item in lst:
+            if isinstance(item, list):
+                yield from function_type.flatten(item)
+            else:
+                yield item
+
     def to_ir(self, builder: ir.builder):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
+        ir_param_types = list(self.flatten(ir_param_types))
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
         return builder.get_function_ty(ir_param_types, ret_types)
+
+
+class tuple_type(dtype):
+
+    def __init__(self, types):
+        self.types = types
+        self.name = f"[{','.join(map(str, self.types))}]"
+        self.num_composite_types = len(self.types)
+
+    def __str__(self):
+        return self.name
+
+    def make_ast_values(self, ir_args):
+        assert len(ir_args) == len(self.types)
+        return [ty.make_ast_values(ir_arg) for ty, ir_arg in zip(self.types, ir_args)]
+
+    def to_ir(self, builder: ir.builder):
+        return [ty.to_ir(builder) for ty in self.types]
 
 
 # scalar types

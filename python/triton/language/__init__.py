@@ -96,6 +96,7 @@ from .core import (
     store,
     tensor,
     trans,
+    tuple_type,
     uint16,
     uint32,
     uint64,
@@ -261,6 +262,10 @@ def str_to_ty(name):
             const = True
         ty = str_to_ty(name)
         return pointer_type(element_ty=ty, const=const)
+
+    if name[0] == "[":
+        tys = [str_to_ty(x) for x in name[1:-1].split(',')]
+        return tuple_type(types=tys)
 
     if name == "nvTmaDesc":
         return nv_tma_desc_type()
