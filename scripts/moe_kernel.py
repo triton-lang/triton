@@ -49,6 +49,7 @@ def matmul_kernel(
 
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)):
         a = tl.load(a_ptrs, mask=token_mask[:, None], other=0.0)
+        # a = tl.load(a_ptrs, mask=token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
         b = tl.load(b_ptrs)
         accumulator += tl.dot(a, b)
         a_ptrs += BLOCK_SIZE_K * SPLIT_K * stride_ak
@@ -192,13 +193,13 @@ tl_to_torch_types = {
 # test_correctness(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c,
 #                  init_type, config, bias_vector, verbose):
 if __name__ == "__main__":
-    config = {'M': 16, 'N': 4096, 'K': 1024, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 1, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 0, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16, 'kpack': 2}
+    config = {'M': 16, 'N': 4096, 'K': 2048, 'rowMajorA': 'T', 'rowMajorB': 'N', 'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 1, 'SPLIT_K': 1, 'num_warps': 8, 'num_stages': 0, 'waves_per_eu': 2, 'matrix_instr_nonkdim': 16, 'kpack': 2}
     # Processing Items
     M = config["M"]
     N = config["N"]
     K = config["K"]
-    col_a = config["rowMajorA"] is "N"
-    col_b = config["rowMajorB"] is "N"
+    col_a = config["rowMajorA"] == "N"
+    col_b = config["rowMajorB"] == "N"
     dtype_a = "fp16"
     dtype_b = "fp16"
     dtype_c = "fp16"
