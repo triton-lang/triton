@@ -274,9 +274,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           PTXInstr::Operand *opr{};
 
           if (otherIsSplatConstInt) {
-            for (size_t s = 0; s < 32; s += valueElemNBits)
-              splatVal |= splatVal << valueElemNBits;
-            opr = ptxBuilder.newConstantOperand(splatVal);
+            int64_t replicatedSplatVal = 0;
+            for (size_t s = 0; s < movWidth; s += valueElemNBits) {
+              replicatedSplatVal |= splatVal << s;
+            }
+            opr = ptxBuilder.newConstantOperand(replicatedSplatVal);
           } else
             opr = ptxBuilder.newOperand(v, readConstraint);
 
