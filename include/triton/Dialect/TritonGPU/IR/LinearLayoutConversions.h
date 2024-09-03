@@ -81,6 +81,8 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 // The primary goal is to efficiently store 2D tiles of a tensor into shared
 // memory using the `stmatrix` instruction, with each thread responsible for
 // storing `N` elements.
+// If `stmatrix` cannot be used for the given tensor encoding, this function
+// returns `std::nullopt`.
 //
 // Unlike standard vectorized stores, such as `st.shared.v4 [%offset],
 // %vec_reg`, where `%vec_reg` contains four consecutive data elements, the
