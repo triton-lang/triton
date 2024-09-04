@@ -130,6 +130,8 @@ struct ConvertTritonGPUToLLVM
         patternBenefitConvertLayoutOptimizedPattern);
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
+    mlir::triton::NVIDIA::populateTMAToLLVMPatterns(typeConverter, targetInfo,
+                                                    patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                         axisInfoAnalysis, computeCapability,

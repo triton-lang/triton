@@ -1051,6 +1051,41 @@ def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir
     return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
 
 
+def tensormap_create(
+    desc_ptr: tl.tensor,
+    global_address: tl.tensor,
+    box_dim: List[tl.tensor],
+    global_dim: List[tl.tensor],
+    global_stride: List[tl.tensor],
+    element_stride: List[tl.tensor],
+    elem_type: int,
+    interleave_layout: int,
+    swizzle_mode: int,
+    fill_mode: int,
+    builder: ir.builder,
+) -> tl.tensor:
+    assert not global_stride or global_stride[0].dtype == tl.int64
+    return tl.tensor(
+        builder.create_tensormap_create(
+            desc_ptr.handle,
+            global_address.handle,
+            [x.handle for x in box_dim],
+            [x.handle for x in global_dim],
+            [x.handle for x in global_stride],
+            [x.handle for x in element_stride],
+            elem_type,
+            interleave_layout,
+            swizzle_mode,
+            fill_mode,
+        ),
+        tl.void,
+    )
+
+
+def tensormap_fenceproxy_acquire(desc_ptr: tl.tensor, builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_tensormap_fenceproxy_acquire(desc_ptr.handle), tl.void)
+
+
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
     # Store by a block pointer: `pointer_type<block_type<>>`
     # Block pointers can not have the `mask` argument
