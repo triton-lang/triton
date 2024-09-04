@@ -73,6 +73,19 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     expectOp.getPredMutable().assign(mask);
     return op;
   }
+  if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
+    rewriter.setInsertionPoint(storeOp);
+    // create conditional store
+    auto ifOp = rewriter.create<scf::IfOp>(storeOp.getLoc(), pred, false);
+    auto *b = ifOp.thenBlock();
+    op->moveBefore(b, b->begin());
+    return ifOp;
+  }
+  if (auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
+    // triton_nvidia_gpu.warp_group_dot
+    // Why is this side-affecting and does it need predication?
+    return dotOp;
+  }
 
   assert("don't know how to predicate this op" && false);
   return op;
