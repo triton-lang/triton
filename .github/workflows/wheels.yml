@@ -91,7 +91,7 @@ jobs:
       - name: Publish wheels to index
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
-          az storage blob upload --account-name oaitriton --auth-mode login --container-name public --source wheelhouse --destination-path "nightly-wheels/" --overwrite
+          az storage blob upload-batch --account-name oaitriton --auth-mode login --source wheelhouse --destination "public/nightly-wheels" --overwrite
 
       - name: Azure Logout
         if: ${{ steps.check-version.outputs.new_commit == 'true' && (success() || failure()) }}
