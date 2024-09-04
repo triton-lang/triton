@@ -431,7 +431,7 @@ class CodeGenerator(ast.NodeVisitor):
 
                 next_ir_idx = ir_idx + curr_ast_type.num_composite_types
                 ir_args = [self.fn.args(i) for i in range(ir_idx, next_ir_idx)]
-                arg_values.append(curr_ast_type.make_ast_value(ir_args))
+                arg_values.append(curr_ast_type.make_ast_values(ir_args))
                 ir_idx = next_ir_idx
                 ast_idx = ast_idx + 1
 

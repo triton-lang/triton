@@ -39,6 +39,14 @@ def builtin(fn: T) -> T:
     return wrapper
 
 
+def _flatten_list(lst):
+    for item in lst:
+        if isinstance(item, list):
+            yield from _flatten_list(item)
+        else:
+            yield item
+
+
 def _tensor_member_fn(fn: T) -> T:
     """Decorator that adds this free function as a member fn on class tensor.
 
@@ -335,6 +343,7 @@ class dtype:
     def __init__(self, name):
         name = _unwrap_if_constexpr(name)
         self.name = name
+        self.num_composite_types = 1
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
@@ -549,6 +558,10 @@ class dtype:
         """Output of repr needs to be an evaluatable expression"""
         return f'triton.language.{self.codegen_name()}'
 
+    def make_ast_values(self, ir_args):
+        assert len(ir_args) == 1
+        return tensor(ir_args[0], self)
+
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
 # We can't change the param name because it is part of function's public API.
@@ -565,6 +578,7 @@ class pointer_type(dtype):
         self.element_ty = element_ty
         self.address_space = address_space
         self.const = const
+        self.num_composite_types = 1
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
@@ -589,6 +603,10 @@ class pointer_type(dtype):
 
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
+
+    def make_ast_values(self, ir_args):
+        assert len(ir_args) == 1
+        return tensor(ir_args[0], self)
 
     @property
     def scalar(self):
@@ -662,17 +680,9 @@ class function_type(dtype):
     def __str__(self):
         return f'fn ({self.param_types}) -> {self.ret_types}'
 
-    @staticmethod
-    def flatten(lst):
-        for item in lst:
-            if isinstance(item, list):
-                yield from function_type.flatten(item)
-            else:
-                yield item
-
     def to_ir(self, builder: ir.builder):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
-        ir_param_types = list(self.flatten(ir_param_types))
+        ir_param_types = list(_flatten_list(ir_param_types))
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
         return builder.get_function_ty(ir_param_types, ret_types)
 
@@ -689,7 +699,8 @@ class tuple_type(dtype):
 
     def make_ast_values(self, ir_args):
         assert len(ir_args) == len(self.types)
-        return [ty.make_ast_values(ir_arg) for ty, ir_arg in zip(self.types, ir_args)]
+        ret = tuple([tensor(ir_arg, ty) for ty, ir_arg in zip(self.types, ir_args)])
+        return ret
 
     def to_ir(self, builder: ir.builder):
         return [ty.to_ir(builder) for ty in self.types]
