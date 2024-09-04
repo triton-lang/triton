@@ -580,14 +580,12 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return false;
 }
 
-bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
-                                ArrayRef<unsigned> paddedRepShape,
-                                ArrayRef<unsigned> outOrd,
-                                unsigned accumNumReplicates,
-                                int swizzleByteWidth) const {
-  return isStMatrixCompatible(srcTy, swizzleByteWidth) &&
-         accumNumReplicates == 1 && outOrd[0] == 1 &&
-         paddedRepShape[1] % 8 == 0;
+void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr, Value val) const {
+  auto vecTy = cast<VectorType>(val.getType());
+  Type elemTy = vecTy.getElementType();
+  stMatrixm8n8x4(i32_val(0), unpackLLVector(loc, val, rewriter), 0, ptr, elemTy,
+                 loc, rewriter);
 }
 
 bool TargetInfo::processReplicaUsingStMatrix(
@@ -596,8 +594,8 @@ bool TargetInfo::processReplicaUsingStMatrix(
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
     int swizzleByteWidth) const {
-  if (canUseStMatrix(srcTy, paddedRepShape, outOrd, accumNumReplicates,
-                     swizzleByteWidth)) {
+  if (isStMatrixCompatible(srcTy, swizzleByteWidth) &&
+      accumNumReplicates == 1 && outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
     storeDistributedToSharedWithStMatrix(srcTy, elemTy, vals, smemBase,
                                          paddedRepShape, origRepShape, loc,
                                          rewriter, swizzleByteWidth);

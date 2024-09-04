@@ -107,8 +107,6 @@ unsigned getNumWarpsPerCTA(Attribute layout);
 
 unsigned getNumCTAs(Attribute layout);
 
-bool isaDistributedLayout(Attribute layout);
-
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.

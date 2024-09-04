@@ -22,6 +22,8 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
+  void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
+                         Value val) const override;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
@@ -38,10 +40,6 @@ public:
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op, unsigned numLaneToReduce,
                   unsigned interleave) const override;
-
-  bool canUseStMatrix(RankedTensorType srcTy, ArrayRef<unsigned> paddedRepShape,
-                      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-                      int swizzleByteWidth) const override;
 
   bool processReplicaUsingStMatrix(RewriterBase &rewriter, Location loc,
                                    Value smemBase, SmallVector<Value> &vals,

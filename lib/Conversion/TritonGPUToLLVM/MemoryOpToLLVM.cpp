@@ -117,7 +117,9 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     // TODO: do we need to check if src is shared ?
-    if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout)) {
+    if (isa<SharedEncodingAttr>(srcLayout) &&
+        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+            dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }

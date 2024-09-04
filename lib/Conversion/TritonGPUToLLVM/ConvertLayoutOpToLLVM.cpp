@@ -53,9 +53,13 @@ public:
 
 private:
   bool isSupported(Attribute srcLayout, Attribute dstLayout) const {
-    return isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout) &&
+    return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+               srcLayout) &&
+           isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+               dstLayout) &&
            !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
   }
+
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
@@ -371,17 +375,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // The following tasks must be completed before we can remove the layoutIsOK
     // check:
     // 1. Support for AMD's MFMA and WMMA
-    // 2. Implementation of NVIDIA's stmatrix
-    // 3. Handling NVIDIA's MMA layout when CTA per CGA > 1
+    // 2. Handling NVIDIA's MMA layout when CTA per CGA > 1
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
         if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
-          return false;
-        }
-        auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-        if (targetInfo.canUseStMatrix(srcTy, scratchConfig.paddedRepShape,
-                                      scratchConfig.order,
-                                      /*accumNumReplicates=*/1)) {
           return false;
         }
         if (useLegacyMMAConversion) {
@@ -483,10 +480,21 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Note: If two threads in the same warp write to the same shmem offset, the
     // hardware resolves that without a stall or a bank conflict.  Therefore we
     // don't need to avoid duplicate writes.
-    LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
+    // Input dims: [reg, lane, warp]
+    // Output dims: [offset, iteration]
+    std::optional<LinearLayout> shmemStoreLayout =
+        chooseStMatrixLayoutForRegToRegConversion(
+            ctx, op.getSrc().getType(), scratchConfig.repShape,
+            scratchConfig.paddedRepShape, scratchConfig.order);
+    bool isStMatrix = shmemStoreLayout.has_value();
+    if (!isStMatrix) {
+      shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
+    }
+    assert(shmemStoreLayout.has_value());
+
     const int shmemAllocatedNumElems =
         getNumScratchElements(scratchConfig.paddedRepShape);
-    assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+    assert(shmemStoreLayout->getOutDimSize(kOffset) <= shmemAllocatedNumElems);
 
     // Layout for the load from shmem to registers.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
@@ -494,14 +502,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Check that the `register` fully determines the `iteration`.  That is,
     // each thread does exactly the same reads and writes to shmem on each
     // iteration, just with different input/output registers.
-    assert(
-        shmemStoreLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
+    assert(shmemStoreLayout->sublayoutIsZero({kLane, kWarp, kBlock},
+                                             {kIteration}));
     assert(
         shmemLoadLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
 
     // iteration -> registers
     SmallVector<SmallVector<int>> inRegsForIter =
-        collectRegsForIter(ctx, shmemStoreLayout);
+        collectRegsForIter(ctx, *shmemStoreLayout);
     SmallVector<SmallVector<int>> outRegsForIter =
         collectRegsForIter(ctx, shmemLoadLayout);
 
@@ -557,7 +565,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return vecAddr;
     };
 
-    auto storeBase = applyLinearLayout(loc, rewriter, shmemStoreLayout,
+    auto storeBase = applyLinearLayout(loc, rewriter, *shmemStoreLayout,
                                        {{kRegister, i32_val(0)},
                                         {kLane, laneId},
                                         {kWarp, warpId},
@@ -578,16 +586,23 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       auto &inRegs = inRegsForIter[i];
       auto &outRegs = outRegsForIter[i];
 
-      for (int j = 0; j < inVals.size() / iterations;
-           j += scratchConfig.inVec) {
+      // When using `stmatrix`, we can store `inVec` elements even if they are
+      // not contiguous
+      auto inVec = isStMatrix ? shmemStoreLayout->getNumConsecutiveInOut()
+                              : scratchConfig.inVec;
+      for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
-        auto vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
+        Value vecAddr = getVecAddr(*shmemStoreLayout, storeBase, inRegSlice);
         SmallVector<Value> inValsVec;
-        for (int k = 0; k < scratchConfig.inVec; k++)
+        for (int k = 0; k < inVec; k++)
           inValsVec.push_back(inVals[inRegSlice + k]);
         Value valsVec = packLLVector(loc, inValsVec, rewriter);
-        targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
-                                /*pred=*/true_val());
+        if (isStMatrix) {
+          targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
+        } else {
+          targetInfo.storeDShared(rewriter, loc, vecAddr, std::nullopt, valsVec,
+                                  /*pred=*/true_val());
+        }
       }
 
       barrier();

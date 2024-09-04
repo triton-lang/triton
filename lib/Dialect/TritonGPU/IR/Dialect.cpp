@@ -407,10 +407,6 @@ unsigned getNumCTAs(Attribute layout) {
   return product<unsigned>(getCTAsPerCGA(layout));
 }
 
-bool isaDistributedLayout(Attribute layout) {
-  return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(layout);
-}
-
 template <typename T> bool hasEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = dyn_cast<TensorOrMemDesc>(type)) {
