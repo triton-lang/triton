@@ -6,11 +6,16 @@ namespace proton {
 
 namespace cupti {
 
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
 struct ExternLibCupti : public ExternLibBase {
   using RetType = CUptiResult;
   static constexpr const char *name = "libcupti.so";
-  static constexpr const char *defaultPath =
-      "/usr/local/cuda/extras/CUPTI/lib64";
+#ifdef CUPTI_LIB_DIR
+  static constexpr const char *defaultPath = TOSTRING(CUPTI_LIB_DIR);
+#else
+  static constexpr const char *defaultPath = "";
+#endif
   static constexpr RetType success = CUPTI_SUCCESS;
   static void *lib;
 };
