@@ -44,8 +44,9 @@ namespace proton {
 
 struct ExternLibBase {
   using RetType = int; // Generic type, can be overridden in derived structs
-  static constexpr const char *name = ""; // Placeholder
-  static constexpr RetType success = 0;   // Placeholder
+  static constexpr const char *name = "";        // Placeholder
+  static constexpr const char *defaultPath = ""; // Placeholder
+  static constexpr RetType success = 0;          // Placeholder
   ExternLibBase() = delete;
   ExternLibBase(const ExternLibBase &) = delete;
   ExternLibBase &operator=(const ExternLibBase &) = delete;
@@ -64,6 +65,14 @@ public:
     if (*lib == nullptr) {
       // If not found, try to load it
       *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
+    }
+    if (*lib == nullptr) {
+      // Still not found, try to load it from the default path
+      auto dir = std::string(ExternLib::defaultPath);
+      if (dir.length() > 0) {
+        auto fullPath = dir + "/" + name;
+        *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
+      }
     }
     if (*lib == nullptr) {
       throw std::runtime_error("Could not find `" + std::string(name) +

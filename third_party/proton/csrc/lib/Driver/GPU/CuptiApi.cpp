@@ -9,6 +9,8 @@ namespace cupti {
 struct ExternLibCupti : public ExternLibBase {
   using RetType = CUptiResult;
   static constexpr const char *name = "libcupti.so";
+  static constexpr const char *defaultPath =
+      "/usr/local/cuda/extras/CUPTI/lib64";
   static constexpr RetType success = CUPTI_SUCCESS;
   static void *lib;
 };
