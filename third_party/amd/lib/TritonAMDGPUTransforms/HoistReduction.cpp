@@ -73,9 +73,11 @@ struct dotReductionChainOperations {
   triton::ReshapeOp reshape;
   triton::BroadcastOp broadcast;
   triton::gpu::ConvertLayoutOp preDotConvert;
+  arith::ConstantOp accZeroInitializer;
   triton::DotOp dot;
   triton::ReduceOp reduction;
   triton::gpu::ConvertLayoutOp postDotConversion;
+  Operation *accumulatorAdd;
   scf::YieldOp yield;
   int yieldOpNo;
 };
@@ -97,32 +99,52 @@ matchDotReductionInLoopPattern(triton::ReduceOp redOp) {
       postDotConversionOperand->getOwner());
   if (!chain.postDotConversion)
     return std::nullopt;
-  auto yieldOperand = getSingleUse(chain.postDotConversion);
-  if (!yieldOperand)
+  auto dotResultUse = getSingleUse(chain.postDotConversion);
+  if (!dotResultUse)
     return std::nullopt;
-  chain.yieldOpNo = yieldOperand->getOperandNumber();
-  chain.yield = dyn_cast<scf::YieldOp>(yieldOperand->getOwner());
+  if (isa<arith::AddFOp, arith::AddIOp>(dotResultUse->getOwner())) {
+    chain.accumulatorAdd = dotResultUse->getOwner();
+    int inductionOpNo = dotResultUse->getOperandNumber() == 0 ? 1 : 0;
+    auto loopArgument = dyn_cast<BlockArgument>(
+        chain.accumulatorAdd->getOperand(inductionOpNo));
+    chain.loopBlockArg = loopArgument;
+    dotResultUse = getSingleUse(chain.accumulatorAdd);
+    if (!dotResultUse)
+      return std::nullopt;
+  }
+  chain.yieldOpNo = dotResultUse->getOperandNumber();
+  chain.yield = dyn_cast<scf::YieldOp>(dotResultUse->getOwner());
   if (!chain.yield)
     return std::nullopt;
+
   chain.dot = dyn_cast<triton::DotOp>(redOp->getOperand(0).getDefiningOp());
   if (!chain.dot)
     return std::nullopt;
-  chain.preDotConvert =
-      dyn_cast<triton::gpu::ConvertLayoutOp>(chain.dot.getC().getDefiningOp());
-  if (!chain.preDotConvert)
+  if (!chain.accumulatorAdd) {
+    chain.preDotConvert = dyn_cast<triton::gpu::ConvertLayoutOp>(
+        chain.dot.getC().getDefiningOp());
+    if (!chain.preDotConvert)
+      return std::nullopt;
+    chain.broadcast = dyn_cast<triton::BroadcastOp>(
+        chain.preDotConvert.getSrc().getDefiningOp());
+    if (!chain.broadcast)
+      return std::nullopt;
+    chain.reshape =
+        dyn_cast<triton::ReshapeOp>(chain.broadcast.getSrc().getDefiningOp());
+    if (!chain.reshape)
+      return std::nullopt;
+    auto loopArgument = dyn_cast<BlockArgument>(chain.reshape.getSrc());
+    if (!loopArgument || loopArgument.getArgNumber() != chain.yieldOpNo + 1)
+      return std::nullopt;
+    chain.loopBlockArg = loopArgument;
+  } else {
+    chain.accZeroInitializer =
+        dyn_cast<mlir::arith::ConstantOp>(chain.dot.getC().getDefiningOp());
+    if (!chain.accZeroInitializer)
+      return std::nullopt;
+  }
+  if (chain.loopBlockArg.getArgNumber() != chain.yieldOpNo + 1)
     return std::nullopt;
-  chain.broadcast = dyn_cast<triton::BroadcastOp>(
-      chain.preDotConvert.getSrc().getDefiningOp());
-  if (!chain.broadcast)
-    return std::nullopt;
-  chain.reshape =
-      dyn_cast<triton::ReshapeOp>(chain.broadcast.getSrc().getDefiningOp());
-  if (!chain.reshape)
-    return std::nullopt;
-  auto loopArgument = dyn_cast<BlockArgument>(chain.reshape.getSrc());
-  if (!loopArgument || loopArgument.getArgNumber() != chain.yieldOpNo + 1)
-    return std::nullopt;
-  chain.loopBlockArg = loopArgument;
   return chain;
 }
 
@@ -130,29 +152,55 @@ void hoistReductionOps(mlir::PatternRewriter &rewriter, scf::ForOp loopOp,
                        dotReductionChainOperations dfChain) {
   auto accInitializer = loopOp.getInitArgs()[dfChain.yieldOpNo];
 
-  // hoist operations outside the loop
-  rewriter.moveOpBefore(dfChain.reshape, loopOp);
-  rewriter.moveOpBefore(dfChain.broadcast, loopOp);
-  rewriter.moveOpBefore(dfChain.preDotConvert, loopOp);
+  if (!dfChain.accumulatorAdd) {
+    // hoist operations outside the loop
+    rewriter.moveOpBefore(dfChain.reshape, loopOp);
+    rewriter.moveOpBefore(dfChain.broadcast, loopOp);
+    rewriter.moveOpBefore(dfChain.preDotConvert, loopOp);
 
-  rewriter.moveOpAfter(dfChain.reduction, loopOp);
-  rewriter.moveOpAfter(dfChain.postDotConversion, dfChain.reduction);
+    rewriter.moveOpAfter(dfChain.reduction, loopOp);
+    rewriter.moveOpAfter(dfChain.postDotConversion, dfChain.reduction);
 
-  // adjust operations DF
-  dfChain.reshape.setOperand(accInitializer);
-  loopOp.setOperand(dfChain.yieldOpNo + 3, dfChain.preDotConvert);
-  dfChain.dot.setOperand(2, dfChain.loopBlockArg);
-  dfChain.yield.setOperand(dfChain.yieldOpNo, dfChain.dot);
+    // adjust operations DF
+    dfChain.reshape.setOperand(accInitializer);
+    loopOp.setOperand(dfChain.yieldOpNo + 3, dfChain.preDotConvert);
+    dfChain.dot.setOperand(2, dfChain.loopBlockArg);
+    dfChain.yield.setOperand(dfChain.yieldOpNo, dfChain.dot);
 
-  rewriter.replaceAllUsesWith(loopOp.getResult(dfChain.yieldOpNo),
-                              dfChain.postDotConversion);
-  dfChain.reduction.setOperand(0, loopOp.getResult(dfChain.yieldOpNo));
+    rewriter.replaceAllUsesWith(loopOp.getResult(dfChain.yieldOpNo),
+                                dfChain.postDotConversion);
+    dfChain.reduction.setOperand(0, loopOp.getResult(dfChain.yieldOpNo));
 
-  // adjust loop types
-  auto newAccTy = dfChain.preDotConvert.getType();
-  // loopOp.getOperand(dfChain.yieldOpNo + 3).setType(newAccTy);
-  loopOp.getResult(dfChain.yieldOpNo).setType(newAccTy);
-  dfChain.loopBlockArg.setType(newAccTy);
+    // adjust loop types
+    auto newAccTy = dfChain.preDotConvert.getType();
+    // loopOp.getOperand(dfChain.yieldOpNo + 3).setType(newAccTy);
+    loopOp.getResult(dfChain.yieldOpNo).setType(newAccTy);
+    dfChain.loopBlockArg.setType(newAccTy);
+  } else {
+    // hoist operations outside the loop
+    rewriter.moveOpBefore(dfChain.accZeroInitializer, loopOp);
+
+    rewriter.moveOpAfter(dfChain.reduction, loopOp);
+    rewriter.moveOpAfter(dfChain.postDotConversion, dfChain.reduction);
+    rewriter.moveOpAfter(dfChain.accumulatorAdd, dfChain.postDotConversion);
+
+    // adjust operations DF
+    dfChain.accumulatorAdd->setOperand(0, dfChain.postDotConversion);
+    dfChain.accumulatorAdd->setOperand(1, accInitializer);
+    loopOp.setOperand(dfChain.yieldOpNo + 3, dfChain.accZeroInitializer);
+    dfChain.dot.setOperand(2, dfChain.loopBlockArg);
+    dfChain.yield.setOperand(dfChain.yieldOpNo, dfChain.dot);
+
+    rewriter.replaceAllUsesWith(loopOp.getResult(dfChain.yieldOpNo),
+                                dfChain.accumulatorAdd->getResult(0));
+    dfChain.reduction.setOperand(0, loopOp.getResult(dfChain.yieldOpNo));
+
+    // adjust loop types
+    auto newAccTy = dfChain.accZeroInitializer.getType();
+    // loopOp.getOperand(dfChain.yieldOpNo + 3).setType(newAccTy);
+    loopOp.getResult(dfChain.yieldOpNo).setType(newAccTy);
+    dfChain.loopBlockArg.setType(newAccTy);
+  }
 }
 
 class HoistReduction : public mlir::RewritePattern {
