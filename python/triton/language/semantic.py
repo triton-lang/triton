@@ -1056,7 +1056,6 @@ def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir
 
 def tensormap_create(
     desc_ptr: tl.tensor,
-    template_ptr: tl.tensor,
     global_address: tl.tensor,
     box_dim: List[tl.tensor],
     global_dim: List[tl.tensor],
@@ -1068,10 +1067,10 @@ def tensormap_create(
     fill_mode: int,
     builder: ir.builder,
 ) -> tl.tensor:
+    assert not global_stride or global_stride[0].dtype == tl.int64
     return tl.tensor(
         builder.create_tensormap_create(
             desc_ptr.handle,
-            template_ptr.handle,
             global_address.handle,
             [x.handle for x in box_dim],
             [x.handle for x in global_dim],

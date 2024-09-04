@@ -101,77 +101,6 @@ public:
   }
 };
 
-class TensormapCreateLowering
-    : public OpRewritePattern<ExperimentalTensormapCreateOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ExperimentalTensormapCreateOp op,
-                                PatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
-    auto loc = op.getLoc();
-
-    constexpr int32_t kTMASize = 128;
-    constexpr int32_t kTMAAlign = 128;
-
-    Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
-    auto tensorType =
-        RankedTensorType::get({kTMASize / 4}, IntegerType::get(ctx, 32));
-    SmallVector<unsigned> order{0};
-    auto ctaLayout = CTALayoutAttr::get(
-        /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
-        /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-    Attribute encoding =
-        SharedEncodingAttr::get(ctx, /*vec=*/1, /*perPhase=*/1, /*maxPhase=*/1,
-                                /*order=*/{0}, ctaLayout);
-    MemDescType memDescType =
-        MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                         encoding, sharedMemorySpace, /*mutableMemory=*/true);
-
-    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType,
-                                                /*src=*/Value{}, kTMAAlign);
-    rewriter.create<triton::nvidia_gpu::TensormapLoadDescriptorOp>(
-        loc, alloc, op.getTemplatePtr());
-    rewriter.create<triton::nvidia_gpu::TensormapReplaceGlobalAddressOp>(
-        loc, alloc, op.getGlobalAddress());
-    rewriter.create<triton::nvidia_gpu::TensormapReplaceRankOp>(
-        loc, alloc, rewriter.getI32IntegerAttr(op.getRank() - 1));
-    for (int i = 0; i < op.getRank(); ++i) {
-      auto ord = rewriter.getI32IntegerAttr(i);
-      rewriter.create<triton::nvidia_gpu::TensormapReplaceBoxDimOp>(
-          loc, alloc, ord, op.getBoxDim()[i]);
-    }
-    for (int i = 0; i < op.getRank(); ++i) {
-      auto ord = rewriter.getI32IntegerAttr(i);
-      rewriter.create<triton::nvidia_gpu::TensormapReplaceGlobalDimOp>(
-          loc, alloc, ord, op.getGlobalDim()[i]);
-    }
-    for (int i = 0; i + 1 < op.getRank(); ++i) {
-      auto ord = rewriter.getI32IntegerAttr(i);
-      rewriter.create<triton::nvidia_gpu::TensormapReplaceGlobalStrideOp>(
-          loc, alloc, ord, op.getGlobalStride()[i]);
-    }
-    for (int i = 0; i + 1 < op.getRank(); ++i) {
-      auto ord = rewriter.getI32IntegerAttr(i);
-      rewriter.create<triton::nvidia_gpu::TensormapReplaceElementStrideOp>(
-          loc, alloc, ord, op.getElementStride()[i]);
-    }
-    rewriter.create<triton::nvidia_gpu::TensormapReplaceElemTypeOp>(
-        loc, alloc, op.getElemType());
-    rewriter.create<triton::nvidia_gpu::TensormapReplaceInterleaveLayoutOp>(
-        loc, alloc, op.getInterleaveLayout());
-    rewriter.create<triton::nvidia_gpu::TensormapReplaceSwizzleModeOp>(
-        loc, alloc, op.getSwizzleMode());
-    rewriter.create<triton::nvidia_gpu::TensormapReplaceFillModeOp>(
-        loc, alloc, op.getFillMode());
-    rewriter.create<triton::nvidia_gpu::TensormapCpFenceproxyOp>(
-        loc, op.getDescPtr(), alloc);
-    rewriter.create<LocalDeallocOp>(loc, alloc);
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
 class TritonNvidiaGPUTMALoweringPass
     : public TritonNvidiaGPUTMALoweringPassBase<
           TritonNvidiaGPUTMALoweringPass> {
@@ -181,8 +110,7 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<TMALoadLowering, TMAStoreLowering, TensormapCreateLowering>(
-        context);
+    patterns.add<TMALoadLowering, TMAStoreLowering>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }

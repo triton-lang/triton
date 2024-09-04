@@ -24,8 +24,7 @@ def _determine_elem_type(element_ty: core.dtype):
 
 @core.builtin
 def experimental_device_tensormap_create1d(
-    desc_out: core.tensor,
-    template_desc: core.tensor,
+    desc_ptr: core.tensor,
     global_address: core.tensor,
     load_size: core.tensor,
     global_size: core.tensor,
@@ -38,8 +37,7 @@ def experimental_device_tensormap_create1d(
     element_stride = [core.full([], 1, core.int32, _builder=_builder)]
 
     semantic.tensormap_create(
-        desc_ptr=desc_out,
-        template_ptr=template_desc,
+        desc_ptr=desc_ptr,
         global_address=global_address,
         box_dim=[core._to_tensor(load_size, _builder)],
         global_dim=[global_size],
@@ -55,8 +53,7 @@ def experimental_device_tensormap_create1d(
 
 @core.builtin
 def experimental_device_tensormap_create2d(
-    desc_out: core.tensor,
-    template_desc: core.tensor,
+    desc_ptr: core.tensor,
     global_address: core.tensor,
     load_size: Sequence[core.constexpr],
     global_size: Sequence[core.tensor],
@@ -81,8 +78,7 @@ def experimental_device_tensormap_create2d(
     elem_stride = core.full([], 1, core.int32, _builder=_builder)
 
     semantic.tensormap_create(
-        desc_ptr=desc_out,
-        template_ptr=template_desc,
+        desc_ptr=desc_ptr,
         global_address=global_address,
         box_dim=[core._to_tensor(x, _builder) for x in load_size[::-1]],
         global_dim=global_size[::-1],

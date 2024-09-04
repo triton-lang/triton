@@ -119,16 +119,14 @@ def device_tensormap_kernel2d(in_ptr, out_ptr, in_desc, out_desc, ready_flag, M,
     if pid_m == 0 and pid_n == 0:
         # Write out descriptor
         tl.extra.cuda.experimental_device_tensormap_create2d(
-            desc_out=in_desc,
-            template_desc=in_desc,
+            desc_ptr=in_desc,
             global_address=in_ptr,
             load_size=[M_BLOCK, N_BLOCK],
             global_size=[M, N],
             element_ty=in_ptr.dtype.element_ty,
         )
         tl.extra.cuda.experimental_device_tensormap_create2d(
-            desc_out=out_desc,
-            template_desc=out_desc,
+            desc_ptr=out_desc,
             global_address=out_ptr,
             load_size=[M_BLOCK, N_BLOCK],
             global_size=[M, N],
@@ -162,17 +160,14 @@ def test_device_tensormap2d(dtype_str):
     inp_copy = inp.clone()
     out = to_triton(numpy_random(shape, dtype_str=dtype_str), device=device, dst_type=dtype_str)
 
-    # Create template descriptors with junk values
-    dummy_tensor = torch.empty((), device="cuda")
-    cpu_desc = triton.tools.experimental_descriptor.create_2d_tma_descriptor(dummy_tensor.data_ptr(), 128, 128, 128,
-                                                                             128, 1)
-    in_desc = cpu_desc.desc.cuda()
-    out_desc = cpu_desc.desc.cuda()
+    in_desc = torch.randint(0, 256, size=(128, ), dtype=torch.uint8, device="cuda")
+    out_desc = torch.randint(0, 256, size=(128, ), dtype=torch.uint8, device="cuda")
     ready_flag = torch.zeros((), dtype=torch.int32, device="cuda")
 
     device_tensormap_kernel2d[M_GRID, N_GRID](inp, out, in_desc, out_desc, ready_flag, *shape, M_BLOCK=M_BLOCK,
                                               N_BLOCK=N_BLOCK)
 
+    # Check results are correct
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(inp_copy))
 
@@ -184,16 +179,14 @@ def device_tensormap_kernel1d(in_ptr, out_ptr, in_desc, out_desc, ready_flag, nu
     if pid == 0:
         # Write out descriptor
         tl.extra.cuda.experimental_device_tensormap_create1d(
-            desc_out=in_desc,
-            template_desc=in_desc,
+            desc_ptr=in_desc,
             global_address=in_ptr,
             load_size=BLOCK,
             global_size=numel,
             element_ty=in_ptr.dtype.element_ty,
         )
         tl.extra.cuda.experimental_device_tensormap_create1d(
-            desc_out=out_desc,
-            template_desc=out_desc,
+            desc_ptr=out_desc,
             global_address=out_ptr,
             load_size=BLOCK,
             global_size=numel,
@@ -226,16 +219,14 @@ def test_device_tensormap1d(dtype_str):
     inp_copy = inp.clone()
     out = to_triton(numpy_random(shape, dtype_str=dtype_str), device=device, dst_type=dtype_str)
 
-    # Create template descriptors with junk values
-    dummy_tensor = torch.empty((), device="cuda")
-    cpu_desc = triton.tools.experimental_descriptor.create_1d_tma_descriptor(dummy_tensor.data_ptr(), 128, 128, 1)
-    in_desc = cpu_desc.desc.cuda()
-    out_desc = cpu_desc.desc.cuda()
+    in_desc = torch.randint(0, 256, size=(128, ), dtype=torch.uint8, device="cuda")
+    out_desc = torch.randint(0, 256, size=(128, ), dtype=torch.uint8, device="cuda")
     ready_flag = torch.zeros((), dtype=torch.int32, device="cuda")
 
     device_tensormap_kernel1d[
         1,
     ](inp, out, in_desc, out_desc, ready_flag, *shape, BLOCK=BLOCK)
 
+    # Check results are correct
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(inp_copy))

@@ -1283,16 +1283,16 @@ void init_triton_ir(py::module &&m) {
                                                         indices);
            })
       .def("create_tensormap_create",
-           [](TritonOpBuilder &self, Value desc_ptr, Value template_ptr,
-              Value global_address, std::vector<Value> box_dim,
-              std::vector<Value> global_dim, std::vector<Value> global_stride,
+           [](TritonOpBuilder &self, Value desc_ptr, Value global_address,
+              std::vector<Value> box_dim, std::vector<Value> global_dim,
+              std::vector<Value> global_stride,
               std::vector<Value> element_stride, int32_t elem_type,
               int32_t interleave_layout, int32_t swizzle_mode,
               int32_t fill_mode) {
              self.create<ExperimentalTensormapCreateOp>(
-                 desc_ptr, template_ptr, global_address, box_dim, global_dim,
-                 global_stride, element_stride, elem_type, interleave_layout,
-                 swizzle_mode, fill_mode);
+                 desc_ptr, global_address, box_dim, global_dim, global_stride,
+                 element_stride, elem_type, interleave_layout, swizzle_mode,
+                 fill_mode);
            })
       .def("create_tensormap_fenceproxy_acquire",
            [](TritonOpBuilder &self, Value desc_ptr) {

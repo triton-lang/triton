@@ -1167,7 +1167,6 @@ def TT_ExperimentalTensormapCreateOp: TT_Op<
     let arguments = (
         ins
         TT_PtrType:$desc_ptr,
-        TT_PtrType:$template_ptr,
         TT_PtrType:$global_address,
         Variadic<I32>:$box_dim,
         Variadic<I32>:$global_dim,
@@ -1184,7 +1183,7 @@ def TT_ExperimentalTensormapCreateOp: TT_Op<
         }
     }];
     let assemblyFormat = [{
-      $desc_ptr `,` $template_ptr `,` $global_address `,`
+      $desc_ptr `,` $global_address `,`
       `[` $box_dim `]` `,`
       `[` $global_dim `]` `,`
       `[` $global_stride `]` `,`

@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Alias.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
@@ -275,6 +276,12 @@ private:
       auto bytes = funcAlloc->getSharedMemorySize();
       maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, bytes,
                                                           scratchAlignment);
+    } else if (auto createTensormap =
+                   dyn_cast<ExperimentalTensormapCreateOp>(op)) {
+      constexpr int32_t kTMASize = 128;
+      constexpr int32_t kTMAAlign = 128;
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, kTMASize,
+                                                          kTMAAlign);
     }
   }
 
