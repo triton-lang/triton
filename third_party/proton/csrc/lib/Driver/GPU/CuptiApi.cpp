@@ -12,9 +12,9 @@ struct ExternLibCupti : public ExternLibBase {
   using RetType = CUptiResult;
   static constexpr const char *name = "libcupti.so";
 #ifdef CUPTI_LIB_DIR
-  static constexpr const char *defaultPath = TOSTRING(CUPTI_LIB_DIR);
+  static constexpr const char *defaultDir = TOSTRING(CUPTI_LIB_DIR);
 #else
-  static constexpr const char *defaultPath = "";
+  static constexpr const char *defaultDir = "";
 #endif
   static constexpr RetType success = CUPTI_SUCCESS;
   static void *lib;

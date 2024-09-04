@@ -10,7 +10,7 @@ namespace hip {
 struct ExternLibHip : public ExternLibBase {
   using RetType = hipError_t;
   static constexpr const char *name = "libamdhip64.so";
-  static constexpr const char *defaultPath = "";
+  static constexpr const char *defaultDir = "";
   static constexpr RetType success = hipSuccess;
   static void *lib;
 };

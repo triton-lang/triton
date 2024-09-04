@@ -11,7 +11,7 @@ struct ExternLibCuda : public ExternLibBase {
   // On WSL, "libcuda.so" and "libcuda.so.1" may not be linked, so we use
   // "libcuda.so.1" instead.
   static constexpr const char *name = "libcuda.so.1";
-  static constexpr const char *defaultPath = "";
+  static constexpr const char *defaultDir = "";
   static constexpr RetType success = CUDA_SUCCESS;
   static void *lib;
 };
