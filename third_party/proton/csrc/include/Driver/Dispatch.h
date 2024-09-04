@@ -71,7 +71,7 @@ public:
       }
     }
     if (*lib == nullptr) {
-      // If still not found, try to load it LD_LIBRARY_PATH
+      // If still not found, try to load it from LD_LIBRARY_PATH
       *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
     }
     if (*lib == nullptr) {
