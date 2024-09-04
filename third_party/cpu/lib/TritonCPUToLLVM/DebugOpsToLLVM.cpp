@@ -76,6 +76,26 @@ std::string getFormatSubstr(Value value, bool hex = false,
   return "";
 }
 
+// For printf, need to extend int32 or float64.
+Value printfPromoteValue(RewriterBase &rewriter, Value value) {
+  auto *context = rewriter.getContext();
+  auto type = value.getType();
+  auto loc = UnknownLoc::get(context);
+
+  bool isUnsigned = type.isUnsignedInteger();
+  if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
+    if (isUnsigned) {
+      return zext(ui32_ty, value);
+    } else {
+      return sext(i32_ty, value);
+    }
+  } else if (type.isBF16() || type.isF16() || type.isF32()) {
+    return fpext(f64_ty, value);
+  }
+
+  return value;
+}
+
 LLVM::LLVMFuncOp getPrintFuncDecl(ConversionPatternRewriter &rewriter,
                                   bool printf) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -89,8 +109,8 @@ LLVM::LLVMFuncOp getPrintFuncDecl(ConversionPatternRewriter &rewriter,
   if (printf)
     argsType = {ptr_ty(ctx)};
   else
-    argsType = {i32_ty,      i32_ty, i32_ty, ptr_ty(ctx),
-                ptr_ty(ctx), i32_ty, i32_ty, i64_ty};
+    argsType = {i32_ty, i32_ty, i32_ty, ptr_ty(ctx), ptr_ty(ctx),
+                i32_ty, i32_ty, i32_ty, i64_ty,      i32_ty};
 
   auto funcType =
       LLVM::LLVMFunctionType::get(i32_ty, argsType, /*isVarArg*/ printf);
@@ -131,12 +151,13 @@ void llPrintf(StringRef prefix, std::array<Value, 3> pid,
   for (auto elem : pid)
     allArgs.push_back(elem);
   if (arg.has_value())
-    allArgs.push_back(arg.value());
+    allArgs.push_back(printfPromoteValue(rewriter, arg.value()));
   call(getPrintFuncDecl(rewriter, true), allArgs);
 }
 
 void llVectorPrint(std::array<Value, 3> pid, StringRef prefix, Value ptr,
-                   bool isInteger, uint32_t bitWidth, int64_t numElem,
+                   bool isInteger, bool isSigned, uint32_t bitWidth,
+                   int64_t numElem, bool hex,
                    ConversionPatternRewriter &rewriter) {
   assert(!prefix.empty());
   auto loc = UnknownLoc::get(rewriter.getContext());
@@ -150,8 +171,10 @@ void llVectorPrint(std::array<Value, 3> pid, StringRef prefix, Value ptr,
   allArgs.push_back(prefixValue);
   allArgs.push_back(ptr);
   allArgs.push_back(i32_val(isInteger));
+  allArgs.push_back(i32_val(isSigned));
   allArgs.push_back(i32_val(bitWidth));
   allArgs.push_back(i64_val(numElem));
+  allArgs.push_back(i32_val(hex));
   call(getPrintFuncDecl(rewriter, false), allArgs);
 }
 
@@ -203,8 +226,9 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::cpu::PrintOp> {
         // booleans and separate bit width.
         llVectorPrint(pid, op.getPrefix(), ptr,
                       vecShapedType.getElementType().isInteger(),
+                      op.getIsSigned()[0],
                       vecShapedType.getElementTypeBitWidth(),
-                      vecShapedType.getNumElements(), rewriter);
+                      vecShapedType.getNumElements(), op.getHex(), rewriter);
       } else {
         // TODO: support 2D+ vector printing.
         std::string msg{op.getPrefix()};

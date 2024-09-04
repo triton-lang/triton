@@ -86,8 +86,12 @@ def TTC_PrintOp : TTC_Op<"print", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
     It only takes a single scalar or vector (tensor) element.
   }];
 
-  let arguments = (ins StrAttr:$prefix, BoolAttr:$hex,
-                   Variadic<AnyTypeOf<[TT_Float, TT_Int, TT_Ptr, TTC_Vector]>>:$val);
+  let arguments = (ins
+    StrAttr:$prefix,
+    BoolAttr:$hex,
+    Variadic<AnyTypeOf<[TT_Float, TT_Int, TT_Ptr, TTC_Vector]>>:$val,
+    DenseI32ArrayAttr:$isSigned
+  );
 
   let assemblyFormat = [{
     $prefix attr-dict (`:` $val^ `:` type($val))?

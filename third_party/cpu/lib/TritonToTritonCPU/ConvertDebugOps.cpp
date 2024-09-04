@@ -51,15 +51,19 @@ struct PrintOpConversion : public OpConversionPattern<triton::PrintOp> {
     // (tt.print doesn't accept vector types, so we have this intermediate op.)
     if (op.getNumOperands() == 0) {
       rewriter.create<triton::cpu::PrintOp>(loc, op.getPrefix(), op.getHex(),
-                                            ValueRange{});
+                                            ValueRange{},
+                                            llvm::SmallVector<int, 0>{});
     } else {
       // triton_cpu.print takes up to one vector or scalar operand. It prints
       // each value as a separate print call like the GPU and interpreter.
+      assert(op.getNumOperands() == op.getIsSigned().size());
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         Value opr = op.getOperands()[i];
+        llvm::SmallVector<int, 1> isSigned = {op.getIsSigned()[i]};
         // TODO: Consider using memrefs for general N-dimensional vectors.
         rewriter.create<triton::cpu::PrintOp>(loc, op.getPrefix(), op.getHex(),
-                                              rewriter.getRemappedValue(opr));
+                                              rewriter.getRemappedValue(opr),
+                                              isSigned);
       }
     }
 
