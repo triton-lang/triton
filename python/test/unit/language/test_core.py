@@ -1,7 +1,7 @@
 # flake8: noqa: F821,F841
 import itertools
 import re
-from typing import Optional, Union
+from typing import Optional
 import math
 import textwrap
 import tempfile
@@ -15,8 +15,21 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.runtime.jit import TensorWrapper, reinterpret
 from triton.language.extra import libdevice
+
+from triton._internal_testing import (
+    int_dtypes,
+    uint_dtypes,
+    float_dtypes,
+    dtypes,
+    dtypes_with_bfloat16,
+    torch_float8_dtypes,
+    torch_dtypes,
+    numpy_random,
+    to_triton,
+    torch_dtype_name,
+    to_numpy,
+)
 
 
 def is_interpreter():
@@ -44,14 +57,6 @@ def get_arch():
     return "" if target is None else str(target.arch)
 
 
-int_dtypes = ['int8', 'int16', 'int32', 'int64']
-uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
-float_dtypes = ['float16', 'float32', 'float64']
-dtypes = int_dtypes + uint_dtypes + float_dtypes
-dtypes_with_bfloat16 = dtypes + ['bfloat16']
-torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
-torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
-
 # TODO: enable multiple cta cluster testing.
 # num_ctas_list = [1, 4] if torch.cuda.get_device_capability()[0] == 9 else [1]
 num_ctas_list = [1]
@@ -68,77 +73,6 @@ else:
 def _bitwidth(dtype: str) -> int:
     # ex.: "int64" -> 64
     return int(re.search(r'(\d+)$', dtype).group(1))
-
-
-def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, high=None):
-    """
-    Override `rs` if you're calling this function twice and don't want the same
-    result for both calls.
-    """
-    if isinstance(shape, int):
-        shape = (shape, )
-    if rs is None:
-        rs = RandomState(seed=17)
-    if dtype_str in int_dtypes + uint_dtypes:
-        iinfo = np.iinfo(getattr(np, dtype_str))
-        low = iinfo.min if low is None else max(low, iinfo.min)
-        high = iinfo.max if high is None else min(high, iinfo.max)
-        dtype = getattr(np, dtype_str)
-        x = rs.randint(low, high, shape, dtype=dtype)
-        x[x == 0] = 1  # Workaround. Never return zero so tests of division don't error out.
-        return x
-    elif dtype_str and 'float8' in dtype_str:
-        x = rs.randint(20, 40, shape, dtype=np.int8)
-        return x
-    elif dtype_str in float_dtypes:
-        return rs.normal(0, 1, shape).astype(dtype_str)
-    elif dtype_str == 'bfloat16':
-        return (rs.normal(0, 1, shape).astype('float32').view('uint32') & np.uint32(0xffff0000)).view('float32')
-    elif dtype_str in ['bool', 'int1', 'bool_']:
-        return rs.normal(0, 1, shape) > 0.0
-    else:
-        raise RuntimeError(f'Unknown dtype {dtype_str}')
-
-
-def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torch.Tensor]:
-    '''
-    Note: We need dst_type because the type of x can be different from dst_type.
-          For example: x is of type `float32`, dst_type is `bfloat16`.
-          If dst_type is None, we infer dst_type from x.
-    '''
-    t = x.dtype.name
-    if t in uint_dtypes:
-        signed_type_name = t.lstrip('u')  # e.g. "uint16" -> "int16"
-        x_signed = x.astype(getattr(np, signed_type_name))
-        return reinterpret(torch.tensor(x_signed, device=device), getattr(tl, t))
-    else:
-        if dst_type and 'float8' in dst_type:
-            return reinterpret(torch.tensor(x, device=device), getattr(tl, dst_type))
-        if t == 'float32' and dst_type == 'bfloat16':
-            return torch.tensor(x, device=device).bfloat16()
-        return torch.tensor(x, device=device)
-
-
-def torch_dtype_name(dtype) -> str:
-    if isinstance(dtype, triton.language.dtype):
-        return dtype.name
-    elif isinstance(dtype, torch.dtype):
-        # 'torch.int64' -> 'int64'
-        m = re.match(r'^torch\.(\w+)$', str(dtype))
-        return m.group(1)
-    else:
-        raise TypeError(f'not a triton or torch dtype: {type(dtype)}')
-
-
-def to_numpy(x):
-    if isinstance(x, TensorWrapper):
-        return x.base.cpu().numpy().astype(getattr(np, torch_dtype_name(x.dtype)))
-    elif isinstance(x, torch.Tensor):
-        if x.dtype is torch.bfloat16:
-            return x.cpu().float().numpy()
-        return x.cpu().numpy()
-    else:
-        raise ValueError(f"Not a triton-compatible tensor: {x}")
 
 
 def patch_kernel(template, to_replace):
@@ -1068,6 +1002,12 @@ def test_abs(dtype_x, device):
 def test_abs_fp8(in_dtype, device):
     if is_hip():
         pytest.skip('test_abs_fp8 not supported on HIP.')
+    elif is_cuda():
+        cc = torch.cuda.get_device_capability()
+        if in_dtype == tl.float8e4b15 and cc >= (9, 0):
+            pytest.skip("float8e4b15 not supported on CUDA >= 9.0")
+        if in_dtype == tl.float8e4nv and cc < (8, 9):
+            pytest.skip("float8e4nv not supported on CUDA < 8.9")
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):
@@ -2948,8 +2888,11 @@ def test_generic_reduction(device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_permute(dtype_str, shape, perm, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
-    if is_hip() and shape == (128, 128) and dtype_str == 'float32':
-        pytest.skip("TODO Out of LDS for float32 with shape 128x128")
+    if dtype_str == "float8e4b15" and (is_hip() or (is_cuda() and torch.cuda.get_device_capability() >= (9, 0))):
+        pytest.skip("float8e4b15 not supported on ROCm or CUDA >= 9.0")
+    if is_hip():
+        if shape == (128, 128) and dtype_str == 'float32':
+            pytest.skip("TODO Out of LDS for float32 with shape 128x128")
 
     # triton kernel
     @triton.jit
@@ -3797,27 +3740,30 @@ def test_load_cache_modifier(cache, device):
 
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
-    if not is_cuda():
-        if is_hip():
-            amdgcn = pgm.asm['amdgcn']
-            cache_modifier_str = 'nt' if 'gfx94' in get_arch() else 'glc'
-            global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
-            if cache == '':
-                assert cache_modifier_str not in global_load_line[0]
-            if cache == '.cg':
-                assert cache_modifier_str in global_load_line[0]
-        return
+    if is_hip():
+        target_arch = get_arch()
+        # TODO: support testing for remaining architectures
+        if 'gfx94' not in target_arch:
+            return
+        amdgcn = pgm.asm['amdgcn']
+        cg_cache_modifier_str = 'nt'
+        global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
+        if cache == '' or cache == '.ca':
+            assert cg_cache_modifier_str not in global_load_line[0]
+        if cache == '.cg':
+            assert cg_cache_modifier_str in global_load_line[0]
 
-    ptx = pgm.asm['ptx']
-    if cache == '':
-        assert 'ld.global.ca' not in ptx
-        assert 'ld.global.cg' not in ptx
-    if cache == '.cg':
-        assert 'ld.global.cg' in ptx
-        assert 'ld.global.ca' not in ptx
-    if cache == '.ca':
-        assert 'ld.global.ca' in ptx
-        assert 'ld.global.cg' not in ptx
+    if is_cuda():
+        ptx = pgm.asm['ptx']
+        if cache == '':
+            assert 'ld.global.ca' not in ptx
+            assert 'ld.global.cg' not in ptx
+        if cache == '.cg':
+            assert 'ld.global.cg' in ptx
+            assert 'ld.global.ca' not in ptx
+        if cache == '.ca':
+            assert 'ld.global.ca' in ptx
+            assert 'ld.global.cg' not in ptx
 
 
 @pytest.mark.interpreter
@@ -3912,35 +3858,54 @@ def test_store_cache_modifier(cache, device):
         x = tl.load(src + offsets)
         tl.store(dst + offsets, x, cache_modifier=CACHE)
 
-    if not is_cuda():
-        return
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
-    ptx = pgm.asm['ptx']
-    if cache == '':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.wb':
-        assert 'st.global.wb' in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.cg':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.cs':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.wt':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' in ptx
+
+    if is_hip():
+        target_arch = get_arch()
+        # TODO: support testing for remaining architectures
+        if 'gfx94' not in target_arch:
+            return
+        amdgcn = pgm.asm['amdgcn']
+        cs_cache_modifier_str = 'nt'
+        wt_cache_modifier_str = 'sc0 sc1'
+        global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
+        if cache == '' or cache == '.cg':
+            assert cs_cache_modifier_str not in global_store_line[0]
+            assert wt_cache_modifier_str not in global_store_line[0]
+        if cache == '.cs':
+            assert cs_cache_modifier_str in global_store_line[0]
+            assert wt_cache_modifier_str not in global_store_line[0]
+        if cache == '.wt':
+            assert cs_cache_modifier_str not in global_store_line[0]
+            assert wt_cache_modifier_str in global_store_line[0]
+
+    if is_cuda():
+        ptx = pgm.asm['ptx']
+        if cache == '':
+            assert 'st.global.wb' not in ptx
+            assert 'st.global.cg' not in ptx
+            assert 'st.global.cs' not in ptx
+            assert 'st.global.wt' not in ptx
+        if cache == '.wb':
+            assert 'st.global.wb' in ptx
+            assert 'st.global.cg' not in ptx
+            assert 'st.global.cs' not in ptx
+            assert 'st.global.wt' not in ptx
+        if cache == '.cg':
+            assert 'st.global.wb' not in ptx
+            assert 'st.global.cg' in ptx
+            assert 'st.global.cs' not in ptx
+            assert 'st.global.wt' not in ptx
+        if cache == '.cs':
+            assert 'st.global.wb' not in ptx
+            assert 'st.global.cg' not in ptx
+            assert 'st.global.cs' in ptx
+            assert 'st.global.wt' not in ptx
+        if cache == '.wt':
+            assert 'st.global.wb' not in ptx
+            assert 'st.global.cg' not in ptx
+            assert 'st.global.cs' not in ptx
+            assert 'st.global.wt' in ptx
 
 
 @pytest.mark.interpreter

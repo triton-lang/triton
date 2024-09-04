@@ -758,9 +758,6 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
             raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                              "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
 
-    if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
-        assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
-
     if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
         assert builder.codegen_fns.get(
             "convert_custom_types") is not None, "target doesn't provide conversion for this type."
@@ -1054,6 +1051,41 @@ def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir
     return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
 
 
+def tensormap_create(
+    desc_ptr: tl.tensor,
+    global_address: tl.tensor,
+    box_dim: List[tl.tensor],
+    global_dim: List[tl.tensor],
+    global_stride: List[tl.tensor],
+    element_stride: List[tl.tensor],
+    elem_type: int,
+    interleave_layout: int,
+    swizzle_mode: int,
+    fill_mode: int,
+    builder: ir.builder,
+) -> tl.tensor:
+    assert not global_stride or global_stride[0].dtype == tl.int64
+    return tl.tensor(
+        builder.create_tensormap_create(
+            desc_ptr.handle,
+            global_address.handle,
+            [x.handle for x in box_dim],
+            [x.handle for x in global_dim],
+            [x.handle for x in global_stride],
+            [x.handle for x in element_stride],
+            elem_type,
+            interleave_layout,
+            swizzle_mode,
+            fill_mode,
+        ),
+        tl.void,
+    )
+
+
+def tensormap_fenceproxy_acquire(desc_ptr: tl.tensor, builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_tensormap_fenceproxy_acquire(desc_ptr.handle), tl.void)
+
+
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
     # Store by a block pointer: `pointer_type<block_type<>>`
     # Block pointers can not have the `mask` argument
@@ -1321,41 +1353,18 @@ def _str_to_dot_input_precision(input_precision, builder):
 
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optional[str], max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
-
-    def assert_dtypes_valid(lhs_dtype, rhs_dtype, options):
-        if not options.allow_fp8e4nv:
-            assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(
-            ), "Dot op does not support fp8e4nv on CUDA arch < 90"
-            if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
-                return
-            assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
-        else:
-            if lhs_dtype.is_int() or rhs_dtype.is_int():
-                assert lhs_dtype == rhs_dtype, f"Both operands must be same type. First operand ({lhs_dtype}) and second operand ({rhs_dtype})"
-                assert lhs_dtype.is_int8() or lhs_dtype.is_uint8(
-                ), f"Both operands must be either int8 or uint8. Operand type ({lhs_dtype})"
-            elif lhs_dtype.is_fp8() or rhs_dtype.is_fp8():
-                if options.allow_fp8e4b15:
-                    allowed_types = ['fp8e4nv', 'fp8e5', 'fp8e4b15']
-                else:
-                    allowed_types = ['fp8e4nv', 'fp8e5']
-
-                def _validate_dtype(dtype, allowed_types, operand_name):
-                    if not any(getattr(dtype, f'is_{dtype_name}')() for dtype_name in allowed_types):
-                        supported_types = ', '.join(allowed_types)
-                        raise AssertionError(f"Only supports {supported_types}. {operand_name} ({dtype})")
-
-                _validate_dtype(lhs_dtype, allowed_types, "First operand")
-                _validate_dtype(rhs_dtype, allowed_types, "Second operand")
-            else:
-                assert lhs_dtype.is_fp16() or lhs_dtype.is_bf16() or lhs_dtype.is_fp32() or lhs_dtype.is_int1(
-                ), f"Unsupported dtype {lhs_dtype}"
-                assert rhs_dtype.is_fp16() or rhs_dtype.is_bf16() or rhs_dtype.is_fp32() or rhs_dtype.is_int1(
-                ), f"Unsupported dtype {rhs_dtype}"
-                assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
-
     assert lhs.type.is_block() and rhs.type.is_block()
-    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.options)
+
+    if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+        # All combinations of supported fp8 x fp8 are permitted
+        pass
+    else:
+        assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
+                             tl.float32), f"Unsupported lhs dtype {lhs.dtype}"
+        assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
+                             tl.float32), f"Unsupported rhs dtype {rhs.dtype}"
+        assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)

@@ -3005,6 +3005,26 @@ LogicalResult MemDescSubviewOp::verify() {
   return success();
 }
 
+// -- LocalAllocOp --
+
+int32_t LocalAllocOp::getAlignmentOrDefault() {
+  auto align = getAlignment();
+  if (align) {
+    return *align;
+  }
+
+  auto ty = getType();
+  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
+  auto bytes =
+      product<int64_t>(shapePerCTA) * (ty.getElementTypeBitWidth() / 8);
+
+  // XXX(Keren): magic numbers 256 and 1024
+  // Software swizzling calculates phase based on offset, while hardware
+  // swizzling do that based on physical address. Thus only by setting the
+  // alignment to 1024 can ensure the correctness.
+  return bytes > 256 ? 1024 : 8;
+}
+
 //===----------------------------------------------------------------------===//
 // Layout debug printing
 //===----------------------------------------------------------------------===//

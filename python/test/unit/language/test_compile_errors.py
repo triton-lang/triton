@@ -1,9 +1,28 @@
+import contextlib
 import pytest
+import os
 
+import torch
 import triton
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
+
+
+def is_interpreter():
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+
+def is_cuda():
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def is_hip():
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+def is_on_mi300():
+    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942')
 
 
 def test_err_undefined_variable():
@@ -320,6 +339,36 @@ def test_defaults_assign_no_err():
         pass
 
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
+
+
+@pytest.mark.parametrize("dtype", [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15])
+def test_fp8_support(dtype):
+    supported_dtypes = [tl.float8e5]
+    if is_cuda():
+        cc = torch.cuda.get_device_capability(0)
+        if cc < (9, 0):
+            supported_dtypes.append(tl.float8e4b15)
+        if cc >= (8, 9):
+            supported_dtypes.append(tl.float8e4nv)
+    elif is_hip():
+        if is_on_mi300():
+            supported_dtypes += [tl.float8e4b8, tl.float8e5b16]
+    elif is_interpreter():
+        supported_dtypes = [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15]
+
+    @triton.jit
+    def dtype_kernel(dtype: tl.constexpr):
+        _ = tl.full((256, ), 0.0, dtype)
+
+    maybe_error = (contextlib.nullcontext() if dtype in supported_dtypes else pytest.raises(CompilationError, match=""))
+    with maybe_error as e:
+        triton.compile(triton.compiler.ASTSource(fn=dtype_kernel, signature={}, constants={"dtype": dtype}))
+
+    if dtype not in supported_dtypes:
+        try:
+            assert ("not supported in this architecture" in str(e.value.__cause__))
+        except AssertionError as assertion_err:
+            raise assertion_err from e.value
 
 
 def test_max_num_imprecise_acc_limit():

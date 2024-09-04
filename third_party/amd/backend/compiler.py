@@ -35,8 +35,7 @@ class HIPOptions:
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
     arch: str = None
-    allow_fp8e4nv: bool = False
-    allow_fp8e4b15: bool = False
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
@@ -77,7 +76,14 @@ class HIPBackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         args = {'arch': self.target.arch}
-        if not "enable_fp_fusion" in args:
+
+        if "supported_fp8_dtypes" not in opts:
+            supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
+            if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
+                supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
+            args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
+
+        if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)

@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Alias.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
@@ -179,8 +180,6 @@ private:
 
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
-    // XXX(Keren): Why this hard-coded alignment?
-    size_t kAlignment = 8;
     for (Value result : op->getResults()) {
       auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>();
       if (alloc && alloc.isSharedMemoryAlloc()) {
@@ -191,15 +190,9 @@ private:
         auto bytes = product<int64_t>(shapePerCTA) *
                      allocType.getElementTypeBitWidth() / 8;
 
-        // XXX(Keren): magic numbers 256 and 1024
-        // benzh@maybe alignment should be passed in.
-        // Software swizzling calculates phase based on offset, while hardware
-        // swizzling do that based on physical address. Thus only by setting the
-        // alignment to 1024 can ensure the correctness. 
-        if (bytes > 256)
-          kAlignment = 1024;
+        auto alignment = alloc.getAlignmentOrDefault();
         allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
-                                                             kAlignment);
+                                                             alignment);
       }
     }
   }
@@ -285,6 +278,12 @@ private:
       auto bytes = funcAlloc->getSharedMemorySize();
       maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, bytes,
                                                           scratchAlignment);
+    } else if (auto createTensormap =
+                   dyn_cast<ExperimentalTensormapCreateOp>(op)) {
+      constexpr int32_t kTMASize = 128;
+      constexpr int32_t kTMAAlign = 128;
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, kTMASize,
+                                                          kTMAAlign);
     }
   }
 

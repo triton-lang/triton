@@ -94,8 +94,7 @@ class CUDAOptions:
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
     enable_fp_fusion: bool = True
-    allow_fp8e4nv: bool = False
-    allow_fp8e4b15: bool = False
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: bool = None
@@ -133,9 +132,15 @@ class CUDABackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
-        args["allow_fp8e4nv"] = self.capability >= 89
-        args["allow_fp8e4b15"] = self.capability < 90
-        if not "enable_fp_fusion" in args:
+        if "supported_fp8_dtypes" not in args:
+            supported_fp8_dtypes = set(CUDAOptions.supported_fp8_dtypes)
+            if self.capability < 90:
+                supported_fp8_dtypes.add("fp8e4b15")
+            if self.capability >= 89:
+                supported_fp8_dtypes.add("fp8e4nv")
+            args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
+
+        if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)

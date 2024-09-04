@@ -1016,5 +1016,23 @@ void ExternElementwiseOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
+// -- ExperimentalTensormapCreateOp --
+LogicalResult ExperimentalTensormapCreateOp::verify() {
+  auto rank = getBoxDim().size();
+  if (getGlobalDim().size() != rank) {
+    return emitError("Rank mismatch for global dim. Got")
+           << getGlobalDim().size() << " but expected " << rank;
+  }
+  if (getGlobalStride().size() + 1 != rank) {
+    return emitError("Rank mismatch for global stride. Got")
+           << getGlobalStride().size() << " but expected " << rank - 1;
+  }
+  if (getElementStride().size() != rank) {
+    return emitError("Rank mismatch for element stride. Got")
+           << getElementStride().size() << " but expected " << rank;
+  }
+  return success();
+}
+
 } // namespace triton
 } // namespace mlir

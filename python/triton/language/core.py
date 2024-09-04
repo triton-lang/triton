@@ -497,6 +497,10 @@ class dtype:
         return self
 
     def to_ir(self, builder: ir.builder) -> ir.type:
+        if self.name.startswith("fp8") and self.name not in builder.options.supported_fp8_dtypes:
+            raise ValueError(f'type {self} not supported in this architecture. '
+                             f'The supported fp8 dtypes are {builder.options.supported_fp8_dtypes}')
+
         if self.name == 'void':
             return builder.get_void_ty()
         elif self.name == 'int1':
@@ -597,8 +601,8 @@ class pointer_type(dtype):
 
 class nv_tma_desc_type(pointer_type):
 
-    def __init__(self):
-        super().__init__(uint8, const=True, address_space=0)
+    def __init__(self, const=True, address_space=0):
+        super().__init__(uint8, const=const, address_space=address_space)
         self.name = 'nv_tma_desc_type'
 
 

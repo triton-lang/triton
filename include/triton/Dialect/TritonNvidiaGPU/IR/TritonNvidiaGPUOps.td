@@ -244,5 +244,4 @@ def TTNG_TMAStoreWait : TTNG_Op<"async_tma_store_wait"> {
   let assemblyFormat = "attr-dict";
 }
 
-
 #endif
