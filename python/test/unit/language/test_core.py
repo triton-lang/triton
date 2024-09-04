@@ -3797,27 +3797,30 @@ def test_load_cache_modifier(cache, device):
 
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
-    if not is_cuda():
-        if is_hip():
-            amdgcn = pgm.asm['amdgcn']
-            cache_modifier_str = 'nt' if 'gfx94' in get_arch() else 'glc'
-            global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
-            if cache == '':
-                assert cache_modifier_str not in global_load_line[0]
-            if cache == '.cg':
-                assert cache_modifier_str in global_load_line[0]
-        return
+    if is_hip():
+        target_arch = get_arch()
+        # TODO: support testing for remaining architectures
+        if 'gfx94' not in target_arch:
+            return
+        amdgcn = pgm.asm['amdgcn']
+        cg_cache_modifier_str = 'nt'
+        global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
+        if cache == '' or cache == '.ca':
+            assert cg_cache_modifier_str not in global_load_line[0]
+        if cache == '.cg':
+            assert cg_cache_modifier_str in global_load_line[0]
 
-    ptx = pgm.asm['ptx']
-    if cache == '':
-        assert 'ld.global.ca' not in ptx
-        assert 'ld.global.cg' not in ptx
-    if cache == '.cg':
-        assert 'ld.global.cg' in ptx
-        assert 'ld.global.ca' not in ptx
-    if cache == '.ca':
-        assert 'ld.global.ca' in ptx
-        assert 'ld.global.cg' not in ptx
+    if is_cuda():
+        ptx = pgm.asm['ptx']
+        if cache == '':
+            assert 'ld.global.ca' not in ptx
+            assert 'ld.global.cg' not in ptx
+        if cache == '.cg':
+            assert 'ld.global.cg' in ptx
+            assert 'ld.global.ca' not in ptx
+        if cache == '.ca':
+            assert 'ld.global.ca' in ptx
+            assert 'ld.global.cg' not in ptx
 
 
 @pytest.mark.interpreter
@@ -3912,35 +3915,54 @@ def test_store_cache_modifier(cache, device):
         x = tl.load(src + offsets)
         tl.store(dst + offsets, x, cache_modifier=CACHE)
 
-    if not is_cuda():
-        return
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
-    ptx = pgm.asm['ptx']
-    if cache == '':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.wb':
-        assert 'st.global.wb' in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.cg':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.cs':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.wt':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' in ptx
+
+    if is_hip():
+        target_arch = get_arch()
+        # TODO: support testing for remaining architectures
+        if 'gfx94' not in target_arch:
+            return
+        amdgcn = pgm.asm['amdgcn']
+        cs_cache_modifier_str = 'nt'
+        wt_cache_modifier_str = 'sc0 sc1'
+        global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
+        if cache == '' or cache == '.cg':
+            assert cs_cache_modifier_str not in global_store_line[0]
+            assert wt_cache_modifier_str not in global_store_line[0]
+        if cache == '.cs':
+            assert cs_cache_modifier_str in global_store_line[0]
+            assert wt_cache_modifier_str not in global_store_line[0]
+        if cache == '.wt':
+            assert cs_cache_modifier_str not in global_store_line[0]
+            assert wt_cache_modifier_str in global_store_line[0]
+
+    if is_cuda():
+        ptx = pgm.asm['ptx']
+        if cache == '':
+            assert 'st.global.wb' not in ptx
+            assert 'st.global.cg' not in ptx
+            assert 'st.global.cs' not in ptx
+            assert 'st.global.wt' not in ptx
+        if cache == '.wb':
+            assert 'st.global.wb' in ptx
+            assert 'st.global.cg' not in ptx
+            assert 'st.global.cs' not in ptx
+            assert 'st.global.wt' not in ptx
+        if cache == '.cg':
+            assert 'st.global.wb' not in ptx
+            assert 'st.global.cg' in ptx
+            assert 'st.global.cs' not in ptx
+            assert 'st.global.wt' not in ptx
+        if cache == '.cs':
+            assert 'st.global.wb' not in ptx
+            assert 'st.global.cg' not in ptx
+            assert 'st.global.cs' in ptx
+            assert 'st.global.wt' not in ptx
+        if cache == '.wt':
+            assert 'st.global.wb' not in ptx
+            assert 'st.global.cg' not in ptx
+            assert 'st.global.cs' not in ptx
+            assert 'st.global.wt' in ptx
 
 
 @pytest.mark.interpreter
