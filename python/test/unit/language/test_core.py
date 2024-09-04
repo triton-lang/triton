@@ -1068,6 +1068,12 @@ def test_abs(dtype_x, device):
 def test_abs_fp8(in_dtype, device):
     if is_hip():
         pytest.skip('test_abs_fp8 not supported on HIP.')
+    elif is_cuda():
+        cc = torch.cuda.get_device_capability()
+        if in_dtype == tl.float8e4b15 and cc >= (9, 0):
+            pytest.skip("float8e4b15 not supported on CUDA >= 9.0")
+        if in_dtype == tl.float8e4nv and cc < (8, 9):
+            pytest.skip("float8e4nv not supported on CUDA < 8.9")
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):
@@ -2948,8 +2954,11 @@ def test_generic_reduction(device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_permute(dtype_str, shape, perm, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
-    if is_hip() and shape == (128, 128) and dtype_str == 'float32':
-        pytest.skip("TODO Out of LDS for float32 with shape 128x128")
+    if dtype_str == "float8e4b15" and (is_hip() or (is_cuda() and torch.cuda.get_device_capability() >= (9, 0))):
+        pytest.skip("float8e4b15 not supported on ROCm or CUDA >= 9.0")
+    if is_hip():
+        if shape == (128, 128) and dtype_str == 'float32':
+            pytest.skip("TODO Out of LDS for float32 with shape 128x128")
 
     # triton kernel
     @triton.jit

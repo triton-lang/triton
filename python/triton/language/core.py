@@ -497,6 +497,10 @@ class dtype:
         return self
 
     def to_ir(self, builder: ir.builder) -> ir.type:
+        if self.name.startswith("fp8") and self.name not in builder.options.supported_fp8_dtypes:
+            raise ValueError(f'type {self} not supported in this architecture. '
+                             f'The supported fp8 dtypes are {builder.options.supported_fp8_dtypes}')
+
         if self.name == 'void':
             return builder.get_void_ty()
         elif self.name == 'int1':
