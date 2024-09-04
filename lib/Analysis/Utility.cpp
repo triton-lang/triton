@@ -426,6 +426,7 @@ bool supportMFMATypes(Type a, Type b) {
     return false;
 
   auto F8E5M2 = TypeID::get<Float8E5M2Type>();
+  auto F8E4M3FN = TypeID::get<Float8E4M3FNType>();
   auto F8E4M3FNUZ = TypeID::get<Float8E4M3FNUZType>();
   auto F8E5M2FNUZ = TypeID::get<Float8E5M2FNUZType>();
   auto F16 = TypeID::get<Float16Type>();
@@ -437,6 +438,7 @@ bool supportMFMATypes(Type a, Type b) {
       {F16, F16},
       {BF16, BF16},
       {F8E5M2, F8E5M2},
+      {F8E4M3FN, F8E4M3FN},
       {F8E4M3FNUZ, F8E4M3FNUZ},
       {F8E4M3FNUZ, F8E5M2FNUZ},
       {F8E5M2FNUZ, F8E4M3FNUZ},
@@ -495,14 +497,14 @@ bool supportMMA(triton::DotOp op, int version) {
       return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
           retShapePerCTA[rank - 1] % 8 == 0 &&
-          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
+          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN() ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
       return false;
     }
     // We cannot use MMA_V3 if we need to accumulate in F32 within the MMA op.
     if (op.getMaxNumImpreciseAcc() < 32 &&
-        (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ()) &&
+        (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN()) &&
         cast<RankedTensorType>(op.getType()).getElementType().isF32()) {
       return false;
     }
