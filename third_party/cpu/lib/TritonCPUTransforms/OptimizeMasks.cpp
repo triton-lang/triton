@@ -116,8 +116,11 @@ struct CdivToDiv : public OpRewritePattern<arith::DivSIOp> {
       }
       return false;
     });
-    if (!replaced)
+
+    if (!replaced) {
+      rewriter.eraseOp(newRes.getDefiningOp());
       return failure();
+    }
 
     return success();
   }

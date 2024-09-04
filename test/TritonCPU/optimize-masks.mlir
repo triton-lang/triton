@@ -71,3 +71,23 @@ module {
     tt.return
   }
 }
+
+// -----
+
+// Regression test for the infinite optimization loop bug.
+
+module {
+  tt.func public @remove_masks_in_for_loop(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+    %c0 = arith.constant 0 : index
+    %cst = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]> : vector<16xi32>
+    %c15_i32 = arith.constant 15 : i32
+    %c16_i32 = arith.constant 16 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : vector<16xf32>
+    %0 = arith.addi %arg1, %c15_i32 : i32
+    %1 = arith.divsi %0, %c16_i32 : i32
+    tt.store %arg0, %1 : !tt.ptr<i32>
+    tt.return
+  }
+}
