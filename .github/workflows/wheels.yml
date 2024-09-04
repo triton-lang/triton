@@ -88,11 +88,10 @@ jobs:
           echo "::add-mask::$AZ_TOKEN"
           echo "access_token=$AZ_TOKEN" >> "$GITHUB_OUTPUT"
 
-      - name: Publish wheels to Azure DevOps
+      - name: Publish wheels to index
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
-          python3 -m pip install twine
-          python3 -m twine upload -r Triton-Nightly -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
+          az storage blob upload --account-name oaitriton --auth-mode login --container-name public --source wheelhouse --destination-path "nightly-wheels/" --overwrite
 
       - name: Azure Logout
         if: ${{ steps.check-version.outputs.new_commit == 'true' && (success() || failure()) }}
