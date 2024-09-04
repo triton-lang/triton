@@ -1394,7 +1394,8 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
 
 def where(condition: tl.tensor, x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
-    condition = cast(condition, tl.int1, builder)
+    if condition.dtype != tl.int1:
+        raise ValueError(f"tl.where: condition must be a boolean. Got {condition.dtype}")
     if condition.type.is_block():
         condition, x = broadcast_impl_value(condition, x, builder)
         x, y = broadcast_impl_value(x, y, builder)
