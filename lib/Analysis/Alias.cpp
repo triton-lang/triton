@@ -34,9 +34,8 @@ LogicalResult SharedMemoryAliasAnalysis::visitOperation(
       return success();
   }
 
-  // New buffer creation ops.
-  if (isa<triton::gpu::LocalAllocOp, triton::ExperimentalTensormapAllocOp>(
-          op)) {
+  // Only LocalAllocOp creates a new buffer.
+  if (isa<triton::gpu::LocalAllocOp>(op)) {
     aliasInfo.insert(result);
     pessimistic = false;
   } else if (isa<triton::gpu::MemDescSubviewOp, triton::TransOp>(op)) {

@@ -1,10 +1,15 @@
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/TypeUtilities.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
+#include "mlir/IR/Value.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -12,22 +17,33 @@ using namespace mlir::triton;
 namespace {
 constexpr int64_t TMA_SIZE_BYTES = 128;
 
-struct TensormapAllocOpConversion
-    : public ConvertOpToLLVMPattern<triton::ExperimentalTensormapAllocOp> {
+Value getDescPtr(Location loc, Value origMemDesc, Value adaptedMemDesc,
+                 const TypeConverter *typeConverter,
+                 ConversionPatternRewriter &rewriter) {
+  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+      loc, adaptedMemDesc,
+      typeConverter->convertType(
+          mlir::cast<MemDescType>(origMemDesc.getType()).getElementType()),
+      rewriter);
+  return smemObj.getBase();
+}
+
+struct TensormapLoadDescriptorOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::nvidia_gpu::TensormapLoadDescriptorOp> {
   const NVIDIA::TargetInfo &targetInfo;
 
-  TensormapAllocOpConversion(LLVMTypeConverter &converter,
-                             const NVIDIA::TargetInfo &targetInfo,
-                             PatternBenefit benefit)
+  TensormapLoadDescriptorOpConversion(LLVMTypeConverter &converter,
+                                      const NVIDIA::TargetInfo &targetInfo,
+                                      PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(triton::ExperimentalTensormapAllocOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::TensormapLoadDescriptorOp op,
+                  OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto ctx = getContext();
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
 
     auto i32Ty = rewriter.getI32Type();
     constexpr int kWarpSize = 32;
@@ -37,7 +53,7 @@ struct TensormapAllocOpConversion
     // Load template descriptor into registers
     Value tmaVal = [&] {
       auto ptrTy = ptr_ty(ctx, /*addressSpace=*/1);
-      auto readAddr = gep(ptrTy, i32Ty, adaptor.getTemplatePtr(), threadId);
+      auto readAddr = gep(ptrTy, i32Ty, adaptor.getSource(), threadId);
 
       PTXBuilder ptxBuilder;
       auto *dstsOpr = ptxBuilder.newListOperand();
@@ -51,28 +67,30 @@ struct TensormapAllocOpConversion
     }();
 
     // Write to shared memory
+    auto descPtr = getDescPtr(loc, op.getDesc(), adaptor.getDesc(),
+                              typeConverter, rewriter);
     auto ptrTy = ptr_ty(ctx, /*addressSpace=*/3);
-    auto writeAddr = gep(ptrTy, i32Ty, smemBase, threadId);
+    auto writeAddr = gep(ptrTy, i32Ty, descPtr, threadId);
     targetInfo.storeShared(rewriter, loc, writeAddr, tmaVal, pred);
 
     // Sync warp
     PTXBuilder ptxBuilder;
     auto &bar = *ptxBuilder.create<>("bar.warp.sync");
     auto *maskOpr = ptxBuilder.newConstantOperand(0xffffffff);
-    bar(maskOpr);
+    bar(maskOpr).predicate(pred);
     ptxBuilder.launch(rewriter, loc, void_ty(ctx));
 
-    rewriter.replaceOp(op, {smemBase});
+    rewriter.eraseOp(op);
     return success();
   }
 };
 
 struct TensormapDeallocOpConversion
-    : public ConvertOpToLLVMPattern<triton::ExperimentalTensormapDeallocOp> {
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TensormapDeallocOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::ExperimentalTensormapDeallocOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::TensormapDeallocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // No-op, deallocation is done by allocation analysis
     rewriter.eraseOp(op);
@@ -82,14 +100,16 @@ struct TensormapDeallocOpConversion
 
 struct TensormapCpFenceproxyOpConversion
     : public ConvertOpToLLVMPattern<
-          triton::ExperimentalTensormapCpFenceproxyOp> {
+          triton::nvidia_gpu::TensormapCpFenceproxyOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::ExperimentalTensormapCpFenceproxyOp op,
+  matchAndRewrite(triton::nvidia_gpu::TensormapCpFenceproxyOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
+    auto ctx = op.getContext();
+
     PTXBuilder ptxBuilder;
 
     // prepare asm operands
@@ -106,10 +126,8 @@ struct TensormapCpFenceproxyOpConversion
     constexpr int kWarpSize = 32;
     Value threadId = getThreadId(rewriter, loc);
     Value pred = icmp_slt(threadId, i32_val(kWarpSize));
-
     cp(outAddrOpr, inAddrOpr, sizeOpr).predicate(pred);
 
-    auto ctx = op.getContext();
     ptxBuilder.launch(rewriter, loc, void_ty(ctx));
 
     rewriter.eraseOp(op);
@@ -164,7 +182,8 @@ struct TensormapReplaceOpConversion : public ConvertToLLVMPattern {
     auto loc = op->getLoc();
     PTXBuilder ptxBuilder;
 
-    Value descPtr = operands[0];
+    auto descPtr = getDescPtr(loc, op->getOperand(0), operands[0],
+                              typeConverter, rewriter);
     Value newVal;
     if (operands.size() == 1) {
     } else {
@@ -227,37 +246,39 @@ struct TensormapReplaceOpConversion : public ConvertToLLVMPattern {
 void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<TensormapAllocOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<TensormapDeallocOpConversion, TensormapCpFenceproxyOpConversion,
+  patterns.add<TensormapLoadDescriptorOpConversion>(typeConverter, targetInfo,
+                                                    benefit);
+  patterns.add<TensormapCpFenceproxyOpConversion,
                TensormapFenceproxyAcquireOpConversion>(typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceGlobalAddressOp::getOperationName(),
+      triton::nvidia_gpu::TensormapReplaceGlobalAddressOp::getOperationName(),
       "global_address", patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceRankOp::getOperationName(), "rank",
+      triton::nvidia_gpu::TensormapReplaceRankOp::getOperationName(), "rank",
       patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceBoxDimOp::getOperationName(), "box_dim",
-      patterns.getContext(), typeConverter, benefit);
+      triton::nvidia_gpu::TensormapReplaceBoxDimOp::getOperationName(),
+      "box_dim", patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceGlobalDimOp::getOperationName(), "global_dim",
-      patterns.getContext(), typeConverter, benefit);
+      triton::nvidia_gpu::TensormapReplaceGlobalDimOp::getOperationName(),
+      "global_dim", patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceGlobalStrideOp::getOperationName(),
+      triton::nvidia_gpu::TensormapReplaceGlobalStrideOp::getOperationName(),
       "global_stride", patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceElementStrideOp::getOperationName(),
+      triton::nvidia_gpu::TensormapReplaceElementStrideOp::getOperationName(),
       "element_stride", patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceElemTypeOp::getOperationName(), "elemtype",
-      patterns.getContext(), typeConverter, benefit);
+      triton::nvidia_gpu::TensormapReplaceElemTypeOp::getOperationName(),
+      "elemtype", patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceInterleaveLayoutOp::getOperationName(),
+      triton::nvidia_gpu::TensormapReplaceInterleaveLayoutOp::
+          getOperationName(),
       "interleave_layout", patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceSwizzleModeOp::getOperationName(),
+      triton::nvidia_gpu::TensormapReplaceSwizzleModeOp::getOperationName(),
       "swizzle_mode", patterns.getContext(), typeConverter, benefit);
   patterns.add<TensormapReplaceOpConversion>(
-      ExperimentalTensormapReplaceFillModeOp::getOperationName(), "fill_mode",
-      patterns.getContext(), typeConverter, benefit);
+      triton::nvidia_gpu::TensormapReplaceFillModeOp::getOperationName(),
+      "fill_mode", patterns.getContext(), typeConverter, benefit);
 }

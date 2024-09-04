@@ -64,10 +64,10 @@ void WarpGroupDotOp::getEffects(
   auto &b = getBMutable();
   if (isa<MemDescType>(a.get().getType()))
     effects.emplace_back(MemoryEffects::Read::get(), &a,
-                         mlir::triton::SharedMemory::get());
+                         mlir::triton::gpu::SharedMemory::get());
   if (isa<MemDescType>(b.get().getType()))
     effects.emplace_back(MemoryEffects::Read::get(), &b,
-                         mlir::triton::SharedMemory::get());
+                         mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- WarpGroupDotWaitOp --
@@ -100,7 +100,7 @@ void InitBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- InvalBarrierOp --
@@ -114,7 +114,7 @@ void InvalBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- BarrierExpectOp --
@@ -128,7 +128,7 @@ void BarrierExpectOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- WaitBarrierOp --
@@ -142,7 +142,7 @@ void WaitBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
   // Need a side effect to prevent compiler from reordering and removing
   // the wait operation.
   effects.emplace_back(MemoryEffects::Write::get(),
@@ -166,9 +166,9 @@ void AsyncTMACopyGlobalToLocalOp::getEffects(
   effects.emplace_back(MemoryEffects::Read::get(), &getDescPtrMutable(),
                        mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), &getBarrierMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- AsyncTMACopyLocalToGlobalOp --
@@ -178,7 +178,7 @@ void AsyncTMACopyLocalToGlobalOp::getEffects(
   effects.emplace_back(MemoryEffects::Write::get(), &getDescPtrMutable(),
                        mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 } // namespace nvidia_gpu

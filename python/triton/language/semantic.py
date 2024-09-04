@@ -1054,76 +1054,40 @@ def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir
     return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
 
 
-def tensormap_allocate(
-    template_desc: tl.tensor,
+def tensormap_create(
+    desc_ptr: tl.tensor,
+    template_ptr: tl.tensor,
+    global_address: tl.tensor,
+    box_dim: List[tl.tensor],
+    global_dim: List[tl.tensor],
+    global_stride: List[tl.tensor],
+    element_stride: List[tl.tensor],
+    elem_type: int,
+    interleave_layout: int,
+    swizzle_mode: int,
+    fill_mode: int,
     builder: ir.builder,
 ) -> tl.tensor:
-
-    desc_ty = tl.nv_tma_desc_type(const=False, address_space=3)
-    return tl.tensor(builder.create_tensormap_alloc(template_desc.handle), desc_ty)
-
-
-def tensormap_deallocate(
-    desc: tl.tensor,
-    builder: ir.builder,
-) -> tl.tensor:
-    return tl.tensor(builder.create_tensormap_dealloc(desc.handle), tl.void)
-
-
-def tensormap_cp_fenceproxy(out_ptr: tl.tensor, in_ptr: tl.tensor, builder: ir.builder) -> tl.tensor:
-    # assert isinstance(out_ptr.dtype,  tl.nv_tma_desc_type) and out_ptr.dtype.address_space in (1, 0)
-    # assert isinstance(in_ptr.dtype,  tl.nv_tma_desc_type) and out_ptr.dtype.address_space == 3
-    return tl.tensor(builder.create_tensormap_cp_fenceproxy(out_ptr.handle, in_ptr.handle), tl.void)
+    return tl.tensor(
+        builder.create_tensormap_create(
+            desc_ptr.handle,
+            template_ptr.handle,
+            global_address.handle,
+            [x.handle for x in box_dim],
+            [x.handle for x in global_dim],
+            [x.handle for x in global_stride],
+            [x.handle for x in element_stride],
+            elem_type,
+            interleave_layout,
+            swizzle_mode,
+            fill_mode,
+        ),
+        tl.void,
+    )
 
 
 def tensormap_fenceproxy_acquire(desc_ptr: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_tensormap_fenceproxy_acquire(desc_ptr.handle), tl.void)
-
-
-def tensormap_replace_global_address(desc_ptr: tl.tensor, newval: tl.tensor, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_tensormap_replace_global_address(desc_ptr.handle, newval.handle), tl.void)
-
-
-def tensormap_replace_rank(desc_ptr: tl.tensor, newval: int, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_tensormap_replace_rank(desc_ptr.handle, newval), tl.void)
-
-
-def tensormap_replace_box_dim(desc_ptr: tl.tensor, ord: int, newval: tl.tensor, builder: ir.builder) -> tl.tensor:
-    newval = tl._to_tensor(newval, builder)
-    return tl.tensor(builder.create_tensormap_replace_box_dim(desc_ptr.handle, ord, newval.handle), tl.void)
-
-
-def tensormap_replace_global_dim(desc_ptr: tl.tensor, ord: int, newval: tl.tensor, builder: ir.builder) -> tl.tensor:
-    newval = tl._to_tensor(newval, builder)
-    return tl.tensor(builder.create_tensormap_replace_global_dim(desc_ptr.handle, ord, newval.handle), tl.void)
-
-
-def tensormap_replace_global_stride(desc_ptr: tl.tensor, ord: int, newval: tl.tensor, builder: ir.builder) -> tl.tensor:
-    newval = tl._to_tensor(newval, builder)
-    newval = cast(newval, tl.int64, builder)
-    return tl.tensor(builder.create_tensormap_replace_global_stride(desc_ptr.handle, ord, newval.handle), tl.void)
-
-
-def tensormap_replace_element_stride(desc_ptr: tl.tensor, ord: int, newval: tl.tensor,
-                                     builder: ir.builder) -> tl.tensor:
-    newval = tl._to_tensor(newval, builder)
-    return tl.tensor(builder.create_tensormap_replace_element_stride(desc_ptr.handle, ord, newval.handle), tl.void)
-
-
-def tensormap_replace_elemtype(desc_ptr: tl.tensor, newval: int, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_tensormap_replace_elemtype(desc_ptr.handle, newval), tl.void)
-
-
-def tensormap_replace_interleave_layout(desc_ptr: tl.tensor, newval: int, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_tensormap_replace_interleave_layout(desc_ptr.handle, newval), tl.void)
-
-
-def tensormap_replace_swizzle_mode(desc_ptr: tl.tensor, newval: int, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_tensormap_replace_swizzle_mode(desc_ptr.handle, newval), tl.void)
-
-
-def tensormap_replace_fill_mode(desc_ptr: tl.tensor, newval: int, builder: ir.builder) -> tl.tensor:
-    return tl.tensor(builder.create_tensormap_replace_fill_mode(desc_ptr.handle, newval), tl.void)
 
 
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):

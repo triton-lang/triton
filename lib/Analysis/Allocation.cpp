@@ -177,8 +177,6 @@ private:
 
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
-    // XXX(Keren): Why this hard-coded alignment?
-    size_t kAlignment = 8;
     for (Value result : op->getResults()) {
       auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>();
       if (alloc && alloc.isSharedMemoryAlloc()) {
@@ -189,23 +187,9 @@ private:
         auto bytes = product<int64_t>(shapePerCTA) *
                      allocType.getElementTypeBitWidth() / 8;
 
-        // XXX(Keren): magic numbers 256 and 1024
-        // benzh@maybe alignment should be passed in.
-        // Software swizzling calculates phase based on offset, while hardware
-        // swizzling do that based on physical address. Thus only by setting the
-        // alignment to 1024 can ensure the correctness. 
-        if (bytes > 256)
-          kAlignment = 1024;
+        auto alignment = alloc.getAlignmentOrDefault();
         allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
-                                                             kAlignment);
-      } else if (auto alloc =
-                     result
-                         .getDefiningOp<triton::ExperimentalTensormapAllocOp>();
-                 alloc) {
-        constexpr auto kTmaDescSize = 128;
-        constexpr auto kTmaDescAlign = 128;
-        allocation->addBuffer<BufferT::BufferKind::Explicit>(
-            result, kTmaDescSize, kTmaDescAlign);
+                                                             alignment);
       }
     }
   }

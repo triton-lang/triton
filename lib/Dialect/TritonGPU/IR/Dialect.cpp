@@ -2889,11 +2889,11 @@ void LocalAllocOp::getEffects(
   if (!getType().getMutableMemory() && !op->hasAttr("allocation.offset"))
     return;
   effects.emplace_back(MemoryEffects::Allocate::get(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
   if (getSrc())
     effects.emplace_back(MemoryEffects::Write::get(),
                          getOperation()->getOpResult(0),
-                         mlir::triton::SharedMemory::get());
+                         mlir::triton::gpu::SharedMemory::get());
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
@@ -2931,7 +2931,7 @@ void LocalLoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // LocalStoreOp
@@ -2945,7 +2945,7 @@ void LocalStoreOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // AsyncCopyGlobalToLocalOp
@@ -2961,7 +2961,7 @@ void AsyncCopyGlobalToLocalOp::getEffects(
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::SharedMemory::get());
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 LogicalResult MemDescSubviewOp::verify() {
@@ -3007,6 +3007,26 @@ LogicalResult MemDescSubviewOp::verify() {
   // resulting code ultimately works.
 
   return success();
+}
+
+// -- LocalAllocOp --
+
+int32_t LocalAllocOp::getAlignmentOrDefault() {
+  auto align = getAlignment();
+  if (align) {
+    return *align;
+  }
+
+  auto ty = getType();
+  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
+  auto bytes =
+      product<int64_t>(shapePerCTA) * (ty.getElementTypeBitWidth() / 8);
+
+  // XXX(Keren): magic numbers 256 and 1024
+  // Software swizzling calculates phase based on offset, while hardware
+  // swizzling do that based on physical address. Thus only by setting the
+  // alignment to 1024 can ensure the correctness.
+  return bytes > 256 ? 1024 : 8;
 }
 
 //===----------------------------------------------------------------------===//
