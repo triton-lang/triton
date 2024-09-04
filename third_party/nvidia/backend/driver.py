@@ -114,21 +114,40 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_launcher(constants, signature, ids):
+def _serialize_type(type):
+    if type[0] == '[':
+        return type[1:-1].split(',')
+    return [type]
 
-    # Record the end of regular arguments;
-    # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
+
+def _serialize_signature(signature):
+    ret = dict()
+    i = 0
+    for _, type in signature.items():
+        types = _serialize_type(type)
+        ret.update({i + j: ty for j, ty in enumerate(types)})
+        i += len(types)
+    return ret
+
+
+def make_launcher(constants, signature, ids):
 
     def _extracted_type(ty):
         if ty[0] == '*':
             return "PyObject*"
         if ty == "nvTmaDesc":
             return "PyObject*"
-
+        if ty[0] == '[':
+            tys = ty[1:-1].split(",")
+            val = ','.join(map(_extracted_type, tys))
+            return f"({val})"
         return ty_to_cpp(ty)
 
     def format_of(ty):
+        if ty[0] == "(":
+            tys = ty[1:-1].split(",")
+            val = ''.join(map(format_of, tys))
+            return f"({val})"
         return {
             "PyObject*": "O",
             "float": "f",
@@ -146,8 +165,13 @@ def make_launcher(constants, signature, ids):
 
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiKKOOOO" + args_format
-    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
+    # expand signature
+    signature = _serialize_signature(signature)
+    serialized_args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+    # Record the end of regular arguments;
+    # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
     internal_args_list = []
     for i, ty in signature.items():
         if ty[0] == "*":
@@ -343,7 +367,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function,
                                            &kernel_metadata, &launch_metadata,
-                                           &launch_enter_hook, &launch_exit_hook {args_list})) {{
+                                           &launch_enter_hook, &launch_exit_hook {serialized_args_list})) {{
     return NULL;
   }}
 
