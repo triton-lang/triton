@@ -18,12 +18,15 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
-#include <iostream>
-
 namespace py = pybind11;
 
 void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   using namespace mlir::triton;
+
+  py::enum_<cpu::VecLib>(m, "VecLib")
+      .value("libsleef", cpu::VecLib::Sleef)
+      .value("libmvec", cpu::VecLib::Mvec);
+
   m.def("add_convert_memory_ops",
         [](mlir::PassManager &pm, bool useScalarLoops) {
           pm.addPass(mlir::triton::cpu::createConvertMemoryOps(useScalarLoops));
@@ -122,8 +125,8 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
   m.def("add_memref_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
   });
-  m.def("add_math_to_libmvec", [](mlir::PassManager &pm, bool use_sleef) {
-    pm.addPass(mlir::triton::cpu::createMathToLibmvecPass(use_sleef));
+  m.def("add_math_to_vec_lib", [](mlir::PassManager &pm, cpu::VecLib lib) {
+    pm.addPass(mlir::triton::cpu::createMathToVecLibPass(lib));
   });
   m.def("add_math_to_libm", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createConvertMathToLibmPass());

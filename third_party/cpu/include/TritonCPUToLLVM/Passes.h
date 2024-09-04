@@ -17,6 +17,11 @@ template <typename T> class OperationPass;
 namespace triton {
 namespace cpu {
 
+enum class VecLib {
+  Mvec,
+  Sleef,
+};
+
 #define GEN_PASS_DECL
 #include "cpu/include/TritonCPUToLLVM/Passes.h.inc"
 
@@ -26,9 +31,8 @@ std::unique_ptr<OperationPass<ModuleOp>> createGetProgramIdOpToLLVMPass();
 std::unique_ptr<OperationPass<triton::FuncOp>> createLowerMultiReductionPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAtomicOpsToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>> createDebugOpsToLLVMPass();
-std::unique_ptr<OperationPass<ModuleOp>> createMathToLibmvecPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-createMathToLibmvecPass(bool use_sleef);
+createMathToVecLibPass(VecLib lib = VecLib::Sleef);
 
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonCPUToLLVM/Passes.h.inc"

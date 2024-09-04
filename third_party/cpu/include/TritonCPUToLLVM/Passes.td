@@ -66,16 +66,16 @@ def DebugOpsToLLVM : Pass<"triton-cpu-debug-ops-to-llvm", "mlir::ModuleOp"> {
                              "mlir::triton::TritonDialect"];
 }
 
-def MathToLibmvec : Pass<"triton-cpu-math-to-libmvec", "mlir::ModuleOp"> {
+def MathToVecLib : Pass<"triton-cpu-math-to-vec-lib", "mlir::ModuleOp"> {
     let summary = "Convert vector math operations to vector libm or sleef calls.";
     let description = [{
     }];
-    let constructor = "mlir::triton::cpu::createMathToLibmvecPass()";
+    let constructor = "mlir::triton::cpu::createMathToVecLibPass()";
 
     let options = [
-        Option<"use_sleef", "use-sleef",
-               "bool", /*default*/"false",
-               "Use sleef library for vector math instead of libmvec.">,
+        Option<"lib", "lib",
+               "mlir::triton::cpu::VecLib", /*default*/"mlir::triton::cpu::VecLib::Sleef",
+               "Library to use for vector math (libsleef or libmvec).">,
     ];
 
     let dependentDialects = ["mlir::vector::VectorDialect",

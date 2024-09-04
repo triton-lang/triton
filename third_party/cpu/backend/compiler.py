@@ -165,10 +165,13 @@ class CPUBackend(BaseBackend):
         cpu.passes.ttcpuir.add_memory_op_to_llvmir(pm)
         cpu.passes.ttcpuir.add_atomic_ops_to_llvmir(pm)
         cpu.passes.ttcpuir.add_debug_ops_to_llvmir(pm)
-        use_sleef = os.environ.get("TRITON_CPU_USE_SLEEF", "0") != "0"
-        use_vec_math = os.environ.get("TRITON_CPU_USE_LIBMVEC", "1") != "0"
-        if (use_sleef or use_vec_math) and self.cpu_arch == "x86_64" and "avx512f" in self.cpu_features:
-            cpu.passes.ttcpuir.add_math_to_libmvec(pm, use_sleef)
+        vec_lib = None
+        if os.environ.get("TRITON_CPU_USE_LIBMVEC", "1") != "0":
+            vec_lib = cpu.passes.ttcpuir.VecLib.libmvec
+        if os.environ.get("TRITON_CPU_USE_SLEEF", "0") != "0":
+            vec_lib = cpu.passes.ttcpuir.VecLib.libsleef
+        if vec_lib is not None and self.cpu_arch == "x86_64" and "avx512f" in self.cpu_features:
+            cpu.passes.ttcpuir.add_math_to_vec_lib(pm, vec_lib)
         passes.convert.add_math_to_llvmir(pm)
         cpu.passes.ttcpuir.add_math_to_libm(pm)
         cpu.passes.ttcpuir.add_vector_to_llvmir(pm, options.enable_fast_math)

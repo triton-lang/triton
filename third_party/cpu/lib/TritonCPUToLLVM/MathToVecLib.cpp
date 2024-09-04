@@ -13,7 +13,7 @@
 namespace mlir {
 namespace triton {
 namespace cpu {
-#define GEN_PASS_DEF_MATHTOLIBMVEC
+#define GEN_PASS_DEF_MATHTOVECLIB
 #include "cpu/include/TritonCPUToLLVM/Passes.h.inc"
 } // namespace cpu
 } // namespace triton
@@ -52,7 +52,7 @@ public:
   }
 };
 
-// Decompose vector operation to singe-dimensional vector operations
+// Decompose vector operation to single-dimensional vector operations
 // with a native AVX512 vector size.
 template <typename OpT>
 struct DecomposeToNativeVecs : public OpRewritePattern<OpT> {
@@ -134,32 +134,73 @@ public:
   }
 };
 
-template <typename OpT>
-struct VecOpToLibmvecCall : public OpRewritePattern<OpT> {
+using GetVecFnNameFn = std::function<std::string(
+    unsigned /*bitwidth*/, unsigned /*numel*/, ValueRange /*operands*/)>;
+
+class MvecNameGenerator {
+public:
+  explicit MvecNameGenerator(StringRef baseName) : baseName(baseName) {}
+
+  std::string operator()(unsigned bitwidth, unsigned numel,
+                         ValueRange operands) const {
+    if (bitwidth != 32 && bitwidth != 64)
+      return "";
+    unsigned vecSize = numel * bitwidth;
+    std::string isaPrefix;
+    if (vecSize == 128) {
+      isaPrefix = "b";
+    } else if (vecSize == 256) {
+      isaPrefix = "d";
+    } else if (vecSize == 512) {
+      isaPrefix = "e";
+    } else {
+      return "";
+    }
+    std::string fnName = "_ZGV" + isaPrefix + "N" + std::to_string(numel);
+    for (auto operand : operands)
+      fnName += "v";
+    return fnName + "_" + baseName + (bitwidth == 32 ? "f" : "");
+  }
+
+private:
+  std::string baseName;
+};
+
+class SleefNameGenerator {
+public:
+  SleefNameGenerator(StringRef baseName, unsigned ulp = 10)
+      : baseName(baseName), ulp(std::to_string(ulp)) {}
+
+  std::string operator()(unsigned bitwidth, unsigned numel,
+                         ValueRange /*operands*/) const {
+    if (bitwidth != 32 && bitwidth != 64)
+      return "";
+    unsigned vecSize = numel * bitwidth;
+    if (vecSize < 128)
+      return "";
+    return "Sleef_" + baseName + (bitwidth == 32 ? "f" : "d") +
+           std::to_string(numel) + "_u" + ulp;
+  }
+
+private:
+  std::string baseName;
+  std::string ulp;
+};
+
+template <typename OpT> struct VecOpToVecLib : public OpRewritePattern<OpT> {
 public:
   using OpRewritePattern<OpT>::OpRewritePattern;
 
-  VecOpToLibmvecCall(MLIRContext *context, StringRef fp32FnBaseName,
-                     StringRef fp64FnBaseName, bool use_sleef)
-      : OpRewritePattern<OpT>(context) {
-    this->fp32FnBaseName = fp32FnBaseName;
-    this->fp64FnBaseName = fp64FnBaseName;
-    this->use_sleef = use_sleef;
-  }
+  VecOpToVecLib(MLIRContext *context, GetVecFnNameFn getVecFnName)
+      : OpRewritePattern<OpT>(context), getVecFnName(getVecFnName) {}
 
   LogicalResult matchAndRewrite(OpT op, PatternRewriter &rewriter) const {
     VectorType vecTy = dyn_cast<VectorType>(op.getType());
     if (!vecTy || vecTy.getRank() > 1)
       return failure();
 
-    Type elemTy = vecTy.getElementType();
-    if (!elemTy.isF32() && !elemTy.isF64())
-      return failure();
-
-    auto fnName = use_sleef
-                      ? getSleefName(elemTy.isF32(), vecTy.getNumElements())
-                      : getLibmvecName(elemTy.isF32(), vecTy.getNumElements(),
-                                       op->getOperands());
+    auto fnName = getVecFnName(vecTy.getElementTypeBitWidth(),
+                               vecTy.getNumElements(), op->getOperands());
     if (fnName.empty())
       return failure();
 
@@ -184,89 +225,67 @@ public:
     return success();
   }
 
-  std::string getLibmvecName(bool isFp32, int64_t numElems,
-                             ValueRange ops) const {
-    auto baseName = isFp32 ? fp32FnBaseName : fp64FnBaseName;
-    int64_t vecSize = numElems * (isFp32 ? 32 : 64);
-    std::string isaPrefix;
-    if (vecSize == 128) {
-      isaPrefix = "b";
-    } else if (vecSize == 256) {
-      isaPrefix = "d";
-    } else if (vecSize == 512) {
-      isaPrefix = "e";
-    } else {
-      return "";
-    }
-    std::string fnName = "_ZGV" + isaPrefix + "N" + std::to_string(numElems);
-    for (auto operand : ops)
-      fnName += "v";
-    fnName += "_" + baseName;
-    return fnName;
-  }
-
-  std::string getSleefName(bool isFp32, int64_t numElems) const {
-    int64_t vecSize = numElems * (isFp32 ? 32 : 64);
-    if (vecSize < 128)
-      return "";
-    auto baseName = isFp32 ? fp32FnBaseName : (fp64FnBaseName + "d");
-    return "Sleef_" + baseName + std::to_string(numElems) + "_u10";
-  }
-
 private:
-  std::string fp32FnBaseName;
-  std::string fp64FnBaseName;
-  bool use_sleef;
+  GetVecFnNameFn getVecFnName;
 };
 
 template <typename OpTy>
-void populatePatternsForOp(RewritePatternSet &patterns, StringRef fp32FnName,
-                           StringRef fp64FnName, bool use_sleef) {
+void populatePatternsForOp(RewritePatternSet &patterns,
+                           GetVecFnNameFn getVecFnName) {
   patterns.add<VecOpToFp32<OpTy>>(patterns.getContext());
   patterns.add<DecomposeToNativeVecs<OpTy>>(patterns.getContext());
-  patterns.add<VecOpToLibmvecCall<OpTy>>(patterns.getContext(), fp32FnName,
-                                         fp64FnName, use_sleef);
+  patterns.add<VecOpToVecLib<OpTy>>(patterns.getContext(), getVecFnName);
 }
 
-struct MathToLibmvecPass
-    : public mlir::triton::cpu::impl::MathToLibmvecBase<MathToLibmvecPass> {
-  MathToLibmvecPass() = default;
+struct MathToVecLibPass
+    : public mlir::triton::cpu::impl::MathToVecLibBase<MathToVecLibPass> {
+  MathToVecLibPass() = default;
 
-  MathToLibmvecPass(bool use_sleef) { this->use_sleef = use_sleef; }
+  explicit MathToVecLibPass(VecLib lib) { this->lib = lib; }
 
   void runOnOperation() override {
     Operation *op = getOperation();
     MLIRContext *context = op->getContext();
 
     RewritePatternSet patterns(context);
-    populatePatternsForOp<math::AcosOp>(patterns, "acosf", "acos", use_sleef);
-    populatePatternsForOp<math::AcoshOp>(patterns, "acoshf", "acosh",
-                                         use_sleef);
-    populatePatternsForOp<math::AsinOp>(patterns, "asinf", "asin", use_sleef);
-    populatePatternsForOp<math::AsinhOp>(patterns, "asinhf", "asinh",
-                                         use_sleef);
-    populatePatternsForOp<math::AtanOp>(patterns, "atanf", "atan", use_sleef);
-    populatePatternsForOp<math::AtanhOp>(patterns, "atanhf", "atanh",
-                                         use_sleef);
-    populatePatternsForOp<math::CbrtOp>(patterns, "cbrtf", "cbrt", use_sleef);
-    populatePatternsForOp<math::CosOp>(patterns, "cosf", "cos", use_sleef);
-    populatePatternsForOp<math::CoshOp>(patterns, "coshf", "cosh", use_sleef);
-    populatePatternsForOp<math::ErfOp>(patterns, "erff", "erf", use_sleef);
-    populatePatternsForOp<math::ExpOp>(patterns, "expf", "exp", use_sleef);
-    populatePatternsForOp<math::Exp2Op>(patterns, "exp2f", "exp2", use_sleef);
-    populatePatternsForOp<math::LogOp>(patterns, "logf", "log", use_sleef);
-    populatePatternsForOp<math::Log2Op>(patterns, "log2f", "log2", use_sleef);
-    populatePatternsForOp<math::Log10Op>(patterns, "log10f", "log10",
-                                         use_sleef);
-    populatePatternsForOp<math::Log1pOp>(patterns, "log1pf", "log1p",
-                                         use_sleef);
-    populatePatternsForOp<math::SinOp>(patterns, "sinf", "sin", use_sleef);
-    populatePatternsForOp<math::SinhOp>(patterns, "sinhf", "sinh", use_sleef);
-    populatePatternsForOp<math::TanOp>(patterns, "tanf", "tan", use_sleef);
-    populatePatternsForOp<math::TanhOp>(patterns, "tanhf", "tanh", use_sleef);
+
+    switch (lib) {
+    case VecLib::Mvec: {
+      populateCommonPatterns<MvecNameGenerator>(patterns);
+      break;
+    }
+    case VecLib::Sleef: {
+      populateCommonPatterns<SleefNameGenerator>(patterns);
+      break;
+    }
+    }
 
     if (failed(applyPatternsAndFoldGreedily(op, std::move(patterns))))
       signalPassFailure();
+  }
+
+  template <typename VecFnNameGenerator>
+  void populateCommonPatterns(RewritePatternSet &patterns) const {
+    populatePatternsForOp<math::AcosOp>(patterns, VecFnNameGenerator("acos"));
+    populatePatternsForOp<math::AcoshOp>(patterns, VecFnNameGenerator("acosh"));
+    populatePatternsForOp<math::AsinOp>(patterns, VecFnNameGenerator("asin"));
+    populatePatternsForOp<math::AsinhOp>(patterns, VecFnNameGenerator("asinh"));
+    populatePatternsForOp<math::AtanOp>(patterns, VecFnNameGenerator("atan"));
+    populatePatternsForOp<math::AtanhOp>(patterns, VecFnNameGenerator("atanh"));
+    populatePatternsForOp<math::CbrtOp>(patterns, VecFnNameGenerator("cbrt"));
+    populatePatternsForOp<math::CosOp>(patterns, VecFnNameGenerator("cos"));
+    populatePatternsForOp<math::CoshOp>(patterns, VecFnNameGenerator("cosh"));
+    populatePatternsForOp<math::ErfOp>(patterns, VecFnNameGenerator("erf"));
+    populatePatternsForOp<math::ExpOp>(patterns, VecFnNameGenerator("exp"));
+    populatePatternsForOp<math::Exp2Op>(patterns, VecFnNameGenerator("exp2"));
+    populatePatternsForOp<math::LogOp>(patterns, VecFnNameGenerator("log"));
+    populatePatternsForOp<math::Log2Op>(patterns, VecFnNameGenerator("log2"));
+    populatePatternsForOp<math::Log10Op>(patterns, VecFnNameGenerator("log10"));
+    populatePatternsForOp<math::Log1pOp>(patterns, VecFnNameGenerator("log1p"));
+    populatePatternsForOp<math::SinOp>(patterns, VecFnNameGenerator("sin"));
+    populatePatternsForOp<math::SinhOp>(patterns, VecFnNameGenerator("sinh"));
+    populatePatternsForOp<math::TanOp>(patterns, VecFnNameGenerator("tan"));
+    populatePatternsForOp<math::TanhOp>(patterns, VecFnNameGenerator("tanh"));
   }
 };
 
@@ -276,13 +295,8 @@ namespace mlir {
 namespace triton {
 namespace cpu {
 
-std::unique_ptr<OperationPass<ModuleOp>> createMathToLibmvecPass() {
-  return std::make_unique<MathToLibmvecPass>();
-}
-
-std::unique_ptr<OperationPass<ModuleOp>>
-createMathToLibmvecPass(bool use_sleef) {
-  return std::make_unique<MathToLibmvecPass>(use_sleef);
+std::unique_ptr<OperationPass<ModuleOp>> createMathToVecLibPass(VecLib lib) {
+  return std::make_unique<MathToVecLibPass>(lib);
 }
 
 } // namespace cpu
