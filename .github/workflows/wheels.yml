@@ -63,8 +63,8 @@ jobs:
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
           # With this install, it gets clang 16.0.6.
           export CIBW_BEFORE_ALL="dnf install clang lld -y";
-          export CIBW_SKIP="cp{35,36,37}-*"
-          export CIBW_BUILD="cp3*-manylinux_x86_64"
+          export CIBW_SKIP="cp{35,36,37,38}-*"
+          export CIBW_BUILD="cp311-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
 
       - name: Install Azure CLI
