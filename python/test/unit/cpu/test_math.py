@@ -115,8 +115,11 @@ def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
         return
 
     # These are not implemented via extern library calls
-    native_impls = ["expm1", "floor", "isnan", "isinf", "rsqrt", "signbit", "sqrt"]
-    if math_fn not in native_impls:
+    native_impls = {
+        "libmvec": {"expm1", "floor", "isnan", "isinf", "rsqrt", "signbit", "sqrt"},
+        "libsleef": {"isnan", "isinf", "rsqrt", "signbit"},
+    }
+    if math_fn not in native_impls[vec_lib]:
         check_num_vec_calls(meta, vec_lib, dtype_str, size)
     else:
         assert meta.asm["asm"].count(lib_prefix[vec_lib]) == 0

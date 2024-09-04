@@ -169,7 +169,12 @@ private:
 class SleefNameGenerator {
 public:
   SleefNameGenerator(StringRef baseName, unsigned ulp = 10)
-      : baseName(baseName), ulp(std::to_string(ulp)) {}
+      : baseName(baseName), ulpSuffix(4, '\0') {
+    if (ulp == 0)
+      ulpSuffix = "";
+    else
+      sprintf(ulpSuffix.data(), "_u%02u", ulp);
+  }
 
   std::string operator()(unsigned bitwidth, unsigned numel,
                          ValueRange /*operands*/) const {
@@ -179,12 +184,12 @@ public:
     if (vecSize < 128)
       return "";
     return "Sleef_" + baseName + (bitwidth == 32 ? "f" : "d") +
-           std::to_string(numel) + "_u" + ulp;
+           std::to_string(numel) + ulpSuffix;
   }
 
 private:
   std::string baseName;
-  std::string ulp;
+  std::string ulpSuffix;
 };
 
 template <typename OpT> struct VecOpToVecLib : public OpRewritePattern<OpT> {
@@ -256,6 +261,12 @@ struct MathToVecLibPass
     }
     case VecLib::Sleef: {
       populateCommonPatterns<SleefNameGenerator>(patterns);
+      populatePatternsForOp<math::ExpM1Op>(patterns,
+                                           SleefNameGenerator("expm1"));
+      populatePatternsForOp<math::FloorOp>(
+          patterns, SleefNameGenerator("floor", /*ulp=*/0));
+      populatePatternsForOp<math::SqrtOp>(
+          patterns, SleefNameGenerator("sqrt", /*ulp=*/5));
       break;
     }
     }
