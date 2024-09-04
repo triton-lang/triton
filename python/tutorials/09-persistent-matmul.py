@@ -575,9 +575,9 @@ def validate(M, N, K, dtype):
         print(f"cublas: {naive_vs_cublas} ", end="")
     print(f"persistent: {naive_vs_persistent} ", end="")
     if tma_persistent_result is not None:
-        print(f"TMA persistent: {naive_vs_tma_persistent}", end="")
+        print(f"TMA persistent: {naive_vs_tma_persistent} ", end="")
     if device_tma_persistent_result is not None:
-        print(f"Device TMA persistent: {naive_vs_device_tma_persistent}", end="")
+        print(f"Device TMA persistent: {naive_vs_device_tma_persistent} ", end="")
     print()
 
 
