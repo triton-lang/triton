@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from triton._C.libtriton import cpu, ir, llvm, passes
 from triton.backends.compiler import BaseBackend, GPUTarget
@@ -17,6 +17,9 @@ import triton.backends.cpu.driver as cpu_driver
 def min_dot_size(target: GPUTarget):
     # Other architectures will only support 16,16,16
     return lambda lhsType, rhsType: (4, 4, 4)
+
+
+VecLib = cpu.passes.ttcpuir.VecLib
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class CPUOptions:
     enable_fp_fusion: bool = True
     max_num_imprecise_acc_default: int = 0
     enable_fast_math: bool = True
+    vec_lib: Optional[str] = 'libsleef'
 
     # TODO: We may introduce CPU-specific options like # of cores.
 
@@ -46,6 +50,18 @@ class CPUOptions:
         hash_dict = dict(self.__dict__)
         key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+    def get_vec_lib(self) -> VecLib:
+        if self.vec_lib is None:
+            return None
+        # Parse enum from str here (instead of in parse_options()) because the options have to be JSON-serializable,
+        # and pybind enums are not serializable.
+        vec_lib = VecLib.__members__.get(self.vec_lib, None)
+        if vec_lib is None:
+            raise ValueError(
+                f"Unexpected value for vec_lib: {self.vec_lib}, should be one of {{{', '.join(VecLib.__members__.keys())}}}"
+            )
+        return vec_lib
 
 
 class CPUBackend(BaseBackend):
@@ -63,7 +79,7 @@ class CPUBackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts}
-        if not "enable_fast_math" in args:
+        if "enable_fast_math" not in args:
             args["enable_fast_math"] = os.getenv("TRITON_CPU_FAST_MATH", "1") != "0"
         return CPUOptions(**args)
 
@@ -165,13 +181,14 @@ class CPUBackend(BaseBackend):
         cpu.passes.ttcpuir.add_memory_op_to_llvmir(pm)
         cpu.passes.ttcpuir.add_atomic_ops_to_llvmir(pm)
         cpu.passes.ttcpuir.add_debug_ops_to_llvmir(pm)
-        vec_lib = None
-        if os.environ.get("TRITON_CPU_USE_LIBMVEC", "1") != "0":
-            vec_lib = cpu.passes.ttcpuir.VecLib.libmvec
-        if os.environ.get("TRITON_CPU_USE_SLEEF", "0") != "0":
-            vec_lib = cpu.passes.ttcpuir.VecLib.libsleef
-        if vec_lib is not None and self.cpu_arch == "x86_64" and "avx512f" in self.cpu_features:
+
+        vec_lib_requirements = {
+            VecLib.libsleef: {"neon", "sse", "avx"},
+            VecLib.libmvec: {"avx512f"},
+        }
+        if (vec_lib := options.get_vec_lib()) and vec_lib_requirements[vec_lib] & self.cpu_features:
             cpu.passes.ttcpuir.add_math_to_vec_lib(pm, vec_lib)
+
         passes.convert.add_math_to_llvmir(pm)
         cpu.passes.ttcpuir.add_math_to_libm(pm)
         cpu.passes.ttcpuir.add_vector_to_llvmir(pm, options.enable_fast_math)
