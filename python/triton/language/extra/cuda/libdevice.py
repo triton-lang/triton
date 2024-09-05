@@ -1077,7 +1077,7 @@ def copysign(arg0, arg1, _builder=None):
 def finitef(arg0, _builder=None):
     return core.extern_elementwise("", "", [arg0], {
         (core.dtype("fp32"), ): ("__nv_finitef", core.dtype("int32")),
-    }, is_pure=True, _builder=_builder)
+    }, is_pure=True, _builder=_builder).to(core.int1, _builder=_builder)
 
 
 @core.extern
@@ -1626,4 +1626,4 @@ def logb(arg0, _builder=None):
 def isfinited(arg0, _builder=None):
     return core.extern_elementwise("", "", [arg0], {
         (core.dtype("fp64"), ): ("__nv_isfinited", core.dtype("int32")),
-    }, is_pure=True, _builder=_builder)
+    }, is_pure=True, _builder=_builder).to(core.int1, _builder=_builder)
