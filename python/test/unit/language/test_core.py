@@ -5619,3 +5619,35 @@ def test_math_extern(dtype_str, device):
     kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+
+# -----------------------
+# test loop unrolling
+# -----------------------
+
+
+def test_unroll_attr(device):
+
+    @triton.jit
+    def _kernel(dst, unroll_factor: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        for i in tl.range(0, 10, loop_unroll_factor=unroll_factor):
+            tl.atomic_add(dst + pid, i + pid)
+
+    def check_loop_unroll_count(ir, opStr, loop_unroll_factor):
+
+        # Loop unrolling pass only working on Nvidia backend at the moment
+        if not is_cuda():
+            assert f'tt.loop_unroll_factor = {loop_unroll_factor}' in ir
+            return
+
+        for line in ir.splitlines():
+            if opStr in line:
+                loop_unroll_factor = loop_unroll_factor - 1
+        # Sometimes we get a remainder loop
+        assert loop_unroll_factor <= 0
+
+    # Try for all different loop unroll factors:
+    for unroll_factor in [1, 2, 4, 5, 8]:
+        h = _kernel[(1, )](torch.empty(1, device=device), unroll_factor)
+        check_loop_unroll_count(h.asm["ttir"], 'tt.atomic_rmw', unroll_factor)
