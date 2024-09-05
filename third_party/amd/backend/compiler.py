@@ -36,6 +36,7 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
+    deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
