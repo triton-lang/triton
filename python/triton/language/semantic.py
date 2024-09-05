@@ -1498,6 +1498,45 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
                      ret_ty)
 
 
+def _str_to_fp_type(float_format: Optional[str]):
+    if float_format == 'e4m3':
+        return ir.F8F6F4TY.E4M3
+    if float_format == 'e5m2':
+        return ir.F8F6F4TY.E5M2
+    if float_format == 'e2m3':
+        return ir.F8F6F4TY.E2M3
+    if float_format == 'e3m2':
+        return ir.F8F6F4TY.E3M2
+    if float_format == 'e2m1':
+        return ir.F8F6F4TY.E2M1
+    raise ValueError(f"Invalid float format: {float_format}.")
+
+
+def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
+               rhs_format, acc: tl.tensor, out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+    assert lhs.type.is_block() and rhs.type.is_block()
+    #TODO: validate types.
+    lhs_rank = len(lhs.shape)
+    rhs_rank = len(rhs.shape)
+    assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    M = lhs.type.shape[-2]
+    N = rhs.type.shape[-1]
+    B = lhs.type.shape[0] if lhs_rank == 3 else None
+    ret_ty = tl.block_type(out_dtype, [B, M, N] if B else [M, N])
+    _0 = builder.get_fp32(0)
+    if acc is None:
+        acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
+    else:
+        acc_handle = acc.handle
+        assert acc.type == ret_ty
+    lhs_format_enum = _str_to_fp_type(lhs_format)
+    rhs_format_enum = _str_to_fp_type(rhs_format)
+    rhs_scale_handle = None if isinstance(rhs_scale, tl.constexpr) else rhs_scale.handle
+    return tl.tensor(
+        builder.create_dot_scaled(lhs.handle, lhs_scale.handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
+                                  rhs_format_enum, acc_handle), ret_ty)
+
+
 # ===----------------------------------------------------------------------===//
 #                               Indexing
 # ===----------------------------------------------------------------------===//

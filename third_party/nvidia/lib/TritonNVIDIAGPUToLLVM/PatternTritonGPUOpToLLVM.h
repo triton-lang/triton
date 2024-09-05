@@ -36,6 +36,11 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     const TargetInfo &targetInfo, PatternBenefit benefit);
 
+void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                      RewritePatternSet &patterns,
+                                      const TargetInfo &targetInfo,
+                                      PatternBenefit benefit);
+
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
