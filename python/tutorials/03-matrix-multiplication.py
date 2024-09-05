@@ -576,8 +576,8 @@ def benchmark(K, provider, fp8_inputs):
 
 proton.start("matmul", hook="triton")
 for K in range(512, 8192 + 1, 512):
-    warmup = 1000
-    reps = 100
+    warmup = 10000
+    reps = 1000
     M = 8192
     N = 8192
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(torch.float8_e5m2)
@@ -587,10 +587,10 @@ for K in range(512, 8192 + 1, 512):
     b = b.to(torch.float8_e5m2)
     # Warmup
     for _ in range(warmup):
-        persistent_matmul(a, b)
+        matmul(a, b)
     # Benchmark
     proton.activate(0)
     for _ in range(reps):
-        persistent_matmul(a, b)
+        matmul(a, b)
     proton.deactivate(0)
 proton.finalize()
