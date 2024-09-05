@@ -598,7 +598,7 @@ static bool preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
       [schedule](scf::ForOp, std::vector<std::pair<Operation *, unsigned>> &s) {
         s = std::move(schedule);
       };
-  options.peelEpilogue = false;
+  options.peelEpilogue = true;
   options.predicateFn = tt::predicateOp;
   options.supportDynamicLoops = true;
 
