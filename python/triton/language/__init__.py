@@ -264,7 +264,8 @@ def str_to_ty(name):
         return pointer_type(element_ty=ty, const=const)
 
     if name[0] == "[":
-        tys = [str_to_ty(x) for x in name[1:-1].split(',')]
+        names = [] if name == "[]" else name[1:-1].split(',')
+        tys = [str_to_ty(x) for x in names]
         return tuple_type(types=tys)
 
     if name == "nvTmaDesc":

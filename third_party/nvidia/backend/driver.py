@@ -116,7 +116,7 @@ def ty_to_cpp(ty):
 
 def _serialize_type(type):
     if type[0] == '[':
-        return type[1:-1].split(',')
+        return [] if type == "[]" else type[1:-1].split(',')
     return [type]
 
 
@@ -141,6 +141,8 @@ def make_launcher(constants, signature, ids):
         if ty == "nvTmaDesc":
             return "PyObject*"
         if ty[0] == '[':
+            if ty == "[]":
+                return "()"
             tys = ty[1:-1].split(",")
             val = ','.join(map(_extracted_type, tys))
             return f"({val})"
@@ -148,6 +150,8 @@ def make_launcher(constants, signature, ids):
 
     def format_of(ty):
         if ty[0] == "(":
+            if ty == "()":
+                return "()"
             tys = ty[1:-1].split(",")
             val = ''.join(map(format_of, tys))
             return f"({val})"
