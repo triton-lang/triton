@@ -3232,9 +3232,6 @@ void TritonGPUDialect::initialize() {
   addInterfaces<TritonGPUInferLayoutInterface>();
 }
 
-#define GET_OP_CLASSES
-#include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
-
 // verify TritonGPU ops
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
