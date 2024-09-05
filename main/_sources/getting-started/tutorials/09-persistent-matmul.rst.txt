@@ -127,7 +127,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
             a_ptrs += BLOCK_SIZE_K * stride_ak
             b_ptrs += BLOCK_SIZE_K * stride_bk
 
-        if (c_ptr.dtype == tl.float8e4nv):
+        if (c_ptr.dtype.element_ty == tl.float8e4nv):
             c = accumulator.to(tl.float8e4nv)
         else:
             c = accumulator.to(tl.float16)
@@ -242,7 +242,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
                 offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
                 c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
                 c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-                if (c_ptr.dtype == tl.float8e4nv):
+                if (c_ptr.dtype.element_ty == tl.float8e4nv):
                     c = accumulator.to(tl.float8e4nv)
                 else:
                     c = accumulator.to(tl.float16)
@@ -519,7 +519,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.896 seconds)
+   **Total running time of the script:** (0 minutes 1.863 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:

@@ -697,7 +697,7 @@ Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
 
 #### Operands:
 
@@ -706,6 +706,74 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
 | `src` | ranked tensor of floating-point or integer or ptr values
 | `indices` | variadic of 32-bit signless integer
+
+### `tt.experimental_tensormap_create` (triton::ExperimentalTensormapCreateOp)
+
+_Create a new TMA descriptor on device_
+
+
+Syntax:
+
+```
+operation ::= `tt.experimental_tensormap_create` $desc_ptr `,` $global_address `,`
+              `[` $box_dim `]` `,`
+              `[` $global_dim `]` `,`
+              `[` $global_stride `]` `,`
+              `[` $element_stride `]`
+              attr-dict `:` functional-type(operands, results)
+```
+
+
+Traits: `AttrSizedOperandSegments`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>elem_type</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 12</td></tr>
+<tr><td><code>interleave_layout</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 2</td></tr>
+<tr><td><code>swizzle_mode</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 3</td></tr>
+<tr><td><code>fill_mode</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative whose maximum value is 1</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
+| `global_address` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
+| `box_dim` | variadic of 32-bit signless integer
+| `global_dim` | variadic of 32-bit signless integer
+| `global_stride` | variadic of 64-bit signless integer
+| `element_stride` | variadic of 32-bit signless integer
+
+### `tt.experimental_tensormap_fenceproxy_acquire` (triton::ExperimentalTensormapFenceproxyAcquireOp)
+
+_Acquire fence on a tensormap object_
+
+
+Syntax:
+
+```
+operation ::= `tt.experimental_tensormap_fenceproxy_acquire` $desc_ptr attr-dict `:` qualified(type($desc_ptr))
+```
+
+
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
 
 ### `tt.extern_elementwise` (triton::ExternElementwiseOp)
 

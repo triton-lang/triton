@@ -90,26 +90,27 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#triton-gpu-local-alloc-triton-gpu-localallocop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.local_alloc</span></code> (triton::gpu::LocalAllocOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id8">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id9">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id8">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id9">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id10">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#triton-gpu-local-dealloc-triton-gpu-localdeallocop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.local_dealloc</span></code> (triton::gpu::LocalDeallocOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id10">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id11">Operands:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#triton-gpu-local-load-triton-gpu-localloadop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.local_load</span></code> (triton::gpu::LocalLoadOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id11">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id12">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id12">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id13">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#triton-gpu-local-store-triton-gpu-localstoreop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.local_store</span></code> (triton::gpu::LocalStoreOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id13">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id14">Operands:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#triton-gpu-memdesc-subview-triton-gpu-memdescsubviewop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.memdesc_subview</span></code> (triton::gpu::MemDescSubviewOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id14">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id15">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id15">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id16">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -368,7 +369,14 @@ containing the address and a view of the buffer.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id8">
-<h3>Operands:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<h3>Attributes:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>alignment</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+</section>
+<section id="id9">
+<h3>Operands:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -382,8 +390,8 @@ containing the address and a view of the buffer.</p>
 </tbody>
 </table>
 </section>
-<section id="id9">
-<h3>Results:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h3>Results:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -417,8 +425,8 @@ operand.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Free</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
-<section id="id10">
-<h3>Operands:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id11">
+<h3>Operands:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -443,8 +451,8 @@ operand.</p>
 <p>Load a tensor from the local memory descriptor into a distributed tensor.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
-<section id="id11">
-<h3>Operands:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>Operands:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -461,8 +469,8 @@ operand.</p>
 </tbody>
 </table>
 </section>
-<section id="id12">
-<h3>Results:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="id13">
+<h3>Results:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -487,8 +495,8 @@ operand.</p>
 <p>Store a distributed tensor into a buffer in local memory.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
-<section id="id13">
-<h3>Operands:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>Operands:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -525,8 +533,8 @@ It doesn’t affect the underlying memory. The subview can be rank-reduced.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id14">
-<h3>Operands:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<section id="id15">
+<h3>Operands:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -543,8 +551,8 @@ It doesn’t affect the underlying memory. The subview can be rank-reduced.</p>
 </tbody>
 </table>
 </section>
-<section id="id15">
-<h3>Results:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<section id="id16">
+<h3>Results:<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>

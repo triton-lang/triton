@@ -167,6 +167,13 @@ Traits: `VerifyTensorLayoutsTrait`
 
 Interfaces: `MemoryEffectOpInterface`
 
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>alignment</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
 #### Operands:
 
 | Operand | Description |
