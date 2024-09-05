@@ -341,7 +341,7 @@ def test_defaults_assign_no_err():
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
 
 
-def test_where_error():
+def test_where_warning():
 
     @triton.jit
     def kernel():
@@ -350,12 +350,8 @@ def test_where_error():
         c = tl.full((64, ), 2, tl.float32)
         tl.where(a, b, c)
 
-    with pytest.raises(CompilationError) as e:
+    with pytest.warns(UserWarning):
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
-    try:
-        assert ("tl.where: condition must be a boolean" in str(e.value.__cause__))
-    except AssertionError as assertion_err:
-        raise assertion_err from e.value
 
 
 @pytest.mark.parametrize("dtype", [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15])

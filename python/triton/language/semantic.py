@@ -1,4 +1,5 @@
 from __future__ import annotations  # remove after python 3.11
+import warnings
 
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
@@ -1399,7 +1400,10 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
 def where(condition: tl.tensor, x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     if condition.dtype != tl.int1:
-        raise ValueError(f"tl.where: condition must be a boolean. Got {condition.dtype}")
+        warnings.warn(
+            f"tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got {condition.dtype}"
+        )
+    condition = cast(condition, tl.int1, builder)
     if condition.type.is_block():
         condition, x = broadcast_impl_value(condition, x, builder)
         x, y = broadcast_impl_value(x, y, builder)
