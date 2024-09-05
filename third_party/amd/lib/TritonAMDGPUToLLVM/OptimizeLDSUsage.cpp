@@ -97,6 +97,8 @@ class OptimizeAMDLDSUsage
 
     auto ctx = srcEnc.getContext();
     auto rank = srcType.getShape().size();
+    if (rank < 2)
+      return;
     unsigned numWarps = triton::gpu::getNumWarpsPerCTA(srcEnc);
     auto warpSize = triton::gpu::getWarpSize(srcEnc);
 
