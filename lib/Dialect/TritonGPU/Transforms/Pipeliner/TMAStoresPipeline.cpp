@@ -76,8 +76,21 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     return false;
 
   DenseMap<tt::ExperimentalDescriptorStoreOp, Value> storeToAlloc;
+  DenseMap<std::pair<ArrayRef<int64_t>, Type>, Value> allocs;
   for (tt::ExperimentalDescriptorStoreOp op : tmaStores) {
+    // Reuse allocations for stores of the same shape and types. This allows
+    // saving shared memory usage. It is valid since we have a wait 0 before
+    // every local_store. We could pipeline more aggressively if we didn't
+    // re-use but there is a tradeoff with shared memory usage.
+    auto key = std::make_pair(op.getSrc().getType().getShape(),
+                              op.getSrc().getType().getElementType());
+    auto it = allocs.find(key);
+    if (it != allocs.end()) {
+      storeToAlloc[op] = it->second;
+      continue;
+    }
     storeToAlloc[op] = createAlloc(forOp, op);
+    allocs[key] = storeToAlloc[op];
   }
 
   for (tt::ExperimentalDescriptorStoreOp op : tmaStores) {
