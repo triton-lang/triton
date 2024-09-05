@@ -39,12 +39,13 @@ std::string mangleFunc(std::string name, Type type) {
 }
 
 // Create a constant vector mask of length `vec` with the same `pred` value
-Value createVectorMaskFromPredicate(RewriterBase& rewriter, Location loc,
+Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
                                     Value pred, int64_t vec) {
   auto vecMaskTy = LLVM::getFixedVectorType(rewriter.getI1Type(), vec);
   Value maskVal = undef(vecMaskTy);
   for (size_t s = 0; s < vec; ++s) {
-    Value indexVal = rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64IntegerAttr(s));
+    Value indexVal =
+        rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64IntegerAttr(s));
     maskVal = insert_element(vecMaskTy, maskVal, pred, indexVal);
   }
   return maskVal;
@@ -173,15 +174,12 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm) {
 
-  // If we not volatile, then use llvm.masked.load
-  if (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE){
+  if (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE) {
     int64_t vec = cast<VectorType>(elemTy).getNumElements();
-    Value maskVal = createVectorMaskFromPredicate(
-        rewriter, loc, pred, vec);
-    bool nt = (cm ==triton::CacheModifier::CG);
-    return rewriter.create<LLVM::MaskedLoadOp>(
-        loc, elemTy, ptr, maskVal, falseVal, vec, nt);
-
+    Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vec);
+    bool nt = (cm == triton::CacheModifier::CG);
+    return rewriter.create<LLVM::MaskedLoadOp>(loc, elemTy, ptr, maskVal,
+                                               falseVal, vec, nt);
   }
 
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
@@ -199,7 +197,6 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
     }
   };
 
-  // Otherwise, we need to revert to if-load solution
   auto funcName = mangleFunc(getLoadNameRaw(cm), funcType);
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
@@ -212,12 +209,10 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, triton::CacheModifier cm) {
-  Type elemTy = ptr.getType();
-  // If we use no cache modifier, simply issue a masked store
-  if (cm == triton::CacheModifier::NONE){
+  if (cm == triton::CacheModifier::NONE) {
+    Type elemTy = val.getType();
     int64_t vec = cast<VectorType>(elemTy).getNumElements();
-    Value maskVal = createVectorMaskFromPredicate(
-        rewriter, loc, pred, vec);
+    Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vec);
     rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal, vec);
   }
   auto ctx = ptr.getContext();

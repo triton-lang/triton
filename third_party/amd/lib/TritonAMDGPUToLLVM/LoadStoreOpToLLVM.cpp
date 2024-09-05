@@ -13,6 +13,8 @@ using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
+using ::mlir::LLVM::AMD::llLoad;
+using ::mlir::LLVM::AMD::llStore;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -311,9 +313,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
 
-      // TODO(Superjomn) Add cache policy fields to StoreOp.
-      // TODO(Superjomn) Deal with cache policy here.
-
       Type valArgTy = IntegerType::get(ctx, width);
       auto wordTy = vec_ty(valueElemTy, wordNElems);
 
@@ -321,8 +320,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       Value elem = valueElems[vecStart];
       Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
 
-
-      // // Create the store val
+      // Create the store val
       Value storeVal = undef(vecTy);
       for (size_t s = 0; s < vec; ++s) {
         Value otherElem = valueElems[vecStart + s];
@@ -331,7 +329,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         storeVal = insert_element(vecTy, storeVal, otherElem, indexVal);
       }
       llStore(rewriter, loc, ptr, storeVal, pred, cacheMod);
-    }
+    } // end vec
     rewriter.eraseOp(op);
     return success();
   }
