@@ -29,6 +29,13 @@ void addOps(scf::ForOp forOp, int stage,
 /// mutable.
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val);
+
+/// Create a map from load ops to their indirection level and the
+/// final use of the load op (another load op, or a dot op).
+/// Indirection level is "0" for the load op directly used by the dot op,
+/// "1" for the load op used by the load op used by the dot op, and so on.
+llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+loadOpsToIndirectionLevelAndUse(scf::ForOp forOp);
 } // namespace triton
 } // namespace mlir
 

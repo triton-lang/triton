@@ -327,54 +327,6 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3) {
                                       ctaLayout);
 }
 
-// Create a map from load ops to their indirection level and the
-// final use of the load op (another load op, or a dot op).
-// Indirection level is "0" for the load op directly used by the dot op,
-// "1" for the load op used by the load op used by the dot op, and so on.
-static llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
-loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
-  llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
-      loadOpToIndLevelAndUse;
-  DenseSet<Operation *> seen;
-
-  std::function<void(Operation * op, int, Operation *)> dfs =
-      [&](Operation *op, int distance, Operation *use) {
-        if (!seen.insert(op).second)
-          return;
-        if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
-          // TODO: What if there are multiple uses at different distances?
-          loadOpToIndLevelAndUse.push_back(std::make_tuple(op, distance, use));
-          use = op;
-          distance++;
-        }
-        for (Value operand : op->getOperands()) {
-          Value v = operand;
-          Operation *defOp = v.getDefiningOp();
-          if (defOp && defOp->getBlock() == op->getBlock()) {
-            dfs(defOp, distance, use);
-          }
-        }
-      };
-
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasTrait<OpTrait::DotLike>())
-      continue;
-    seen.clear();
-    dfs(&op, 0, &op);
-  }
-
-  // If the loop has numStages attribute, also consider pipelining other loads
-  // that are not directly used by dot ops.
-  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
-    for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op))
-        dfs(&op, 0, &op);
-    }
-  }
-
-  return loadOpToIndLevelAndUse;
-}
-
 static bool loadIsMMAv3(Operation *loadOp) {
   if (!loadOp->hasOneUse())
     return false;
@@ -397,11 +349,11 @@ static bool loadIsMMAv3(Operation *loadOp) {
   return oldOrder == newOrder;
 }
 
-static llvm::MapVector<Operation *, LoadInfo>
+static void
 assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
                         &loadOpToIndLevelAndUse,
-                    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo;
+                    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                    llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
 
   for (auto &[op, dist, use] : loadOpToIndLevelAndUse) {
     if (loadToInfo.count(op))
@@ -512,20 +464,22 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
     }
     loadToInfo[op] = loadInfo;
   }
-
-  return loadToInfo;
 }
 
-static llvm::MapVector<Operation *, LoadInfo>
-scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
-              DenseSet<Operation *> &rootUsers, int numStages) {
+// assignMemoryLayouts, loadToInfo
+static tt::CoarseSchedule::Cluster
+getLoopSchedule(scf::ForOp forOp, tt::CoarseSchedule &schedule,
+                /*DenseSet<Operation *> &rootUsers,*/ int numStages,
+                llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+  tt::CoarseSchedule::Cluster afterPrologue = schedule.clusters.begin();
 
   // Get all loads that are (transitively) used by dot ops and their distance
   // to the dot op.
   llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
-      loadOpToIndLevelAndUse = loadOpsToIndirectionLevelAndUse(forOp);
+      loadOpToIndLevelAndUse =
+          mlir::triton::loadOpsToIndirectionLevelAndUse(forOp);
   LLVM_DEBUG({
     LDBG("Found " << loadOpToIndLevelAndUse.size() << " loads to pipeline:");
     for (const auto &[l, i, u] : loadOpToIndLevelAndUse) {
@@ -535,49 +489,58 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     }
   });
   if (loadOpToIndLevelAndUse.empty())
-    return {};
+    return afterPrologue;
 
   // Check which loads are good for pipelining, and assign them
   // memory layouts.
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo =
-      assignMemoryLayouts(loadOpToIndLevelAndUse, axisInfoAnalysis);
+  assignMemoryLayouts(loadOpToIndLevelAndUse, axisInfoAnalysis, loadToInfo);
 
   if (loadToInfo.empty())
-    return {};
+    return afterPrologue;
 
-  // Calculate the stage distance between applicable loads.
-  int maxIndirectionLevel = -1;
-  for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse) {
-    if (loadToInfo.count(loadOp) == 0)
-      continue;
-    maxIndirectionLevel = std::max(maxIndirectionLevel, dist);
-  }
-  unsigned stagesBetweenLoads =
-      ceil<unsigned>(numStages - 2, maxIndirectionLevel + 1);
-
-  tt::CoarseSchedule::Cluster rootUsersCluster = schedule.clusters.newAtFront();
-  // Put the root uses of the loads in the last stage.
-  for (auto &[loadOp, dist, use] : loadOpToIndLevelAndUse) {
-    if (loadToInfo.count(loadOp) == 0)
-      continue;
-    // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
-    // always present in the opInfo
-    if (!isa<tt::LoadOp>(use)) {
-      schedule.insert(use, numStages - 1, rootUsersCluster);
-      rootUsers.insert(use);
+  // reconstrcut schedule from annotations of (stage, cluster)
+  int maxClusterId = 0, minClusterId = 0;
+  bool hasSchedule = false;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (op.hasAttr("loop.stage") && op.hasAttr("loop.cluster")) {
+      auto clusterId = cast<IntegerAttr>(op.getAttr("loop.cluster"))
+                           .getValue()
+                           .getSExtValue();
+      LLVM_DEBUG({
+        LDBG("saw cluster " << clusterId);
+        op.dump();
+      });
+      if (!hasSchedule) {
+        minClusterId = clusterId;
+        maxClusterId = clusterId;
+        hasSchedule = true;
+        continue;
+      }
+      minClusterId = (clusterId < minClusterId) ? clusterId : minClusterId;
+      maxClusterId = (clusterId > maxClusterId) ? clusterId : maxClusterId;
     }
   }
-
-  SmallVector<tt::CoarseSchedule::Cluster> loadsClusters;
-  for (int i = 0; i < maxIndirectionLevel + 1; i++) {
-    loadsClusters.push_back(schedule.clusters.newAtBack());
+  assert(hasSchedule);
+  LDBG("minCluster " << minClusterId << " max " << maxClusterId);
+  DenseMap<int, tt::CoarseSchedule::Cluster> clusters;
+  for (int i = minClusterId; i < maxClusterId + 1; i++) {
+    clusters.insert({i, schedule.clusters.newAtBack()});
   }
-  // Assign stages to the loads.
-  for (auto [loadOp, indLevel, _] : loadOpToIndLevelAndUse) {
-    if (loadToInfo.count(loadOp) == 0)
-      continue;
-    int stage = (maxIndirectionLevel - indLevel) * stagesBetweenLoads;
-    schedule.insert(loadOp, stage, loadsClusters[indLevel]);
+  // afterPrologue should be the first cluster after ifOps?
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (op.hasAttr("loop.stage") && op.hasAttr("loop.cluster")) {
+      auto stage =
+          cast<IntegerAttr>(op.getAttr("loop.stage")).getValue().getZExtValue();
+      auto clusterId = cast<IntegerAttr>(op.getAttr("loop.cluster"))
+                           .getValue()
+                           .getSExtValue();
+      schedule.insert(&op, stage, clusters[clusterId]);
+      LLVM_DEBUG({
+        LDBG("insert stage " << stage << " cluster " << clusterId << " "
+                             << *clusters[clusterId]);
+        op.dump();
+      });
+    }
   }
 
   // Distance from the load to the use.
@@ -587,67 +550,7 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     loadToInfo[loadOp].distToUse = schedule[use].first - schedule[loadOp].first;
   }
 
-  return loadToInfo;
-}
-
-// Schedule the prologue and epilogue `if` ops in the loop, pushing them as
-// close to the loop boundaries as possible. Return the cluster after the
-// prologue (or the beginning of the loop if there is no prologue).
-static tt::CoarseSchedule::Cluster
-schedulePrologueAndEpilogue(scf::ForOp forOp, tt::CoarseSchedule &schedule,
-                            DenseSet<Operation *> &rootUsers, int numStages) {
-  tt::CoarseSchedule::Cluster afterPrologue = schedule.clusters.begin();
-
-  // Look for the IfOp that is in the backward slice any of the currently
-  // scheduled ops and put it at the beginning of the loop.
-  DenseMap<scf::IfOp, int> ifsToStage;
-  // Go stage by stage.
-  for (int stage = 0; stage < numStages; stage++) {
-    for (auto [op, stage_, cluster] : schedule.getOpsInOrder(forOp)) {
-      if (stage_ != stage)
-        continue;
-      SetVector<Operation *> backwardSlice;
-      BackwardSliceOptions opt;
-      opt.omitBlockArguments = true;
-      getBackwardSlice((Operation *)op, &backwardSlice, opt);
-
-      for (auto op : backwardSlice) {
-        if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-          ifsToStage.insert({ifOp, stage});
-        }
-      }
-    }
-  }
-  tt::CoarseSchedule::Cluster prologueCluster = schedule.clusters.newAtFront();
-  for (auto [ifOp, stage] : ifsToStage) {
-    schedule.insert(ifOp, stage, prologueCluster);
-  }
-
-  // Look for the IfOp that is in the forward slice of the root users and put it
-  // at the end of the loop.
-  tt::CoarseSchedule::Cluster epilogueCluster = schedule.clusters.newAtBack();
-  for (auto rootUser : rootUsers) {
-    SetVector<Operation *> forwardSlice;
-    getForwardSlice(rootUser, &forwardSlice);
-
-    int stage = schedule[rootUser].first;
-    for (auto op : forwardSlice) {
-      scf::IfOp ifOp = dyn_cast<scf::IfOp>(op);
-      if (ifOp == nullptr) {
-        // check if the op is in the body of an if op that's part of the loop
-        auto parentOp = op->getParentOp();
-        if (parentOp != nullptr &&
-            parentOp->getParentOp() == forOp.getOperation()) {
-          ifOp = dyn_cast<scf::IfOp>(parentOp);
-        }
-      }
-      if (ifOp) {
-        schedule.insertIfAbsent(ifOp, stage,
-                                epilogueCluster); // after prefetch extracts
-      }
-    }
-  }
-  return afterPrologue;
+  return clusters[0];
 }
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
@@ -1058,22 +961,16 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
   // a scaffold for the final schedule.
-  DenseSet<Operation *> rootUsers;
+  // DenseSet<Operation *> rootUsers;
   tt::CoarseSchedule coarseSchedule(numStages);
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo =
-      scheduleLoads(forOp, coarseSchedule, rootUsers, numStages);
+  llvm::MapVector<Operation *, LoadInfo> loadToInfo;
+  tt::CoarseSchedule::Cluster afterPrologue = getLoopSchedule(
+      forOp, coarseSchedule, /*rootUsers,*/ numStages, loadToInfo);
   if (loadToInfo.empty())
     return false;
 
   LLVM_DEBUG({
     LDBG("Coarse schedule loads only:");
-    coarseSchedule.dump();
-  });
-
-  tt::CoarseSchedule::Cluster afterPrologue =
-      schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
-  LLVM_DEBUG({
-    LDBG("Coarse schedule with prologue and epilogue:");
     coarseSchedule.dump();
   });
 
@@ -1099,6 +996,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     coarseSchedule.dump();
   });
 
+  LDBG("afterPrologue = " << *afterPrologue);
   scheduleRemainingToLastStage(forOp, coarseSchedule, afterPrologue, numStages);
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
