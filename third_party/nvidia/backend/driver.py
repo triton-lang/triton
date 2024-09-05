@@ -122,12 +122,15 @@ def _serialize_type(type):
 
 def _serialize_signature(signature):
     ret = dict()
+    map = dict()
     i = 0
     for _, type in signature.items():
         types = _serialize_type(type)
         ret.update({i + j: ty for j, ty in enumerate(types)})
+        for ii in range(len(types)):
+            map[i + ii] = _
         i += len(types)
-    return ret
+    return ret, map
 
 
 def make_launcher(constants, signature, ids):
@@ -167,8 +170,8 @@ def make_launcher(constants, signature, ids):
     format = "iiiKKOOOO" + args_format
 
     # expand signature
-    signature = _serialize_signature(signature)
-    serialized_args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+    signature, kvmap = _serialize_signature(signature)
+    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
@@ -181,9 +184,9 @@ def make_launcher(constants, signature, ids):
             internal_args_list.append(f"*tma_ptr{i}")
         else:
             internal_args_list.append(f"_arg{i}")
+    params = [i for i in kvmap.keys() if kvmap[i] not in constants]
 
     # generate glue code
-    params = [i for i in signature.keys() if i not in constants]
     src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
@@ -367,7 +370,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function,
                                            &kernel_metadata, &launch_metadata,
-                                           &launch_enter_hook, &launch_exit_hook {serialized_args_list})) {{
+                                           &launch_enter_hook, &launch_exit_hook {args_list})) {{
     return NULL;
   }}
 
