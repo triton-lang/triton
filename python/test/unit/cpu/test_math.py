@@ -74,7 +74,7 @@ def test_tensor_math_fn(vec_lib, dtype_str, math_fn, size, device):
 @pytest.mark.parametrize("dtype_str", float_dtypes)
 @pytest.mark.parametrize("math_fn", [
     "acos", "acosh", "asin", "asinh", "atan", "atanh", "cbrt", "cos", "cosh", "erf", "exp", "exp2", "expm1", "floor",
-    "isnan", "isinf", "log", "log1p", "log2", "log10", "rsqrt", "signbit", "sin", "sinh", "sqrt", "tan", "tanh"
+    "isnan", "isinf", "log", "log1p", "log2", "log10", "rsqrt", "signbit", "sin", "sinh", "sqrt", "tan", "tanh", "trunc"
 ])
 def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
     if not is_cpu():
@@ -116,7 +116,7 @@ def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
 
     # These are not implemented via extern library calls
     native_impls = {
-        "libmvec": {"expm1", "floor", "isnan", "isinf", "rsqrt", "signbit", "sqrt"},
+        "libmvec": {"expm1", "floor", "isnan", "isinf", "rsqrt", "signbit", "sqrt", "trunc"},
         "libsleef": {"isnan", "isinf", "rsqrt", "signbit"},
     }
     if math_fn not in native_impls[vec_lib]:

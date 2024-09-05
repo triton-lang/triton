@@ -124,6 +124,11 @@ def tanh(arg0, _builder=None):
     return core.tensor(_builder.create_tanh(arg0.handle), arg0.type)
 
 
+@core.extern
+def trunc(arg0, _builder=None):
+    return core.tensor(_builder.create_trunc(arg0.handle), arg0.type)
+
+
 @jit
 def _const(v, dtype):
     """

@@ -433,6 +433,7 @@ struct ConvertUnsupportedOps
       patterns.add<PromoteOpToFp32<math::SqrtOp>>(context);
       patterns.add<PromoteOpToFp32<math::TanOp>>(context);
       patterns.add<PromoteOpToFp32<math::TanhOp>>(context);
+      patterns.add<PromoteOpToFp32<math::TruncOp>>(context);
     }
 
     if (failed(mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns))))

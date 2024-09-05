@@ -267,6 +267,8 @@ struct MathToVecLibPass
           patterns, SleefNameGenerator("floor", /*ulp=*/0));
       populatePatternsForOp<math::SqrtOp>(
           patterns, SleefNameGenerator("sqrt", /*ulp=*/5));
+      populatePatternsForOp<math::TruncOp>(
+          patterns, SleefNameGenerator("trunc", /*ulp=*/0));
       break;
     }
     }
