@@ -729,7 +729,7 @@ class ReduceScanOpIneterface:
         if hasattr(ret, "shape") and ret.shape:
             ret_type = tl.block_type(dtype, ret.shape)
         else:
-            ret = np.array([ret], dtype=_get_np_dtype(dtype))
+            ret = np.array([ret]).astype(_get_np_dtype(dtype))
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
