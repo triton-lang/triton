@@ -75,11 +75,10 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   }
   if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
     rewriter.setInsertionPoint(storeOp);
-    // create conditional store
-    auto ifOp = rewriter.create<scf::IfOp>(storeOp.getLoc(), pred, false);
-    auto *b = ifOp.thenBlock();
-    op->moveBefore(b, b->begin());
-    return ifOp;
+    Value mask = getPredMask(rewriter, storeOp.getPtr().getType(),
+                             storeOp.getMask(), pred);
+    storeOp.getMaskMutable().assign(mask);
+    return op;
   }
   if (auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
     // triton_nvidia_gpu.warp_group_dot
