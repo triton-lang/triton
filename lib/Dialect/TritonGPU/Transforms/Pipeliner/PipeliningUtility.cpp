@@ -80,11 +80,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     storeOp.getMaskMutable().assign(mask);
     return op;
   }
-  if (auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
-    // triton_nvidia_gpu.warp_group_dot
-    // Why is this side-affecting and does it need predication?
-    return dotOp;
-  }
 
   assert("don't know how to predicate this op" && false);
   return op;
