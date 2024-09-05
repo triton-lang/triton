@@ -995,12 +995,13 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
     elt_ty = ptr_ty.element_ty
 
     # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
-    if elt_ty == tl.int1:
+    is_bool = elt_ty == tl.int1
+    if is_bool:
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
 
-    # Cast `other` into `ele_ty` type
+    # Cast `other` into `elt_ty` type
     if other is not None:
         other = cast(other, elt_ty, builder)
 
@@ -1014,11 +1015,14 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
 
     # Build IR
     if mask is None:
-        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
+        ret = tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
     else:
-        return tl.tensor(
+        ret = tl.tensor(
             builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache, eviction,
                                        is_volatile), dst_ty)
+    if is_bool:
+        ret = cast(ret, tl.int1, builder)
+    return ret
 
 
 def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], boundary_check: Tuple,

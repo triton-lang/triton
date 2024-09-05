@@ -1050,7 +1050,7 @@ def isnan(arg0, _builder=None):
         ], {
             (core.dtype("fp32"), ): ("__nv_isnanf", core.dtype("int32")),
             (core.dtype("fp64"), ): ("__nv_isnand", core.dtype("int32")),
-        }, is_pure=True, _builder=_builder)
+        }, is_pure=True, _builder=_builder).to(core.int1, _builder=_builder)
 
 
 @core.extern
@@ -1086,7 +1086,7 @@ def isinf(arg0, _builder=None):
         "", "", [arg0], {
             (core.dtype("fp32"), ): ("__nv_isinff", core.dtype("int32")),
             (core.dtype("fp64"), ): ("__nv_isinfd", core.dtype("int32")),
-        }, is_pure=True, _builder=_builder)
+        }, is_pure=True, _builder=_builder).to(core.int1, _builder=_builder)
 
 
 @core.extern
