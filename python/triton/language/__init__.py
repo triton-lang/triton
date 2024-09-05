@@ -84,6 +84,7 @@ from .core import (
     permute,
     pi32_t,
     pointer_type,
+    nv_tma_desc_type,
     program_id,
     range,
     reduce,
@@ -207,6 +208,7 @@ __all__ = [
     "philox_impl",
     "pi32_t",
     "pointer_type",
+    "nv_tma_desc_type",
     "program_id",
     "rand",
     "rand4x",
@@ -259,6 +261,10 @@ def str_to_ty(name):
             const = True
         ty = str_to_ty(name)
         return pointer_type(element_ty=ty, const=const)
+
+    if name == "nvTmaDesc":
+        return nv_tma_desc_type()
+
     tys = {
         "fp8e4nv": float8e4nv,
         "fp8e4b8": float8e4b8,

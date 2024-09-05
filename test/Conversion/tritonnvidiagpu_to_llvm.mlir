@@ -79,3 +79,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: byval_tma_desc
+  // CHECK: llvm.align = 64
+  // CHECK: llvm.byval = !llvm.array<128 x i8>
+  // CHECK: nvvm.grid_constant
+  tt.func @byval_tma_desc(%desc: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}) {
+    tt.return
+  }
+}

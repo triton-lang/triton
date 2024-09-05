@@ -39,6 +39,10 @@ public:
                   triton::ReduceOp op, unsigned numLaneToReduce,
                   unsigned interleave) const override;
 
+  bool canUseStMatrix(RankedTensorType srcTy, ArrayRef<unsigned> paddedRepShape,
+                      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+                      int swizzleByteWidth) const override;
+
   bool processReplicaUsingStMatrix(RewriterBase &rewriter, Location loc,
                                    Value smemBase, SmallVector<Value> &vals,
                                    RankedTensorType srcTy, Type elemTy,
