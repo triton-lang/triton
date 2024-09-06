@@ -14,6 +14,7 @@
 
 using namespace mlir;
 namespace ttg = mlir::triton::gpu;
+namespace tt = mlir::triton;
 
 static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
   if (isa<ttg::LocalLoadOp>(op))
@@ -96,6 +97,51 @@ public:
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
     opToMove.clear();
+
+    // Move writing to LDS and reading from LDS right after the loading of a
+    // tensor from global memory. There are 2 possible patterns depending on
+    // whether writing to LDS is done using an optional local_alloc argument or
+    // a local_store instruction:
+    //
+    // 1) %1 = load %ptr
+    //    %2 = local_alloc %1
+    //    %3 = local_load %2
+    //
+    // 2) %1 = load %ptr
+    //    %2 = local_alloc
+    //    %3 = local_store %1, %2
+    //    %4 = local_load %2
+    m.walk([&](ttg::LocalLoadOp op) {
+      Operation *localLoad = (Operation *)op;
+      Operation *localAlloc = localLoad->getOperand(0).getDefiningOp();
+
+      if (!localAlloc || !isa<ttg::LocalAllocOp>(localAlloc)) {
+        return;
+      }
+
+      // Case when localAlloc has no operands
+      if (localAlloc->getNumOperands() < 1) {
+        Operation *localStore = getFirstUse(localAlloc);
+        assert(localStore && "localAlloc has no use");
+
+        // Check if the use is a LocalStoreOp
+        if (isa<ttg::LocalStoreOp>(localStore)) {
+          Operation *loadOp = localStore->getOperand(0).getDefiningOp();
+
+          if (isa<tt::LoadOp>(loadOp)) {
+            localAlloc->moveAfter(loadOp);
+            localStore->moveAfter(localAlloc);
+            localLoad->moveAfter(localStore);
+          }
+        }
+        return;
+      }
+
+      // Case when localAlloc has operands
+      Operation *loadOp = localAlloc->getOperand(0).getDefiningOp();
+      localAlloc->moveAfter(loadOp);
+      localLoad->moveAfter(localAlloc);
+    });
 
     // Sink conversion after the last dealloc but before the first use ancestor
     // in its block. This helps to avoid unnecessary shared memory allocation.
