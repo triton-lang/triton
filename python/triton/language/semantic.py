@@ -182,10 +182,15 @@ def binary_op_type_checking_impl(lhs: tl.tensor | numbers.Number, rhs: tl.tensor
     check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
     if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_ptr():
         ret_sca_ty = computation_type_impl(lhs_sca_ty, lhs_is_scalar, rhs_sca_ty, rhs_is_scalar, div_or_mod)
-        lhs = full(
-            (), lhs_scalar, dtype=ret_sca_ty, builder=builder) if lhs_is_scalar else cast(lhs, ret_sca_ty, builder)
-        rhs = full(
-            (), rhs_scalar, dtype=ret_sca_ty, builder=builder) if rhs_is_scalar else cast(rhs, ret_sca_ty, builder)
+        # avoid doing float32 -> float64 roundtrips through to_cast that lose precision
+        if lhs_is_scalar and ret_sca_ty == tl.float64 and isinstance(lhs_scalar, float):
+            lhs = full((), lhs_scalar, dtype=ret_sca_ty, builder=builder)
+        else:
+            lhs = cast(lhs, ret_sca_ty, builder)
+        if rhs_is_scalar and ret_sca_ty == tl.float64 and isinstance(rhs_scalar, float):
+            rhs = full((), rhs_scalar, dtype=ret_sca_ty, builder=builder)
+        else:
+            rhs = cast(rhs, ret_sca_ty, builder)
 
     # implicit broadcasting
     lhs, rhs = broadcast_impl_value(lhs, rhs, builder)
