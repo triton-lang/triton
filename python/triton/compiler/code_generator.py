@@ -18,6 +18,8 @@ from types import ModuleType
 
 
 def mangle_ty(ty):
+    if ty.is_tuple():
+        return 'T' + '_'.join(map(mangle_ty, ty.types)) + 'T'
     if ty.is_ptr():
         return 'P' + mangle_ty(ty.element_ty)
     if ty.is_int():
@@ -1053,14 +1055,15 @@ class CodeGenerator(ast.NodeVisitor):
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
-        args = [arg if _is_triton_tensor(arg) else constexpr(arg) for arg in args]
+        args = [
+            arg if _is_triton_tensor(arg) or isinstance(arg, language.core.tuple) else constexpr(arg) for arg in args
+        ]
         # generate function def
         attributes = {}
         constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
         constants = {i: args[i] for i in constexprs}
         # generate call
         args = [None if i in constexprs else arg for i, arg in enumerate(args)]
-        arg_vals = [arg.handle for arg in args if arg is not None]
         arg_types = [arg.type for arg in args if arg is not None]
         fn_name = mangle_fn(fn.__name__, arg_types, constants)
         # generate function def if necessary
@@ -1086,6 +1089,7 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
+        arg_vals = language.tuple([x for x in args if x is not None]).serialize()
         call_op = self.builder.call(symbol, arg_vals)
         if call_op.get_num_results() == 0 or callee_ret_type is None:
             return None

@@ -490,6 +490,10 @@ class dtype:
     def is_const():
         return False
 
+    @staticmethod
+    def is_tuple():
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -705,6 +709,9 @@ class tuple_type(dtype):
     def to_ir(self, builder: ir.builder):
         return [ty.to_ir(builder) for ty in self.types]
 
+    def is_tuple(self):
+        return True
+
 
 # scalar types
 void = dtype('void')
@@ -792,6 +799,9 @@ class tensor:
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
         self.shape = [constexpr(s) for s in self.shape]
+
+    def serialize(self):
+        return [self.handle]
 
     def __str__(self) -> str:
         # ex. "float32[16, 32]"
@@ -1169,6 +1179,23 @@ class tensor:
 
     def flip(self, dim=None) -> tensor:
         ...
+
+
+class tuple:
+
+    def __init__(self, args: list):
+        self.values = args
+        self.type = tuple_type([x.type for x in args])
+
+    def serialize(self):
+        return list(_flatten_list([x.serialize() for x in self.values]))
+
+    def __getitem__(self, idx: constexpr):
+        assert isinstance(idx, constexpr)
+        return self.values[idx]
+
+    def __len__(self):
+        return len(self.values)
 
 
 def get_bool_env_var(var_name):
