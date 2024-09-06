@@ -67,8 +67,8 @@ template <class ConcreteType>
 class DotLike : public TraitBase<ConcreteType, DotLike> {
 public:
   static LogicalResult verifyTrait(Operation *op) {
-    // if (op->getNumOperands() != 3)
-    //   return op->emitOpError("expected 3 operands");
+    if (op->getNumOperands() < 3)
+      return op->emitOpError("expected at least 3 operands");
     auto aTy = cast<TensorOrMemDesc>(op->getOperand(0).getType());
     auto bTy = cast<TensorOrMemDesc>(op->getOperand(1).getType());
     auto cTy = cast<TensorOrMemDesc>(op->getOperand(2).getType());
