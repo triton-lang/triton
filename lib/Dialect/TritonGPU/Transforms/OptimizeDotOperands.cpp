@@ -65,11 +65,17 @@ bool canHoistDotOpEncV3(Operation* op) {
   if (isa<arith::SelectOp>(op))
     return false;
 
+  // Downcasting not currently supported; it will likely require minor
+  // adjustments in sharedToDotOperandMMv2
+  auto oprType = getElementTypeOrSelf(op->getOperand(0));
+  auto resType = getElementTypeOrSelf(op->getResult(0));
+  if (oprType.getIntOrFloatBitWidth() > resType.getIntOrFloatBitWidth())
+    return false;
+
   // Don't hoist through u1 -> fp casts as they aren't supported in
   // ElementwiseOpToLLVM::reorderValues().
   if (isa<arith::UIToFPOp>(op)) {
-    Type opType = getElementTypeOrSelf(op->getOperand(0));
-    if (opType.isInteger(1))
+    if (oprType.isInteger(1))
       return false;
   }
 
