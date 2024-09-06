@@ -1,0 +1,880 @@
+\newcommand{\drawBlockedWave}[5]{
+  %%
+  %% Draw a wave coverage with blocked layout
+  %%
+  %% Wave TL: pre defined top-left coordinate of the wave
+  %% \elem: pre defined variable
+  %%
+  %% #1: sizePerThread[0] --> sizePerThreadM
+  %% #2: sizePerThread[1] --> sizePerThreadN
+  %% #3: threadsPerWarp[0] --> threadsPerWarpM
+  %% #4: threadsPerWarp[1] --> threadsPerWarpN
+  %% #5: fastest changing dim --> order
+
+  \pgfmathsetmacro{\sizePerThreadM}{#1}
+  \pgfmathsetmacro{\sizePerThreadN}{#2}
+  \pgfmathsetmacro{\threadsPerWarpM}{#3}
+  \pgfmathsetmacro{\threadsPerWarpN}{#4}
+  \pgfmathsetmacro{\order}{#5}
+
+  \pgfmathsetmacro{\waveSizeM}{\sizePerThreadM*\threadsPerWarpM}
+  \pgfmathsetmacro{\waveSizeN}{\sizePerThreadN*\threadsPerWarpN}
+
+  \foreach \tid in {0,...,63}{
+    \pgfmathsetmacro{\tidM}{int(\tid/\threadsPerWarpN)}
+    \pgfmathsetmacro{\tidN}{mod(\tid,\threadsPerWarpN)}
+    \coordinate (Thread TL) at ($(Wave TL)+(\tidN*\sizePerThreadN*\elem, -\tidM*\sizePerThreadM*\elem)$);
+    \pgfmathsetmacro{\ratio}{\tidM*10}
+
+    \ifthenelse{\tid = 0}{
+      \draw [line width = 0.01mm, fill=red] (Thread TL)
+      rectangle ++(\sizePerThreadN*\elem, -\sizePerThreadM*\elem);
+    }{
+      \draw [line width = 0.01mm, fill=blue!\ratio!white] (Thread TL)
+      rectangle ++(\sizePerThreadN*\elem, -\sizePerThreadM*\elem);
+    }
+  }
+  \draw (Wave TL) rectangle ++(\waveSizeN*\elem, -\waveSizeM*\elem);
+}
+
+\newcommand{\drawBlockedCTA}[7]{
+  %%
+  %% Draw a CTA coverage with blocked layout
+  %%
+  %% CTA TL: pre defined top-left coordinate of the CTA
+  %% \elem: pre defined variable
+  %%
+  %% #1: sizePerThread[0] --> sizePerThreadM
+  %% #2: sizePerThread[1] --> sizePerThreadN
+  %% #3: threadsPerWarp[0] --> threadsPerWarpM
+  %% #4: threadsPerWarp[1] --> threadsPerWarpN
+  %% #5: warpsPerCTA[0] --> warpsPerCTAM
+  %% #6: warpsPerCTA[1] --> warpsPerCTAN
+  %% #7: fastest changing dim --> order
+
+  \pgfmathsetmacro{\sizePerThreadM}{#1}
+  \pgfmathsetmacro{\sizePerThreadN}{#2}
+  \pgfmathsetmacro{\threadsPerWarpM}{#3}
+  \pgfmathsetmacro{\threadsPerWarpN}{#4}
+  \pgfmathsetmacro{\warpsPerCTAM}{#5}
+  \pgfmathsetmacro{\warpsPerCTAN}{#6}
+  \pgfmathsetmacro{\order}{#7}
+
+  \pgfmathsetmacro{\CTASizeM}{\sizePerThreadM*\threadsPerWarpM*\warpsPerCTAM}
+  \pgfmathsetmacro{\CTASizeN}{\sizePerThreadN*\threadsPerWarpN*\warpsPerCTAN}
+  \pgfmathsetmacro{\waveSizeM}{\sizePerThreadM*\threadsPerWarpM}
+  \pgfmathsetmacro{\waveSizeN}{\sizePerThreadN*\threadsPerWarpN}
+
+  \pgfmathsetmacro{\maxWaveId}{\warpsPerCTAM*\warpsPerCTAN-1}
+
+  \coordinate (Wave TL) at (CTA TL);
+  \drawBlockedWave{\sizePerThreadM}{\sizePerThreadN}{\threadsPerWarpM}{\threadsPerWarpN}{\order}
+  \foreach \waveId in {0,...,\maxWaveId}{
+    \ifthenelse{\order=1}
+    {
+      \pgfmathsetmacro{\waveCoordM}{int(\waveId/\warpsPerCTAN)}
+      \pgfmathsetmacro{\waveCoordN}{mod(\waveId,\warpsPerCTAN)}
+      \pgfmathsetmacro{\rot}{0}
+    }{
+      \pgfmathsetmacro{\waveCoordM}{mod(\waveId,\warpsPerCTAM)}
+      \pgfmathsetmacro{\waveCoordN}{int(\waveId/\warpsPerCTAM)}
+      \pgfmathsetmacro{\rot}{90}
+    }
+
+    \coordinate (Wave TL) at ($(CTA TL)+(\waveCoordN*\waveSizeN*\elem, -\waveCoordM*\waveSizeM*\elem)$);
+    \draw [ultra thin] (Wave TL) rectangle ++(\waveSizeN*\elem, -\waveSizeM*\elem)
+    node [pos=.5, scale=.6*\scale, inner sep=0, fill=white, rotate=\rot] {wave\waveId};
+  }
+
+  \draw [thick] (CTA TL) rectangle ++(\CTASizeN*\elem, -\CTASizeM*\elem);
+}
+
+\newcommand{\drawBlockedTensor}[8]{
+  %%
+  %% Draw a tensor with blocked layout of the following parameters
+  %% sizePerThread[2]
+  %% threadsPerWarp[2]
+  %% warpsPerCTA[2]
+  %% order[2]
+  %%
+  %% TL: pre defined top-left coordinate of the tensor
+  %% \elem: pre defined variable
+  %%
+  %% #1: tensorShape[0] --> M
+  %% #2: tensorShape[1] --> N
+  %% #3: sizePerThread[0] --> sizePerThreadM
+  %% #4: sizePerThread[1] --> sizePerThreadN
+  %% #5: threadsPerWarp[0] --> threadsPerWarpM
+  %%     Note that threadsPerWarp[1] is calculated by 64/threadsPerWarp[0]
+  %% #6: warpsPerCTA[0] --> warpsPerCTAM
+  %% #7: warpsPerCTA[1] --> warpsPerCTAN
+  %% #8: fastest changing dim --> order
+
+  \pgfmathsetmacro{\M}{#1}
+  \pgfmathsetmacro{\N}{#2}
+  \pgfmathsetmacro{\sizePerThreadM}{#3}
+  \pgfmathsetmacro{\sizePerThreadN}{#4}
+  \pgfmathsetmacro{\threadsPerWarpM}{#5}
+  \pgfmathsetmacro{\warpsPerCTAM}{#6}
+  \pgfmathsetmacro{\warpsPerCTAN}{#7}
+  \pgfmathsetmacro{\order}{#8}
+
+  \pgfmathsetmacro{\threadsPerWarpN}{64/\threadsPerWarpM}
+  \pgfmathsetmacro{\CTASizeM}{\sizePerThreadM*\threadsPerWarpM*\warpsPerCTAM}
+  \pgfmathsetmacro{\CTASizeN}{\sizePerThreadN*\threadsPerWarpN*\warpsPerCTAN}
+  \pgfmathsetmacro{\CTARepM}{\M/\CTASizeM}
+  \pgfmathsetmacro{\CTARepN}{\N/\CTASizeN}
+  \pgfmathsetmacro{\maxCTAId}{\CTARepM*\CTARepN-1}
+
+  \foreach \ctaId in {0,...,\maxCTAId}{
+    \pgfmathsetmacro{\ctaCoordM}{int(\ctaId/\CTARepN)}
+    \pgfmathsetmacro{\ctaCoordN}{mod(\ctaId,\CTARepN)}
+    \coordinate (CTA TL) at ($(TL)+(\ctaCoordN*\CTASizeN*\elem, -\ctaCoordM*\CTASizeM*\elem)$);
+    \drawBlockedCTA{\sizePerThreadM}{\sizePerThreadN}{\threadsPerWarpM}{\threadsPerWarpN}{\warpsPerCTAM}{\warpsPerCTAN}{\order}
+  }
+
+  \node [scale=.7*\scale, above, rotate=90] at ($(TL)+(0, -.5*\M*\elem)$) {M=\M};
+  \node [scale=.7*\scale, above] at ($(TL)+(.5*\N*\elem, 0)$) {K=\N};
+
+  \def\zoomR{1.5}
+  \coordinate (zoomin BL) at ($(TL)+(0, .3)$);
+
+  \foreach \hl in {0,...,\sizePerThreadM}{
+    \draw ($(zoomin BL)+(0, \hl*\elem*\zoomR)$) -- ++(\sizePerThreadN*\elem*\zoomR,0);
+  }
+  \foreach \vl in {0,...,\sizePerThreadN}{
+    \draw ($(zoomin BL)+(\vl*\elem*\zoomR, 0)$) -- ++(0, \sizePerThreadM*\elem*\zoomR);
+  }
+
+  \node [scale=.6*\scale, left] at ($(zoomin BL)+(0, .5*\sizePerThreadM*\elem*\zoomR)$) {$t_0$};
+  \node [scale=.6*\scale, right] at ($(zoomin BL)+(\sizePerThreadN*\elem*\zoomR, .5*\sizePerThreadM*\elem*\zoomR)$) {\sizePerThreadM$\times$\sizePerThreadN};
+
+  \draw [densely dotted] (TL) -- (zoomin BL);
+  \draw [densely dotted] ($(TL)+(\sizePerThreadN*\elem, 0)$) -- ($(zoomin BL)+(\sizePerThreadN*\elem*\zoomR, 0)$);
+  \draw [fill=red] (TL) rectangle ++(\sizePerThreadN*\elem, -\sizePerThreadM*\elem);
+}
+
+\newcommand{\drawBlockMFMALayoutLarge}[3]{
+  %%
+  %% Draw a single block of MFMA_32x32x8xf16 or MFMA_16x16x16xf16
+  %%
+  %% block TL: pre-defined top-left coordinate of the block
+  %% \elem: pre defined variable
+  %%
+  %% #1: 1 for mfma.trans, 0 for normal mfma
+  %% #2: mfmaNonKDim
+  %% #3: verbose. 1 means draw tid in each vec; 0 means draw nothing
+
+  \pgfmathsetmacro{\trans}{#1}
+  \pgfmathsetmacro{\nonTrans}{1-#1}
+  \pgfmathsetmacro{\nonKDim}{#2}
+  \pgfmathsetmacro{\maxTID}{\nonKDim-1}
+  \pgfmathsetmacro{\groups}{64/\nonKDim}
+  \pgfmathsetmacro{\maxGID}{\groups-1}
+  \pgfmathsetmacro{\maxIVec}{\nonKDim*\nonKDim/256-1}
+  \pgfmathsetmacro{\verbose}{#3}
+  \foreach \iVec in {0,...,\maxIVec} {
+    \coordinate (wave TL) at ($(block TL)+(\trans*\iVec*\groups*4*\elem, -\nonTrans*\iVec*\groups*4*\elem)$);
+    \foreach \tg in {0,...,\maxGID}{
+      \pgfmathsetmacro{\colID}{\tg+4}
+      \pgfmathsetmacro{\col}{\Colors[\colID]}
+      \foreach \tid in {0,...,\maxTID} {
+        \pgfmathsetmacro{\ratio}{\tid*2.5*\groups+15}
+        \ifthenelse{\verbose=0}{
+          \draw [line width=0.005mm, fill=\col!\ratio!white]
+          ($(wave TL)+(\nonTrans*\tid*\elem+\tg*\trans*4*\elem, -\trans*\tid*\elem-\tg*\nonTrans*4*\elem)$)
+          rectangle ++(\nonTrans*\elem+\trans*4*\elem, -\nonTrans*4*\elem-\trans*\elem);
+        }{
+          \pgfmathsetmacro{\drawTid}{int(\tid+\tg*\nonKDim)}
+          \draw [line width=0.005mm, fill=\col!\ratio!white]
+          ($(wave TL)+(\nonTrans*\tid*\elem+\tg*\trans*4*\elem, -\trans*\tid*\elem-\tg*\nonTrans*4*\elem)$)
+          rectangle ++(\nonTrans*\elem+\trans*4*\elem, -\nonTrans*4*\elem-\trans*\elem)
+          node [pos=.5, scale=.35*\scale, rotate=90*\nonTrans] {t\drawTid};
+        }
+      }
+    }
+  }
+  \draw [thick] (block TL) rectangle ++(\nonKDim*\elem, -\nonKDim*\elem);
+}
+
+
+\newcommand{\drawTensorMFMALayout}[6]{
+  %%
+  %% Draw a tensor with mfma layout.
+  %%
+  %% C TL: pre defined top-left coordinates of the tensor
+  %%
+  %% #1: M
+  %% #2: N
+  %% #3: MFMA nonKDim
+  %% #4: warpsPerCTA[0]
+  %% #5: warpsPerCTA[1]
+  %% #6: 1 for mfma.trans, 0 for normal mfma
+
+  \pgfmathsetmacro{\tensorShapeH}{#1}
+  \pgfmathsetmacro{\tensorShapeW}{#2}
+  \pgfmathsetmacro{\mfmaNonKDim}{#3}
+  \pgfmathsetmacro{\warpsPerCTAH}{#4}
+  \pgfmathsetmacro{\warpsPerCTAW}{#5}
+  \pgfmathsetmacro{\mfmaTrans}{#6}
+
+  \coordinate (old TL) at (TL);
+  \coordinate (TL) at (C TL);
+
+
+  \pgfmathsetmacro{\CTARepH}{\tensorShapeH/\mfmaNonKDim/\warpsPerCTAH}
+  \pgfmathsetmacro{\CTARepW}{\tensorShapeW/\mfmaNonKDim/\warpsPerCTAW}
+  \pgfmathsetmacro{\maxCTAId}{\CTARepH*\CTARepW-1}
+  \pgfmathsetmacro{\maxWaveId}{\warpsPerCTAH*\warpsPerCTAW-1}
+  \pgfmathsetmacro{\CTASizeH}{\warpsPerCTAH*\mfmaNonKDim}
+  \pgfmathsetmacro{\CTASizeW}{\warpsPerCTAW*\mfmaNonKDim}
+
+
+  \foreach \ctaId in {0,...,\maxCTAId}{
+    \pgfmathsetmacro{\ctaCoordH}{int(\ctaId/\CTARepW)}
+    \pgfmathsetmacro{\ctaCoordW}{mod(\ctaId,\CTARepW)}
+    \coordinate (CTA TL) at ($(TL)+(\ctaCoordW*\CTASizeW*\elem, -\ctaCoordH*\CTASizeH*\elem)$);
+    %% Draw a detailed view of wave0 in each CTA
+    \coordinate (block TL) at (CTA TL);
+    \drawBlockMFMALayoutLarge{\mfmaTrans}{\mfmaNonKDim}{0}
+
+    \foreach \waveId in {0,...,\maxWaveId}{
+      \pgfmathsetmacro{\waveCoordH}{int(\waveId/\warpsPerCTAW)}
+      \pgfmathsetmacro{\waveCoordW}{mod(\waveId,\warpsPerCTAW)}
+      \coordinate (block TL) at ($(CTA TL)+(\waveCoordW*\mfmaNonKDim*\elem, -\waveCoordH*\mfmaNonKDim*\elem)$);
+      %% Inside the loop, only draw a rectangle
+      \draw [ultra thin] (block TL) rectangle ++(\mfmaNonKDim*\elem, -\mfmaNonKDim*\elem)
+      node [scale=.7*\mfmaNonKDim/32*\scale, pos=.5, fill=white, inner sep=0] {wave\waveId};
+    }
+
+    %% Draw the outline of each CTA rep
+    \draw [ultra thick] (CTA TL) rectangle ++(\CTASizeW*\elem, -\CTASizeH*\elem);
+  }
+
+  \coordinate (TL) at (old TL);
+}
+
+\newcommand{\drawMFMAOperand}[4]{
+  %%
+  %% Draw one mfma operand
+  %%
+  %% mfma op TL: pre defined coordinates of the top-left
+  %% \elem: pre defined variable
+  %%
+  %% #1: mfmNonKDim
+  %% #2: kpack
+  %% #3: 0 for opA and 1 for opB
+  %% #4: verbose. 1 means draw tid in each vec; 0 means draw nothing
+
+  \pgfmathsetmacro{\nonKDim}{#1}
+  \pgfmathsetmacro{\maxGID}{64/\nonKDim-1}
+  \pgfmathsetmacro{\maxTID}{\nonKDim-1}
+  \pgfmathsetmacro{\kpack}{#2}
+  \pgfmathsetmacro{\opIdxA}{#3}
+  \pgfmathsetmacro{\opIdxB}{1-\opIdxA}
+  \pgfmathsetmacro{\verbose}{#4}
+
+  \foreach \col/\tg in {0,...,\maxGID}{
+    \pgfmathsetmacro{\col}{\Colors[\tg]}
+    \foreach \tid in {0,...,\maxTID} {
+      % \pgfmathsetmacro{\ratio}{\tid*2.5+15}
+      \ifthenelse{\verbose=0}{
+        \draw [line width=0.005mm, fill=\col]
+        ($(mfma op TL)+(\tg*\kpack*\elem*\opIdxB+\tid*\elem*\opIdxA, -\tid*\elem*\opIdxB-\tg*\kpack*\elem*\opIdxA)$)
+        rectangle ++(\kpack*\elem*\opIdxB + \elem*\opIdxA, -\elem*\opIdxB-\kpack*\elem*\opIdxA);
+      }{
+        \pgfmathsetmacro{\drawTid}{int(\tid+\tg*\nonKDim)}
+        \draw [line width=0.005mm, fill=\col]
+        ($(mfma op TL)+(\tg*\kpack*\elem*\opIdxB+\tid*\elem*\opIdxA, -\tid*\elem*\opIdxB-\tg*\kpack*\elem*\opIdxA)$)
+        rectangle ++(\kpack*\elem*\opIdxB + \elem*\opIdxA, -\elem*\opIdxB-\kpack*\elem*\opIdxA)
+        node [pos=.5, scale=.35*\scale, rotate=90*\opIdxA] {t\drawTid};
+      }
+    }
+  }
+}
+
+\newcommand{\drawWaveOperand}[4]{
+  %%
+  %% Draw the part of the tensor that is one operand of the wave
+  %%
+  %% Op TL: pre defined coordinates of the top-left of the operand
+  %% \elem: pre defined variable
+  %%
+  %% #1: K
+  %% #2: mfmNonKDim
+  %% #3: kpack
+  %% #4: 0 for opA and 1 for opB
+
+  \pgfmathsetmacro{\K}{#1}
+  \pgfmathsetmacro{\nonKDim}{#2}
+  \pgfmathsetmacro{\groups}{64/\nonKDim}
+  \pgfmathsetmacro{\kpack}{#3}
+  \pgfmathsetmacro{\opIdx}{#4}
+  \pgfmathsetmacro{\opIdxOther}{1-\opIdx}
+
+  \coordinate (TL) at (Op TL);
+
+  \pgfmathsetmacro{\numKRep}{\K/\kpack/\groups}
+  \pgfmathsetmacro{\maxKRepId}{\numKRep-1}
+
+  \foreach \repId in {0,...,\maxKRepId}{
+    \coordinate (mfma op TL) at ($(TL)+(\repId*\groups*\kpack*\elem*\opIdxOther, -\repId*\groups*\kpack*\elem*\opIdx)$);
+    \drawMFMAOperand{\nonKDim}{\kpack}{\opIdx}{0}
+    \draw [thick] (mfma op TL) rectangle
+    ++(\groups*\kpack*\elem*\opIdxOther+\nonKDim*\opIdx*\elem, -\nonKDim*\opIdxOther*\elem-\groups*\kpack*\elem*\opIdx);
+  }
+}
+
+\newcommand{\drawDotOperands}[7]{
+  %%
+  %% Draw operand tensors of dot
+  %%
+  %% A TL and B TL: pre defined top-left coordinates of A and B tensor
+  %% \elem: pre defined variable
+  %%
+  %% #1: M
+  %% #2: N
+  %% #3: K
+  %% #4: MFMA nonKDim
+  %% #5: warpsPerCTA[0]
+  %% #6: warpsPerCTA[1]
+  %% #7: kpack
+
+  \pgfmathsetmacro{\M}{#1}
+  \pgfmathsetmacro{\N}{#2}
+  \pgfmathsetmacro{\K}{#3}
+  \pgfmathsetmacro{\mfmaNonKDim}{#4}
+  \pgfmathsetmacro{\warpsPerCTAM}{#5}
+  \pgfmathsetmacro{\warpsPerCTAN}{#6}
+  \pgfmathsetmacro{\kpack}{#7}
+
+  %% operand A
+  \pgfmathsetmacro{\CTARepM}{\M/\warpsPerCTAM/\mfmaNonKDim}
+  \pgfmathsetmacro{\maxCTAIdM}{\CTARepM-1}
+  \pgfmathsetmacro{\maxWaveId}{\warpsPerCTAM-1}
+  \foreach \ctaId in {0,...,\maxCTAIdM}{
+    \coordinate (CTA TL) at ($(A TL)+(0, -\ctaId*\warpsPerCTAM*\mfmaNonKDim*\elem)$);
+    \foreach \waveId in {0,...,\maxWaveId}{
+      \coordinate (wave TL) at ($(CTA TL)+(0, -\waveId*\mfmaNonKDim*\elem)$);
+      \draw [ultra thin] (wave TL) rectangle ++(\K*\elem, -\mfmaNonKDim*\elem);
+    }
+    %% Only draw the detailed view of the first wave in CTA
+    \coordinate (Op TL) at (CTA TL);
+    \drawWaveOperand{\K}{\mfmaNonKDim}{\kpack}{0}
+
+    %% Draw the outline of each CTA rep
+    \draw [ultra thick] (CTA TL) rectangle ++(\K*\elem, -\warpsPerCTAM*\mfmaNonKDim*\elem);
+  }
+  \draw [ultra thin] (A TL) rectangle ++(\K*\elem, -\M*\elem);
+
+
+  %% operand B
+  \pgfmathsetmacro{\CTARepN}{\N/\warpsPerCTAN/\mfmaNonKDim}
+  \pgfmathsetmacro{\maxCTAIdN}{\CTARepN-1}
+  \pgfmathsetmacro{\maxWaveId}{\warpsPerCTAN-1}
+  \foreach \ctaId in {0,...,\maxCTAIdN}{
+    \coordinate (CTA TL) at ($(B TL)+(\ctaId*\warpsPerCTAN*\mfmaNonKDim*\elem, 0)$);
+    \foreach \waveId in {0,...,\maxWaveId}{
+      \coordinate (wave TL) at ($(CTA TL)+(\waveId*\mfmaNonKDim*\elem ,0)$);
+      \draw [ultra thin] (wave TL) rectangle ++(\mfmaNonKDim*\elem, -\K*\elem);
+    }
+    %% Only draw the detailed view of the first wave in CTA
+    \coordinate (Op TL) at (CTA TL);
+    \drawWaveOperand{\K}{\mfmaNonKDim}{\kpack}{1}
+
+    %% Draw the outline of each CTA rep
+    \draw [ultra thick] (CTA TL) rectangle ++(\warpsPerCTAN*\mfmaNonKDim*\elem, -\K*\elem);
+  }
+  \draw [ultra thin] (B TL) rectangle ++(\N*\elem, -\K*\elem);
+}
+
+
+\newcommand{\drawDot}[8]{
+  %%
+  %% Draw C = dot A, B
+  %%
+  %% C TL: pre defined top-left coordinates of the result tensor
+  %% \elem: pre defined variable
+  %%
+  %% #1: M
+  %% #2: N
+  %% #3: K
+  %% #4: MFMA nonKDim
+  %% #5: warpsPerCTA[0]
+  %% #6: warpsPerCTA[1]
+  %% #7: 1 for mfma.trans, 0 for normal mfma
+  %% #8: kpack
+
+  \pgfmathsetmacro{\M}{#1}
+  \pgfmathsetmacro{\N}{#2}
+  \pgfmathsetmacro{\K}{#3}
+  \pgfmathsetmacro{\mfmaNonKDim}{#4}
+  \pgfmathsetmacro{\groups}{64/\mfmaNonKDim}
+  \pgfmathsetmacro{\warpsPerCTAM}{#5}
+  \pgfmathsetmacro{\warpsPerCTAN}{#6}
+  \pgfmathsetmacro{\mfmaTrans}{#7}
+  \pgfmathsetmacro{\kpack}{#8}
+  \pgfmathsetmacro{\kdim}{int(\groups*\kpack)}
+
+  \pgfmathsetmacro{\gap}{\elem*20}
+  \coordinate (A TL) at ($(C TL)+(-\gap-\K*\elem, 0)$);
+  \coordinate (B TL) at ($(C TL)+(0, \gap+\K*\elem)$);
+
+  \drawDotOperands{\M}{\N}{\K}{\mfmaNonKDim}{\warpsPerCTAM}{\warpsPerCTAN}{\kpack}
+
+  \drawTensorMFMALayout{\M}{\N}{\mfmaNonKDim}{\warpsPerCTAM}{\warpsPerCTAN}{\mfmaTrans}
+
+  %% Draw labels
+  \node [scale=\scale, above] at ($(A TL)+(.5*\K*\elem, 0)$) {K=\K};
+  \node [scale=\scale, above, rotate=90] at ($(A TL)+(0, -.5*\M*\elem)$) {M=\M};
+
+  \node [scale=\scale, above, rotate=90] at ($(B TL)+(0, -.5*\K*\elem)$) {K=\K};
+  \node [scale=\scale, above] at ($(B TL)+(.5*\N*\elem, 0)$) {N=\N};
+
+  \node [scale=\scale, above left] at (A TL) {A};
+  \node [scale=\scale, above left] at (B TL) {B};
+  \node [scale=\scale, above left] at (C TL) {C};
+
+  %% label nonKDim
+  \node [scale=.8*\scale, left] at ($(A TL)+(0, -.5*\mfmaNonKDim*\elem)$) {\mfmaNonKDim};
+  \node [scale=.8*\scale, above] at ($(B TL)+(.5*\mfmaNonKDim*\elem, 0)$) {\mfmaNonKDim};
+  %% label kpack
+  \node [scale=.8*\scale, above] at ($(A TL)+(0.5*\groups*\kpack*\elem, 0)$) {\kdim};
+  \node [scale=.8*\scale, left] at ($(B TL)+(0, -0.5*\groups\kpack*\elem)$) {\kdim};
+}
+
+\newcommand{\Colors}{{
+    "red",
+    "YellowGreen",
+    "blue",
+    "Maroon",
+    "orange",
+    "cyan",
+    "magenta",
+    "brown",
+    "teal",
+    "purple",
+    "gray",
+    "Green",
+    "BlueGreen",
+    "violet",
+    "olive",
+    "darkgray",
+  }}
+
+\newcommand{\drawTensorLayoutGlobalMem}{
+  %%
+  %% Draw tensor layout in global memory without any swizzling
+  %%
+  %% TL: pre defined top-left coordinates of the tensor in global memory
+  %% \elem: per defined variable
+  %% \Colors: a pre defined array of 16 colors
+  %%
+  %% The following arguments are also expected to be pre defined
+  %% #1: M
+  %% #2: K
+  %% #3: vec: number of elements in a group
+
+  \pgfmathsetmacro{\numVecK}{\K/\vec}
+  \pgfmathsetmacro{\maxVecId}{16*\numVecK-1}
+  \pgfmathsetmacro{\drawM}{20}
+
+  %% Draw the tensor, but only draw 32 rows
+  \draw (TL) rectangle ++(\K*\elem, -\drawM*\elem);
+  %% Draw detailed vec view of the tensor
+  \foreach \vecId in {0,...,\maxVecId}{
+
+    \pgfmathsetmacro{\vecCoordM}{int(\vecId/\numVecK)}
+    \pgfmathsetmacro{\vecCoordK}{mod(\vecId,\numVecK)}
+    \coordinate (vec TL) at ($(TL)+(\vecCoordK*\vec*\elem, -\vecCoordM*\elem)$);
+
+    \pgfmathsetmacro{\colorIdxK}{int(mod(\vecCoordK,16))}
+    \pgfmathsetmacro{\colorIdxM}{mod(\vecCoordM,16)}
+    \pgfmathsetmacro{\vecColor}{\Colors[\colorIdxK]}
+    \pgfmathsetmacro{\ratio}{100-floor(\vecCoordK/16)*40}
+
+    \draw [ultra thin, fill=\vecColor!\ratio!white] (vec TL) rectangle ++(\vec*\elem, -\elem)
+    node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
+
+  }
+  %% M and K dim
+  \node [scale=\scale, rotate=90, above] at ($(TL)+(0, -.5*\drawM*\elem-8*\elem)$) {M=\M};
+  \node [scale=.8*\scale, left] at ($(TL)+(0, -.5*16*\elem)$) {16};
+  \node [scale=\scale, above] at ($(TL)+(.5*\K*\elem, 0)$) {K=\K};
+  %% label for vecSize
+  \def\vecR{1.5}
+  \coordinate (vec TL) at ($(TL)+(-.25*\vec*\elem, 3*\elem*\vecR)$);
+  \pgfmathsetmacro{\maxVec}{\vec-1}
+  \foreach \vecId in {0,...,\maxVec}{
+    \draw ($(vec TL)+(\vecId*\elem*\vecR, 0)$) rectangle ++(\elem*\vecR, -\elem*\vecR);
+  }
+  \draw [densely dotted] (TL) -- ($(vec TL)+(0, -\elem*\vecR)$);
+  \draw [densely dotted] ($(TL)+(\vec*\elem, 0)$) -- ($(vec TL)+(\vec*\elem*\vecR, -\elem*\vecR)$);
+  \node [scale=.8*\scale, above] at ($(vec TL)+(.5*\vec*\elem*\vecR, 0)$) {vec=\vec};
+}
+
+
+
+\newcommand{\drawLDSLayoutTritonSwizzling}[2]{
+  %%
+  %% Draw tensor layout in LDS with swizzling
+  %%
+  %% TL: pre defined top-left coordinates of the tensor in global memory
+  %% \elem: per defined variable
+  %% \Colors: a pre defined array of 16 colors
+  %%
+  %% The following three arguments are expected to be pre defined
+  %% #1: M
+  %% #2: K
+  %% #3: vec: number of elements in a group
+  %%
+  %% #1: hasSwizzle, 0 means no swizzling and no padding,
+  %%                 1 means optimal swizzling
+  %%                 2 means padding
+  %% #2: access mode, 0 means draw nothing, 1 means ds_read, 2 means ds_write
+  %% For ds_write access, the following variables are assumed to be pre defined
+  %% \sizePerThreadK
+  %% \sizePerThreadM
+  %% \threadsPerWarpK
+
+  \pgfmathsetmacro{\hasSwizzle}{#1}
+  \pgfmathsetmacro{\accessMode}{#2}
+  \pgfmathsetmacro{\numVecK}{\K/\vec}
+
+  %% Assuming fp16 data type
+  \pgfmathsetmacro{\LDSK}{64}
+  \pgfmathsetmacro{\numLDSVec}{\LDSK/\vec}
+  \pgfmathsetmacro{\swizzleK}{max(\LDSK, \K)}
+  \pgfmathsetmacro{\LDSM}{int(\M/\LDSK*\K)}
+
+  \ifthenelse{\accessMode = 2}{
+    %% \accessMode == 2, draw 8 rows
+    \pgfmathsetmacro{\maxVecId}{8*\numVecK-1}
+    \pgfmathsetmacro{\drawM}{8*\K/\LDSK+4}
+  }{
+    %% \accessMode == 0 or 1, draw 16 rows
+    \pgfmathsetmacro{\maxVecId}{16*\numVecK-1}
+    \pgfmathsetmacro{\drawM}{16*\K/\LDSK+4}
+  }
+
+  %% Parameters used for swizzling
+  \pgfmathsetmacro{\numVecSwizzleK}{\swizzleK/\vec}
+  %% perPhase = ceil(LDSK / K)
+  %% The number of the rows of the tensor that can share the same swizzling pattern
+  \pgfmathsetmacro{\perPhase}{ceil(\LDSK/\K)}
+  %% maxPhase: the total number of different swizzling patterns
+  \ifthenelse{\hasSwizzle=0}{
+    %% When swizzling is disabled
+    \pgfmathsetmacro{\maxPhase}{1}
+  }{
+    %% When vec is small enough, we want 16/perPhase different swizzling patterns
+    %% When vec is large, we can only have 64 / \vec different swizzling pattern at most
+    \pgfmathsetmacro{\maxPhase}{min(16/\perPhase,64/\vec)}
+  }
+
+  %% Draw the LDS
+  \draw (TL) rectangle ++(\LDSK*\elem, -\drawM*\elem);
+
+  %% Draw detailed vec view of LDS
+  \foreach \vecId in {0,...,\maxVecId}{
+    \pgfmathsetmacro{\vecCoordM}{int(\vecId/\numVecK)}
+    \pgfmathsetmacro{\vecCoordK}{int(mod(\vecId,\numVecK))}
+    \pgfmathsetmacro{\rawPhase}{floor(\vecId/\numVecSwizzleK)}
+    %% vec color
+    \pgfmathsetmacro{\colorIdxK}{int(mod(\vecCoordK,16))}
+    \pgfmathsetmacro{\colorIdxM}{mod(\vecCoordM,16)}
+    \pgfmathsetmacro{\ratio}{100-floor(\vecCoordK/16)*40}
+    \pgfmathsetmacro{\vecColor}{\Colors[\colorIdxK]}
+
+    %% old vec coordinates
+    \coordinate (vec TL) at ($(TL)+(\vecCoordK*\vec*\elem, -\vecCoordM*\elem)$);
+
+    %% new vec coordinates in LDS by swizzling
+    %% The following two conditions correspond to the relation between \LDSK and \K
+    \ifthenelse{\LDSK < \K}{
+      \pgfmathsetmacro{\vecLDSM}{\vecCoordM*\K/\LDSK+floor(\vecCoordK*\vec/\LDSK)}
+      \pgfmathsetmacro{\vecLDSK}{int(mod(\vecCoordK, \LDSK/\vec))}
+    }{
+      \pgfmathsetmacro{\vecLDSM}{floor(\vecCoordM/\perPhase)}
+      \pgfmathsetmacro{\vecLDSK}{int(\vecCoordK+mod(\vecCoordM,\perPhase)*\numVecK)}
+    }
+    %%
+    \pgfmathsetmacro{\phase}{int(mod(\rawPhase, \maxPhase))}
+    %% Compute the swizzled col id
+    \pgfmathsetmacro{\vecLDSKSwizzled}{\bitwiseXor{\vecLDSK}{\phase}}
+
+    %% new vec coordinates in LDS by padding
+    \pgfmathsetmacro{\numPads}{floor(\vecId/\numLDSVec)}
+    \pgfmathsetmacro{\bankId}{\vec/2*\vecId+\numPads}
+    \pgfmathsetmacro{\vecPadM}{int(\bankId/32)}
+    \pgfmathsetmacro{\vecPadK}{int(mod(\bankId,32))}
+
+    \ifthenelse{\hasSwizzle = 2}{
+      %% vec coordinates by padding
+      \coordinate (new vec TL) at ($(TL)+(\vecPadK*2*\elem, -\vecPadM*\elem)$);
+      \pgfmathsetmacro{\tailBankId}{int(\vecPadK+\vec/2-1)}
+    }{
+      %% vec coordinates by swizzling
+      \coordinate (new vec TL) at ($(TL)+(\vecLDSKSwizzled*\vec*\elem, -\vecLDSM*\elem)$);
+      \pgfmathsetmacro{\tailBankId}{0}
+    }
+
+    \ifthenelse{\hasSwizzle = 2 \AND \tailBankId > 31}{
+      \pgfmathsetmacro{\nextBanks}{\tailBankId-31}
+      \pgfmathsetmacro{\leftBanks}{\vec/2 - \nextBanks}
+      \draw [ultra thin, fill=\vecColor!\ratio!white] (new vec TL) rectangle ++(\leftBanks*2*\elem, -\elem)
+      node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
+      \draw [ultra thin, fill=\vecColor!\ratio!white] ($(TL)+(0, -\vecPadM*\elem-\elem)$)
+      rectangle ++(\nextBanks*2*\elem, -\elem) node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
+    }{
+      \draw [ultra thin, fill=\vecColor!\ratio!white] (new vec TL) rectangle ++(\vec*\elem, -\elem)
+      node [pos=.5, scale=.6*\scale, white] {m\vecCoordM};
+    }
+
+    %% ds_read
+    %% Highlight the elements the first 16 threads access in the first cycle
+    %% This is used to visualize bank conflicts
+    \ifthenelse{\accessMode = 1}{
+      \ifthenelse{\vecCoordK = 0}{
+        \draw [fill=white]  (new vec TL) rectangle ++(\elem, -\elem);
+        \draw (new vec TL) -- ++(\elem, -\elem);
+        \draw ($(new vec TL)+(0, -\elem)$) -- ++(\elem, \elem);
+      }{}
+    }{}
+
+    %% Draw ds_write pattern
+    \ifthenelse{\accessMode = 2}{
+      %% First compute the coverage of the first 16 threads
+      \pgfmathsetmacro{\covK}{min(16, \threadsPerWarpK)*\sizePerThreadK/\vec}
+      \pgfmathsetmacro{\covM}{ceil(16/\threadsPerWarpK)*\sizePerThreadM}
+      %% Check conditions for the first 16 threads
+      \pgfmathsetmacro{\vecInThread}{int(mod(\vecCoordK, \sizePerThreadK/\vec))}
+      \ifthenelse{\vecInThread=0}{
+        \ifthenelse{\vecCoordK<\covK \AND \vecCoordM<\covM}{
+          \draw [fill=white]  (new vec TL) rectangle ++(\elem, -\elem);
+          \draw (new vec TL) -- ++(\elem, -\elem);
+          \draw ($(new vec TL)+(0, -\elem)$) -- ++(\elem, \elem);
+        }{}
+      }{}
+    }{}
+
+    %% Label the phase of each line if swizzling is used
+    \ifthenelse{\hasSwizzle = 2}{}{
+      \pgfmathsetmacro{\lastVecId}{int(64/\vec)-1}
+      \ifthenelse{\vecLDSKSwizzled = \lastVecId}{
+        \draw [ultra thin] ($(new vec TL)+(\vec*\elem, -.5*\elem)$) -- ++(\elem, 0)
+        node [scale=.6*\scale, right] {\phase};
+      }{}
+    }
+  }
+
+  %% Draw boundary of 32 banks
+  %% Assume fp16 data type
+  \foreach \bank in {0,...,31}{
+    \draw [ultra thin, gray] ($(TL)+(\bank*2*\elem, 0)$) -- ++(0, 2*\elem)
+    node [scale=.6*\scale, right, black] {\bank};
+  }
+  \draw [ultra thin, gray] ($(TL)+(32*2*\elem, 0)$) -- ++(0, 2*\elem);
+  \node [scale=.6*\scale, left, black] at ($(TL)+(0, 2*\elem)$) {bank id};
+
+  \node [scale=\scale, above] at ($(TL)+(.5*\LDSK*\elem, 3*\elem)$) {LDS 32 banks};
+  \node [scale=\scale, rotate=90, above] at ($(TL)+(0, -.5*\drawM*\elem)$) {LDSM=\LDSM};
+
+  %% label phase if swizzling is used
+  \ifthenelse{\hasSwizzle = 2}{}{
+    \node [scale=.6*\scale, above right] at($(TL)+(32*2*\elem, 0)$) {phase};
+  }
+}
+
+\newcommand{\drawMFMAInstr}[3]{
+  %%
+  %% Draw layout of mfma instructions with tid labeled
+  %%
+  %% C TL: pre defined top-left coordinates of the output matrix
+  %% \elem: pre defined variable
+  %%
+  %% #1: mfmaNonKDim
+  %% #2: kpack
+  %% #3: mfmaTrans
+  \pgfmathsetmacro{\mfmaNonKDim}{#1}
+  \pgfmathsetmacro{\groups}{64/\mfmaNonKDim}
+  \pgfmathsetmacro{\kpack}{#2}
+  \pgfmathsetmacro{\mfmaTrans}{#3}
+  \pgfmathsetmacro{\nonTrans}{1-#3}
+
+  \pgfmathsetmacro{\gap}{\elem*5}
+  \coordinate (mfma opA TL) at ($(C TL)+(-.5*\gap-1.2*\nonTrans*\gap-\groups*\kpack*\elem, 0)$);
+  \coordinate (mfma op TL) at (mfma opA TL);
+  \drawMFMAOperand{\mfmaNonKDim}{\kpack}{0}{1}
+  \coordinate (mfma op TL) at ($(C TL)+(0, 1.5*\gap+.5*\mfmaTrans*\gap+\groups*\kpack*\elem)$);
+  \drawMFMAOperand{\mfmaNonKDim}{\kpack}{1}{1}
+
+  \coordinate (block TL) at (C TL);
+  \drawBlockMFMALayoutLarge{\mfmaTrans}{\mfmaNonKDim}{1}
+
+  %% Draw labels
+  \def\vecR{1.5}
+  \coordinate (vec TL) at ($(mfma opA TL)+(-.25*\kpack*\elem, 3*\elem*\vecR)$);
+  \pgfmathsetmacro{\maxVec}{\kpack-1}
+  \foreach \vecId in {0,...,\maxVec}{
+    \draw ($(vec TL)+(\vecId*\elem*\vecR, 0)$) rectangle ++(\elem*\vecR, -\elem*\vecR);
+  }
+  \draw [densely dotted] (mfma opA TL) -- ($(vec TL)+(0, -\elem*\vecR)$);
+  \draw [densely dotted] ($(mfma opA TL)+(\kpack*\elem, 0)$) -- ($(vec TL)+(\kpack*\elem*\vecR, -\elem*\vecR)$);
+  \node [scale=.8*\scale, above] at ($(vec TL)+(.5*\kpack*\elem*\vecR, 0)$) {vec=\kpack};
+
+  \coordinate (vec TL) at ($(mfma op TL)+(-3*\elem*\vecR, .25*\kpack*\elem)$);
+  \foreach \vecId in {0,...,\maxVec}{
+    \draw ($(vec TL)+(0, -\vecId*\elem*\vecR)$) rectangle ++(\elem*\vecR, -\elem*\vecR);
+  }
+  \draw [densely dotted] (mfma op TL) -- ($(vec TL)+(\elem*\vecR,0)$);
+  \draw [densely dotted] ($(mfma op TL)+(0, -\kpack*\elem)$) -- ($(vec TL)+(\elem*\vecR, -\kpack*\elem*\vecR)$);
+  \node [scale=.8*\scale, above, rotate=90] at ($(vec TL)+(0, -.5*\kpack*\elem*\vecR)$) {vec=\kpack};
+
+  \node [scale=\scale, below] at ($(block TL)+(.5*\mfmaNonKDim*\elem,-\mfmaNonKDim*\elem)$) {outC};
+  \ifthenelse{\mfmaTrans=0}{
+    \node [scale=\scale, below] at ($(mfma opA TL)+(\kpack*\elem, -\mfmaNonKDim*\elem)$) {opA};
+    \node [scale=\scale, above] at (mfma op TL) {opB};
+    \coordinate (vec TL) at ($(block TL)+(-3*\elem-\elem*\vecR, .25*4*\elem)$);
+    \foreach \vecId in {0,1,2,3}{
+      \draw ($(vec TL)+(0, -\vecId*\elem*\vecR)$) rectangle ++(\elem*\vecR, -\elem*\vecR);
+    }
+    \draw [densely dotted] (block TL) -- ++(-3*\elem, .25*4*\elem);
+    \draw [densely dotted] ($(block TL)+(0, -4*\elem)$) -- ++(-3*\elem, -.25*4*\elem);
+    \node [scale=.8*\scale, above, rotate=90] at ($(vec TL)+(0, -.5*4*\elem*\vecR)$) {vec=4};
+    \node [scale=.8*\scale, above, align=center] at ($(block TL)+(.5*\mfmaNonKDim*\elem, 0)$) {mfmaLayout\\trans=False};
+  }{
+    \node [scale=\scale, below] at ($(mfma opA TL)+(\kpack*\elem, -\mfmaNonKDim*\elem)$) {opB};
+    \node [scale=\scale, above] at (mfma op TL) {opA};
+    \coordinate (vec TL) at ($(block TL)+(-.25*4*\elem, 3*\elem+\elem*\vecR)$);
+    \foreach \vecId in {0,1,2,3}{
+      \draw ($(vec TL)+(\vecId*\elem*\vecR, 0)$) rectangle ++(\elem*\vecR, -\elem*\vecR);
+    }
+    \draw [densely dotted] (block TL) -- ++(-.25*4*\elem, 3*\elem);
+    \draw [densely dotted] ($(block TL)+(4*\elem, 0)$) -- ++(.25*4*\elem, 3*\elem);
+    \node [scale=.8*\scale, above] at ($(vec TL)+(.5*4*\elem*\vecR, 0)$) {vec=4};
+    \node [scale=.8*\scale, above, align=center] at ($(block TL)+(16*\elem, 0)$) {mfmaLayout\\trans=True};
+  }
+}
+
+\newcommand{\drawWMMAOperand}[3]{
+  %%
+  %% Draw the layout of one operand of WMMA instruction
+  %%
+  %% #1: opIdx. 0 for opA, 1 for opB
+  %% #2: verbose. 1 means draw tid in each vec; 0 means draw nothing
+  %% #3: mode. 0 for w32, 1 for w64
+  %%
+  %% wmma op TL: pre defined top-left coordinates of the operand matrix
+
+  \pgfmathsetmacro{\isOpB}{#1}
+  \pgfmathsetmacro{\isOpA}{1-\isOpB}
+  \pgfmathsetmacro{\verbose}{#2}
+  \pgfmathsetmacro{\isWLarge}{#3}
+
+  \foreach \row in {0,...,15}{
+    \pgfmathsetmacro{\ratio}{\row*5+15}
+    \coordinate (vec TL) at ($(wmma op TL)+(\row*\isOpB*\elem, -\row*\elem*\isOpA)$);
+    \ifthenelse{\isWLarge=1}{
+      \pgfmathsetmacro{\tidone}{int(\row+16)}
+      \pgfmathsetmacro{\tidtwo}{int(\row+32)}
+      \pgfmathsetmacro{\tidthree}{int(\row+48)}
+      \draw [line width=0.005mm, fill=brown!\ratio!white] (vec TL)
+      rectangle ++(16*\elem*\isOpA+\elem*\isOpB, -\elem*\isOpA-16*\elem*\isOpB)
+      node [scale=0.4*\scale, pos=.5, rotate=90*\isOpB] {t\row, t\tidone, t\tidtwo, t\tidthree};
+    }{
+      \pgfmathsetmacro{\tidone}{int(\row+16)}
+      \draw [line width=0.005mm, fill=brown!\ratio!white] (vec TL)
+      rectangle ++(16*\elem*\isOpA+\elem*\isOpB, -\elem*\isOpA-16*\elem*\isOpB)
+      node [scale=0.4*\scale, pos=.5, rotate=90*\isOpB] {t\row, t\tidone};
+    }
+  }
+}
+
+\newcommand{\drawWMMAResult}[2]{
+  %%
+  %% Draw layout of WMMA result tensor
+  %%
+  %% #1: verbose. 1 means draw tid in each vec; 0 means draw nothing
+  %% #2: mode. 0 for w32, 1 for w64
+
+  \pgfmathsetmacro{\verbose}{#1}
+  \pgfmathsetmacro{\isWLarge}{#2}
+
+  \pgfmathsetmacro{\numElem}{256}
+  \pgfmathsetmacro{\maxElemId}{\numElem-1}
+
+  \foreach \elemId in {0,...,\maxElemId}{
+    %% figure out the rowID
+    \pgfmathsetmacro{\rowId}{floor(\elemId/16)}
+    %% figure out the colID
+    \pgfmathsetmacro{\colId}{mod(\elemId,16)}
+    %% figure out the tid and color
+    \ifthenelse{\isWLarge=1}{
+      \pgfmathsetmacro{\tid}{int(mod(\elemId,64))}
+      \pgfmathsetmacro{\laneId}{mod(\elemId,64)}
+    }{
+      \pgfmathsetmacro{\tid}{int(mod(\elemId,32))}
+      \pgfmathsetmacro{\laneId}{mod(\elemId,32)}
+    }
+    %% figure out the color
+    \pgfmathsetmacro{\colorId}{floor(\laneId/16)}
+    \pgfmathsetmacro{\vecColor}{\Colors[\colorId]}
+    %% Coordinate
+    \coordinate (vec TL) at ($(C TL)+(\colId*\elem, -\rowId*\elem)$);
+    \draw [line width=0.005mm, fill=\vecColor!60!white] (vec TL) rectangle ++(\elem, -\elem)
+    node [scale=.4*\scale, pos=.5] {t\tid};
+  }
+
+
+}
+
+\newcommand{\drawWMMAInstr}[2]{
+  %%
+  %% Draw wmma instruction layouts 16x16x16
+  %%
+  %% #1: mode. 0 for w32, 1 for w64
+  %% #2: verbose. 1 means draw tid in each vec; 0 means draw nothing
+  %%
+  %% C TL: pre defined top-left coordinates of output matrix
+  %% \elem: pre defined element size
+
+
+  \pgfmathsetmacro{\isWLarge}{#1}
+  \pgfmathsetmacro{\verbose}{#2}
+
+  \pgfmathsetmacro{\gap}{\elem*2}
+  \coordinate (wmma op TL) at ($(C TL)+(-\gap-16*\elem, 0)$);
+  \coordinate (wmma opA TL) at (wmma op TL);
+  \drawWMMAOperand{0}{\verbose}{\isWLarge}
+  \coordinate (wmma op TL) at ($(C TL)+(0, \gap+16*\elem)$);
+  \drawWMMAOperand{1}{\verbose}{\isWLarge}
+
+  \drawWMMAResult{1}{\isWLarge}
+
+  %% labels
+  \pgfmathsetmacro{\gap}{\elem}
+  \node [above left, scale=\scale] at (wmma opA TL) {A};
+  \node [above left, scale=\scale] at (wmma op TL) {B};
+  \node [above right, scale=\scale] at ($(C TL)+(16*\elem, 0)$) {C};
+
+  %% A k dim
+  \node [scale=.8*\scale] (k dim A) at ($(wmma opA TL)+(8*\elem,\gap)$) {16};
+  \draw [->, >=stealth] (k dim A.west) -- ($(wmma opA TL)+(0, \gap)$);
+  \draw [->, >=stealth] (k dim A.east) -- ($(wmma opA TL)+(16*\elem, \gap)$);
+
+  %% B K dim
+  \node [scale=.8*\scale, rotate=90] (k dim B) at ($(wmma op TL)+(-\gap, -8*\elem)$) {16};
+  \draw [->, >=stealth] (k dim B.east) -- ($(wmma op TL)+(-\gap, 0)$);
+  \draw [->, >=stealth] (k dim B.west) -- ($(wmma op TL)+(-\gap, -16*\elem)$);
+
+  %% C M dim
+  \node [scale=.8*\scale] (m dim) at ($(C TL)+(8*\elem,-16*\elem-\gap)$) {16};
+  \draw [->, >=stealth] (m dim.west) -- ($(C TL)+(0, -16*\elem-\gap)$);
+  \draw [->, >=stealth] (m dim.east) -- ($(C TL)+(16*\elem, -16*\elem-\gap)$);
+
+  %% C N dim
+  \node [scale=.8*\scale, rotate=-90] (n dim) at ($(C TL)+(16*\elem+\gap, -8*\elem)$) {16};
+  \draw [->, >=stealth] (n dim.west) -- ($(C TL)+(16*\elem+\gap, 0)$);
+  \draw [->, >=stealth] (n dim.east) -- ($(C TL)+(16*\elem+\gap, -16*\elem)$);
+}
