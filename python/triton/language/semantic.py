@@ -1,4 +1,5 @@
 from __future__ import annotations  # remove after python 3.11
+import warnings
 
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
@@ -995,12 +996,13 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
     elt_ty = ptr_ty.element_ty
 
     # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
-    if elt_ty == tl.int1:
+    is_bool = elt_ty == tl.int1
+    if is_bool:
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
 
-    # Cast `other` into `ele_ty` type
+    # Cast `other` into `elt_ty` type
     if other is not None:
         other = cast(other, elt_ty, builder)
 
@@ -1014,11 +1016,14 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
 
     # Build IR
     if mask is None:
-        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
+        ret = tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
     else:
-        return tl.tensor(
+        ret = tl.tensor(
             builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache, eviction,
                                        is_volatile), dst_ty)
+    if is_bool:
+        ret = cast(ret, tl.int1, builder)
+    return ret
 
 
 def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], boundary_check: Tuple,
@@ -1429,6 +1434,10 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
 
 def where(condition: tl.tensor, x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
+    if condition.dtype != tl.int1:
+        warnings.warn(
+            f"tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got {condition.dtype}"
+        )
     condition = cast(condition, tl.int1, builder)
     if condition.type.is_block():
         condition, x = broadcast_impl_value(condition, x, builder)

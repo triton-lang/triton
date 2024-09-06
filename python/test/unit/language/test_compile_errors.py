@@ -341,6 +341,19 @@ def test_defaults_assign_no_err():
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
 
 
+def test_where_warning():
+
+    @triton.jit
+    def kernel():
+        a = tl.full((64, ), 0, tl.uint32)
+        b = tl.full((64, ), 1, tl.float32)
+        c = tl.full((64, ), 2, tl.float32)
+        tl.where(a, b, c)
+
+    with pytest.warns(UserWarning):
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+
+
 @pytest.mark.parametrize("dtype", [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15])
 def test_fp8_support(dtype):
     warning_dtypes = []
