@@ -13,6 +13,7 @@ namespace mlir::LLVM::AMD {
 const char predicatedLoad[] = "__predicated_load";
 const char predicatedLoadCA[] = "__predicated_load_CA";
 const char predicatedLoadCG[] = "__predicated_load_CG";
+const char predicatedLoadCV[] = "__predicated_load_CV";
 const char predicatedStore[] = "__predicated_store";
 const char predicatedStoreCG[] = "__predicated_store_CG";
 const char predicatedStoreCS[] = "__predicated_store_CS";
