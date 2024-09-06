@@ -494,8 +494,10 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(node, ast.AnnAssign):
             _names += [self.visit(node.target)]
         else:
+            print(0)
             for target in node.targets:
                 _names += [self.visit(target)]
+            print(1)
         if len(_names) > 1:
             raise self._unsupported(node, "simultaneous multiple assignment is not supported.")
         names = _names[0]
