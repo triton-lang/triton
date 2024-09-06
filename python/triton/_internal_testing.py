@@ -1,3 +1,4 @@
+import os
 import re
 import numpy as np
 import torch
@@ -11,11 +12,37 @@ from triton.runtime.jit import TensorWrapper, reinterpret
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
+integral_dtypes = int_dtypes + uint_dtypes
 float_dtypes = ['float16', 'float32', 'float64']
-dtypes = int_dtypes + uint_dtypes + float_dtypes
+dtypes = integral_dtypes + float_dtypes
 dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
+
+
+def is_interpreter():
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+
+def get_current_target():
+    if is_interpreter():
+        return None
+    return triton.runtime.driver.active.get_current_target()
+
+
+def is_cuda():
+    target = get_current_target()
+    return False if target is None else target.backend == "cuda"
+
+
+def is_hip():
+    target = get_current_target()
+    return False if target is None else target.backend == "hip"
+
+
+def get_arch():
+    target = get_current_target()
+    return "" if target is None else str(target.arch)
 
 
 def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, high=None):
@@ -87,10 +114,6 @@ def to_numpy(x):
         return x.cpu().numpy()
     else:
         raise ValueError(f"Not a triton-compatible tensor: {x}")
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
 def supports_tma():

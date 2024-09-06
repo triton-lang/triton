@@ -1114,12 +1114,12 @@ class ASTTransformer(ast.NodeTransformer):
         if len(names) > 1:
             raise ValueError("Multiple assignments are not supported")
         # Modify the assignment x = value to
-        # triton.core.language._to_tensor(value, interpreter_builder, False)
+        # triton.language.semantic.to_tensor(value, interpreter_builder, False)
         node.value = ast.Call(
             func=ast.Attribute(
                 value=ast.Attribute(
                     value=ast.Attribute(value=ast.Name(id='triton', ctx=ast.Load()), attr='language', ctx=ast.Load()),
-                    attr='core', ctx=ast.Load()), attr='_to_tensor', ctx=ast.Load()),
+                    attr='semantic', ctx=ast.Load()), attr='to_tensor', ctx=ast.Load()),
             args=[node.value, ast.Name(id='interpreter_builder', ctx=ast.Load()),
                   ast.Constant(value=False)], keywords=[])
         return node
