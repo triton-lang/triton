@@ -168,6 +168,8 @@ unsigned ReduceOpHelper::getThreadsReductionAxis() {
 
 bool ReduceOpHelper::isWarpSynchronous() {
   auto srcLayout = getSrcLayout();
+  if (!srcLayout)
+    return true;
   auto srcShape = getSrcShape();
   return getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] == 1;
 }
