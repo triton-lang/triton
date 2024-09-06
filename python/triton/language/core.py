@@ -296,6 +296,11 @@ class dtype:
         SIGNED = 0
         UNSIGNED = 1
 
+    class KIND(Enum):
+        BOOLEAN = 0
+        INTEGRAL = 1
+        FLOATING = 2
+
     def __init__(self, name):
         name = _unwrap_if_constexpr(name)
         self.name = name
@@ -428,12 +433,12 @@ class dtype:
     def kind(self):
         # Return int value following the type ordering bool < integer < fp
         if self.is_bool():
-            return 0
+            return dtype.KIND.BOOLEAN
         elif self.is_int():
-            return 1
+            return dtype.KIND.INTEGRAL
         else:
             assert self.is_floating()
-            return 2
+            return dtype.KIND.FLOATING
 
     @staticmethod
     def is_dtype(type_str):

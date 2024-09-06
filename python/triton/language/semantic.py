@@ -65,7 +65,7 @@ def computation_type_impl(a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_i
     #   it doesn't participate in the pomotion
     if a_is_scalar != b_is_scalar:
         scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
-        if scalar_ty.kind() <= tensor_ty.kind():
+        if scalar_ty.kind().value <= tensor_ty.kind().value:
             # Upcast because of 3) and 4) below!
             if div_or_mod and (tensor_ty in (tl.float16, tl.bfloat16)):
                 return tl.float32
