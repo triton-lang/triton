@@ -32,7 +32,7 @@ class LoopUnrollPass : public TritonLoopUnrollBase<LoopUnrollPass> {
     // Use the attribute attached to the loop if it exists otherwise use the
     // global control.
     if (!forOp->hasAttr(mlir::triton::loopUnrollFactorAttrName))
-      return unrollFactor;
+      return 1;
     return mlir::cast<IntegerAttr>(
                forOp->getAttr(mlir::triton::loopUnrollFactorAttrName))
         .getInt();
@@ -57,10 +57,6 @@ public:
       (void)loopUnrollByFactor(loop, unrollFactor);
     }
   }
-
-  Option<uint64_t> unrollFactor{*this, "unroll-factor",
-                                llvm::cl::desc("Default loop unroll factor."),
-                                llvm::cl::init(1)};
 };
 
 } // anonymous namespace
