@@ -341,7 +341,7 @@ public:
       needRewrite = true;
       auto makeTensorPtrOp = getMakeTensorPtrOp(results[i]);
       assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
-      auto info = rewritedInfo[makeTensorPtrOp.getResult()];
+      const auto &info = rewritedInfo[makeTensorPtrOp.getResult()];
       for (unsigned j = 0; j < info.length(); ++j) {
         newRetTypes.push_back(builder.getI64Type());
       }

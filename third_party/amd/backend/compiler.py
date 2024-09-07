@@ -36,6 +36,7 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
+    deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
@@ -255,7 +256,7 @@ class HIPBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")

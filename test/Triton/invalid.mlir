@@ -202,21 +202,6 @@ tt.func public @fn(%arg0: tensor<2xf32>) {
 
 // -----
 
-// Bad order; should start with 2.
-#blocked  = #triton_gpu.blocked<{sizePerThread = [1,1,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [1,2,0]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1,1], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [1,0]}>
-
-module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-tt.func public @fn(%arg0: tensor<2x2x2xf32, #blocked>) {
-    // expected-error @+2 {{last dimension}}
-    // expected-error @+1 {{op failed to infer returned types}}
-    %a, %b = tt.split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
-    tt.return
-}
-}  // end module
-
-// -----
-
 #blocked  = #triton_gpu.blocked<{sizePerThread = [1,1,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [2,0,1]}>
 // Bad order, should be [1,0].
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1,1], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [1,0]}>

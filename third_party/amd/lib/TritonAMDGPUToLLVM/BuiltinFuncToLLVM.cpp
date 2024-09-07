@@ -206,11 +206,8 @@ struct ConvertBuiltinFuncToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    // Disable block merging because of:
-    // https://github.com/llvm/llvm-project/issues/63230
-    // TODO(giuseros): enable block merging once the above ticket is completed
     GreedyRewriteConfig config;
-    config.enableRegionSimplification = GreedySimplifyRegionLevel::Normal;
+    config.enableRegionSimplification = GreedySimplifyRegionLevel::Aggressive;
 
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context);

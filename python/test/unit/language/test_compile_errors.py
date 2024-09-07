@@ -341,13 +341,28 @@ def test_defaults_assign_no_err():
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
 
 
+def test_where_warning():
+
+    @triton.jit
+    def kernel():
+        a = tl.full((64, ), 0, tl.uint32)
+        b = tl.full((64, ), 1, tl.float32)
+        c = tl.full((64, ), 2, tl.float32)
+        tl.where(a, b, c)
+
+    with pytest.warns(UserWarning):
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constants={}))
+
+
 @pytest.mark.parametrize("dtype", [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15])
 def test_fp8_support(dtype):
+    warning_dtypes = []
     supported_dtypes = [tl.float8e5]
     if is_cuda():
         cc = torch.cuda.get_device_capability(0)
-        if cc < (9, 0):
-            supported_dtypes.append(tl.float8e4b15)
+        supported_dtypes.append(tl.float8e4b15)
+        if cc >= (9, 0):
+            warning_dtypes.append(tl.float8e4b15)
         if cc >= (8, 9):
             supported_dtypes.append(tl.float8e4nv)
     elif is_hip():
@@ -360,8 +375,14 @@ def test_fp8_support(dtype):
     def dtype_kernel(dtype: tl.constexpr):
         _ = tl.full((256, ), 0.0, dtype)
 
-    maybe_error = (contextlib.nullcontext() if dtype in supported_dtypes else pytest.raises(CompilationError, match=""))
-    with maybe_error as e:
+    if dtype in warning_dtypes:
+        ctx = pytest.warns(UserWarning, match=r"fp8e4b15 is deprecated in this architecture")
+    elif dtype in supported_dtypes:
+        ctx = contextlib.nullcontext()
+    else:
+        ctx = pytest.raises(CompilationError, match="")
+
+    with ctx as e:
         triton.compile(triton.compiler.ASTSource(fn=dtype_kernel, signature={}, constants={"dtype": dtype}))
 
     if dtype not in supported_dtypes:

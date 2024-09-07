@@ -125,13 +125,13 @@ LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
 
   if (names.empty())
     // If no alias name is given, we print all layout attributes in the file.
-    for (auto def : asmState.getAttributeAliasDefs()) {
+    for (const auto &def : asmState.getAttributeAliasDefs()) {
       if (failed(printLambda(def.name, def.value)))
         return failure();
     }
   else {
     // Print the layout attributes with the given alias names.
-    for (auto alias : names) {
+    for (const auto &alias : names) {
       auto def = asmState.getAttributeAliasDef(alias);
       if (!def) {
         llvm::errs() << "Can't find the layout attribute: " << alias << "\n";

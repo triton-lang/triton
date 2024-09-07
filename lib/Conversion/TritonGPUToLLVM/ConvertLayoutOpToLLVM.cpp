@@ -202,8 +202,8 @@ private:
     auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
     unsigned inVec = scratchConfig.inVec;
     unsigned outVec = scratchConfig.outVec;
-    auto paddedRepShape = scratchConfig.paddedRepShape;
-    auto origRepShape = scratchConfig.repShape;
+    const auto &paddedRepShape = scratchConfig.paddedRepShape;
+    const auto &origRepShape = scratchConfig.repShape;
 
     unsigned outElems = getTotalElemsPerThread(dstTy);
     auto outOrd = getOrder(dstLayout);
