@@ -76,6 +76,9 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Type Promotion</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html#broadcasting">Broadcasting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html#differences-with-numpy">Differences with NumPy</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
@@ -192,7 +195,9 @@ keeps the norm consistent regardless of the dropout probability.</p>
 <span class="p">]))</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>---------  -------  ---------  --------  --------  --------  --------  --------  --------  ---------  ---------
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>/home/runner/_work/triton/triton/python/triton/language/semantic.py:1502: UserWarning: tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got int32
+  warnings.warn(
+---------  -------  ---------  --------  --------  --------  --------  --------  --------  ---------  ---------
 input      1.541    -0.293429  -2.17879  0.568431  -1.08452  -1.3986   0.403347  0.838026  -0.719258  -0.403344
 keep mask  1         1          0        1          0         1        1         0          0          0
 output     3.08199  -0.586858   0        1.13686    0        -2.79719  0.806694  0          0          0
@@ -297,7 +302,7 @@ to explore the <cite>python/triton/language/random.py</cite>!</p>
 <p>Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov, “Dropout: A Simple Way to Prevent Neural Networks from Overfitting”, JMLR 2014</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.730 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.703 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/bc847dec325798bdc436c4ef5ac8b78a/04-low-memory-dropout.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">04-low-memory-dropout.ipynb</span></code></a></p>

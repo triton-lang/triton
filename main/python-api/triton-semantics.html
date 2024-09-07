@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Type Promotion &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../_static/sg_gallery.css?v=d2d258e8" />
+      <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/custom.css" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+        <script src="../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Triton MLIR Dialects and Ops" href="../dialects/dialects.html" />
+    <link rel="prev" title="triton.testing.assert_close" href="generated/triton.testing.assert_close.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Type Promotion</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#broadcasting">Broadcasting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#differences-with-numpy">Differences with NumPy</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Type Promotion</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/python-api/triton-semantics.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <p>Triton mostly follows the semantics of NumPy with minor exceptions. In this document, we go over some of the array computing features supported in Triton, and we cover the exceptions where Triton’s semantics deviate from that NumPy.</p>
+<section id="type-promotion">
+<h1>Type Promotion<a class="headerlink" href="#type-promotion" title="Link to this heading">¶</a></h1>
+<p><strong>Type Promotion</strong> occurs when tensors of different data types are used in an operation. For binary operations associated to <a class="reference external" href="https://docs.python.org/3/reference/datamodel.html#emulating-numeric-types">dunder methods</a> and the ternary function <code class="docutils literal notranslate"><span class="pre">tl.where</span></code> on its last two arguments, Triton automatically converts the input tensors to a common data type following a hierarchy of kinds (sets of dtypes): <code class="docutils literal notranslate"><span class="pre">{bool}</span> <span class="pre">&lt;</span> <span class="pre">{integral</span> <span class="pre">dypes}</span> <span class="pre">&lt;</span> <span class="pre">{floating</span> <span class="pre">point</span> <span class="pre">dtypes}</span></code>.</p>
+<p>The algorithm is as follows:</p>
+<ol class="arabic">
+<li><p><strong>Kind</strong> If one tensor is of a dtype of a higher kind, the other tensor is promoted to this dtype: <code class="docutils literal notranslate"><span class="pre">(int32,</span> <span class="pre">bfloat16)</span> <span class="pre">-&gt;</span> <span class="pre">bfloat16</span></code></p></li>
+<li><p><strong>Width</strong> If both tensors are of dtypes of the same kind, and one of them is of a higher width, the other one is promoted to this dtype: <code class="docutils literal notranslate"><span class="pre">(float32,</span> <span class="pre">float16)</span> <span class="pre">-&gt;</span> <span class="pre">float32</span></code></p></li>
+<li><p><strong>Supremum</strong> If both tensors are of the same width and signedness but different dtypes, they are both promoted to the next larger dtype. <code class="docutils literal notranslate"><span class="pre">(float16,</span> <span class="pre">bfloat16)</span> <span class="pre">-&gt;</span> <span class="pre">float32</span></code></p>
+<p>3.1 If both tensors are of different <code class="docutils literal notranslate"><span class="pre">fp8</span></code> dtypes, they are both cast to <code class="docutils literal notranslate"><span class="pre">float16</span></code>.</p>
+</li>
+<li><p><strong>Prefer unsigned</strong> Otherwise (same width, different signedness), they are promoted to the unsigned dtype: <code class="docutils literal notranslate"><span class="pre">(int32,</span> <span class="pre">uint32)</span> <span class="pre">-&gt;</span> <span class="pre">uint32</span></code></p></li>
+</ol>
+<p>The rules are a bit different when they involve a scalar. By scalar here we mean a numeric literal, a variable marked with <cite>tl.constexpr</cite> or a combination of these. These are represented by NumPy scalars and have types <code class="docutils literal notranslate"><span class="pre">bool</span></code>, <code class="docutils literal notranslate"><span class="pre">int</span></code> and <code class="docutils literal notranslate"><span class="pre">float</span></code>.</p>
+<p>When an operation involves a tensor and a scalar:</p>
+<ol class="arabic simple">
+<li><p>If the scalar is of a kind lower or equal to the tensor, it will not participate in the promotion: <code class="docutils literal notranslate"><span class="pre">(uint8,</span> <span class="pre">int)</span> <span class="pre">-&gt;</span> <span class="pre">uint8</span></code></p></li>
+<li><p>If the scalar is of a higher kind, we choose the lowest dtype in which it fits among <code class="docutils literal notranslate"><span class="pre">int32</span></code> &lt; <code class="docutils literal notranslate"><span class="pre">uint32</span></code> &lt; <code class="docutils literal notranslate"><span class="pre">int64</span></code> &lt; <code class="docutils literal notranslate"><span class="pre">uint64</span></code> for ints and <code class="docutils literal notranslate"><span class="pre">float32</span></code> &lt; <code class="docutils literal notranslate"><span class="pre">float64</span></code> for floats. Then, both the tensor and the scalar are promoted to this dtype: <code class="docutils literal notranslate"><span class="pre">(int16,</span> <span class="pre">4.0)</span> <span class="pre">-&gt;</span> <span class="pre">float32</span></code></p></li>
+</ol>
+</section>
+<section id="broadcasting">
+<h1>Broadcasting<a class="headerlink" href="#broadcasting" title="Link to this heading">¶</a></h1>
+<p><strong>Broadcasting</strong> allows operations on tensors of different shapes by automatically expanding their shapes to a compatible size without copying the data. This follows the following rules:</p>
+<ol class="arabic simple">
+<li><p>If one of the tensor shapes is shorter, pad it on the left with ones until both tensors have the same number of dimensions: <code class="docutils literal notranslate"><span class="pre">((3,</span> <span class="pre">4),</span> <span class="pre">(5,</span> <span class="pre">3,</span> <span class="pre">4))</span> <span class="pre">-&gt;</span> <span class="pre">((1,</span> <span class="pre">3,</span> <span class="pre">4),</span> <span class="pre">(5,</span> <span class="pre">3,</span> <span class="pre">4))</span></code></p></li>
+<li><p>Two dimensions are compatible if they are equal, or if one of them is 1. A dimension of 1 will be expanded to match the dimension of the other tensor. <code class="docutils literal notranslate"><span class="pre">((1,</span> <span class="pre">3,</span> <span class="pre">4),</span> <span class="pre">(5,</span> <span class="pre">3,</span> <span class="pre">4))</span> <span class="pre">-&gt;</span> <span class="pre">((5,</span> <span class="pre">3,</span> <span class="pre">4),</span> <span class="pre">(5,</span> <span class="pre">3,</span> <span class="pre">4))</span></code></p></li>
+</ol>
+</section>
+<section id="differences-with-numpy">
+<h1>Differences with NumPy<a class="headerlink" href="#differences-with-numpy" title="Link to this heading">¶</a></h1>
+<p><strong>C rounding in integer division</strong> Operators in Triton follow C semantics rather than Python semantics for efficiency. As such, <code class="docutils literal notranslate"><span class="pre">int</span> <span class="pre">//</span> <span class="pre">int</span></code> implements <a class="reference external" href="https://en.wikipedia.org/wiki/Modulo#In_programming_languages">rounding towards zero as in C</a> for integers of mixed signs, rather than rounding towards minus infinity as in Python. For the same reason, the modulus operator <code class="docutils literal notranslate"><span class="pre">int</span> <span class="pre">%</span> <span class="pre">int</span></code> (which is defined as <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">%</span> <span class="pre">b</span> <span class="pre">=</span> <span class="pre">a</span> <span class="pre">-</span> <span class="pre">b</span> <span class="pre">*</span> <span class="pre">(a</span> <span class="pre">//</span> <span class="pre">b)</span></code>) also follows C semantics rather than Python semantics.</p>
+<p>Perhaps confusingly, integer division and modulus follow Python semantics for computations where all the inputs are scalars.</p>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="generated/triton.testing.assert_close.html" class="btn btn-neutral float-left" title="triton.testing.assert_close" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../dialects/dialects.html" class="btn btn-neutral float-right" title="Triton MLIR Dialects and Ops" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
