@@ -337,13 +337,11 @@ void init_triton_llvm(py::module &&m) {
         // We don't pass the targetMachine to the LLVM-IR pass builder, unless
         // `arch` is specified
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
-        if (!arch.empty() && pluginFile.empty())		
+        if (!arch.empty() && pluginFile.empty())
           targetMachine = std::move(
               createTargetMachine(mod, arch, enable_fp_fusion, features));
         PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
                        std::nullopt, instrCbPtr);
-
-
 
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM
