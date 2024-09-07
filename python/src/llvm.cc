@@ -331,17 +331,19 @@ void init_triton_llvm(py::module &&m) {
         // regressions with some scheduling solution.
         tuningOptions.SLPVectorization = true;
 
+        std::string pluginFile =
+            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
+
         // We don't pass the targetMachine to the LLVM-IR pass builder, unless
         // `arch` is specified
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
-        if (!arch.empty())
+        if (!arch.empty() && pluginFile.empty())		
           targetMachine = std::move(
               createTargetMachine(mod, arch, enable_fp_fusion, features));
         PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
                        std::nullopt, instrCbPtr);
 
-        std::string pluginFile =
-            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
+
 
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM
