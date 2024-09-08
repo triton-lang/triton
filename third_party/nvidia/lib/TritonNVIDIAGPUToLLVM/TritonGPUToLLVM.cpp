@@ -1,5 +1,6 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
+#include "TritonNVIDIAGPUToLLVM/Utility.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -226,6 +227,36 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
+}
+
+bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
+  if (isa<triton::nvidia_gpu::InitBarrierOp>(before) &&
+      isa<triton::nvidia_gpu::InitBarrierOp>(after))
+    return true;
+
+  if (isa<triton::nvidia_gpu::InvalBarrierOp>(before) &&
+      isa<triton::nvidia_gpu::InvalBarrierOp>(after))
+    return true;
+
+  // TMA wait, TMA copy and barrier expect all access the barrier but can do it
+  // in any order, therefore we don't need a barrier between those operations.
+  if (isa<triton::nvidia_gpu::WaitBarrierOp,
+          triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::BarrierExpectOp>(before) &&
+      isa<triton::nvidia_gpu::WaitBarrierOp,
+          triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::BarrierExpectOp>(after))
+    return true;
+
+  // A mbarrier wait is released only when the whole operations is done,
+  // therefore any thread can access the memory after the barrier even if some
+  // threads haven't reached the mbarrier wait.
+  if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::WaitBarrierOp>(before) &&
+      !isa<triton::nvidia_gpu::InvalBarrierOp>(after))
+    return true;
+
+  return false;
 }
 
 } // namespace triton
