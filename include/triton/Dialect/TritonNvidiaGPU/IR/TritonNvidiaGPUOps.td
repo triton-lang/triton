@@ -70,10 +70,10 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 // WarpGroupDot Op
 //
 def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-                                            DotLike,
-                                            TypesMatchWith<"result's type matches accumulator's type",
-                                                            "d", "c", "$_self">]> {
+                                                     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                                     DotLike,
+                                                     TypesMatchWith<"result's type matches accumulator's type",
+                                                                     "d", "c", "$_self">]> {
     let summary = "warp group dot";
 
     let description = [{
@@ -93,7 +93,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<I
 }
 
 def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                                     AllTypesMatch<["inputs", "outputs"]>]> {
+                                                              AllTypesMatch<["inputs", "outputs"]>]> {
   let summary = "warp group dot wait";
   let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
   let results = (outs Variadic<TT_TensorOrMemDesc>:$outputs);
@@ -243,6 +243,5 @@ def TTNG_TMAStoreWait : TTNG_Op<"async_tma_store_wait"> {
 
   let assemblyFormat = "attr-dict";
 }
-
 
 #endif

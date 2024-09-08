@@ -28,6 +28,14 @@ int getMfmaVersion(ISAFamily isaFamily) {
   return 0;
 }
 
+int getWmmaVersion(StringRef archGen) {
+  if (archGen.contains("gfx11"))
+    return 1;
+  if (archGen.contains("gfx12"))
+    return 2;
+  return 0;
+}
+
 SmallVector<unsigned, 2> warpsPerTile(tt::DotOp dotOp,
                                       const ArrayRef<int64_t> shape,
                                       int numWarps,
@@ -82,8 +90,8 @@ warpsPerTileMFMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
 SmallVector<unsigned, 2>
 warpsPerTileWMMA(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   return warpsPerTile(dotOp, shape, numWarps,
-                      {ttg::AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[0],
-                       ttg::AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[1]});
+                      {ttg::AMDWmmaEncodingAttr::getMNKDimPerInstr()[0],
+                       ttg::AMDWmmaEncodingAttr::getMNKDimPerInstr()[1]});
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
@@ -147,7 +155,7 @@ selectMatrixCoreOperandTypes(tt::DotOp dot,
 }
 
 OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
-                                            tt::DotOp dot) {
+                                            tt::DotOp dot, int version) {
   Type f16 = rewriter.getF16Type();
   Type f32 = rewriter.getF32Type();
   Type bf16 = rewriter.getBF16Type();
@@ -164,6 +172,20 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
       // by WMMA instruction, but not supported by triton
       // clang-format on
   };
+  // TODO: support fp8 configurations for WMMAv2. The code should be as
+  // following:
+  // if (version == 2) {
+  //   Type fp8 = rewriter.getFp8Type();
+  //   Type bf8 = rewriter.getBF8Type();
+  //   applicableTypes.append({
+  //       // clang-format off
+  //       {fp8, fp8, f32, f32},
+  //       {fp8, bf8, f32, f32},
+  //       {bf8, fp8, f32, f32},
+  //       {bf8, bf8, f32, f32},
+  //       // clang-format on
+  //   });
+  // }
   return selectMatrixCoreOperandTypes(dot, applicableTypes);
 }
 
@@ -282,10 +304,8 @@ public:
 
   /// @brief Choose MFMA instruction parameters
   /// @param dot target dot operation
-  /// @return pair {mDim, nDim, kDim, kBase} sizes of one MFMA instruction
-  /// arguments
-  std::tuple<unsigned, unsigned, unsigned, unsigned>
-  chooseMfmaDimensions(tt::DotOp dot) const {
+  /// @return MfmaInsn or failure
+  FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotOp dot) const {
     // number of matrix elements along k dim per one MFMA intruction
     unsigned kDim = 0;
     auto opType = cast<RankedTensorType>(dot.getA().getType());
@@ -337,13 +357,10 @@ public:
       llvm::report_fatal_error("No match found in MFMA database\n");
 
     kDim = maybeMfmaInsn->getKDim();
-    unsigned kBase = maybeMfmaInsn->getKBase();
-
     assert(kDim != 0);
-
     assert(M % mDim == 0 && N % nDim == 0);
     assert(opType.getShape()[rank - 1] % kDim == 0);
-    return {mDim, nDim, kDim, kBase};
+    return maybeMfmaInsn;
   }
 
   LogicalResult matchAndRewrite(Operation *op,
@@ -374,7 +391,11 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc;
 
-    auto [mDim, nDim, kDim, kBase] = chooseMfmaDimensions(dotOp);
+    auto mfmaInstr = chooseMfmaInstruction(dotOp);
+    auto mDim = mfmaInstr.value().getMDim();
+    auto nDim = mfmaInstr.value().getNDim();
+    auto kDim = mfmaInstr.value().getKDim();
+    auto kBase = mfmaInstr.value().getKBase();
 
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
@@ -435,14 +456,14 @@ public:
     if (!isSecondDot(dotOp))
       kWidth *= kPack;
 
-    auto newAType = RankedTensorType::get(
-        oldAType.getShape(), oldAType.getElementType(),
-        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));
-    auto newBType = RankedTensorType::get(
-        oldBType.getShape(), oldBType.getElementType(),
-        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth));
-    a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
-    b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
+    auto newAEncoding =
+        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
+    auto newBEncoding =
+        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
+    a = convertAndCastTensor(rewriter, a, newAEncoding,
+                             mfmaInstr.value().getElementTypeA());
+    b = convertAndCastTensor(rewriter, b, newBEncoding,
+                             mfmaInstr.value().getElementTypeB());
     auto newDot = rewriter.create<tt::DotOp>(
         dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
         dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
@@ -562,9 +583,12 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 }
 
 class BlockedToWMMA : public RewritePattern {
+  int wmmaVersion;
+
 public:
-  BlockedToWMMA(MLIRContext *context)
-      : RewritePattern(tt::DotOp::getOperationName(), 2, context) {}
+  BlockedToWMMA(MLIRContext *context, int wmmaVersion)
+      : RewritePattern(tt::DotOp::getOperationName(), 2, context),
+        wmmaVersion(wmmaVersion) {}
 
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const override {
@@ -586,15 +610,20 @@ public:
     auto bShape = oldBType.getShape();
 
     // check shape
-    auto mnkDim = ttg::AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+    auto mnkDim = ttg::AMDWmmaEncodingAttr::getMNKDimPerInstr();
     auto rank = aShape.size();
     if (aShape[rank - 2] % mnkDim[0] != 0 || // m
         bShape[rank - 1] % mnkDim[1] != 0 || // n
         aShape[rank - 1] % mnkDim[2] != 0)   // k
       return failure();
 
+    if (wmmaVersion == 2 && llvm::isa<FloatType>(oldAType) &&
+        oldAType.getIntOrFloatBitWidth() == 8) {
+      return rewriter.notifyMatchFailure(op, "not supported yet");
+    }
+
     // get operand types
-    auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp);
+    auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion);
     if (operandTypes.empty())
       return failure();
 
@@ -607,7 +636,8 @@ public:
     auto warpsPerTile = warpsPerTileWMMA(dotOp, retShape, numWarps);
 
     auto CTALayout = ttg::getCTALayout(oldRetEncoding);
-    wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, warpsPerTile, CTALayout);
+    wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, warpsPerTile,
+                                            CTALayout);
 
     auto newRetType = RankedTensorType::get(retShape, operandTypes[3], wmmaEnc);
 
@@ -618,10 +648,12 @@ public:
 
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
-        ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, mnkDim[2]));
+        ttg::DotOperandEncodingAttr::get(
+            ctx, 0, wmmaEnc, wmmaEnc.getSizePerThreadForOperands(0)[rank - 1]));
     auto newBType = RankedTensorType::get(
         bShape, operandTypes[1],
-        ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEnc, mnkDim[2]));
+        ttg::DotOperandEncodingAttr::get(
+            ctx, 1, wmmaEnc, wmmaEnc.getSizePerThreadForOperands(1)[rank - 2]));
 
     Value castedA = convertAndCastTensor(rewriter, a, newAType.getEncoding(),
                                          operandTypes[0]);
@@ -666,10 +698,9 @@ public:
       patterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
                                     matrixInstructionSize, kPack);
       break;
-    case ISAFamily::RDNA1:
-    case ISAFamily::RDNA2:
     case ISAFamily::RDNA3:
-      patterns.add<::BlockedToWMMA>(context);
+      patterns.add<::BlockedToWMMA>(context,
+                                    getWmmaVersion(archGenerationName));
       break;
     default:
       break;

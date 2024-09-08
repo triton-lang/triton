@@ -8,6 +8,7 @@ namespace hsa {
 struct ExternLibHsa : public ExternLibBase {
   using RetType = hsa_status_t;
   static constexpr const char *name = "libhsa-runtime64.so";
+  static constexpr const char *defaultDir = "";
   static constexpr RetType success = HSA_STATUS_SUCCESS;
   static void *lib;
 };

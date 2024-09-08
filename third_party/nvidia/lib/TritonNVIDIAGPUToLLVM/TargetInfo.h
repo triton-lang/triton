@@ -22,6 +22,8 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
+  void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
+                         Value val) const override;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;

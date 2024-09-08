@@ -167,7 +167,7 @@ loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
   // and collect their indirection levels and uses.
   std::function<void(Operation *, int, Operation *)> dfs =
       [&](Operation *op, int distance, Operation *use) {
-        // Skip previously visisted load ops.
+        // Skip previously visited load ops.
         if (!seen.insert(op).second)
           return;
 
@@ -598,7 +598,7 @@ static bool preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
       [schedule](scf::ForOp, std::vector<std::pair<Operation *, unsigned>> &s) {
         s = std::move(schedule);
       };
-  options.peelEpilogue = false;
+  options.peelEpilogue = true;
   options.predicateFn = tt::predicateOp;
   options.supportDynamicLoops = true;
 

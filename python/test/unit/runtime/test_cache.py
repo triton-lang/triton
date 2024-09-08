@@ -52,6 +52,13 @@ def kernel_nospec(X, i, BLOCK: tl.constexpr):
     tl.store(X, i)
 
 
+@triton.jit(do_not_specialize_on_alignment=["i"])
+def kernel_nospec_on_alignment(X, i, BLOCK: tl.constexpr):
+    i = i + 1
+    i = function_1(i)
+    tl.store(X, i)
+
+
 @triton.jit
 def kernel_with_combine_fn(X, BLOCK: tl.constexpr):
     i = tl.arange(0, BLOCK)
@@ -161,7 +168,7 @@ def test_reuse(device, fresh_triton_cache):
     assert counter == 1
 
 
-@pytest.mark.parametrize('mode', ['enable', 'disable'])
+@pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_on_alignment'])
 def test_specialize(mode, device, fresh_triton_cache):
     counter = 0
 
@@ -171,8 +178,8 @@ def test_specialize(mode, device, fresh_triton_cache):
 
     JITFunction.cache_hook = inc_counter
     x = torch.empty(1, dtype=torch.int32, device=device)
-    function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 3, 'disable': 1}[mode]
+    function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
+    target = {'enable': 3, 'disable': 1, 'disable_on_alignment': 2}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
@@ -186,7 +193,7 @@ def test_annotation(device):
 
     x = torch.empty(1, dtype=torch.int32, device=device)
 
-    device = torch.cuda.current_device()
+    device = getattr(torch, device).current_device()
     kernel[(1, )](x, 1)
     kernel[(1, )](x, 8)
     kernel[(1, )](x, 16)
@@ -214,7 +221,7 @@ def test_kernel_default_arg(device):
     kernel[(1, )](x)
     assert x == torch.ones_like(x)
 
-    device = torch.cuda.current_device()
+    device = getattr(torch, device).current_device()
     assert len(kernel.cache[device]) == 1
 
 
@@ -407,7 +414,7 @@ def test_jit_warmup_cache(device) -> None:
         torch.randn(32, dtype=torch.float32, device=device),
         32,
     ]
-    device = torch.cuda.current_device()
+    device = getattr(torch, device).current_device()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
@@ -417,7 +424,7 @@ def test_jit_warmup_cache(device) -> None:
     assert len(kernel_add.cache[device]) == 1
 
 
-def test_jit_debug() -> None:
+def test_jit_debug(device) -> None:
 
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):
@@ -425,7 +432,7 @@ def test_jit_debug() -> None:
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
-    device = torch.cuda.current_device()
+    device = getattr(torch, device).current_device()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
@@ -445,13 +452,13 @@ def add_fn(a, b, o, N: tl.constexpr):
     tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
 
-def test_jit_noinline() -> None:
+def test_jit_noinline(device) -> None:
 
     @triton.jit
     def kernel_add_device(a, b, o, N: tl.constexpr):
         add_fn(a, b, o, N)
 
-    device = torch.cuda.current_device()
+    device = getattr(torch, device).current_device()
     assert len(kernel_add_device.cache[device]) == 0
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1
@@ -481,7 +488,7 @@ def test_memory_leak() -> None:
         tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
 
 
-def test_preload(fresh_triton_cache) -> None:
+def test_preload(device, fresh_triton_cache) -> None:
 
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr, type: tl.constexpr):
@@ -495,7 +502,7 @@ def test_preload(fresh_triton_cache) -> None:
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) - tl.load(b + idx))
 
-    device = torch.cuda.current_device()
+    device = getattr(torch, device).current_device()
 
     # get the serialized specialization data
     specialization_data = None
@@ -535,3 +542,38 @@ def test_preload(fresh_triton_cache) -> None:
     # test that we can't preload a mismatched kernel
     with pytest.raises(RuntimeError, match="Specialization data is for"):
         kernel_sub.preload(specialization_data)
+
+
+def test_hooks(device, fresh_triton_cache) -> None:
+
+    @triton.jit
+    def kernel_add(a, b, o, N: tl.constexpr, type: tl.constexpr):
+        idx = tl.arange(0, N)
+        tl.device_assert(idx < 32, "idx < 32")
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
+
+    # get the serialized specialization data
+    specialization_data = None
+    is_warmup = False
+    key = 0
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+        nonlocal is_warmup
+        is_warmup = kwargs["compile"]["is_warmup"]
+        nonlocal key
+        key = kwargs["compile"]["key"]
+
+    specialization_data_compiled = None
+
+    def compiled_hook(*args, **kwargs):
+        nonlocal specialization_data_compiled
+        specialization_data_compiled = kwargs["compile"]["specialization_data"]
+
+    JITFunction.cache_hook = cache_hook
+    JITFunction.compiled_hook = compiled_hook
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
+    assert specialization_data is not None and specialization_data_compiled == specialization_data
+    assert is_warmup is True
+    assert key in kernel_add.cache[getattr(torch, device).current_device()]

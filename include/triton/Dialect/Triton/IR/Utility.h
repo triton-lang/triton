@@ -25,19 +25,17 @@ template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
 template <typename VecT> auto product(const VecT &vec) {
   return product(llvm::ArrayRef(vec));
 }
-template <typename Int> Int getNumElements(ArrayRef<Int> shape) {
-  if (shape.empty()) {
-    return 0;
-  }
-  return product(shape);
-}
 
 // TODO(jlebar): Rename to ceilOfRatio.
 template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
 
 /// Get the highest power of 2 divisor of an integer.
 template <typename T> T highestPowOf2Divisor(T n) {
-  if (n == 0) {
+  // When n is 0 or min, return the highest power of 2. The min case is handled
+  // separately to avoid underflow when T is a signed integer. Technically
+  // in that case the correct divisor is -n, but this value is outside the
+  // range of possible values, so we take the next best alternative.
+  if (n == 0 || n == std::numeric_limits<T>::min()) {
     return (static_cast<T>(1) << (sizeof(T) * 8 - 2));
   }
   return (n & (~(n - 1)));

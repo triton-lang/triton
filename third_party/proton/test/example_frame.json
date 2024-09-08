@@ -2,10 +2,30 @@
   {
     "children": [
       {
+        "children": [
+          {
+            "children": [],
+            "frame": {
+              "name": "/home/user/projects/example.py/test.py:foo@1",
+              "type": "function"
+            },
+            "metrics": {
+              "Count": 1,
+              "DeviceId": "0",
+              "DeviceType": "HIP",
+              "Time (ns)": 204800
+            }
+          }
+        ],
+        "frame": {
+          "name": "test0"
+        },
+        "metrics": {}
+      },
+      {
         "children": [],
         "frame": {
-          "name": "/home/user/projects/example.py/test.py:foo@1",
-          "type": "function"
+          "name": "test1"
         },
         "metrics": {
           "count": 1,

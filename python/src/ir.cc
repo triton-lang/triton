@@ -1,4 +1,4 @@
-﻿#include <pybind11/functional.h>
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
@@ -226,6 +227,7 @@ void init_triton_ir(py::module &&m) {
                     cf::ControlFlowDialect, LLVM::LLVMDialect>();
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
+    mlir::LLVM::registerInlinerInterface(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
@@ -745,10 +747,8 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getI64Type();
            })
       .def("get_fp8e4nv_ty",
-           // TODO: fp8e4nv is using Float8E4M3FNUZType, which
-           // does not seem right. It should use FloatE4M3FNType
            [](TritonOpBuilder &self) -> Type {
-             return self.getBuilder().getType<Float8E4M3FNUZType>();
+             return self.getBuilder().getType<Float8E4M3FNType>();
            })
       .def("get_fp8e4b8_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -1269,7 +1269,7 @@ void init_triton_ir(py::module &&m) {
                                   evictionPolicy);
            })
       .def("create_descriptor_load",
-           [](TritonOpBuilder &self, Value &desc_ptr,
+           [](TritonOpBuilder &self, Value desc_ptr,
               std::vector<Value> &indices, Type type,
               CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> Value {
@@ -1277,10 +1277,26 @@ void init_triton_ir(py::module &&m) {
                  type, desc_ptr, indices, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_store",
-           [](TritonOpBuilder &self, Value &desc_ptr, Value value,
+           [](TritonOpBuilder &self, Value desc_ptr, Value value,
               std::vector<Value> &indices) -> void {
              self.create<ExperimentalDescriptorStoreOp>(desc_ptr, value,
                                                         indices);
+           })
+      .def("create_tensormap_create",
+           [](TritonOpBuilder &self, Value desc_ptr, Value global_address,
+              std::vector<Value> box_dim, std::vector<Value> global_dim,
+              std::vector<Value> global_stride,
+              std::vector<Value> element_stride, int32_t elem_type,
+              int32_t interleave_layout, int32_t swizzle_mode,
+              int32_t fill_mode) {
+             self.create<ExperimentalTensormapCreateOp>(
+                 desc_ptr, global_address, box_dim, global_dim, global_stride,
+                 element_stride, elem_type, interleave_layout, swizzle_mode,
+                 fill_mode);
+           })
+      .def("create_tensormap_fenceproxy_acquire",
+           [](TritonOpBuilder &self, Value desc_ptr) {
+             self.create<ExperimentalTensormapFenceproxyAcquireOp>(desc_ptr);
            })
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
@@ -1539,6 +1555,10 @@ void init_triton_ir(py::module &&m) {
              auto lineNoAttr = self.getBuilder().getI32IntegerAttr(lineNo);
              self.create<AssertOp>(condition, messageAttr, fileNameAttr,
                                    funcNameAttr, lineNoAttr);
+           })
+      .def("create_assume",
+           [](TritonOpBuilder &self, Value &condition) {
+             self.create<LLVM::AssumeOp>(condition);
            })
       // Undef
       .def("create_undef",

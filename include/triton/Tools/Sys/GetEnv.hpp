@@ -28,7 +28,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE",
     "TRITON_ENABLE_LLVM_DEBUG",
     "TRITON_LLVM_DEBUG_ONLY",
-    "USE_TTGIR_LOC",
+    "USE_IR_LOC",
     "NVPTX_ENABLE_DUMP",
     // clang-format on
 };
@@ -36,7 +36,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
     // clang-format off
     "TRITON_REPRODUCER_PATH",
-    "TRITON_DISABLE_PYTHON_STACKTRACE"
+    "TRITON_ENABLE_PYTHON_STACKTRACE"
     // clang-format on
 };
 

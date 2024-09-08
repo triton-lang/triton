@@ -113,8 +113,7 @@ public:
     Value falseValue = selectOp.getFalseValue();
     Value condSelect = selectOp.getCondition();
 
-    auto *loadOpCandidate = trueValue.getDefiningOp();
-    auto loadOp = llvm::dyn_cast_or_null<LoadOp>(loadOpCandidate);
+    auto loadOp = trueValue.getDefiningOp<LoadOp>();
     if (!loadOp)
       return failure();
 
@@ -122,8 +121,7 @@ public:
     if (!mask)
       return failure();
 
-    auto *splatOpCandidate = mask.getDefiningOp();
-    auto splatOp = llvm::dyn_cast_or_null<SplatOp>(splatOpCandidate);
+    auto splatOp = mask.getDefiningOp<SplatOp>();
     if (!splatOp)
       return failure();
 
@@ -175,26 +173,21 @@ public:
     if (!isReduceAdd)
       return failure();
     // operand of reduce has to be mul
-    auto mulOp = llvm::dyn_cast_or_null<arith::MulFOp>(
-        reduceOp.getOperand(0).getDefiningOp());
+    auto mulOp = reduceOp.getOperand(0).getDefiningOp<arith::MulFOp>();
     if (!mulOp)
       return failure();
     // mul operand has to be broadcast
-    auto broadcastLhsOp = llvm::dyn_cast_or_null<BroadcastOp>(
-        mulOp.getOperand(0).getDefiningOp());
+    auto broadcastLhsOp = mulOp.getOperand(0).getDefiningOp<BroadcastOp>();
     if (!broadcastLhsOp)
       return failure();
-    auto broadcastRhsOp = llvm::dyn_cast_or_null<BroadcastOp>(
-        mulOp.getOperand(1).getDefiningOp());
+    auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
     if (!broadcastRhsOp)
       return failure();
     // broadcast operand is expand dims
-    auto expandLhsOp = llvm::dyn_cast_or_null<ExpandDimsOp>(
-        broadcastLhsOp.getSrc().getDefiningOp());
+    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
     if (!expandLhsOp)
       return failure();
-    auto expandRhsOp = llvm::dyn_cast_or_null<ExpandDimsOp>(
-        broadcastRhsOp.getSrc().getDefiningOp());
+    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
     if (!expandRhsOp)
       return failure();
     // get not-broadcast dimensions

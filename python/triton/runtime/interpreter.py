@@ -76,8 +76,8 @@ class InterpreterOptions:
     extern_libs: dict = None
     debug: bool = False
     arch: str = None
-    allow_fp8e4nv: bool = True
-    allow_fp8e4b15: bool = True
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
+    deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
@@ -647,6 +647,9 @@ class InterpreterBuilder:
         # Interpreter's device_assert function has a different format than Triton's device_assert
         assert condition, f"{message} in {fileName}:{funcName}:{lineNo}"
 
+    def create_assume(self, condition):
+        assert condition, "Assume failed"
+
     def create_barrier(self):
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
@@ -726,7 +729,7 @@ class ReduceScanOpIneterface:
         if hasattr(ret, "shape") and ret.shape:
             ret_type = tl.block_type(dtype, ret.shape)
         else:
-            ret = np.array([ret], dtype=_get_np_dtype(dtype))
+            ret = np.array([ret]).astype(_get_np_dtype(dtype))
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
@@ -1111,12 +1114,12 @@ class ASTTransformer(ast.NodeTransformer):
         if len(names) > 1:
             raise ValueError("Multiple assignments are not supported")
         # Modify the assignment x = value to
-        # triton.core.language._to_tensor(value, interpreter_builder, False)
+        # triton.language.semantic.to_tensor(value, interpreter_builder, False)
         node.value = ast.Call(
             func=ast.Attribute(
                 value=ast.Attribute(
                     value=ast.Attribute(value=ast.Name(id='triton', ctx=ast.Load()), attr='language', ctx=ast.Load()),
-                    attr='core', ctx=ast.Load()), attr='_to_tensor', ctx=ast.Load()),
+                    attr='semantic', ctx=ast.Load()), attr='to_tensor', ctx=ast.Load()),
             args=[node.value, ast.Name(id='interpreter_builder', ctx=ast.Load()),
                   ast.Constant(value=False)], keywords=[])
         return node

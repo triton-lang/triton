@@ -306,18 +306,18 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
     break;
   default:
     PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
+    return NULL;
   }
   assert((elementSize * tensorDim) >= 32 && "block size too small.");
   int rank = 1;
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
                                       getCuTensorMapEncodeTiledHandle);
-  CUresult result = cuTensorMapEncodeTiled(
+  CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
       (CUtensorMap *)desc_address, type, rank, (void *)global_address, dims,
       globalStrides, boxDim, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
-      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-  assert(result == CUDA_SUCCESS);
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
   return Py_None;
 }
 
@@ -375,12 +375,11 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
                                       getCuTensorMapEncodeTiledHandle);
-  CUresult result = cuTensorMapEncodeTiled(
+  CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
       (CUtensorMap *)desc_address, type, rank, (void *)global_address, dims,
       globalStrides, tensorDims, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
-      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
-  assert(result == CUDA_SUCCESS);
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
   return Py_None;
 }
 

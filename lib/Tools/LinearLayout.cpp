@@ -1,6 +1,7 @@
 #include "triton/Tools/LinearLayout.h"
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
 #include "mlir/IR/BuiltinAttributes.h"
@@ -161,6 +162,36 @@ void assertDimsSubsetIgnoringOrder(T &&small, U &&big) {
                              "they aren't.  Got dims: [" +
                              Twine(triton::join(small, ", ")) + "] and [" +
                              triton::join(big, ", ") + "]");
+  }
+}
+
+// Check that elements common to both aDims and bDims
+// appear in the same relative order.
+template <typename T, typename U>
+void assertCommonDimsSameOrder(T &&aDims, U &&bDims) {
+  SmallDenseSet<StringAttr> aDimsSet(aDims.begin(), aDims.end());
+  SmallDenseSet<StringAttr> bDimsSet(bDims.begin(), bDims.end());
+
+  std::vector<StringAttr> aCommonDims;
+  for (StringAttr dim : aDims) {
+    if (bDimsSet.contains(dim)) {
+      aCommonDims.push_back(dim);
+    }
+  }
+
+  std::vector<StringAttr> bCommonDims;
+  for (StringAttr dim : bDims) {
+    if (aDimsSet.contains(dim)) {
+      bCommonDims.push_back(dim);
+    }
+  }
+
+  if (aCommonDims != bCommonDims) {
+    llvm::report_fatal_error("All a/b dimensions common to both layouts "
+                             "must appear in the same relative order, but they "
+                             "don't.\na:" +
+                             Twine(triton::join(aDims, ", ")) +
+                             "\nb: " + triton::join(bDims, ", "));
   }
 }
 
@@ -552,40 +583,9 @@ LinearLayout LinearLayout::reshapeOuts(
 }
 
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
-  // Check that elements common to both outerDimsRange and innerDimsRange
-  // appear in the same relative order.
-  auto checkCommonDims = [&](auto outerDimsRange, auto innerDimsRange) {
-    SmallDenseSet<StringAttr> outerDims(outerDimsRange.begin(),
-                                        outerDimsRange.end());
-    SmallDenseSet<StringAttr> innerDims(innerDimsRange.begin(),
-                                        innerDimsRange.end());
-
-    std::vector<StringAttr> outerCommonDims;
-    for (StringAttr dim : outerDimsRange) {
-      if (innerDims.contains(dim)) {
-        outerCommonDims.push_back(dim);
-      }
-    }
-
-    std::vector<StringAttr> innerCommonDims;
-    for (StringAttr dim : innerDimsRange) {
-      if (outerDims.contains(dim)) {
-        innerCommonDims.push_back(dim);
-      }
-    }
-
-    if (outerCommonDims != innerCommonDims) {
-      llvm::report_fatal_error(
-          "Cannot multiply layouts.  All in/out dimensions common to both "
-          "layouts must appear in the same relative order, but they "
-          "don't.\nOuter:" +
-          Twine(outer.toString()) + "\nInner:" + inner.toString());
-    }
-  };
-
   // Check that dims common to outer and inner have the same relative order.
-  checkCommonDims(outer.getInDimNames(), inner.getInDimNames());
-  checkCommonDims(outer.getOutDimNames(), inner.getOutDimNames());
+  assertCommonDimsSameOrder(inner.getOutDimNames(), outer.getOutDimNames());
+  assertCommonDimsSameOrder(inner.getInDimNames(), outer.getInDimNames());
 
   // Get the sizeLog2 of all input and output dimensions we're going to
   // consider, in order.  `inner` is more minor, so its dimensions come
@@ -641,6 +641,9 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 
 std::optional<LinearLayout>
 LinearLayout::divideRight(const LinearLayout &divisor) {
+  assertCommonDimsSameOrder(getOutDimNames(), divisor.getOutDimNames());
+  assertCommonDimsSameOrder(getInDimNames(), divisor.getInDimNames());
+
   // Strip off the top N bases for each input dimension of divisor.  This
   // gives a candidate quotient.  Then check if quotient * divisor equals
   // `this`.
@@ -654,35 +657,135 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
                          divisor.getInDimSizeLog2(inDim));
   }
 
+  // Check if the size of the new out-dims are large enough.
+  // If yes, we can divide the out-dims.
+  // If no, we return nullopt to indicate that the division is not possible.
   llvm::MapVector<StringAttr, int32_t> newOutDims = outDims;
-  for (const auto [outDim, outDimSize] : divisor.outDims) {
-    if (newOutDims[outDim] < outDimSize) {
+  for (const auto [outDimName, outDimSize] : divisor.outDims) {
+    if (newOutDims[outDimName] < outDimSize) {
       return std::nullopt;
     }
-    newOutDims[outDim] /= outDimSize;
+    newOutDims[outDimName] /= outDimSize;
   }
 
-  eraseEmptyInOutDims(newBases, newOutDims);
-
-  LDBG("this->divideRight(divisor)=candidate_quotient");
+  LDBG("Checking candidate_quotient * divisor == *this");
   LDBG("this:" << *this);
   LDBG("divisor:" << divisor);
+  LDBG("newBases: " << triton::join(newBases, ", ", [](auto &p) {
+         return p.first.str() + "=" + std::to_string(p.second.size());
+       }));
   LDBG("newOutDims: " << triton::join(newOutDims, ", ", [](auto &p) {
          return p.first.str() + "=" + std::to_string(p.second);
        }));
   std::optional<LinearLayout> candidateQuotient = LinearLayout::tryCreate(
-      std::move(newBases), std::move(newOutDims).takeVector(),
+      std::move(newBases), std::move(newOutDims.takeVector()),
       /*requireSurjective=*/false);
+  LDBG("candidate_quotient:" << candidateQuotient);
+  LDBG("*candidate_quotient * divisor=" << *candidateQuotient * divisor);
   if (!candidateQuotient.has_value()) {
     LDBG("candidate quotient failed invariant checks");
     return std::nullopt;
   }
-  LDBG("candidate_quotient:" << candidateQuotient);
-
-  if (*candidateQuotient * divisor == *this) {
-    return *candidateQuotient;
+  if (*candidateQuotient * divisor != *this) {
+    LDBG("candidate quotient failed invariant checks");
+    return std::nullopt;
   }
-  return std::nullopt;
+
+  // Now that we have a candidate quotient, we need to eliminate any empty
+  // dimensions from the candidate quotient but still ensure that
+  // quotient * divisor == *this.
+  newBases = candidateQuotient->bases;
+  newOutDims = candidateQuotient->outDims;
+
+  // We only remove the trailing empty output dimensions from `quotient`.
+  //
+  // In the multiplication `quotient * divisor == result`, the output dimensions
+  // of `quotient` always come before those of `divisor` in `result`.  Removing
+  // any non-trailing empty dimensions from `quotient` would change the
+  // order of the output dimensions in `result`.
+  //
+  // The following loop iterates through the output dimensions of `result` from
+  // right to left.  During the iteration, the following conditions are checked:
+  //
+  //   1. If an output dimension exists only in `divisor` and not in `quotient`,
+  //   the loop continues.
+  //   2. If an output dimension exists only in `quotient` and not in `divisor`,
+  //   we stop the loop.
+  //   3. If an output dimension exists in both `quotient` and `divisor`, it may
+  //   be removed, but only if it is a size-1 dimension and meets one of the
+  //   following conditions:
+  //    - The dimension immediately following it in `quotient` has already been
+  //    removed.
+  //    - It is the last dimension of `quotient`.
+  //   Otherwise, removing this dimension could alter the structure of `result`.
+  //
+  // Consider the quotient l = o / r, where:
+  //   out-dims(o) = ["out0", "out1", "out2", "out3"]
+  //   out-dims(r) = ["out1", "out3"]
+  //
+  // Only "out1" is a size-1 dimension.  If we remove "out1" from o, the
+  // resulting output dimensions would be:
+  //   out-dims(l) = ["out0", "out2", "out3"]
+  //
+  // Performing the multiplication l * r results in:
+  //   out-dims(l * r) = ["out0", "out2", "out3"] * ["out1", "out3"] = ["out0",
+  //   "out2", "out3", "out1"]
+  // This outcome does not match the original out-dims(o).
+  //
+  // However, if we remove only "out3" from o, we get:
+  //   out-dims(l) = ["out0", "out1", "out2"]
+  //
+  // Then, performing the multiplication l * r yields:
+  //   out-dims(l * r) = ["out0", "out1", "out2"] * ["out1", "out3"] = ["out0",
+  //   "out1", "out2", "out3"]
+  // This result matches the original out-dims(o).
+  llvm::SmallVector<size_t> emptyOutDimIndices;
+  for (const auto [outDimName, outDimSize] : llvm::reverse(outDims)) {
+    if (newOutDims.contains(outDimName) && !divisor.hasOutDim(outDimName)) {
+      break;
+    }
+    if (newOutDims.contains(outDimName) && divisor.hasOutDim(outDimName) &&
+        candidateQuotient->getOutDimSize(outDimName) == 1) {
+      auto lastOutDimName = newOutDims.rbegin()->first;
+      if (outDimName != lastOutDimName) {
+        break;
+      }
+      emptyOutDimIndices.push_back(getOutDimIndex(outDimName));
+      newOutDims.erase(outDimName);
+    }
+  }
+
+  // Erase the basis elements corresponding to the empty out-dims.
+  for (auto &[inDim, inDimBases] : newBases) {
+    for (auto &basis : inDimBases) {
+      for (int i : emptyOutDimIndices) {
+        basis.erase(basis.begin() + i);
+      }
+    }
+  }
+
+  // Erase trailing empty in-dims.
+  for (auto inDimName : llvm::reverse(getInDimNames())) {
+    if (newBases[inDimName].empty() && divisor.hasInDim(inDimName)) {
+      newBases.erase(inDimName);
+    } else {
+      break;
+    }
+  }
+
+  LDBG("Eliminated empty dims from candidate_quotient");
+  LDBG("newBases: " << triton::join(newBases, ", ", [](auto &p) {
+         return p.first.str() + "=" + std::to_string(p.second.size());
+       }));
+  LDBG("newOutDims: " << triton::join(newOutDims, ", ", [](auto &p) {
+         return p.first.str() + "=" + std::to_string(p.second);
+       }));
+  auto quotient = LinearLayout::tryCreate(std::move(newBases),
+                                          std::move(newOutDims).takeVector(),
+                                          /*requireSurjective=*/false);
+  LDBG("quotient:" << quotient);
+  assert(quotient.has_value());
+  return quotient;
 }
 
 LinearLayout LinearLayout::sublayout(ArrayRef<StringAttr> inDimNames,
@@ -838,7 +941,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   // that choice.
   //
   // Let A' be A with the last line changed to "=4", and similarly for B'.
-  // When transfering from A' to B', we can't cross blocks even if we wanted
+  // When transferring from A' to B', we can't cross blocks even if we wanted
   // to, because the two blocks now have different data.  But also, any
   // mapping of thread+block from A' to B' is also valid for mapping from A
   // to B.
@@ -913,6 +1016,41 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     retOutDims.push_back({dim, outer.getInDimSize(dim)});
   }
   return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
+}
+
+llvm::MapVector<StringAttr, int32_t>
+LinearLayout::getFreeVariableMasks() const {
+  std::unique_ptr<uint64_t[]> mat = getMatrix(*this);
+  int numRows = getTotalOutDimSizeLog2();
+  int numCols = getTotalInDimSizeLog2();
+
+  // stride is specified in number of 64-bit words per row, and we pack our
+  // matrix so that there's only one uint64_t per row.
+  assert(numCols <= 64);
+  f2reduce::inplace_rref_strided(mat.get(), numRows, numCols, /*stride=*/1);
+
+  // For each row in the RREF matrix, identify the column with the first "1".
+  // These columns correspond to the basic (i.e. non-free) variables.
+  std::set<int32_t> basicVars;
+  for (int r = 0; r < numRows; r++) {
+    if (mat[r] == 0) {
+      continue;
+    }
+    basicVars.insert(__builtin_ctzll(mat[r]));
+  }
+
+  llvm::MapVector<StringAttr, int32_t> ret;
+  int c = 0;
+  for (StringAttr dim : getInDimNames()) {
+    int32_t mask = 0;
+    for (int i = 0; i < getInDimSizeLog2(dim); i++, c++) {
+      if (basicVars.count(c) == 0) {
+        mask |= (1 << i);
+      }
+    }
+    ret[dim] = mask;
+  }
+  return ret;
 }
 
 bool operator==(LinearLayout lhs, LinearLayout rhs) {

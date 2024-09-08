@@ -102,7 +102,7 @@ def test_print(func: str, data_type: str, device: str):
     if func == "device_print":
         kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_scalar":
-        scalar = torch.tensor(42, dtype=x.dtype, device="cuda")
+        scalar = torch.tensor(42, dtype=x.dtype, device=device)
         kernel_device_print_scalar[(1, )](scalar, num_warps=num_warps)
     elif func == "device_print_negative":
         x = -x
@@ -135,6 +135,10 @@ def test_print(func: str, data_type: str, device: str):
        func != "print_multiple_args" and func != "device_print_multiple_args" and \
        func != "device_print_pointer" and func != "device_print_scalar":
         assert_close(y, x)
+
+    # Wait until driver complete all the jobs for the device_print, especially test_subprocess
+    # require this which captures stdout when child exits.
+    getattr(torch, device).synchronize()
 
 
 if __name__ == "__main__":

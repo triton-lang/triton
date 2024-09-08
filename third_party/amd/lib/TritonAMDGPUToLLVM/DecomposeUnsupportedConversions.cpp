@@ -28,10 +28,9 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
 }
 
 static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
-  unsigned inVec = 0;
-  unsigned outVec = 0;
-  auto smemShape = triton::getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
-  unsigned elems = getNumElements<unsigned>(smemShape);
+  auto scratchConfig = mlir::triton::getScratchConfigForCvt(
+      cvtOp.getSrc().getType(), cvtOp.getType());
+  unsigned elems = getNumScratchElements(scratchConfig.paddedRepShape);
   auto srcType = cvtOp.getSrc().getType();
   auto bytes =
       isa<triton::PointerType>(srcType.getElementType())
@@ -41,10 +40,8 @@ static int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) {
   return bytes;
 }
 
-bool isPowerOfTwo(unsigned x) { return x && (x & (x - 1)) == 0; }
-
 static std::vector<std::pair<int, int>> factorizePowerOf2(int n) {
-  assert(isPowerOfTwo(n));
+  assert(llvm::isPowerOf2_32(n));
   int x = log2(n);
   std::vector<std::pair<int, int>> pairs;
 
@@ -81,7 +78,8 @@ createNewConvertOps(ModuleOp &mod, OpBuilder &builder,
   } else if (auto srcWmma = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(
                  srcType.getEncoding())) {
     auto newWmmaEnc = triton::gpu::AMDWmmaEncodingAttr::get(
-        mod.getContext(), {warpsPerCtaX, warpsPerCtaY}, srcWmma.getCTALayout());
+        mod.getContext(), srcWmma.getVersion(), {warpsPerCtaX, warpsPerCtaY},
+        srcWmma.getCTALayout());
 
     newSrcType = RankedTensorType::get(srcType.getShape(),
                                        srcType.getElementType(), newWmmaEnc);
@@ -113,8 +111,8 @@ struct DecomposeUnsupportedAMDConversions
 
     triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
 
-    triton::gpu::decomposeTensorCoreToDotLayoutConversion<
-        triton::gpu::AMDMfmaEncodingAttr>(mod, isMfmaToDotShortcut);
+    triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
+                                                          isMfmaToDotShortcut);
 
     /* -------------------------------- */
     // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`

@@ -1070,6 +1070,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     coarseSchedule.dump();
   });
 
+  tt::CoarseSchedule::Cluster afterPrologue =
+      schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
+  LLVM_DEBUG({
+    LDBG("Coarse schedule with prologue and epilogue:");
+    coarseSchedule.dump();
+  });
+
   SmallVector<Value> barriers;
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
@@ -1077,13 +1084,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
 
   LLVM_DEBUG({
     LDBG("Coarse schedule with async loads:");
-    coarseSchedule.dump();
-  });
-
-  tt::CoarseSchedule::Cluster afterPrologue =
-      schedulePrologueAndEpilogue(forOp, coarseSchedule, rootUsers, numStages);
-  LLVM_DEBUG({
-    LDBG("Coarse schedule with prologue and epilogue:");
     coarseSchedule.dump();
   });
 
@@ -1395,11 +1395,19 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     // allowed in between.
     Value transitiveOperand = operand;
     while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp>(
-        transitiveOperand.getDefiningOp())) {
-      transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
+               transitiveOperand.getDefiningOp()) ||
+           isa<BlockArgument>(transitiveOperand)) {
+      auto blockArg = dyn_cast<BlockArgument>(transitiveOperand);
+      if (blockArg && blockArg.getOwner() == forOp.getBody()) {
+        transitiveOperand =
+            cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
+                .getOperand(blockArg.getArgNumber() - 1);
+      } else if (Operation *def = transitiveOperand.getDefiningOp()) {
+        transitiveOperand = def->getOperand(0);
+      }
     }
     return forOp.isDefinedOutsideOfLoop(transitiveOperand) ||
-           isa<ttg::MemDescSubviewOp>(transitiveOperand.getDefiningOp());
+           transitiveOperand.getDefiningOp<ttg::MemDescSubviewOp>();
   };
 
   // We don't have to call checkOperand on getC() because it's always in

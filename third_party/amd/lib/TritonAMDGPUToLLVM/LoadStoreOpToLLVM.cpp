@@ -189,6 +189,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
+    auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset
@@ -224,8 +225,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         falseVal = v;
       }
 
-      bool nt = op.getCache() == triton::CacheModifier::CG;
-      auto loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal, nt);
+      auto loadVal =
+          llLoad(rewriter, loc, ptr, vecTy, pred, falseVal, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -293,6 +294,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
 
+    auto cacheMod = op.getCache();
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
@@ -329,7 +331,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         llWord = bitcast(llWord, valArgTy);
         Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
         auto address = ptrElems[vecStart + wordIdx * wordNElems];
-        llStore(rewriter, loc, address, llWord, maskVal);
+        llStore(rewriter, loc, address, llWord, maskVal, cacheMod);
       }
     }
     rewriter.eraseOp(op);
@@ -443,8 +445,6 @@ struct AtomicCASOpConversion
 
         // Fill entry block with global memory barrier and conditional branch.
         rewriter.setInsertionPointToEnd(curBlock);
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(rewriter.getContext(), 3));
         auto tid = tid_val();
         Value pred = icmp_eq(tid, i32_val(i));
         rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
@@ -457,22 +457,30 @@ struct AtomicCASOpConversion
         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
             StringRef("agent"));
-        // Extract the new_loaded value from the pair.
-        Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
 
-        store(newLoaded, atomPtr);
+        if (atomicNeedsSharedMemory(op.getResult())) {
+          // Extract the new_loaded value from the pair.
+          Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
+          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          store(newLoaded, atomPtr);
+        }
 
         rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
 
         // Build the last block: synced load from shared memory, exit.
         rewriter.setInsertionPointToStart(endBlock);
 
+        if (!atomicNeedsSharedMemory(op.getResult())) {
+          rewriter.eraseOp(op);
+          return success();
+        }
+
         GCNBuilder BuilderMemfenceLDS;
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
+        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         Value ret = load(valueElemTy, atomPtr);
-        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -620,8 +628,10 @@ struct AtomicRMWOpConversion
         atom = insert_element(vecTy, tmp, atom2, i32_val(1)).getResult();
       }
       if (!tensorTy) {
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        store(atom, atomPtr);
+        if (atomicNeedsSharedMemory(op.getResult())) {
+          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          store(atom, atomPtr);
+        }
       }
       rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
 
@@ -634,10 +644,13 @@ struct AtomicRMWOpConversion
                        : extract_element(valueElemTy, retVal, i32_val(ii));
         }
       } else {
+        if (!atomicNeedsSharedMemory(op.getResult())) {
+          rewriter.eraseOp(op);
+          return success();
+        }
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         barrier();
         Value ret = load(valueElemTy, atomPtr);
-        barrier();
         rewriter.replaceOp(op, {ret});
       }
     }

@@ -3,7 +3,8 @@ from triton._C.libtriton import ir, passes, llvm, nvidia
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional
+from types import ModuleType
 import hashlib
 import re
 import tempfile
@@ -48,12 +49,15 @@ def ptx_get_version(cuda_version) -> int:
     assert isinstance(cuda_version, str)
     major, minor = map(int, cuda_version.split('.'))
     if major == 12:
-        return 80 + minor
+        if minor < 6:
+            return 80 + minor
+        elif minor == 6:
+            return 85
     if major == 11:
         return 70 + minor
     if major == 10:
         return 63 + minor
-    raise RuntimeError("Triton only support CUDA 10.0 or higher")
+    raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 
 @functools.lru_cache()
@@ -90,8 +94,8 @@ class CUDAOptions:
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
     enable_fp_fusion: bool = True
-    allow_fp8e4nv: bool = False
-    allow_fp8e4b15: bool = False
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
+    deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: bool = None
@@ -129,9 +133,17 @@ class CUDABackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
-        args["allow_fp8e4nv"] = self.capability >= 89
-        args["allow_fp8e4b15"] = self.capability < 90
-        if not "enable_fp_fusion" in args:
+        if "supported_fp8_dtypes" not in args:
+            supported_fp8_dtypes = set(CUDAOptions.supported_fp8_dtypes)
+            if self.capability >= 89:
+                supported_fp8_dtypes.add("fp8e4nv")
+            args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
+
+        if "deprecated_fp8_dtypes" not in args:
+            if self.capability >= 90:
+                args["deprecated_fp8_dtypes"] = ("fp8e4b15", )
+
+        if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
@@ -154,6 +166,10 @@ class CUDABackend(BaseBackend):
             "min_dot_size": min_dot_size(self.target)
         }
         return codegen_fns
+
+    def get_module_map(self) -> Dict[str, ModuleType]:
+        from triton.language.extra.cuda import libdevice
+        return {"triton.language.extra.libdevice": libdevice}
 
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)
@@ -229,6 +245,11 @@ class CUDABackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        # Set up Diagnostic
+        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
+            srcMgr = llvm.source_mgr()
+            diag = ir.source_mgr_diag(srcMgr, mod.context)
+            mod.context.printOpOnDiagnostic(True)
         nvidia.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.convert.add_scf_to_cf(pm)
@@ -316,21 +337,26 @@ class CUDABackend(BaseBackend):
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
-            except subprocess.CalledProcessError as e:
-                with open(flog.name) as log_file:
-                    log = log_file.read()
-                if e.returncode == 255:
-                    raise RuntimeError(f'Internal Triton PTX codegen error: \n{log}')
-                elif e.returncode == 128 + signal.SIGSEGV:
-                    raise RuntimeError(
-                        f'Please run `ptxas {fsrc.name}` to confirm that this is a bug in `ptxas`\n{log}')
-                else:
-                    raise RuntimeError(f'`ptxas` failed with error code {e.returncode}: \n{log}')
-            finally:
                 if os.path.exists(fsrc.name):
                     os.remove(fsrc.name)
                 if os.path.exists(flog.name):
                     os.remove(flog.name)
+            except subprocess.CalledProcessError as e:
+                with open(flog.name) as log_file:
+                    log = log_file.read()
+                if os.path.exists(flog.name):
+                    os.remove(flog.name)
+
+                if e.returncode == 255:
+                    error = 'Internal Triton PTX codegen error'
+                elif e.returncode == 128 + signal.SIGSEGV:
+                    error = '`ptxas` raised SIGSEGV'
+                else:
+                    error = f'`ptxas` failed with error code {e.returncode}'
+
+                raise RuntimeError(f'{error}\n'
+                                   f'`ptxas` stderr:\n{log}\n'
+                                   f'Repro command: {ptxas_cmd}\n')
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()

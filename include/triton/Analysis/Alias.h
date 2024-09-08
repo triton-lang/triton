@@ -79,13 +79,13 @@ public:
   ModRefResult getModRef(Operation *op, Value location);
 
   void setToEntryState(dataflow::Lattice<AliasInfo> *lattice) override {
-    propagateIfChanged(
-        lattice, lattice->join(
-                     AliasInfo::getPessimisticValueState(lattice->getPoint())));
+    propagateIfChanged(lattice,
+                       lattice->join(AliasInfo::getPessimisticValueState(
+                           lattice->getAnchor())));
   }
 
   /// Computes if the alloc set of the results are changed.
-  void
+  LogicalResult
   visitOperation(Operation *op,
                  ArrayRef<const dataflow::Lattice<AliasInfo> *> operands,
                  ArrayRef<dataflow::Lattice<AliasInfo> *> results) override;

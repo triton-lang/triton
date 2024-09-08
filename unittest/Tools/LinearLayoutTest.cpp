@@ -600,6 +600,20 @@ TEST_F(LinearLayoutTest, DivideRight_EliminateInDim) {
   LinearLayout l3({{S("in2"), {{0, 1}, {1, 0}}}}, {S("out1"), S("out2")});
   ASSERT_EQ(l3 * l2, l1);
   EXPECT_EQ(l1.divideRight(l2), l3);
+
+  LinearLayout l4({{S("in1"), {{0, 1}, {0, 2}}}, {S("in2"), {}}},
+                  {S("out1"), S("out2")});
+  LinearLayout l5({{S("in1"), {{0, 1}, {0, 2}}}}, {S("out1"), S("out2")});
+  LinearLayout l6({{S("in2"), {}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l5 * l6, l4);
+  EXPECT_EQ(l4.divideRight(l6), l5);
+
+  LinearLayout l7({{S("in1"), {}}, {S("in2"), {{0, 1}}}, {S("in3"), {}}},
+                  {S("out1"), S("out2")});
+  LinearLayout l8({{S("in2"), {{0, 1}}}}, {S("out1"), S("out2")});
+  LinearLayout l9({{S("in1"), {}}, {S("in2"), {}}, {S("in3"), {}}}, {});
+  ASSERT_EQ(l9 * l8, l7);
+  EXPECT_EQ(l7.divideRight(l8), l9);
 }
 
 TEST_F(LinearLayoutTest, DivideRight_EliminateOutDim) {
@@ -613,6 +627,18 @@ TEST_F(LinearLayoutTest, DivideRight_EliminateOutDim) {
   LinearLayout l3({{S("in2"), {{1}, {1}}}}, {S("out1")});
   ASSERT_EQ(l3 * l2, l1);
   EXPECT_EQ(l1.divideRight(l2), l3);
+
+  LinearLayout l4(
+      {
+          {S("in1"), {{0, 1}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l5({{S("in1"), {{1}, {2}}}}, {S("out2")});
+  using BasesArray =
+      ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>>;
+  LinearLayout l6(BasesArray{}, {S("out1")});
+  ASSERT_EQ(l6 * l5, l4);
+  EXPECT_EQ(l4.divideRight(l5), l6);
 }
 
 TEST_F(LinearLayoutTest, DivideRight_Assertion) {
@@ -730,6 +756,36 @@ TEST_F(LinearLayoutTest, SublayoutIsIdentity) {
   EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out2")}));
   EXPECT_TRUE(
       l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1"), S("out2")}));
+}
+
+TEST_F(LinearLayoutTest, FreeVariableMasks) {
+  using llvm::to_vector;
+  using AR = llvm::ArrayRef<std::pair<StringAttr, int32_t>>;
+
+  EXPECT_EQ(AR(to_vector(LinearLayout::identity1D(4, S("in"), S("out"))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0}}));
+  EXPECT_EQ(
+      AR(to_vector(
+          LinearLayout::zeros1D(16, S("in"), S("out")).getFreeVariableMasks())),
+      AR({{S("in"), 0b1111}}));
+  EXPECT_EQ(AR(to_vector((LinearLayout::identity1D(2, S("in"), S("out")) *
+                          LinearLayout::zeros1D(4, S("in"), S("out")) *
+                          LinearLayout::identity1D(4, S("in"), S("out")) *
+                          LinearLayout::zeros1D(2, S("in"), S("out")))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0b100110}}));
+  EXPECT_EQ(AR(to_vector((LinearLayout::identity1D(2, S("in"), S("out")) *
+                          LinearLayout::zeros1D(4, S("in"), S("out")) *
+                          LinearLayout::identity1D(4, S("in"), S("out")) *
+                          LinearLayout::zeros1D(2, S("in"), S("out")))
+                             .getFreeVariableMasks())),
+            AR({{S("in"), 0b100110}}));
+  EXPECT_EQ(AR(to_vector(LinearLayout({{S("in1"), {{1, 1}, {2, 2}, {0, 0}}},
+                                       {S("in2"), {{1, 0}, {0, 1}, {2, 0}}}},
+                                      {S("out1"), S("out2")})
+                             .getFreeVariableMasks())),
+            AR({{S("in1"), 0b100}, {S("in2"), 0b10}}));
 }
 
 } // anonymous namespace
