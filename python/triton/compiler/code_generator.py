@@ -366,18 +366,17 @@ class CodeGenerator(ast.NodeVisitor):
         if ret_value is None:
             self.builder.ret([])
             ret_ty = language.void
-        elif isinstance(ret_value, tuple):
-            ret_values = [language.core._to_tensor(v, self.builder) for v in ret_value]
+        elif isinstance(ret_value, language.tuple):
+            ret_values = [language.core._to_tensor(v, self.builder) for v in ret_value.values]
             ret_types = [v.type for v in ret_values]
             self.builder.ret([v.handle for v in ret_values])
-            ret_ty = tuple(ret_types)
+            ret_ty = language.tuple_type(ret_types)
         else:
             ret = language.core._to_tensor(ret_value, self.builder)
             self.builder.ret([ret.handle])
             ret_ty = ret.type
         # self.builder.create_branch(post_ret_block)
         # self.builder.set_insertion_point_to_end(post_ret_block)
-
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
@@ -450,8 +449,8 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.ret([])
         else:
             # update return type
-            if isinstance(self.ret_type, tuple):
-                self.prototype.ret_types = list(self.ret_type)
+            if isinstance(self.ret_type, language.tuple_type):
+                self.prototype.ret_types = self.ret_type.types
                 self.fn.reset_type(self.prototype.to_ir(self.builder))
             else:
                 self.prototype.ret_types = [self.ret_type]
@@ -489,32 +488,35 @@ class CodeGenerator(ast.NodeVisitor):
         # default: call visit_Assign
         return self.visit_Assign(node)
 
+    def assignTarget(self, target, value):
+        if isinstance(target, ast.Subscript):
+            assert target.ctx.__class__.__name__ == "Store"
+            return self.visit_Subscript_Store(target, value)
+        assert isinstance(target, ast.Name)
+        self.set_value(self.visit(target), value)
+
     def visit_Assign(self, node):
-        _names = []
-        if isinstance(node, ast.AnnAssign):
-            _names += [self.visit(node.target)]
-        else:
-            print(0)
-            for target in node.targets:
-                _names += [self.visit(target)]
-            print(1)
-        if len(_names) > 1:
-            raise self._unsupported(node, "simultaneous multiple assignment is not supported.")
-        names = _names[0]
-        values = self.visit(node.value)
-        if not _is_list_like(names):
-            names = [names]
-        if not _is_list_like(values):
-            values = [values]
-        native_nontensor_types = (language.dtype, )
-        for name, value in zip(names, values):
-            # by default, constexpr are assigned into python variable
+        # construct values to assign
+        def _sanitize_value(value):
+            native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
             if value is not None and \
-               not _is_triton_tensor(value) and \
-               not isinstance(value, native_nontensor_types):
+                not _is_triton_tensor(value) and \
+                not isinstance(value, native_nontensor_types):
                 value = language.core._to_tensor(value, self.builder)
-            self.set_value(name, value)
+            return value
+
+        values = _sanitize_value(self.visit(node.value))
+        # construct targets
+        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
+        assert len(targets) == 1, "simultaneous multiple assignment is not supported."
+        target = targets[0]
+        # assign values to targets
+        self.assignTarget(target, values)
+
+        # names = [self.visit(target)]
+        # for name, value in zip(names, values):
+        #     self.set_value(name, value)
 
     def visit_AugAssign(self, node):
         name = node.target.id
@@ -889,13 +891,23 @@ class CodeGenerator(ast.NodeVisitor):
             assert False, "Not implemented"
             ast.NodeVisitor.generic_visit(self, stmt)
 
-    def visit_Subscript(self, node):
+    def visit_Subscript_Load(self, node):
         assert node.ctx.__class__.__name__ == "Load"
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         if _is_triton_tensor(lhs):
             return lhs.__getitem__(slices, _builder=self.builder)
         return lhs[slices]
+
+    def visit_Subscript_Store(self, node, value):
+        assert node.ctx.__class__.__name__ == "Store"
+        lhs = self.visit(node.value)
+        slices = self.visit(node.slice)
+        assert isinstance(lhs, language.tuple)
+        lhs.__setitem__(slices, value)
+
+    def visit_Subscript(self, node):
+        return self.visit_Subscript_Load(node)
 
     def visit_ExtSlice(self, node):
         return [self.visit(dim) for dim in node.dims]
@@ -1101,8 +1113,8 @@ class CodeGenerator(ast.NodeVisitor):
             # should return a tuple of tl.tensor
             results = []
             for i in range(call_op.get_num_results()):
-                results.append(tensor(call_op.get_result(i), callee_ret_type[i]))
-            return tuple(results)
+                results.append(tensor(call_op.get_result(i), callee_ret_type.types[i]))
+            return language.tuple(results)
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))

@@ -23,15 +23,15 @@ def test_index(size, device="cuda"):
     @triton.jit
     def kernel(_0, Ptrs, _1: tl.constexpr, values, _2, _3: tl.constexpr, _4):
         values = _tuple_increment(values)
-        # _tuple_index_func(Ptrs, values)
+        _tuple_index_func(Ptrs, values)
 
     vals = tuple([i + 1 for i in range(size)])
     rets = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in vals])
     kernel[(1, )](0, rets, 0, vals, 0, 0, 0)
-    assert vals == tuple([x.item() + 1 for x in rets])
+    assert vals == tuple([x.item() - 1 for x in rets])
 
 
 # function call (tuple argument)
 # function call (tuple return value)
 # tuple of tuples
-# assignment
+# assignment (into a tuple, from a tuple)

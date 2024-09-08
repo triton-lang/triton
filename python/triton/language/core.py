@@ -1194,6 +1194,10 @@ class tuple:
         assert isinstance(idx, constexpr)
         return self.values[idx]
 
+    def __setitem__(self, idx: constexpr, value):
+        assert isinstance(idx, constexpr)
+        self.values[idx] = value
+
     def __len__(self):
         return len(self.values)
 
