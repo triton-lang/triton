@@ -144,7 +144,7 @@ private:
       false, false, true, true, false, false};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
       "start_time (ns)", "end_time (ns)", "count",
-      "time (ns)",      "device_id",     "device_type",
+      "time (ns)",       "device_id",     "device_type",
   };
 };
 
