@@ -31,7 +31,31 @@ def test_index(size, device="cuda"):
     assert vals == tuple([x.item() - 1 for x in rets])
 
 
+def test_assign(device="cuda"):
+
+    @triton.jit
+    def kernel(XPtrs, YPtrs, values):
+        X0, X1 = XPtrs
+        x0, x1 = values
+        tl.store(X0, x0)
+        tl.store(X1, x1)
+        Y0, Y1 = YPtrs
+        Y = Y0, Y1
+        y = x0, x1
+        tl.store(Y[0], y[0])
+        tl.store(Y[1], y[1])
+
+    vals = (2., 3.)
+    x = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in vals])
+    y = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in vals])
+    kernel[(1, )](x, y, vals)
+    assert x[0] == vals[0]
+    assert x[1] == vals[1]
+    assert y[0] == vals[0]
+    assert y[1] == vals[1]
+
+
 # function call (tuple argument)
 # function call (tuple return value)
-# tuple of tuples
+# __getitem__ and __setitem__
 # assignment (into a tuple, from a tuple)

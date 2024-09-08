@@ -492,6 +492,11 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(target, ast.Subscript):
             assert target.ctx.__class__.__name__ == "Store"
             return self.visit_Subscript_Store(target, value)
+        if isinstance(target, ast.Tuple):
+            assert target.ctx.__class__.__name__ == "Store"
+            for i, name in enumerate(target.elts):
+                self.set_value(self.visit(name), value.values[i])
+            return
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
@@ -507,16 +512,8 @@ class CodeGenerator(ast.NodeVisitor):
             return value
 
         values = _sanitize_value(self.visit(node.value))
-        # construct targets
-        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-        assert len(targets) == 1, "simultaneous multiple assignment is not supported."
-        target = targets[0]
-        # assign values to targets
-        self.assignTarget(target, values)
-
-        # names = [self.visit(target)]
-        # for name, value in zip(names, values):
-        #     self.set_value(name, value)
+        assert len(node.targets) == 1
+        self.assignTarget(node.targets[0], values)
 
     def visit_AugAssign(self, node):
         name = node.target.id
@@ -539,7 +536,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Tuple(self, node):
         args = [self.visit(x) for x in node.elts]
-        return tuple(args)
+        return language.tuple(args)
 
     def _apply_binary_method(self, method_name, lhs, rhs):
         # TODO: raise something meaningful if getattr fails below, esp for reverse method
@@ -1105,7 +1102,7 @@ class CodeGenerator(ast.NodeVisitor):
         symbol = self.module.get_function(fn_name)
         arg_vals = language.tuple([x for x in args if x is not None]).serialize()
         call_op = self.builder.call(symbol, arg_vals)
-        if call_op.get_num_results() == 0 or callee_ret_type is None:
+        if callee_ret_type is None:
             return None
         elif call_op.get_num_results() == 1:
             return tensor(call_op.get_result(0), callee_ret_type)
