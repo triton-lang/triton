@@ -11,8 +11,8 @@ def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp">
 
     - `addptr(addptr(ptr, idx0), idx1) => addptr(ptr, AddI(idx0, idx1))`
 
-    - `select(cond, load(ptrs, broadcast(cond), ???), other) =>
-         load(ptrs, broadcast(cond), other)`
+    - `select(cond, load(ptrs, mask, ???), other) =>
+         load(ptrs, mask, other) if mask is a dense value related to cond`
 
     - `broadcast(constant) => reshaped_constant`
     - `torch.sum(x[:,:,None].expand(-1,-1,n) * y[None,:,:].expand(m,-1,-1),1)
@@ -21,7 +21,8 @@ def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp">
 
   let constructor = "mlir::triton::createCombineOpsPass()";
 
-  let dependentDialects = ["mlir::arith::ArithDialect"];
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::tensor::TensorDialect"];
 }
 
 def TritonReorderBroadcast : Pass</*cli-arg*/"triton-reorder-broadcast", /*Op*/"mlir::ModuleOp"> {

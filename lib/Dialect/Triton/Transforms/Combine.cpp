@@ -1,5 +1,6 @@
 #include <memory>
 
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -95,8 +96,14 @@ using FastMathFlags = arith::FastMathFlags;
 
 #include "TritonCombine.inc"
 
-// select(cond, load(ptrs, splat(cond), ???), other)
-//   => load(ptrs, splat(cond), other)
+/// select(cond, load(ptrs, mask, ???), other)
+///   => load(ptrs, mask, other)
+/// mask: a dense value related to cond
+/// - mask = cond
+/// - mask = splat(cond)
+/// - cond = extract(mask) &&  mask = denseVal
+/// - cond = extract(mask) &&  mask = splat(boolVal)
+/// - cond = extract(mask) &&  mask = broadcast(denseVal)
 class CombineSelectMaskedLoadPattern : public RewritePattern {
 public:
   CombineSelectMaskedLoadPattern(MLIRContext *context)
@@ -121,13 +128,80 @@ public:
     if (!mask)
       return failure();
 
-    auto splatOp = mask.getDefiningOp<SplatOp>();
-    if (!splatOp)
-      return failure();
+    bool findTargetPattern = false;
+    if (mask == condSelect) {
+      // Case 1: The mask of the load and the cond of the select are the same
+      // value.
+      // ```mlir
+      //   %mask : i1
+      //   %true_val = tt.load %ptr, %mask, %other : !tt.ptr<f32>
+      //   %res = arith.select %mask, %true_val, %false_val : f32
+      // ```
+      findTargetPattern = true;
+    } else if (auto splatOp = mask.getDefiningOp<SplatOp>()) {
+      // Case 2: The mask of the load is splatted from the cond of the select.
+      // ```mlir
+      //   %mask = tt.splat %cond : i1 -> tensor<8xi1>
+      //   %true_val = tt.load %ptr, %mask : tensor<8x!tt.ptr<f32>>
+      //   %res = arith.select %cond, %true_val, %false_val : tensor<8xf32>
+      // ```
+      if (splatOp.getSrc() == condSelect) {
+        findTargetPattern = true;
+      }
+    }
 
-    auto splatCond = splatOp.getSrc();
-    if (splatCond != condSelect)
+    // Case 3: The condition of the select is a value extracted from a dense
+    // tensor (the mask value).
+    // ```mlir
+    //   %mask : dense tensor(splatted from same value)
+    //   %true_val = tt.load %ptr, %mask
+    //   %cond = tensor.extract %mask[...]
+    //   %res = arith.select %cond, %true_val, %false_val
+    // ```
+    if (auto extractOp = condSelect.getDefiningOp<tensor::ExtractOp>()) {
+      auto tensor = extractOp.getTensor();
+      if (tensor == mask) {
+        if (llvm::all_of(
+                llvm::cast<RankedTensorType>(tensor.getType()).getShape(),
+                [](int64_t size) { return size == int64_t(1); })) {
+          // The mask shape is a 0-rank tensor or a tensor with all unit
+          // dimensions.
+          // ```mlir
+          //   %mask : tensor<1x1xi1>
+          //   %cond = tensor.extract %mask[%c0, %c0] : tensor<1x1xi1>
+          // ```
+          findTargetPattern = true;
+        } else {
+          auto defineOp = tensor.getDefiningOp();
+          if (llvm::isa_and_present<triton::SplatOp>(defineOp)) {
+            // The mask value is splatted from a bool value.
+            // ```mlir
+            //   %mask = tt.splat %bool : i1 -> tensor<8x8xi1>
+            //   %cond = tensor.extract %mask[%c0, %c0] : tensor<8x8xi1>
+            // ```
+            findTargetPattern = true;
+          } else if (auto broadcastOp =
+                         llvm::dyn_cast_if_present<triton::BroadcastOp>(
+                             defineOp)) {
+            // The mask value is broadcasted from an all unit-dimension tensor.
+            // ```mlir
+            //   %mask = tt.broadcast %bool : tensor<1x1xi1> -> tensor<8x8xi1>
+            //   %cond = tensor.extract %mask[%c0, %c0] : tensor<8x8xi1>
+            // ```
+            if (llvm::all_of(
+                    llvm::cast<RankedTensorType>(broadcastOp.getSrc().getType())
+                        .getShape(),
+                    [](int64_t size) { return size == int64_t(1); })) {
+              findTargetPattern = true;
+            }
+          }
+        }
+      }
+    }
+
+    if (!findTargetPattern) {
       return failure();
+    }
 
     rewriter.replaceOpWithNewOp<LoadOp>(
         op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
