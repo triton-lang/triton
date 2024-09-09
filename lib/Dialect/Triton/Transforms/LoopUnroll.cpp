@@ -29,12 +29,11 @@ namespace {
 class LoopUnrollPass : public TritonLoopUnrollBase<LoopUnrollPass> {
 
   int getUnrollFactorOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists otherwise use the
-    // global control.
-    if (forOp->hasAttr(mlir::triton::loopUnrollFactorAttrName))
-      return mlir::cast<IntegerAttr>(
-                 forOp->getAttr(mlir::triton::loopUnrollFactorAttrName))
-          .getInt();
+    // Use the attribute attached to the loop if it exists otherwise set the
+    // factor to 1 to suppress the unrolling.
+    if (auto factor = forOp->getAttrOfType<IntegerAttr>(
+            mlir::triton::loopUnrollFactorAttrName))
+      return factor.getInt();
     return 1;
   }
 
