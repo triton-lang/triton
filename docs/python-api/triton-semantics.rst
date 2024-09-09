@@ -1,5 +1,6 @@
 Triton Semantics
 ================
+
 Triton mostly follows the semantics of NumPy with minor exceptions. In this document, we go over some of the array computing features supported in Triton, and we cover the exceptions where Triton's semantics deviate from that NumPy.
 
 Type Promotion
