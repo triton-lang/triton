@@ -185,6 +185,7 @@ class constexpr:
             self.value = value.value
         else:
             self.value = value
+        self.type = constexpr
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
@@ -713,6 +714,12 @@ class tuple_type(dtype):
         return True
 
 
+class slice_type(dtype):
+
+    def __init__(self):
+        self.name = 'slice_type'
+
+
 # scalar types
 void = dtype('void')
 int1 = dtype('int1')
@@ -1021,6 +1028,8 @@ class tensor:
     def __getitem__(self, slices, _builder=None):
         if isinstance(slices, (slice, constexpr)) or slices is None:
             slices = [slices]
+        if isinstance(slices, tuple):
+            slices = slices.values
         ret = self
         for dim, sl in enumerate(slices):
             if sl is None or isinstance(sl, constexpr) and sl.value is None:
@@ -1200,6 +1209,15 @@ class tuple:
 
     def __len__(self):
         return len(self.values)
+
+
+class slice:
+
+    def __init__(self, start, stop, step):
+        self.start = start
+        self.stop = stop
+        self.step = step
+        self.type = slice_type()
 
 
 def get_bool_env_var(var_name):
