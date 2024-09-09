@@ -79,7 +79,7 @@ def WGMMA_EltTypeAttr : I32EnumAttr<"WGMMAEltType",
 def WGMMA_OperandType : AnyTypeOf<[LLVM_AnyStruct, I64], "wgmma operand A/B type">;
 
 def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
-  let arguments = (ins WGMMA_OperandType:$opA, WGMMA_OperandType:$opB, I1:$useC, Optional<WGMMA_OperandType>:$opC,
+  let arguments = (ins WGMMA_OperandType:$opA, WGMMA_OperandType:$opB, I1:$useC, Optional<LLVM_AnyStruct>:$opC,
                    I32Attr:$m, I32Attr:$n, I32Attr:$k,
                    WGMMA_EltTypeAttr:$eltTypeC, WGMMA_EltTypeAttr:$eltTypeA, WGMMA_EltTypeAttr:$eltTypeB,
                    WGMMA_LayoutAttr:$layoutA, WGMMA_LayoutAttr:$layoutB);
