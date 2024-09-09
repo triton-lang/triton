@@ -742,6 +742,7 @@ tt.func @tma_special_cases(%arg1: !tt.ptr<i8, 0>) -> (tensor<256x64xf16, #blocke
 
   // CHECK-NEXT: triton_nvidia_gpu.async_tma_copy_global_to_local
   // CHECK-NEXT: triton_nvidia_gpu.barrier_expect
+  // CHECK-NEXT: gpu.barrier
   // CHECK-NEXT: triton_nvidia_gpu.wait_barrier
   triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : <i8, 0>, <1xi64, #shared1, #triton_gpu.shared_memory, mutable> -> <256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
   triton_nvidia_gpu.barrier_expect %barrier, 49152, %true : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>

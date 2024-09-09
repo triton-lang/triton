@@ -98,7 +98,7 @@ struct ConvertTritonGPUToLLVM
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
+    ModuleMembarAnalysis membarPass(&allocation, NVIDIA::canSkipBarSync);
     membarPass.run();
 
     // Lower functions
@@ -241,6 +241,12 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
   if (isa<triton::nvidia_gpu::InvalBarrierOp>(before) &&
       isa<triton::nvidia_gpu::InvalBarrierOp>(after))
     return true;
+
+  //  We can't have a warp get ahead when we have a chain of mbarrier wait so we
+  //  need a barrier in between two WaitBarrierOp.
+  if (isa<triton::nvidia_gpu::WaitBarrierOp>(before) &&
+      isa<triton::nvidia_gpu::WaitBarrierOp>(after))
+    return false;
 
   // Even though WaitBarrierOp, AsyncTMACopyGlobalToLocalOp and
   // AsyncTMACopyGlobalToLocalOp read and write to the mbarrier allocation it is
