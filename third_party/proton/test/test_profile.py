@@ -216,11 +216,10 @@ def test_pcsampling():
         proton.start(f.name.split(".")[0], hook="triton", backend="cupti_pcsampling")
         with proton.scope("test0"):
             foo[(1, )](x, y, x.size()[0], num_warps=4)
-        x.zero_()
         proton.finalize()
         data = json.load(f)
         assert "foo" in data[0]["children"][0]["children"][0]["frame"]["name"]
-        assert data[0]["children"][0]["children"][0]["metrics"]["NumSamples"] > 0
+        assert data[0]["children"][0]["children"][0]["metrics"]["num_samples"] > 0
 
 
 def test_deactivate():

@@ -372,7 +372,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   cupti::subscribe<true>(&subscriber, callbackFn, nullptr);
   if (profiler.isPCSamplingEnabled()) {
     setResourceCallbacks(subscriber, /*enable=*/true);
-    // PC sampling is not compatible with concurrent kernel profiling
+    // Continuous PC sampling is not compatible with concurrent kernel profiling
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);

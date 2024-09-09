@@ -22,7 +22,7 @@ class scope:
             foo[1,](x, y)
         ```
 
-        decoarator:
+        decorator:
         ```python
         @proton.scope("test0", {metric_name: metric_value})
         def foo(x, y):
