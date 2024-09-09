@@ -230,6 +230,10 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
 }
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
+  // Multiple init barriers on the same allocation would usually not happen but
+  // that allows us to avoid barriers between multiple subslice of an array of
+  // mbarriers. This is still correct even if the inits happen on the same
+  // allocation.
   if (isa<triton::nvidia_gpu::InitBarrierOp>(before) &&
       isa<triton::nvidia_gpu::InitBarrierOp>(after))
     return true;
@@ -238,8 +242,10 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
       isa<triton::nvidia_gpu::InvalBarrierOp>(after))
     return true;
 
-  // TMA wait, TMA copy and barrier expect all access the barrier but can do it
-  // in any order, therefore we don't need a barrier between those operations.
+  // Even though WaitBarrierOp, AsyncTMACopyGlobalToLocalOp and
+  // AsyncTMACopyGlobalToLocalOp read and write to the mbarrier allocation it is
+  // valid for them to happen in different order on different threads, therefore
+  // we don't need a barrier between those operations.
   if (isa<triton::nvidia_gpu::WaitBarrierOp,
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
           triton::nvidia_gpu::BarrierExpectOp>(before) &&

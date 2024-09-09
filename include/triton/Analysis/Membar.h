@@ -13,7 +13,7 @@ class OpBuilder;
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
 /// shared memory thay may not require a barrier in between them.
-using MemBarFilterFn = std::function<bool(Operation *, Operation *)>;
+using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
 struct BlockInfo {
   using IntervalMapT = std::map<Interval<size_t>, std::set<Operation *>>;
@@ -35,7 +35,7 @@ struct BlockInfo {
   }
 
   /// Returns true if intervals in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other, MemBarFilterFn filter) const {
+  bool isIntersected(const BlockInfo &other, MembarFilterFn filter) const {
     return /*RAW*/ isIntersected(syncWriteIntervals, other.syncReadIntervals,
                                  filter) ||
            /*WAR*/
@@ -61,7 +61,7 @@ struct BlockInfo {
 private:
   bool isIntersected(const IntervalMapT &lhsIntervalSet,
                      const IntervalMapT &rhsIntervalSet,
-                     MemBarFilterFn filter) const {
+                     MembarFilterFn filter) const {
     for (auto &lhs : lhsIntervalSet)
       for (auto &rhs : rhsIntervalSet)
         if (lhs.first.intersects(rhs.first))
@@ -94,7 +94,7 @@ public:
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
   MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation, MemBarFilterFn filter)
+  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
       : allocation(allocation), filter(filter) {}
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
@@ -130,7 +130,7 @@ private:
 
 private:
   Allocation *allocation = nullptr;
-  MemBarFilterFn filter = nullptr;
+  MembarFilterFn filter = nullptr;
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
@@ -141,7 +141,7 @@ private:
 class ModuleMembarAnalysis : public CallGraph<BlockInfo> {
 public:
   ModuleMembarAnalysis(ModuleAllocation *moduleAllocation,
-                       MemBarFilterFn filter = nullptr)
+                       MembarFilterFn filter = nullptr)
       : CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
         moduleAllocation(moduleAllocation), filter(filter) {}
 
@@ -162,7 +162,7 @@ public:
 
 private:
   ModuleAllocation *moduleAllocation;
-  MemBarFilterFn filter;
+  MembarFilterFn filter;
 };
 
 } // namespace mlir
