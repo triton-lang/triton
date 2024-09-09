@@ -53,7 +53,8 @@ def TritonRewriteTensorPointer : Pass</*cli-arg*/"triton-rewrite-tensor-pointer"
 def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::ModuleOp"> {
   let summary = "Loop unroller";
   let description = [{
-    unroll scf loops
+    The pass unrolls a scf loop with tt.loop_unroll_factor attribute. The attribute specialises how many iterations
+    the loop should be unrolled.
   }];
   let constructor = "mlir::triton::createLoopUnrollPass()";
   let dependentDialects = ["mlir::triton::TritonDialect"];

@@ -22,7 +22,7 @@
 
 namespace mlir::triton {
 
-static const char *loopUnrollFactorAttrName = "tt.unrolled_iteration";
+static const char *loopUnrollFactorAttrName = "tt.loop_unroll_factor";
 
 namespace {
 
@@ -31,11 +31,11 @@ class LoopUnrollPass : public TritonLoopUnrollBase<LoopUnrollPass> {
   int getUnrollFactorOrDefault(scf::ForOp forOp) {
     // Use the attribute attached to the loop if it exists otherwise use the
     // global control.
-    if (!forOp->hasAttr(mlir::triton::loopUnrollFactorAttrName))
-      return 1;
-    return mlir::cast<IntegerAttr>(
-               forOp->getAttr(mlir::triton::loopUnrollFactorAttrName))
-        .getInt();
+    if (forOp->hasAttr(mlir::triton::loopUnrollFactorAttrName))
+      return mlir::cast<IntegerAttr>(
+                 forOp->getAttr(mlir::triton::loopUnrollFactorAttrName))
+          .getInt();
+    return 1;
   }
 
 public:
