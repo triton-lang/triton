@@ -229,9 +229,13 @@ static std::unique_ptr<uint32_t[][3]> get_all_grids(uint32_t gridX, uint32_t gri
 
 static void run_omp_kernels(uint32_t gridX, uint32_t gridY, uint32_t gridZ, kernel_ptr_t kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   // TODO: Consider using omp collapse(3) clause for simplicity?
-  auto all_grids = get_all_grids(gridX, gridY, gridZ);
   size_t N = gridX * gridY * gridZ;
+  if (N == 1) {{
+      (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} 0, 0, 0, 1, 1, 1);
+      return;
+  }}
 
+  auto all_grids = get_all_grids(gridX, gridY, gridZ);
   if (getBoolEnv("TRITON_CPU_SINGLE_CORE")) {{
     if (getBoolEnv("TRITON_CPU_OMP_DEBUG"))
       printf("Single core launcher\\n");

@@ -25,6 +25,7 @@ import triton.language as tl
 
 GPU_BLOCK_SIZE = 1024
 CPU_BLOCK_SIZE = 4096
+CPU_ST_THRESHOLD = 65536
 USE_GPU = False
 
 
@@ -56,6 +57,26 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
+@triton.jit
+def add_kernel_tiled(x_ptr,  # *Pointer* to first input vector.
+                     y_ptr,  # *Pointer* to second input vector.
+                     output_ptr,  # *Pointer* to output vector.
+                     n_elements,  # Size of the vector.
+                     BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
+                     TILE_SIZE: tl.constexpr,  # Number of elements each iteration should process.
+                     # NOTE `constexpr` so it can be used as a shape value.
+                     ):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    for i in range(0, tl.cdiv(BLOCK_SIZE, TILE_SIZE)):
+        offsets = block_start + i * TILE_SIZE + tl.arange(0, TILE_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+
 # %%
 # Let's also declare a helper function to (1) allocate the `z` tensor
 # and (2) enqueue the above kernel with appropriate grid/block sizes:
@@ -80,6 +101,28 @@ def add(x: torch.Tensor, y: torch.Tensor, output: torch.Tensor, device):
     return output
 
 
+def add_tiled(x: torch.Tensor, y: torch.Tensor, output):
+    if output is None:
+        output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel_tiled[grid](x, y, output, n_elements, BLOCK_SIZE=CPU_BLOCK_SIZE, TILE_SIZE=16)
+    return output
+
+
+def add_tiled_with_st_threshold(x: torch.Tensor, y: torch.Tensor, output):
+    if output is None:
+        output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    # TODO: try to choose the best block size using autotuner
+    BLOCK_SIZE = triton.next_power_of_2(n_elements)
+    if BLOCK_SIZE > CPU_ST_THRESHOLD:
+        BLOCK_SIZE = CPU_BLOCK_SIZE
+    add_kernel_tiled[grid](x, y, output, n_elements, BLOCK_SIZE=BLOCK_SIZE, TILE_SIZE=16)
+    return output
+
+
 # %%
 # We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
 torch.manual_seed(0)
@@ -94,10 +137,19 @@ print(output_torch_cpu)
 print(output_triton_cpu)
 print(f'The maximum difference between torch-cpu and triton-cpu is '
       f'{torch.max(torch.abs(output_torch_cpu - output_triton_cpu))}')
+output_triton_cpu = add_tiled(x, y, None)
+print(f'The maximum difference between torch-cpu-tiled and triton-cpu is '
+      f'{torch.max(torch.abs(output_torch_cpu - output_triton_cpu))}')
 
-LINE_VALS = ['triton-cpu-single', 'triton-cpu', 'torch-cpu']
-LINE_NAMES = ['TritonCPU 1', 'TritonCPU', 'TorchCPU']
-LINE_STYLES = [('blue', '--'), ('blue', '-'), ('green', '-')]
+LINE_VALS = [
+    'triton-cpu', 'triton-cpu-hooks', 'triton-cpu-tiled', 'triton-cpu-tiled-hooks', 'triton-cpu-tiled-tuned-hooks',
+    'torch-cpu'
+]
+LINE_NAMES = [
+    'TritonCPU', 'TritonCPU (hooks)', 'TritonCPUTiled', 'TritonCPUTiled (hooks)', 'TritonCPUTiled (tuned, hooks)',
+    'TorchCPU'
+]
+LINE_STYLES = [('blue', '--'), ('blue', '-'), ('blue', '-'), ('blue', '-'), ('blue', '-'), ('green', '-')]
 
 if USE_GPU and triton.runtime.driver.get_active_gpus():
     triton.runtime.driver.set_active_to_gpu()
@@ -156,6 +208,7 @@ def benchmark(size, provider):
             os.unsetenv('TRITON_CPU_SINGLE_CORE')
     else:
         triton.runtime.driver.set_active_to_gpu()
+    output = torch.empty_like(x)
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-gpu':
@@ -166,17 +219,24 @@ def benchmark(size, provider):
     elif provider == 'torch-cpu':
         # Note that we preallocate the output buffer here to only measure the kernel performance
         # without a large chunk of memory allocation.
-        output = torch.empty_like(x)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.add(x, y, out=output), quantiles=quantiles,
                                                      device_type=device)
-    elif provider == 'triton-cpu-single':
-        output = torch.empty_like(x)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, True), quantiles=quantiles,
-                                                     device_type=device)
     elif provider == 'triton-cpu':
-        output = torch.empty_like(x)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, True), quantiles=quantiles,
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, device), quantiles=quantiles,
                                                      device_type=device)
+    elif provider == 'triton-cpu-hooks':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, device), quantiles=quantiles,
+                                                     device_type=device, measure_time_with_hooks=True)
+    elif provider == 'triton-cpu-tiled':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled(x, y, output), quantiles=quantiles,
+                                                     device_type=device)
+    elif provider == 'triton-cpu-tiled-hooks':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled(x, y, output), quantiles=quantiles,
+                                                     device_type=device, measure_time_with_hooks=True)
+    elif provider == 'triton-cpu-tiled-tuned-hooks':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled_with_st_threshold(x, y, output),
+                                                     quantiles=quantiles, device_type=device,
+                                                     measure_time_with_hooks=True)
     gbps = lambda ms: 3 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
