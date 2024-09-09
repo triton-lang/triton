@@ -348,7 +348,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
          pcSamplingData->remainingNumPcs > 0 || firstRound) {
     // Handle data
     for (size_t i = 0; i < pcSamplingData->totalNumPcs; ++i) {
-      auto *pcData = pcSamplingData->pPcData;
+      auto *pcData = pcSamplingData->pPcData + i;
       auto *cubinData = getCubinData(pcData->cubinCrc);
       auto key =
           CubinData::LineInfoKey{pcData->functionIndex, pcData->pcOffset};
