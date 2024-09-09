@@ -73,6 +73,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     expectOp.getPredMutable().assign(mask);
     return op;
   }
+  if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
+    rewriter.setInsertionPoint(storeOp);
+    Value mask = getPredMask(rewriter, storeOp.getPtr().getType(),
+                             storeOp.getMask(), pred);
+    storeOp.getMaskMutable().assign(mask);
+    return op;
+  }
 
   assert("don't know how to predicate this op" && false);
   return op;

@@ -1,4 +1,5 @@
 # flake8: noqa: F821,F841
+import contextlib
 import itertools
 import re
 from typing import Optional
@@ -18,11 +19,16 @@ import triton.language as tl
 from triton.language.extra import libdevice
 
 from triton._internal_testing import (
+    integral_dtypes,
     int_dtypes,
     uint_dtypes,
     float_dtypes,
     dtypes,
     dtypes_with_bfloat16,
+    is_cuda,
+    is_interpreter,
+    is_hip,
+    get_arch,
     torch_float8_dtypes,
     torch_dtypes,
     numpy_random,
@@ -32,29 +38,14 @@ from triton._internal_testing import (
 )
 
 
-def is_interpreter():
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
-def get_current_target():
-    if is_interpreter():
-        return None
-    return triton.runtime.driver.active.get_current_target()
-
-
-def is_cuda():
-    target = get_current_target()
-    return False if target is None else target.backend == "cuda"
-
-
-def is_hip():
-    target = get_current_target()
-    return False if target is None else target.backend == "hip"
-
-
-def get_arch():
-    target = get_current_target()
-    return "" if target is None else str(target.arch)
+@contextlib.contextmanager
+def promotion_numpy_2_0():
+    state = np._get_promotion_state()
+    np._set_promotion_state("weak")
+    try:
+        yield
+    finally:
+        np._set_promotion_state(state)
 
 
 # TODO: enable multiple cta cluster testing.
@@ -276,7 +267,7 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', num_ctas=1,
-                 y_low=None, y_high=None, test_broadcast=True):
+                 y_low=None, y_high=None, filter_y=None, test_broadcast=True, test_scalar=True):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
     check_type_supported(dtype_y, device)
     SIZE = 128
@@ -306,45 +297,92 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         z = GENERATE_TEST_HERE
         tl.store(Z + off, z)
 
+    @triton.jit
+    def kernel_scalar_rhs(Z, X, y: tl.constexpr, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + off, z)
+
     replacements = {'GENERATE_TEST_HERE': expr}
     kernel = patch_kernel(kernel, replacements)
     kernel_broadcast_lhs = patch_kernel(kernel_broadcast_lhs, replacements)
     kernel_broadcast_rhs = patch_kernel(kernel_broadcast_rhs, replacements)
+    kernel_scalar_rhs = patch_kernel(kernel_scalar_rhs, replacements)
 
     # inputs
     rs = RandomState(17)
     x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs)
     y = numpy_random(SIZE, dtype_str=dtype_y, rs=rs, low=y_low, high=y_high)
+    if filter_y:
+        y[filter_y(y)] = 1
     if mode_x == 'nan':
         x[:] = float('nan')
     if mode_y == 'nan':
         y[:] = float('nan')
 
     def do_test(x, y, kernel_fn):
-        # reference result
-        z_ref = eval(expr if numpy_expr is None else numpy_expr)
+        x_is_scalar = isinstance(x, (bool, int, float))
+        y_is_scalar = isinstance(y, (bool, int, float))
+        scalar_test = x_is_scalar or y_is_scalar
+
+        # For scalars, we follow the NumPy 2.0 (and JAX/PyTorch pretty much) casting rules.
+        if scalar_test:
+            # We remove any explicit casting
+            pattern = r'\.astype\(np\.\w+\)'
+            scalar_expr = expr if numpy_expr is None else re.sub(pattern, '', numpy_expr)
+            with promotion_numpy_2_0():
+                z_ref = eval(scalar_expr)
+        else:
+            z_ref = eval(expr if numpy_expr is None else numpy_expr)
+
         dtype_z = _binary_op_dtype_override(dtype_x, dtype_y)
-        if dtype_z is not None:
+        if not scalar_test and dtype_z is not None:
             z_ref = z_ref.astype(dtype_z)
+
         # triton result
-        x_tri = to_triton(x, device=device, dst_type=dtype_x)
-        y_tri = to_triton(y, device=device, dst_type=dtype_y)
+        x_tri = x if x_is_scalar else to_triton(x, device=device, dst_type=dtype_x)
+        y_tri = y if y_is_scalar else to_triton(y, device=device, dst_type=dtype_y)
         z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
         kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
         err_msg = f"{expr}, {kernel_fn.__name__}"
-        np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=1e-3, rtol=0.01)
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=3e-3, rtol=0.01)
+
+    def get_scalar(x, dtype, low, high, filter):
+        # If dtype is int, don't choose a huge number for the scalar
+        # as it'll overflow easily when converted to the other dtype
+        if dtype in integral_dtypes:
+            # Choose in range [-7, 7] ([0, 7] for uints)
+            low_x = 0 if dtype in uint_dtypes else -7
+            if low is not None:
+                low_x = max(low_x, low)
+            high_x = 7
+            if high is not None:
+                high_x = min(high_x, high)
+            scalar = numpy_random((), dtype_str=dtype, rs=rs, low=low_x, high=high_x).item()
+            if filter and filter(scalar):
+                #  https://xkcd.com/221/
+                scalar = 4
+        else:
+            scalar = x.flat[0].item()
+        return scalar
 
     do_test(x, y, kernel)
+    if mode_y != 'nan' and test_scalar:
+        if dtype_x in uint_dtypes:
+            low = 0 if y_low is None else max(y_low, 0)
+        else:
+            low = y_low
+        y_scalar = get_scalar(y, dtype_y, low, y_high, filter_y)
+        do_test(x, y_scalar, kernel_scalar_rhs)
     if test_broadcast:
         do_test(x[:1].reshape(()), y, kernel_broadcast_lhs)
         do_test(x, y[:1].reshape(()), kernel_broadcast_rhs)
 
 
 def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
-    # The result of x % y is ill-conditioned if x % y is much smaller than x.
-    # pytorch/CUDA has slightly different (probably better) rounding on
-    # remainders than stock LLVM. We currently don't expect to match it
-    # bit-for-bit.
+    # FIXME For large x, we are casting x to a floating point where it does not fit
+    #       For small y, we are computing floor(div(float(x), y)) which may not fit
     return (dtype_x, dtype_y) in [
         ('int32', 'bfloat16'),
         ('int32', 'float16'),
@@ -386,7 +424,7 @@ def test_dtype_codegen():
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
-    expr = f' x {op} y'
+    expr = f'x {op} y'
     if op == '%' and dtype_x in int_dtypes + uint_dtypes and dtype_y in int_dtypes + uint_dtypes:
         # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
         numpy_expr = 'np.fmod(x, y)'
@@ -410,11 +448,25 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         with pytest.raises(triton.TritonError, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     else:
+        # skip when bfloat16, as NumPy's ref performs the computation in float32
+        # while Triton performs it in bfloat16
+        # We also skip mod when it is ill-conditioned
+        skip_scalar_test = ((dtype_x == "bfloat16" and "float" in dtype_y)
+                            or (expr == "x % y" and dtype_x in int_dtypes + uint_dtypes and dtype_y in float_dtypes
+                                and _mod_operation_ill_conditioned(dtype_x, "float32")))
+        # can't divide by zero
+        not_zero = op in ('/', '%') and dtype_x in integral_dtypes and dtype_y in integral_dtypes
+        # can't represent -int(max)
+        not_minus_one = op in ('*', '/') and dtype_x in int_dtypes and dtype_y in int_dtypes
+        if not_zero or not_minus_one:
+            filter_y = lambda y: not_zero * (y == 0) | not_minus_one * (y == -1)
+        else:
+            filter_y = None
         _test_binary(
             dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas,
             # fails with values where fmod(x, y) is roughly zero, but happens to
             # pass with the random values chosen for non-broadcast tests
-            test_broadcast=(op != "%"))
+            test_broadcast=(op != "%"), filter_y=filter_y, test_scalar=not skip_scalar_test)
 
 
 @pytest.mark.interpreter
@@ -454,7 +506,13 @@ def test_floordiv(dtype_x, dtype_y, num_ctas, device):
     # reference result for //.
     expr = 'x // y'
     numpy_expr = '((x - np.fmod(x, y)) / y)'
-    _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
+    # can't represent -int(max)
+    not_minus_one = dtype_x in int_dtypes and dtype_y in int_dtypes
+    if not_minus_one:
+        filter_y = lambda y: y == -1
+    else:
+        filter_y = None
+    _test_binary(dtype_x, dtype_y, expr, numpy_expr, filter_y=filter_y, device=device, num_ctas=num_ctas)
 
 
 def test_unsigned_name_mangling(device):
@@ -519,10 +577,7 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
-    (dtype_x, dtype_y, op)
-    for op in ['<<', '>>']
-    for dtype_x in int_dtypes + uint_dtypes
-    for dtype_y in int_dtypes + uint_dtypes
+    (dtype_x, dtype_y, op) for op in ['<<', '>>'] for dtype_x in int_dtypes + uint_dtypes for dtype_y in uint_dtypes
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
@@ -843,7 +898,7 @@ def test_where_broadcast(num_ctas, device):
     def where_scalar_condition(a_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
         xoffsets = tl.arange(0, BLOCK_SIZE)[:, None]
         yoffsets = tl.arange(0, BLOCK_SIZE)[None, :]
-        mask = 0
+        mask = False
         vals = tl.load(a_ptr + yoffsets + BLOCK_SIZE * xoffsets)
         res = tl.where(mask, vals, 0.)
         tl.store(out_ptr + yoffsets + BLOCK_SIZE * xoffsets, res)

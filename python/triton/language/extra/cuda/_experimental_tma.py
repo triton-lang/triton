@@ -32,14 +32,14 @@ def experimental_device_tensormap_create1d(
     _builder: ir.builder,
 ):
     load_size = core._constexpr_to_value(load_size)
-    global_size = core._to_tensor(global_size, _builder)
+    global_size = semantic.to_tensor(global_size, _builder)
     element_ty = core._constexpr_to_value(element_ty)
     element_stride = [core.full([], 1, core.int32, _builder=_builder)]
 
     semantic.tensormap_create(
         desc_ptr=desc_ptr,
         global_address=global_address,
-        box_dim=[core._to_tensor(load_size, _builder)],
+        box_dim=[semantic.to_tensor(load_size, _builder)],
         global_dim=[global_size],
         global_stride=[],
         element_stride=element_stride,
@@ -63,13 +63,13 @@ def experimental_device_tensormap_create2d(
     assert len(load_size) == 2
     assert len(global_size) == 2
     load_size = [core._constexpr_to_value(x) for x in load_size]
-    global_size = [core._to_tensor(x, _builder) for x in global_size]
+    global_size = [semantic.to_tensor(x, _builder) for x in global_size]
 
     element_size = element_ty.primitive_bitwidth // 8
     element_size_t = core.full([], element_size, core.int64, _builder=_builder)
     global_stride = semantic.mul(element_size_t, global_size[-1], _builder)
     # Undocumented, but global_stride seems to be divided by 16
-    global_stride = semantic.ashr(global_stride, core._to_tensor(4, _builder), _builder)
+    global_stride = semantic.ashr(global_stride, semantic.to_tensor(4, _builder), _builder)
 
     contig_dim_size_in_bytes = element_size * load_size[-1]
     if contig_dim_size_in_bytes > 128:
@@ -80,7 +80,7 @@ def experimental_device_tensormap_create2d(
     semantic.tensormap_create(
         desc_ptr=desc_ptr,
         global_address=global_address,
-        box_dim=[core._to_tensor(x, _builder) for x in load_size[::-1]],
+        box_dim=[semantic.to_tensor(x, _builder) for x in load_size[::-1]],
         global_dim=global_size[::-1],
         global_stride=[global_stride],
         element_stride=[elem_stride, elem_stride],

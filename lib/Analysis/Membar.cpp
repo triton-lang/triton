@@ -136,11 +136,15 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo.syncWriteIntervals.insert(
-                    allocation->getAllocatedInterval(bufferId));
+                curBlockInfo
+                    .syncWriteIntervals[allocation->getAllocatedInterval(
+                        bufferId)]
+                    .insert(op);
               else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo.syncReadIntervals.insert(
-                    allocation->getAllocatedInterval(bufferId));
+                curBlockInfo
+                    .syncReadIntervals[allocation->getAllocatedInterval(
+                        bufferId)]
+                    .insert(op);
             }
           }
         }
@@ -161,15 +165,15 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           "dependencies");
     }
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
-    curBlockInfo.syncWriteIntervals.insert(interval);
-    if (blockInfo->isIntersected(curBlockInfo)) {
+    curBlockInfo.syncWriteIntervals[interval].insert(op);
+    if (blockInfo->isIntersected(curBlockInfo, filter)) {
       builder->setInsertionPoint(op);
       insertBarrier(op, builder);
     }
     // Ops with a scratch buffer internally syncs read/write on shared memory
     blockInfo->sync();
-    curBlockInfo.syncReadIntervals.insert(interval);
-  } else if (blockInfo->isIntersected(curBlockInfo)) {
+    curBlockInfo.syncReadIntervals[interval].insert(op);
+  } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();
