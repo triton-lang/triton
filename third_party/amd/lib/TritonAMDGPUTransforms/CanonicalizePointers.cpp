@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -16,6 +17,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+#include <utility>
 
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Pass/Pass.h"
@@ -127,52 +129,30 @@ private:
   LogicalResult rewriteBranchOp(cf::BranchOp branchOp, Location curLoc,
                                 OpOperand *operand, Value &nextPtr);
 
-  // Extract the scalar/uniform offset from a `tt.addptr` operation
-  Value getScalarOffset(Location loc, triton::AddPtrOp addPtrOp,
-                        bool &hasNonUniformComponent);
-
   // Perform simplified scalar extraction. An offset can be composed by Unifrom
   // (U) and non-uniform(N) components. A uniform component is basically a
   // tensor constant (or a splat). A NonUniform value is a `make_range` or
-  // whatever we multiply with a `make_range` operation. We consider the
-  // following expressions:
-  //   offset = (U+U) -> ScalarOffset = (U+U)
-  //   offset = (U+N) -> ScalarOffset = (U)
-  //   offset = (N+N) -> ScalarOffset = 0
-  //   offset = (U*(N+U)) -> ScalarOffset = U*U
-  //   offset = (N*U) -> ScalarOffset = 0
-  // We do not consider the more generic expression:
+  // whatever we multiply with a `make_range` operation. We consider the generic
+  // expressions:
   //   offset = (N+U)*(N+U)
-  // Or any other expression not involving * and +.
+  //
+  // Where the `uniformOffset=U*U` and the `nonUniformOffset=(N*U+U*N+N*N).
+  //
+  // We do not consider any expression not involving * and +.
   //
   // The function accepts the `rewriter`, the `location` and start recursing at
-  // the `curOperand` offset used by the `curOp` operation.
+  // the given `expr`.
   //
-  // E.g., in  the following IR:
-  // ```
-  //   %offset = arith.add %uniform, %non_uniform
-  //   %ptr0 = addptr %ptr, %offset`
-  // ```
-  // `arith.add` is the current op and `%offset` is the operand.
+  // We also pass the bitness of the offset.
   //
-  // Note that if we have the above use-def chain, we can rewrite this as :
-  // ```
-  // %ptr0 = addptr %ptr, %uniform : !ptr<f32>
-  // %ptr1 = addptr %ptr0, %non_uniform : tensor<..x !ptr<f32>>
-  // ```
-  //
-  //  We also pass the bitness of the offset and a boolean
-  //  `hasNonUniformComponent` initialized to `false` to flag if the remaining
-  //  tree of operations with root in `curOp` has still some non-uniform
-  //  component.
-  Value extractScalarOffsetFromExpr(Location loc, Operation *curOp,
-                                    OpOperand &curOperand, int64_t bitness,
-                                    bool &hasNonUniformComponent);
-
-  // Extract the offset from a binary operator
-  Value extractScalarOffsetFromAddOrMul(Location loc, Operation *binOp,
-                                        OpOperand &curOperand, int64_t bitness,
-                                        bool &hasNonUniformComponent);
+  // The function returns the two components of the given offset as a
+  // std::pair{U, NU}
+  std::pair<Value, Value> decomposeOffsetFromExpr(Location loc, Value expr,
+                                                  int64_t bitness);
+  std::pair<Value, Value> decomposeOffsetFromAdd(Location loc, Value expr,
+                                                 int64_t bitness);
+  std::pair<Value, Value> decomposeOffsetFromMul(Location loc, Value expr,
+                                                 int64_t bitness);
 
   // Return either the operation or its rewritten op
   template <typename OpTy>
@@ -241,7 +221,8 @@ static Value narrow64bitOffsetTo32bits(IRRewriter &rewriter, Location loc,
 
 // Helper function to determine if the given `op` is a constant tensor and in
 // that case return the scalar value.
-Value getScalarConstant(IRRewriter &rewriter, Location loc, Operation *op) {
+Value getScalarConstant(IRRewriter &rewriter, Location loc, Value expr) {
+  Operation *op = expr.getDefiningOp();
 
   // Check for splatness
   if (auto splatOp = dyn_cast<triton::SplatOp>(op))
@@ -268,128 +249,108 @@ bool canNarrowOffset(Value baseOffset, Value addOffset) {
   return (isBaseOffsetZero && addOffsetType.isInteger(32));
 }
 
+// Create a zero tensor with a given `type`
+Value createTensorZero(IRRewriter &rw, Location loc, RankedTensorType type) {
+  mlir::Attribute zeroAttr = rw.getZeroAttr(type.getElementType());
+  auto zeroDenseAttr = DenseElementsAttr::get(type, zeroAttr);
+  return rw.create<arith::ConstantOp>(loc, zeroDenseAttr);
+}
+
 } // namespace
 
-// Offset extraction logic for a binary op A*B or A+B
-Value PointerCanonicalizer::extractScalarOffsetFromAddOrMul(
-    Location loc, Operation *binOp, OpOperand &curOperand, int64_t bitness,
-    bool &hasNonUniformComponent) {
-
-  assert((isa<arith::MulIOp, arith::AddIOp>(binOp)) &&
-         "Only arith.addi or arith.muli ops are supported");
-
-  // Common useful variables
-  OpOperand &lhsOperand = binOp->getOpOperand(0);
-  OpOperand &rhsOperand = binOp->getOpOperand(1);
-  Operation *lhsOp = lhsOperand.get().getDefiningOp();
-  Operation *rhsOp = rhsOperand.get().getDefiningOp();
-
-  // Useful creator function
-  auto createBinOp = [&](Value lhs, Value rhs) -> Value {
-    if (isa<arith::AddIOp>(binOp))
-      return rewriter.create<arith::AddIOp>(loc, lhs, rhs);
-    else
-      return rewriter.create<arith::MulIOp>(loc, lhs, rhs);
-  };
-
-  // Propagate addition. If the binary operation is a arith.add, we
-  // can simply replace its use with the uniform operand. I.e., if we
-  // have:
-  // ```
-  //   %a = arith.addi %u, %nu
-  //   %ptr0 = addptr %ptr, %a
-  // ```
-  // We can replace this with:
-  // ```
-  //   %scalar_offset = %u
-  //   %ptr0 = addptr %ptr, %nu
-  // ```
-  auto propagateNonUniformOffset = [&](Value nonUniformOffset) {
-    if (isa<arith::AddIOp>(binOp))
-      curOperand.set(nonUniformOffset);
-  };
-
-  // If one out lhs or rhs is a scalar, set the current operand to the
-  // non-scalar value and keep extracting
-  if (Value lhsScalar = getScalarConstant(rewriter, loc, lhsOp)) {
-    propagateNonUniformOffset(rhsOperand.get());
-    Value scalarOffset = extractScalarOffsetFromExpr(
-        loc, rhsOp, rhsOperand, bitness, hasNonUniformComponent);
-    return createBinOp(scalarOffset, lhsScalar);
-  } else if (Value rhsScalar = getScalarConstant(rewriter, loc, rhsOp)) {
-    propagateNonUniformOffset(lhsOperand.get());
-    Value scalarOffset = extractScalarOffsetFromExpr(
-        loc, lhsOp, lhsOperand, bitness, hasNonUniformComponent);
-    return createBinOp(scalarOffset, rhsScalar);
-  } else if (isa<arith::MulIOp>(binOp)) {
-    // Stop if this is a non-scalar * non-scalar
-    hasNonUniformComponent = true;
-    return rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
-  } else {
-    // Keep extracting otherwise
-    Value scalarOffsetLhs = extractScalarOffsetFromExpr(
-        loc, lhsOp, lhsOperand, bitness, hasNonUniformComponent);
-    Value scalarOffsetRhs = extractScalarOffsetFromExpr(
-        loc, rhsOp, rhsOperand, bitness, hasNonUniformComponent);
-    return createBinOp(scalarOffsetLhs, scalarOffsetRhs);
-  }
+// Offset extraction logic for an addition op:
+// decompose(A+B) = {U(A)+U(B), NU(A)+NU(B)}
+std::pair<Value, Value>
+PointerCanonicalizer::decomposeOffsetFromAdd(Location loc, Value expr,
+                                             int64_t bitness) {
+  auto addOp = cast<arith::AddIOp>(expr.getDefiningOp());
+  auto [uniformOffsetL, nonUniformOffsetL] =
+      decomposeOffsetFromExpr(loc, addOp.getLhs(), bitness);
+  auto [uniformOffsetR, nonUniformOffsetR] =
+      decomposeOffsetFromExpr(loc, addOp.getRhs(), bitness);
+  Value uniformAdd =
+      rewriter.create<arith::AddIOp>(loc, uniformOffsetL, uniformOffsetR);
+  Value nonUniformAdd =
+      rewriter.create<arith::AddIOp>(loc, nonUniformOffsetL, nonUniformOffsetR);
+  return {uniformAdd, nonUniformAdd};
 }
 
-Value PointerCanonicalizer::extractScalarOffsetFromExpr(
-    Location loc, Operation *curOp, OpOperand &curOperand, int64_t bitness,
-    bool &hasNonUniformComponent) {
-  if (Value scalarConst = getScalarConstant(rewriter, loc, curOp))
-    return scalarConst;
+// Offset extraction logic for a multiplication op:
+// decompose(A*B) = {U(A)*U(B), NU(A)*NU(B)+NU(B)*U(A)+U(A)*NU(B)}
+std::pair<Value, Value>
+PointerCanonicalizer::decomposeOffsetFromMul(Location loc, Value expr,
+                                             int64_t bitness) {
+  auto mulOp = cast<arith::MulIOp>(expr.getDefiningOp());
+  auto [uniformOffsetL, nonUniformOffsetL] =
+      decomposeOffsetFromExpr(loc, mulOp.getLhs(), bitness);
+  auto [uniformOffsetR, nonUniformOffsetR] =
+      decomposeOffsetFromExpr(loc, mulOp.getRhs(), bitness);
+  Value uniformMul =
+      rewriter.create<arith::MulIOp>(loc, uniformOffsetL, uniformOffsetR);
 
-  Value scalarOffset =
-      llvm::TypeSwitch<Operation *, Value>(curOp)
+  Value uniformOffsetLSplat = rewriter.create<triton::SplatOp>(
+      loc, nonUniformOffsetL.getType(), uniformOffsetL);
+  Value uniformOffsetRSplat = rewriter.create<triton::SplatOp>(
+      loc, nonUniformOffsetL.getType(), uniformOffsetR);
+
+  Value nonUNonU =
+      rewriter.create<arith::MulIOp>(loc, nonUniformOffsetL, nonUniformOffsetR);
+  Value nonUU = rewriter.create<arith::MulIOp>(loc, uniformOffsetLSplat,
+                                               nonUniformOffsetR);
+  Value uNonU = rewriter.create<arith::MulIOp>(loc, nonUniformOffsetL,
+                                               uniformOffsetRSplat);
+
+  Value tmp = rewriter.create<arith::AddIOp>(loc, nonUNonU, nonUU);
+  Value nonUniformMul = rewriter.create<arith::AddIOp>(loc, tmp, uNonU);
+  return {uniformMul, nonUniformMul};
+}
+
+std::pair<Value, Value>
+PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
+                                              int64_t bitness) {
+
+  RewriterBase::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointAfterValue(expr);
+
+  // Base case 1: it is a splat. Return the scalar constant as the uniform part
+  if (Value scalarConst = getScalarConstant(rewriter, loc, expr)) {
+    auto tensorZero =
+        createTensorZero(rewriter, loc, cast<RankedTensorType>(expr.getType()));
+    return {scalarConst, tensorZero};
+  }
+
+  auto offsets =
+      llvm::TypeSwitch<Operation *, std::pair<Value, Value>>(
+          expr.getDefiningOp())
           .Case<triton::BroadcastOp>([&](auto broadcastOp) {
-            return extractScalarOffsetFromExpr(
-                loc, broadcastOp.getSrc().getDefiningOp(),
-                broadcastOp->getOpOperand(0), bitness, hasNonUniformComponent);
+            auto [uniform, nonUniform] =
+                decomposeOffsetFromExpr(loc, broadcastOp.getSrc(), bitness);
+            auto broadcastNonUniform = rewriter.create<triton::BroadcastOp>(
+                loc, broadcastOp.getType(), nonUniform);
+            return std::make_pair(uniform, broadcastNonUniform);
           })
           .Case<triton::ExpandDimsOp>([&](auto expandOp) {
-            return extractScalarOffsetFromExpr(
-                loc, expandOp.getSrc().getDefiningOp(),
-                expandOp->getOpOperand(0), bitness, hasNonUniformComponent);
+            auto [uniform, nonUniform] =
+                decomposeOffsetFromExpr(loc, expandOp.getSrc(), bitness);
+            auto expandNonUniform = rewriter.create<triton::ExpandDimsOp>(
+                loc, nonUniform, expandOp.getAxis());
+            return std::make_pair(uniform, expandNonUniform);
           })
-          .Case<arith::AddIOp, arith::MulIOp>([&](Operation *op) {
-            return extractScalarOffsetFromAddOrMul(loc, op, curOperand, bitness,
-                                                   hasNonUniformComponent);
+          .Case<arith::AddIOp>([&](Operation *op) {
+            return decomposeOffsetFromAdd(loc, expr, bitness);
+          })
+          .Case<arith::MulIOp>([&](Operation *op) {
+            return decomposeOffsetFromMul(loc, expr, bitness);
           })
           .Default([&](Operation *op) {
-            hasNonUniformComponent = true;
-            return rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+            // Base case 2: it is not a supported operation. We assume no
+            // uniform part
+            Value scalarZero =
+                rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+            return std::make_pair(scalarZero, expr);
           });
 
-  return scalarOffset;
-}
-
-// Try to extract a scalar `offset` by a (possibly) tensor offset. This will
-// potentially modify the `offset` field of the `addPtrOp` (which will be
-// potentially stripped off the non-uniform component)
-Value PointerCanonicalizer::getScalarOffset(Location loc,
-                                            triton::AddPtrOp addPtrOp,
-                                            bool &hasNonUniformComponent) {
-  hasNonUniformComponent = false;
-  Value offset = addPtrOp.getOffset();
-  if (!isa<RankedTensorType>(offset.getType()))
-    return offset;
-
-  // Early exist for the case of a constant tensor
-  if (Value scalarConst = getScalarConstant(rewriter, loc, addPtrOp))
-    return scalarConst;
-
-  // Additional optimization to catch cases where `offset = f(non-splat, splat)`
-  // and `f=={AddIOp,MulIOp}`. In this case we can get the splat contribution
-  // out of the add and use that to update the scalar pointer. We use a queue of
-  // <Operation, Operand> to traverse the offset contribution, in this way we
-  // can propagate the non-splat component to the right place
-  int64_t bitness =
-      cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth();
-  return extractScalarOffsetFromExpr(loc, addPtrOp.getOffset().getDefiningOp(),
-                                     addPtrOp->getOpOperand(1), bitness,
-                                     hasNonUniformComponent);
+  return offsets;
 }
 
 // Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
@@ -481,33 +442,51 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
   nextPtr = addPtrOp.getResult();
   auto fatPtr = pointers[addPtrOp.getPtr()];
   Value newPtr = fatPtr.basePtr;
-  bool hasNonUniformComponent = false;
-  Value scalarOffset =
-      getScalarOffset(curLoc, addPtrOp, hasNonUniformComponent);
-  if (!isZeroConst(scalarOffset)) {
-    // Scalar pointer update
+  // If it is a scalar pointer update, simply bump the base pointer
+  if (!isa<RankedTensorType>(addPtrOp.getPtr().getType())) {
+    pointers[nextPtr] = fatPtr.copyWithOffset(nextPtr);
+    return success();
+  }
+  Value offset = addPtrOp.getOffset();
+
+  // Early exit for the case of a constant tensor
+  if (Value scalarConst = getScalarConstant(rewriter, curLoc, offset)) {
     newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
-                                               scalarOffset);
+                                               scalarConst);
+    pointers[nextPtr] = fatPtr.copyWithOffset(newPtr);
+    opToDelete.insert(addPtrOp);
+    return success();
   }
 
+  int64_t bitness =
+      cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth();
+  auto [uniformOffset, nonUniformOffset] =
+      decomposeOffsetFromExpr(curLoc, offset, bitness);
+
+  // Scalar pointer update (if any): bump the scalar pointer
+  if (!matchPattern(uniformOffset, m_Zero())) {
+    newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
+                                               uniformOffset);
+  }
+
+  // Vector offset update (if any): bump the tensor offset
   Value fatPtrOffset = fatPtr.offset;
   bool canNarrow = fatPtr.canNarrow;
   Value newOffset = fatPtrOffset;
-  // Vector offset update
-  if (hasNonUniformComponent) {
-    Value addPtrOffset = addPtrOp.getOffset();
-    Type addPtrOffsetType = getElementTypeOrSelf(addPtrOffset);
-    canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, addPtrOffset);
+  if (!isZeroConst(nonUniformOffset)) {
+    Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
+    canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
 
     // If we the incoming offset is 32 bits, then we have to cast to 64
     if (addPtrOffsetType.isInteger(32))
-      addPtrOffset = extend32bitOffsetTo64Bits(rewriter, curLoc, addPtrOffset);
+      nonUniformOffset =
+          extend32bitOffsetTo64Bits(rewriter, curLoc, nonUniformOffset);
 
     newOffset =
-        rewriter.create<arith::AddIOp>(curLoc, addPtrOffset, fatPtrOffset);
+        rewriter.create<arith::AddIOp>(curLoc, nonUniformOffset, fatPtrOffset);
   }
-  pointers[nextPtr] = FatPtr{newPtr, newOffset, canNarrow};
   opToDelete.insert(addPtrOp);
+  pointers[nextPtr] = FatPtr{newPtr, newOffset, canNarrow};
   return success();
 }
 
@@ -565,7 +544,6 @@ LogicalResult PointerCanonicalizer::rewriteYieldOp(scf::YieldOp yieldOp,
   yieldOp.getResultsMutable().append(fatPtr.offset);
 
   if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
-    auto v = forOp.getRegionIterArg(operandNum);
     yieldOp->setOperand(operandNum, forOp.getRegionIterArg(operandNum));
   } else if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
     // Case 1: the yieldOp is contained within an IfOp. One of the
@@ -868,7 +846,6 @@ LogicalResult PointerCanonicalizer::run() {
   }
   return success();
 }
-
 // This pass is calling the pointer canonicalization utility
 // on the given MLIR module
 class TritonAMDGPUCanonicalizePointersPass
