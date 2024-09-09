@@ -112,22 +112,17 @@ public:
     //    %3 = local_store %1, %2
     //    %4 = local_load %2
     m.walk([&](ttg::LocalLoadOp localLoad) {
-      auto localAlloc =
-          localLoad->getOperand(0).getDefiningOp<ttg::LocalAllocOp>();
-      if (!localAlloc) {
+      auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
+      if (!localAlloc)
         return;
-      }
 
       // Case when localAlloc has operands
       if (localAlloc->getNumOperands() == 1) {
-        if (!localAlloc->hasOneUse()) {
+        if (!localAlloc->hasOneUse())
           return;
-        }
-        Operation *loadOp =
-            localAlloc->getOperand(0).getDefiningOp<tt::LoadOp>();
-        if (!loadOp) {
+        auto loadOp = localAlloc->getOperand(0).getDefiningOp<tt::LoadOp>();
+        if (!loadOp)
           return;
-        }
         localAlloc->moveAfter(loadOp);
         localLoad->moveAfter(localAlloc);
         return;
@@ -139,20 +134,17 @@ public:
 
       // Check if the localAlloc has exactly two uses (localStore and localLoad)
       int numUses = std::distance(allocVal.use_begin(), allocVal.use_end());
-      if (numUses != 2) {
+      if (numUses != 2)
         return;
-      }
 
       // localStore comes before localLoad in block.
       Operation *localStore = getFirstUse(localAlloc);
-      if (!isa<ttg::LocalStoreOp>(localStore)) {
+      if (!isa<ttg::LocalStoreOp>(localStore))
         return;
-      }
 
-      Operation *loadOp = localStore->getOperand(0).getDefiningOp<tt::LoadOp>();
-      if (!loadOp) {
+      auto loadOp = localStore->getOperand(0).getDefiningOp<tt::LoadOp>();
+      if (!loadOp)
         return;
-      }
       localAlloc->moveAfter(loadOp);
       localStore->moveAfter(localAlloc);
       localLoad->moveAfter(localStore);
