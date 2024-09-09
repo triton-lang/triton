@@ -1,3 +1,4 @@
+#include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -43,14 +44,13 @@ computeDigitInfoHelper(const void *array, size_t index) {
 
 std::pair<int, bool> computeDigitInfo(void *vec, bool isInt, bool isSigned,
                                       int32_t bitWidth, size_t index) {
-
   if (isInt == 0) {
     if (bitWidth == 32)
       return computeDigitInfoHelper<float>(vec, index);
     else if (bitWidth == 64)
       return computeDigitInfoHelper<double>(vec, index);
     else
-      assert(false && "Unsupported bitWidth");
+      llvm_unreachable("Unsupported bitWidth");
   } else {
     if (isSigned) {
       if (bitWidth == 64)
@@ -76,7 +76,7 @@ std::pair<int, bool> computeDigitInfo(void *vec, bool isInt, bool isSigned,
         return computeDigitInfoHelper<bool>(vec, index);
     }
     printf("bitWidth: %d\n", bitWidth);
-    assert(false && "Unsupported bitWidth");
+    llvm_unreachable("Unsupported bitWidth");
   }
 }
 
@@ -126,7 +126,7 @@ void printElement(std::stringstream &ss, const void *vec, size_t index,
       printElementHelper<double>(ss, vec, index);
       break;
     default:
-      assert(false && "Unsupported bitWidth");
+      llvm_unreachable("Unsupported bitWidth");
     }
   } else {
     if (formatInfo.isSigned) {
@@ -148,7 +148,7 @@ void printElement(std::stringstream &ss, const void *vec, size_t index,
         printElementHelper<bool>(ss, vec, index);
         break;
       default:
-        assert(false && "Unsupported bitWidth");
+        llvm_unreachable("Unsupported bitWidth");
       }
     } else {
       switch (formatInfo.bitWidth) {
@@ -168,7 +168,7 @@ void printElement(std::stringstream &ss, const void *vec, size_t index,
         printElementHelper<bool>(ss, vec, index);
         break;
       default:
-        assert(false && "Unsupported bitWidth");
+        llvm_unreachable("Unsupported bitWidth");
       }
     }
   }
