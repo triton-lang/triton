@@ -141,12 +141,11 @@ LogicalResult WaitBarrierOp::verify() {
 void WaitBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The wait will flip the phase therefore it reads and writes the barrier.
   effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
                        mlir::triton::gpu::SharedMemory::get());
-  // Need a side effect to prevent compiler from reordering and removing
-  // the wait operation.
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       mlir::SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --
