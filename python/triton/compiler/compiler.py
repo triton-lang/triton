@@ -196,7 +196,7 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
-    if os.getenv("TRITON_DEV_MODE", "0") == "1":
+    if os.getenv("TRITON_FRONT_END_DEBUGGING", "0") == "1":
         return
 
     if e.__cause__ is not None:
