@@ -1,3 +1,4 @@
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
@@ -80,6 +81,31 @@ bool canHoistDotOpEncV3(Operation* op) {
   }
 
   return true;
+}
+
+auto cloneSlice(PatternRewriter& rewriter, const SetVector<Operation *>& slice) {
+  IRMapping sliceMap;
+  SetVector<Operation*> newSlice;
+  for (Operation *op : slice) {
+    auto newOp = rewriter.clone(*op);
+    newSlice.insert(newOp);
+    sliceMap.map(op, newOp);
+    for (auto [result, newResult] : llvm::zip(op->getResults(), newOp->getResults())) {
+      assert(result != newResult);
+      sliceMap.map(result, newResult);
+    }
+  }
+
+  for (auto [op, newOp] : sliceMap.getOperationMap())
+    for (auto [oprIdx, operand] : llvm::enumerate(newOp->getOperands())) {
+      auto defOp = operand.getDefiningOp();
+      if (!slice.contains(defOp))
+        continue;
+
+      newOp->setOperand(oprIdx, sliceMap.lookup(operand));
+    }
+
+  return std::make_tuple(newSlice, sliceMap);
 }
 
 // Given
@@ -355,13 +381,21 @@ struct MMAV3UseRegOperand
   }
 };
 
-// TODO(ggengnv) more tests (multiple elt-wise ops) and document
+// MMAV3's analog of HoistLayoutConversion, for operand A only; will make WarpGroupDot
+// accept operand A in registers instead of shmem.
+//
+//  local_alloc(elementwise(x)) ->
+//  elementwise(convert(x, #dot_operand)).
+//
+// Whereas (MMAV2) HoistLayoutConversion hoists thru one op at a time and requires
+// multiple passes will directly hoist the convert to the right place in one pass.
 struct MMAV3HoistLayoutConversion
     : public OpRewritePattern<triton::nvidia_gpu::WarpGroupDotOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(triton::nvidia_gpu::WarpGroupDotOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    // Can only hoist operand 0
     auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
     if (!alloc || !alloc.getSrc())
       return failure();
@@ -374,138 +408,116 @@ struct MMAV3HoistLayoutConversion
       return failure();
 
     // Performs checks for early stop
-    NvidiaMmaEncodingAttr dstEnc;
     Type inputEltTy;
-    {
-      auto srcEnc = dyn_cast<BlockedEncodingAttr>(getEncoding(alloc.getSrc()));
-      dstEnc =
-          dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
-      // Want: A's Encoding to be Blocked and D's encoding to be NvidiaMmA v3
-      if (!srcEnc || !dstEnc || dstEnc.getVersionMajor() != 3)
-        return failure();
+    auto srcEnc = dyn_cast<BlockedEncodingAttr>(getEncoding(alloc.getSrc()));
+    auto dstEnc =
+        dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
+    // Want: A's Encoding to be Blocked and D's encoding to be NvidiaMmaV3
+    if (!srcEnc || !dstEnc || dstEnc.getVersionMajor() != 3)
+      return failure();
+    auto src = alloc.getSrc().getDefiningOp();
+    // Value passed to alloc must have Tensor arguments and single Tensor result
+    if (!src || src->getNumOperands() == 0 || src->getNumResults() != 1)
+      return failure();
+    if (!all_of(src->getOperandTypes(),
+                [](Type ty) { return isa<RankedTensorType>(ty); }))
+      return failure();
+    auto srcTy = dyn_cast<RankedTensorType>(src->getResult(0).getType());
+    if (!srcTy)
+      return failure();
+    inputEltTy = srcTy.getElementType();
 
-      auto src = alloc.getSrc().getDefiningOp();
+    // Check src itself can be hoisted through
+    if (!canHoistDotOpEncV3(src))
+      return failure();
 
-      // Value passed to alloc must have Tensor arguments and single Tensor result
-      if (!src || src->getNumOperands() == 0 || src->getNumResults() != 1)
-        return failure();
-      if (!all_of(src->getOperandTypes(),
-                  [](Type ty) { return isa<RankedTensorType>(ty); }))
-        return failure();
-      auto srcTy = dyn_cast<RankedTensorType>(src->getResult(0).getType());
-      if (!srcTy)
-        return failure();
-      inputEltTy = srcTy.getElementType();
-
-      if (!canHoistDotOpEncV3(src))
-        return failure();
-    }
-
+    // Obtain backward slice
     SetVector<Operation *> slice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
     opt.filter = [&](Operation *op) {
-      return (op->getParentRegion() == alloc->getParentRegion()) && !isa<LoadOp, LocalLoadOp, arith::ConstantOp>(op)
-        && (op->getNumOperands() != 0);  // Ensures all ops in slice have operands
+      // Stop before Load, ConstantOp, or LocalLoad (which is unlikely)
+      return (op->getParentRegion() == alloc->getParentRegion())
+        && !isa<LoadOp, arith::ConstantOp, LocalLoadOp>(op)
+        && (op->getNumOperands() != 0);
     };
-
     getBackwardSlice(alloc.getOperation(), &slice, opt);
 
+    // Verify slice can be hoisted through
+    if (slice.empty())
+      return failure();
+
     auto isBlockedRankedTensor = [&](auto val) {
-      return isa<BlockedEncodingAttr>(getEncoding(val)) && isa<RankedTensorType>(val.getType());
+      return isa<BlockedEncodingAttr, DotOperandEncodingAttr>(getEncoding(val)) &&
+        isa<RankedTensorType>(val.getType());
     };
 
-    SmallVector<Operation *> frontierOps;
     for (Operation *currOp : slice) {
       if (!canHoistDotOpEncV3(currOp))
         return failure();
 
       // We previously ensured that all ops in slice have at least one operand
-      bool isFrontier = false;
       for (auto operand : currOp->getOperands()) {
-        auto op = operand.getDefiningOp();
-        if (!slice.contains(op)) {
-          if (!isa<LoadOp, arith::ConstantOp>(op))
+        auto defOp = operand.getDefiningOp();
+        if (!slice.contains(defOp)) {
+          if (!isa<LoadOp, arith::ConstantOp>(defOp)) {
             return failure();
+          }
 
-          isFrontier = true;
+          auto res = currOp->getResult(0);
+          if (!isBlockedRankedTensor(res)) {
+            return failure();
+          }
+
+          if (!llvm::all_of(currOp->getOperands(), isBlockedRankedTensor)) {
+            return failure();
+          }
         }
-      }
-
-      if (isFrontier) {
-        auto res = currOp->getResult(0);
-        if (!isBlockedRankedTensor(res))
-          return failure();
-
-        if (!llvm::all_of(currOp->getOperands(), isBlockedRankedTensor))
-          return failure();
-
-        frontierOps.push_back(currOp);
       }
     }
 
-    // Nothing to hoist through
-    if (frontierOps.empty())
-      return failure();
+    auto [newSlice, sliceMap] = cloneSlice(rewriter, slice);
 
-    // convert A operand
+    // For each frontierOp (i.e. op whose defining op is not in slice):
+    //  load/constant; frontierOp; [hoistableElementwiseOps...]; local_alloc; warp_group_dot
+    //  -> load/constant; convert_layout; frontierOp; [hoistableOps...]; warp_group_dot
     auto dotOperandEnc = DotOperandEncodingAttr::get(
         dotOp.getContext(), /*opIdx=*/0, dstEnc, inputEltTy);
+    for (auto op : newSlice) {
+      // Convert operands
+      for (auto [oprIdx, operand] : llvm::enumerate(op->getOperands())) {
+        auto defOp = operand.getDefiningOp();
 
-    // For each frontierOp:
-    //  load; frontierOp; [hoistableOps...]; local_alloc; warp_group_dot
-    //  -> load; local_alloc; local_load; convert_layout; frontierOp; [hoistableOps...]; warp_group_dot
-    //  or...
-    //  constant; frontierOp; [hoistableOps...]; warp_group_dot
-    //  -> constant; convert_layout; frontierOp; [hoistableOps...]; warp_group_dot
-    for (Operation *frontierOp : frontierOps) {
-      auto frontierTy = dyn_cast<RankedTensorType>(frontierOp->getResult(0).getType());
+        // Not frontier; no need to convert operand
+        if (newSlice.contains(defOp)) {
+          op->moveAfter(defOp);
+          continue;
+        }
 
-      SmallVector<ConvertLayoutOp> newOperands;
-      for (auto operand : frontierOp->getOperands()) {
         // We checked earlier that all operands are ranked tensors.
         auto operandTy = cast<RankedTensorType>(operand.getType());
         auto operandEltTy = operandTy.getElementType();
 
-        ConvertLayoutOp cvt;
-
         Type cvtTy = RankedTensorType::get(
             operandTy.getShape(), operandTy.getElementType(), dotOperandEnc);
+        auto cvt = rewriter.create<ConvertLayoutOp>(defOp->getLoc(), cvtTy, operand);
 
-        if (isa<LoadOp>(operand.getDefiningOp())) {
-          auto oldAllocTy = alloc.getType();
-          auto oldAllocEnc = cast<SharedEncodingAttr>(oldAllocTy.getEncoding());
-
-          auto newAllocEnc = SharedEncodingAttr::get(
-              oldAllocEnc.getContext(), dotOperandEnc, operandTy.getShape(),
-              getOrder(operandTy.getEncoding()),
-              getCTALayout(operandTy.getEncoding()),
-              operandTy.getElementType().getIntOrFloatBitWidth(), /*needTrans=*/false);
-
-          auto newAllocTy = MemDescType::get(operandTy.getShape(), operandEltTy,
-                                          newAllocEnc, oldAllocTy.getMemorySpace());
-          auto localAlloc = rewriter.create<LocalAllocOp>(alloc.getLoc(), newAllocTy, operand);
-          auto localLoad = rewriter.create<LocalLoadOp>(alloc.getLoc(), operandTy, localAlloc);
-          cvt = rewriter.create<ConvertLayoutOp>(alloc.getLoc(), cvtTy, localLoad);
-        } else {
-          assert(isa<arith::ConstantOp>(operand.getDefiningOp()));
-          cvt = rewriter.create<ConvertLayoutOp>(alloc.getLoc(), cvtTy, operand);
-        }
-
-        newOperands.push_back(cvt);
+        op->setOperand(oprIdx, cvt);
+        op->moveAfter(cvt);
       }
 
-      auto newFrontier = rewriter.clone(*frontierOp);
-      for (int i = 0; i < newOperands.size(); i++)
-        newFrontier->setOperand(i, newOperands[i]);
-      newFrontier->getResult(0).setType(RankedTensorType::get(
-          frontierTy.getShape(), frontierTy.getElementType(), dotOperandEnc));
+      // Convert result
+      auto resTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
 
-      rewriter.replaceOp(frontierOp, newFrontier);
+      op->getResult(0).setType(RankedTensorType::get(
+          resTy.getShape(), resTy.getElementType(), dotOperandEnc));
     }
 
-    // replace LHS operand with its parent (in dotOpEnc)
-    rewriter.modifyOpInPlace(dotOp, [&]() { dotOp.setOperand(0, alloc.getSrc()); });
+    // replace LHS operand with alloc's parent (cloned)
+    auto newDotOperand = sliceMap.lookup(alloc.getSrc());
+    rewriter.modifyOpInPlace(dotOp, [&]() {
+      dotOp.setOperand(0, newDotOperand);
+    });
 
     return success();
   }
