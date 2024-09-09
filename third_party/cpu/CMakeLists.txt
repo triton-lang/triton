@@ -8,6 +8,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
 endif()
 
 add_library(TritonCPURuntime SHARED ${CMAKE_CURRENT_SOURCE_DIR}/runtime/cpu_runtime.cpp)
+target_link_libraries(TritonCPURuntime PRIVATE LLVMSupport)
 
 # Build and link sleef
 set(SLEEF_BUILD_SHARED_LIBS ON CACHE BOOL "Build sleef shared lib" FORCE)
