@@ -244,9 +244,8 @@ Value getScalarConstant(IRRewriter &rewriter, Location loc, Value expr) {
 // - `baseOffset` is 32-bits and `addOffset`(64-bits) is zero
 bool canNarrowOffset(Value baseOffset, Value addOffset) {
   Type addOffsetType = getElementTypeOrSelf(addOffset);
-  Operation *baseOp = baseOffset.getDefiningOp();
-  bool isBaseOffsetZero = baseOp && isa<triton::SplatOp>(baseOp);
-  return (isBaseOffsetZero && addOffsetType.isInteger(32));
+  auto baseSplatOp = baseOffset.getDefiningOp<triton::SplatOp>();
+  return baseSplatOp && addOffsetType.isInteger(32);
 }
 
 // Create a zero tensor with a given `type`
@@ -263,7 +262,7 @@ Value createTensorZero(IRRewriter &rw, Location loc, RankedTensorType type) {
 std::pair<Value, Value>
 PointerCanonicalizer::decomposeOffsetFromAdd(Location loc, Value expr,
                                              int64_t bitness) {
-  auto addOp = cast<arith::AddIOp>(expr.getDefiningOp());
+  auto addOp = expr.getDefiningOp<arith::AddIOp>();
   auto [uniformOffsetL, nonUniformOffsetL] =
       decomposeOffsetFromExpr(loc, addOp.getLhs(), bitness);
   auto [uniformOffsetR, nonUniformOffsetR] =
@@ -280,7 +279,7 @@ PointerCanonicalizer::decomposeOffsetFromAdd(Location loc, Value expr,
 std::pair<Value, Value>
 PointerCanonicalizer::decomposeOffsetFromMul(Location loc, Value expr,
                                              int64_t bitness) {
-  auto mulOp = cast<arith::MulIOp>(expr.getDefiningOp());
+  auto mulOp = expr.getDefiningOp<arith::MulIOp>();
   auto [uniformOffsetL, nonUniformOffsetL] =
       decomposeOffsetFromExpr(loc, mulOp.getLhs(), bitness);
   auto [uniformOffsetR, nonUniformOffsetR] =
@@ -291,7 +290,7 @@ PointerCanonicalizer::decomposeOffsetFromMul(Location loc, Value expr,
   Value uniformOffsetLSplat = rewriter.create<triton::SplatOp>(
       loc, nonUniformOffsetL.getType(), uniformOffsetL);
   Value uniformOffsetRSplat = rewriter.create<triton::SplatOp>(
-      loc, nonUniformOffsetL.getType(), uniformOffsetR);
+      loc, nonUniformOffsetR.getType(), uniformOffsetR);
 
   Value nonUNonU =
       rewriter.create<arith::MulIOp>(loc, nonUniformOffsetL, nonUniformOffsetR);
