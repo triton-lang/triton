@@ -14,6 +14,7 @@
 
 using namespace mlir;
 namespace ttg = mlir::triton::gpu;
+namespace tt = mlir::triton;
 
 static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
   if (isa<ttg::LocalLoadOp>(op))
@@ -96,6 +97,58 @@ public:
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
     opToMove.clear();
+
+    // Move writing to LDS and reading from LDS right after the loading of a
+    // tensor from global memory. There are 2 possible patterns depending on
+    // whether writing to LDS is done using an optional local_alloc argument or
+    // a local_store instruction:
+    //
+    // 1) %1 = load %ptr
+    //    %2 = local_alloc %1
+    //    %3 = local_load %2
+    //
+    // 2) %1 = load %ptr
+    //    %2 = local_alloc
+    //    %3 = local_store %1, %2
+    //    %4 = local_load %2
+    m.walk([&](ttg::LocalLoadOp localLoad) {
+      auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
+      if (!localAlloc)
+        return;
+
+      // Case when localAlloc has operands
+      if (localAlloc->getNumOperands() == 1) {
+        if (!localAlloc->hasOneUse())
+          return;
+        auto loadOp = localAlloc->getOperand(0).getDefiningOp<tt::LoadOp>();
+        if (!loadOp)
+          return;
+        localAlloc->moveAfter(loadOp);
+        localLoad->moveAfter(localAlloc);
+        return;
+      }
+
+      // Case when localAlloc has no operands
+      assert(localAlloc->getNumOperands() < 1);
+      auto allocVal = localAlloc->getResult(0);
+
+      // Check if the localAlloc has exactly two uses (localStore and localLoad)
+      int numUses = std::distance(allocVal.use_begin(), allocVal.use_end());
+      if (numUses != 2)
+        return;
+
+      // localStore comes before localLoad in block.
+      Operation *localStore = getFirstUse(localAlloc);
+      if (!isa<ttg::LocalStoreOp>(localStore))
+        return;
+
+      auto loadOp = localStore->getOperand(0).getDefiningOp<tt::LoadOp>();
+      if (!loadOp)
+        return;
+      localAlloc->moveAfter(loadOp);
+      localStore->moveAfter(localAlloc);
+      localLoad->moveAfter(localStore);
+    });
 
     // Sink conversion after the last dealloc but before the first use ancestor
     // in its block. This helps to avoid unnecessary shared memory allocation.
