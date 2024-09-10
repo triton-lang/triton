@@ -933,6 +933,21 @@ int getNVIDIAComputeCapability(Operation *module) {
   return computeCapability;
 }
 
+StringRef getAMDArch(Operation *module) {
+  assert(module->hasAttr(triton::AttrTargetName) &&
+         "Expected a target attribute on the module operation");
+
+  StringAttr targetAttr =
+      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+
+  StringRef ref = targetAttr.strref();
+  assert(ref.starts_with("hip:") &&
+         "expected target attribute to be prefixed with \"cuda:\"");
+
+  StringRef archStr = ref.drop_front(4); // drop the "hip:"
+  return archStr;
+}
+
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and

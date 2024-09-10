@@ -484,12 +484,18 @@ bool supportMMA(triton::DotOp op, int version) {
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
+  auto retType = op.getType();
+  auto retShapePerCTA = getShapePerCTA(retType);
+  auto rank = retShapePerCTA.size();
+  auto aTensorTy = cast<RankedTensorType>(op.getA().getType());
+  auto aShape = aTensorTy.getShape();
+  auto encoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+  if (retShapePerCTA[rank - 2] < 16 || retShapePerCTA[rank - 1] < 16 ||
+      aShape[rank - 1] < 16)
+    return false;
   if (version == 3) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
-    auto retType = op.getType();
-    auto retShapePerCTA = getShapePerCTA(retType);
-    auto rank = retShapePerCTA.size();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = TritonGPUDialect::getNumWarps(mod);
     // TODO(Keren): for now, fallback to MMAv2 if handling batch matmul.
