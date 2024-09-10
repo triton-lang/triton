@@ -37,8 +37,9 @@ def test_mma_remark(capfd):
     triton.compile(
         triton.compiler.ASTSource(
             fn=matmul_kernel, signature={
-                0: '*fp32', 1: '*fp32', 2: '*fp32', 3: 'i32', 4: 'i32', 5: 'i32', 6: 'i32', 7: 'i32', 8: 'i32', 9:
-                'i32', 10: 'i32', 11: 'i32'
+                'a_ptr': '*fp32', 'b_ptr': '*fp32', 'c_ptr': '*fp32', 'M': 'i32', 'N': 'i32', 'K': 'i32', 'stride_am':
+                'i32', 'stride_ak': 'i32', 'stride_bk': 'i32', 'stride_bn': 'i32', 'stride_cm': 'i32', 'stride_cn':
+                'i32'
             }, constants={}))
     captured = capfd.readouterr()
 
@@ -75,8 +76,10 @@ def test_remark_vectorization(capfd):
 
     XBLOCK = 1024
     triton.compile(
-        triton.compiler.ASTSource(fn=ldst_vec, signature={0: '*i64', 1: '*i64', 2: '*fp16', 3: '*fp32', 4: '*fp16'},
-                                  constants={"XBLOCK": XBLOCK}), options={"num_warps": 1})
+        triton.compiler.ASTSource(
+            fn=ldst_vec, signature={
+                'in_ptr0': '*i64', 'in_ptr1': '*i64', 'in_ptr2': '*fp16', 'in_ptr3': '*fp32', 'out_ptr0': '*fp16'
+            }, constants={"XBLOCK": XBLOCK}), options={"num_warps": 1})
 
     _, err = capfd.readouterr()
     assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
