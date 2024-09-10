@@ -37,6 +37,10 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+#define PERF_WARNING(OP, INFO)                                                 \
+  (OP).emitRemark() << "Warning: " << INFO << ".\n"                             \
+                    << "Performance is possibly impacted.\n"
+
 using namespace mlir;
 using namespace mlir::scf;
 using namespace mlir::triton;
@@ -125,6 +129,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   if (!upperBoundCst || !lowerBoundCst || !stepCst) {
     if (!options.supportDynamicLoops) {
       LDBG("--dynamic loop not supported -> BAIL");
+      PERF_WARNING(forOp, "dynamic loop not supported");
       return false;
     }
   } else {
@@ -136,6 +141,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
       dynamicLoop = false;
     } else if (!options.supportDynamicLoops) {
       LDBG("--fewer loop iterations than pipeline stages -> BAIL");
+      PERF_WARNING(forOp, "fewer loop iterations than pipeline stages");
       return false;
     }
   }
@@ -143,12 +149,14 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   predicateFn = options.predicateFn;
   if ((!peelEpilogue || dynamicLoop) && predicateFn == nullptr) {
     LDBG("--no epilogue or predicate set -> BAIL");
+    PERF_WARNING(forOp, "no epilogue or predicate set");
     return false;
   }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   options.getScheduleFn(forOp, schedule);
   if (schedule.empty()) {
     LDBG("--empty schedule -> BAIL");
+    PERF_WARNING(forOp, "empty schedule");
     return false;
   }
 
@@ -170,6 +178,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
 
   if (!verifySchedule()) {
     LDBG("--invalid schedule: " << op << " -> BAIL");
+    PERF_WARNING(op, "invalid schedule");
     return false;
   }
 
@@ -205,6 +214,8 @@ bool LoopPipelinerInternal::initializeLoopInfo(
                    })) {
     LDBG("--only support loop carried dependency with a distance of 1 or "
          "defined outside of the loop -> BAIL");
+    PERF_WARNING(forOp, "only support loop carried dependency with a distance "
+                        "of 1 or defined outside of the loop");
     return false;
   }
   annotateFn = options.annotateFn;
@@ -322,9 +333,15 @@ LogicalResult LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
       int predicateIdx = i - stages[op];
       if (predicates[predicateIdx]) {
         OpBuilder::InsertionGuard insertGuard(rewriter);
-        newOp = predicateFn(rewriter, newOp, predicates[predicateIdx]);
-        if (newOp == nullptr)
+        Operation *predicateOp =
+            predicateFn(rewriter, newOp, predicates[predicateIdx]);
+        if (predicateOp == nullptr) {
+          LDBG("--predicateFn returned nullptr -> BAIL");
+          PERF_WARNING(*newOp,
+                       "cannot create predicate operation for prologue");
           return failure();
+        }
+        newOp = predicateOp;
       }
       if (annotateFn)
         annotateFn(newOp, triton::PipeliningOption::PipelinerPart::Prologue, i);
@@ -572,9 +589,14 @@ LogicalResult LoopPipelinerInternal::createKernel(
 
     if (predicates[useStage]) {
       OpBuilder::InsertionGuard insertGuard(rewriter);
-      newOp = predicateFn(rewriter, newOp, predicates[useStage]);
-      if (!newOp)
+      Operation *predicateOp =
+          predicateFn(rewriter, newOp, predicates[useStage]);
+      if (!predicateOp) {
+        LDBG("--predicateFn returned nullptr -> BAIL");
+        PERF_WARNING(*newOp, "cannot create predicate operation for kernel");
         return failure();
+      }
+      newOp = predicateOp;
       // Remap the results to the new predicated one.
       for (auto values : llvm::zip(op->getResults(), newOp->getResults()))
         mapping.map(std::get<0>(values), std::get<1>(values));
@@ -710,9 +732,15 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
           });
       if (dynamicLoop) {
         OpBuilder::InsertionGuard insertGuard(rewriter);
-        newOp = predicateFn(rewriter, newOp, predicates[currentVersion]);
-        if (!newOp)
+        Operation *predicateOp =
+            predicateFn(rewriter, newOp, predicates[currentVersion]);
+        if (!predicateOp) {
+          LDBG("--predicateFn returned nullptr -> BAIL");
+          PERF_WARNING(*newOp,
+                       "cannot create predicate operation for epilogue");
           return failure();
+        }
+        newOp = predicateOp;
       }
       if (annotateFn)
         annotateFn(newOp, triton::PipeliningOption::PipelinerPart::Epilogue,
@@ -782,15 +810,21 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
   if (modifiedIR)
     *modifiedIR = false;
   LoopPipelinerInternal pipeliner;
-  if (!pipeliner.initializeLoopInfo(forOp, options))
+  if (!pipeliner.initializeLoopInfo(forOp, options)) {
+    LDBG("--initializeLoopInfo failed -> BAIL");
+    PERF_WARNING(forOp, "failed to initialize loop pipeliner");
     return failure();
+  }
 
   if (modifiedIR)
     *modifiedIR = true;
 
   // 1. Emit prologue.
-  if (failed(pipeliner.emitPrologue(rewriter)))
+  if (failed(pipeliner.emitPrologue(rewriter))) {
+    LDBG("--emitPrologue failed -> BAIL");
+    PERF_WARNING(forOp, "failed to emit prologue");
     return failure();
+  }
 
   // 2. Track values used across stages. When a value cross stages it will
   // need to be passed as loop iteration arguments.
@@ -809,16 +843,22 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
   // Create the kernel block, order ops based on user choice and remap
   // operands.
   if (failed(pipeliner.createKernel(newForOp, crossStageValues, loopArgMap,
-                                    rewriter)))
+                                    rewriter))) {
+    LDBG("--createKernel failed -> BAIL");
+    PERF_WARNING(forOp, "failed to create kernel");
     return failure();
+  }
 
   llvm::SmallVector<Value> returnValues =
       newForOp.getResults().take_front(forOp->getNumResults());
   if (options.peelEpilogue) {
     // 4. Emit the epilogue after the new forOp.
     rewriter.setInsertionPointAfter(newForOp);
-    if (failed(pipeliner.emitEpilogue(rewriter, returnValues)))
+    if (failed(pipeliner.emitEpilogue(rewriter, returnValues))) {
+      LDBG("--emitEpilogue failed -> BAIL");
+      PERF_WARNING(forOp, "failed to emit epilogue");
       return failure();
+    }
   }
   // 5. Erase the original loop and replace the uses with the epilogue output.
   if (forOp->getNumResults() > 0)
