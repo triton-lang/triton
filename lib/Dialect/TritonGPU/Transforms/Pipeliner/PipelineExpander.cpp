@@ -38,7 +38,7 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 #define PERF_WARNING(OP, INFO)                                                 \
-  (OP).emitRemark() << "Warning: " << INFO << ".\n"                             \
+  (OP).emitRemark() << "Warning: " << INFO << ".\n"                            \
                     << "Performance is possibly impacted.\n"
 
 using namespace mlir;
