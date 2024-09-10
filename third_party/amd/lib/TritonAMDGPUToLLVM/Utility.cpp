@@ -1,17 +1,221 @@
 #include "Utility.h"
+#include "ConvertLayoutOpToLLVM/SharedToDotOperandHelper.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeRange.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/LogicalResult.h"
+#include <utility>
 
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::getFunctionType;
 
 namespace {
+
+// Utility function to traverse a struct, get to the GEP contained
+// in the struct at position `pos` and extract its base pointer and offset
+mlir::FailureOr<std::pair<Value, Value>> getBaseAndOffset(Value ptr,
+                                                          int64_t pos = 0) {
+  // Typedef the return type here, to have more coincise code
+  using ReturnType = mlir::FailureOr<std::pair<Value, Value>>;
+
+  Operation *currentOp = ptr.getDefiningOp();
+  auto res =
+      llvm::TypeSwitch<Operation *, ReturnType>(currentOp)
+          .Case<LLVM::GEPOp>([&](auto gepOp) -> ReturnType {
+            SmallVector<Value> indices =
+                llvm::to_vector(gepOp.getDynamicIndices());
+            if (indices.size() == 1)
+              return std::make_pair(gepOp.getBase(), indices[0]);
+            return failure();
+          })
+          .Case<LLVM::AddrSpaceCastOp>([&](auto addrspaceCastOp) -> ReturnType {
+            return getBaseAndOffset(addrspaceCastOp.getArg(), pos);
+          })
+          .Case<LLVM::ExtractValueOp>([&](auto extractValOp) -> ReturnType {
+            ArrayRef<int64_t> position = extractValOp.getPosition();
+            if (position.size() > 1)
+              return failure();
+            return getBaseAndOffset(extractValOp.getContainer(), position[0]);
+          })
+          .Case<LLVM::InsertValueOp>([&](auto insertValOp) -> ReturnType {
+            ArrayRef<int64_t> position = insertValOp.getPosition();
+            if (position.size() > 1)
+              return failure();
+            if (position[0] == pos)
+              return getBaseAndOffset(insertValOp.getValue(), 0);
+            return getBaseAndOffset(insertValOp.getContainer(), pos);
+          })
+          .Default([&](Operation *op) -> ReturnType { return failure(); });
+  return res;
+}
+
+// Utility class to take care of buffer operation emission. We may add more
+// emitters into this as needed.
+struct BufferEmitter {
+
+  BufferEmitter(RewriterBase &rw, Location loc, AMD::TargetInfo ti)
+      : rewriter(rw), loc(loc), targetInfo(ti) {}
+
+  // Emit a predicated rocdl.raw.ptr.buffer.load. `type` needs to be a
+  // `VectorType`
+  Value emitMaskedBufferLoad(Type type, Value basePtr, Value offset, Value pred,
+                             Value falseVal, bool nt = false) {
+    // VectorType vecTy = cast<VectorType>(type);
+    SmallVector<Value, 6> args;
+    fillBufferArgs(type, basePtr, offset, pred, nt, args);
+    Type bufferType = getBufferOpType(type);
+    Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
+        loc, bufferType, args, ArrayRef<NamedAttribute>());
+    data = bitcast(data, type);
+    return data;
+  }
+
+  // Emit a predicated rocdl.raw.ptr.buffer.store. `type` needs to be a
+  // `VectorType`
+  void emitMaskedBufferStore(Value data, Value basePtr, Value offset,
+                             Value pred, bool nt = false) {
+    // We only support vector types. So the caller needs to ensure we have a
+    // vector type here
+    VectorType vecTy = cast<VectorType>(data.getType());
+    Type bufferType = getBufferOpType(vecTy);
+    if (vecTy != bufferType)
+      data = bitcast(data, bufferType);
+    SmallVector<Value, 6> args{data};
+    fillBufferArgs(vecTy, basePtr, offset, pred, nt, args);
+    rewriter.create<ROCDL::RawPtrBufferStoreOp>(loc, TypeRange{}, args,
+                                                ArrayRef<NamedAttribute>());
+  }
+
+private:
+  // Given a type, the buffer type can be either the same type
+  // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
+  // a vector of 4xi32. This usually makes the life of the backend easier
+  Type getBufferOpType(Type type) {
+    int64_t vecSize = 1;
+    Type elementType = type;
+    if (auto vecType = dyn_cast<VectorType>(type)) {
+      vecSize = vecType.getNumElements();
+      elementType = vecType.getElementType();
+    }
+
+    const int valueElemNBits =
+        std::max(8u, elementType.getIntOrFloatBitWidth());
+    const size_t totalWidthBits = valueElemNBits * vecSize;
+
+    // For bf16, always convert to i16
+    Type bufferElementType = elementType;
+    if (elementType.isBF16())
+      bufferElementType = rewriter.getI16Type();
+
+    // If we are dealing with a subword type (e.g., i8 or f16) but we
+    // still need multiple words, then pack the subwords into 32bit integers
+    // and update the vector length and the type
+    int64_t bufferVecSize = vecSize;
+    if (valueElemNBits < 32) {
+      if (totalWidthBits > 32) {
+        bufferElementType = rewriter.getI32Type();
+        bufferVecSize = totalWidthBits / 32;
+      } else {
+        bufferElementType = rewriter.getIntegerType(totalWidthBits);
+        bufferVecSize = 1;
+      }
+    }
+
+    // This is the buffer type that the buffer operation will use. It
+    // will be bitcast-able to the original type. So if the types
+    // ended up different, we simply have to emit a `bitcastOp` to convert
+    Type bufferType = type;
+    if (bufferVecSize != vecSize)
+      bufferType = VectorType::get(bufferVecSize, bufferElementType);
+    if (bufferVecSize == 1)
+      bufferType = getElementTypeOrSelf(bufferType);
+
+    return bufferType;
+  }
+
+  // Fill common buffer operation arguments. A large part of this function is
+  // courtesy of: mlir/lib/Conversion/AMDGPUToROCDL/AMDGPUToROCDL.cpp
+  void fillBufferArgs(Type type, Value basePtr, Value offset, Value pred,
+                      bool nt, SmallVector<Value> &args) {
+    // 1. Create the resource descriptor
+    // bits 0-11: dst sel, ignored by these intrinsics
+    // bits 12-14: data format (ignored, must be nonzero, 7=float)
+    // bits 15-18: data format (ignored, must be nonzero, 4=32bit)
+    // bit 19: In nested heap (0 here)
+    // bit 20: Behavior on unmap (0 means  "return 0 / ignore")
+    // bits 21-22: Index stride for swizzles (N/A)
+    // bit 23: Add thread ID (0)
+    // bit 24: Reserved to 1 (RDNA) or 0 (CDNA)
+    // bits 25-26: Reserved (0)
+    // bit 27: Buffer is non-volatile (CDNA only)
+    // bits 28-29: Out of bounds select (0 = structured, 1 = check index, 2 =
+    //  none, 3 = either swizzles or testing against offset field) RDNA only
+    // bits 30-31: Type (must be 0)
+    uint32_t flags = (7 << 12) | (4 << 15);
+    if (targetInfo.getISAFamily() == AMD::ISAFamily::RDNA2 ||
+        targetInfo.getISAFamily() == AMD::ISAFamily::RDNA3) {
+      flags |= (1 << 24);
+      uint32_t oob = 3;
+      flags |= (oob << 28);
+    }
+    Value stride = int_val(16, 0);
+    Value flagsConst = int_val(32, flags);
+    Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
+    Value numRecordsByte = int_val(32, std::numeric_limits<int>::max() - 1);
+
+    Value resource = rewriter.createOrFold<ROCDL::MakeBufferRsrcOp>(
+        loc, rsrcType, basePtr, stride, numRecordsByte, flagsConst);
+
+    // 2. Create the (masked) offset
+    Type elementType = getElementTypeOrSelf(type);
+    const int valueElemNBits =
+        std::max(8u, elementType.getIntOrFloatBitWidth());
+    const int elementByteWidth = valueElemNBits / 8;
+    // Please note: the index passed to GEP is not in bytes, but in number of
+    // elements In order to pass the index to the buffer operation, we need to
+    // convert in bytes (i.e., we need to multiply by `elementByteWidth`)
+    Value vOffsetOutOfBunds = int_val(
+        32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
+    Value vRealOffset = mul(int_val(32, elementByteWidth), offset);
+    Value maskedOffset = select(pred, vRealOffset, vOffsetOutOfBunds);
+
+    // 3. Set the sgprOffset to 0
+    Value sgprOffset = int_val(32, 0);
+
+    // 4. Create the cache modifiers word
+    // bit 0: GLC = 0 (atomics drop value, less coherency)
+    // bits 1-2: SLC, DLC = 0 (similarly)
+    // bit 3: swizzled (0 for raw)
+    Value cacheModifiers = int_val(32, nt << 1);
+
+    // 5. Add the arguments
+    args.push_back(resource);
+    args.push_back(maskedOffset);
+    args.push_back(sgprOffset);
+    args.push_back(cacheModifiers);
+  }
+
+  // Rewriter utilities
+  RewriterBase &rewriter;
+  Location loc;
+  AMD::TargetInfo targetInfo;
+};
+
 enum class ShflKind : uint32_t {
   bfly = 0,
   up = 1,
@@ -189,16 +393,37 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, int64_t alignmentBytes,
-             triton::CacheModifier cm) {
+             Value pred, Value falseVal,
+             std::optional<triton::AMD::TargetInfo> targetInfo,
+             int64_t alignmentBytes, triton::CacheModifier cm,
+             bool useBufferOps) {
 
-  // Try to emit llvm.intr.masked.load if we can. In theory the backend should
-  // be happier because we emit less branchy code to optimize. The backend will
-  // lower it down however it wants at some point.
-  if (alignmentBytes &&
-      (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE)) {
-    // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we need
-    // to bitcast to `vector<1xelemTy>` (and back)
+  bool noCacheModifiers = (cm == triton::CacheModifier::NONE);
+  bool nt = (cm == triton::CacheModifier::CG);
+  // Use a predicated buffer load intrinsic if we can. This should be optimal,
+  // since we don't have to emit any branch. Also, in this way the hardware
+  // is automatically doing the pointer arithmetic, so we should save in VALU
+  // arithmetic and registers.
+  if (useBufferOps && targetInfo && (noCacheModifiers || nt)) {
+    auto maybeBaseAndOffset = getBaseAndOffset(ptr);
+    if (!failed(maybeBaseAndOffset)) {
+      BufferEmitter bufferEmitter(rewriter, loc, targetInfo.value());
+      Value basePtr = maybeBaseAndOffset->first;
+      Value offset = maybeBaseAndOffset->second;
+      bool nt = (cm == triton::CacheModifier::CG);
+      Value vecData = bufferEmitter.emitMaskedBufferLoad(
+          elemTy, basePtr, offset, pred, falseVal, nt);
+      vecData = bitcast(vecData, elemTy);
+      return vecData;
+    }
+  }
+
+  // Alternatively, try to emit llvm.intr.masked.load if we can. In theory the
+  // backend should be happier because we emit less branchy code to optimize.
+  // The backend will lower it down however it wants at some point.
+  if (alignmentBytes && (noCacheModifiers || nt)) {
+    // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we
+    // need to bitcast to `vector<1xelemTy>` (and back)
     int64_t vecSize = getNumElements(elemTy);
     Type vecType = castToVectorType(elemTy);
     falseVal = bitcast(falseVal, vecType);
@@ -211,6 +436,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
     return vecData;
   }
 
+  // Default strategy: emit a branch in MLIR.
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
   auto getLoadNameRaw = [](triton::CacheModifier cm) {
@@ -237,10 +463,29 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, int64_t alignmentBytes, triton::CacheModifier cm) {
-  // Try to emit llvm.intr.masked.store if we can. In theory the backend should
-  // be happier because we emit less branchy code to optimize. The backend will
-  // lower it down however it wants at some point.
+             Value pred, std::optional<triton::AMD::TargetInfo> targetInfo,
+             int64_t alignmentBytes, triton::CacheModifier cm,
+             bool useBufferOps) {
+  // Use a predicated buffer store intrinsic if we can. This should be optimal,
+  // since we don't have to emit any branch, ever.
+  if (useBufferOps && targetInfo && cm == triton::CacheModifier::NONE) {
+    auto maybeBaseAndOffset = getBaseAndOffset(ptr);
+    if (!failed(maybeBaseAndOffset)) {
+      BufferEmitter bufferEmitter(rewriter, loc, targetInfo.value());
+      Type elemTy = val.getType();
+      int64_t vecSize = getNumElements(elemTy);
+      Type vecType = castToVectorType(elemTy);
+      Value basePtr = maybeBaseAndOffset->first;
+      Value offset = maybeBaseAndOffset->second;
+      val = bitcast(val, vecType);
+      bufferEmitter.emitMaskedBufferStore(val, basePtr, offset, pred);
+      return;
+    }
+  }
+
+  // Alternatively, try to emit llvm.intr.masked.store if we can. In theory
+  // the backend should be happier because we emit less branchy code to
+  // optimize. The backend will lower it down however it wants at some point.
   if (alignmentBytes && cm == triton::CacheModifier::NONE) {
     // `llvm.intr.masked.store` only accepts vectors. If we see a scalar we need
     // to bitcast to `vector<1xelemTy>`
@@ -254,6 +499,7 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
     return;
   }
 
+  // Default strategy: emit a branch in MLIR.
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();

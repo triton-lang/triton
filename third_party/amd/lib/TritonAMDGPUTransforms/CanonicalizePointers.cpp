@@ -17,6 +17,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -545,6 +546,8 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
 
   // Early exit for the case of a constant tensor
   if (Value scalarConst = getScalarConstant(rewriter, curLoc, offset)) {
+    // Propagate the attributes if this is only a constant update. Whatever
+    // attribute was valid for the original tensor update will be still valid
     newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
                                                scalarConst);
     pointers[nextPtr] = fatPtr.copyWithOffset(newPtr);
@@ -571,17 +574,22 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
   bool propagateAtrs = true;
   if (!isZeroConst(nonUniformOffset)) {
     Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
+    Type fatPtrOffsetType = getElementTypeOrSelf(fatPtrOffset);
     canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
 
     // If we the incoming offset is 32 bits, then we have to cast to 64
-    if (addPtrOffsetType.isInteger(32))
+    if (addPtrOffsetType.isInteger(32) && fatPtrOffsetType.isInteger(64))
       nonUniformOffset =
           extend32bitOffsetTo64Bits(rewriter, curLoc, nonUniformOffset);
+    else if (addPtrOffsetType.isInteger(64) && fatPtrOffsetType.isInteger(32))
+      nonUniformOffset =
+          narrow64bitOffsetTo32bits(rewriter, curLoc, nonUniformOffset);
 
     newOffset =
         rewriter.create<arith::AddIOp>(curLoc, nonUniformOffset, fatPtrOffset);
     propagateAtrs = false;
   }
+
   opToDelete.insert(addPtrOp);
   pointers[nextPtr] = FatPtr{newPtr, newOffset, canNarrow};
 
@@ -958,14 +966,19 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
 
 LogicalResult PointerCanonicalizer::rewriteFunction(triton::FuncOp funcOp) {
   Region &region = funcOp.getRegion();
-  for (Value arg : region.getArguments()) {
+  for (auto [idx, arg] : llvm::enumerate(region.getArguments())) {
     // The pointer argument needs to be a scalar
     if (!isa<triton::PointerType>(arg.getType()))
       continue;
 
+    int64_t bitness = 64;
+    if (IntegerAttr pointerRangeAttr =
+            funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
+      bitness = pointerRangeAttr.getInt();
+
     rewriter.setInsertionPointToStart(&region.front());
     Value zeroOffset =
-        rewriter.create<arith::ConstantIntOp>(region.getLoc(), 0, 64);
+        rewriter.create<arith::ConstantIntOp>(region.getLoc(), 0, bitness);
 
     // Start the rewrite
     clearFunctionState();

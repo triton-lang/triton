@@ -25,6 +25,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                       const DenseSet<Value> &assumptions,
                                        PatternBenefit benefit);
 
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,

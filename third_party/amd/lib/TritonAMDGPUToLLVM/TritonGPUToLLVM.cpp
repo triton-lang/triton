@@ -12,6 +12,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
@@ -107,6 +108,13 @@ struct ConvertTritonAMDGPUToLLVM
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
 
+    // Collect all the assumed expressions
+    DenseSet<Value> assumptions;
+    mod.walk([&](Operation *op) {
+      if (op->getName().getStringRef() == "llvm.intr.assume")
+        assumptions.insert(op->getOperand(0));
+    });
+
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
@@ -183,7 +191,7 @@ struct ConvertTritonAMDGPUToLLVM
                                              targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            numWarps, axisInfoAnalysis,
-                                           AMDBenefit);
+                                           assumptions, AMDBenefit);
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
                       commonBenefit);
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns,
