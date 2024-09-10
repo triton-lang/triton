@@ -69,9 +69,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Type Promotion</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html#broadcasting">Broadcasting</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html#differences-with-numpy">Differences with NumPy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
@@ -128,25 +126,25 @@ Credits: OpenAI kernel team</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     114.253325     93.979200
-1   2048.0     141.914607    110.081687
-2   4096.0     155.124249    125.638424
-3   8192.0     169.098510    132.213495
-4  16384.0     174.167377    135.770608
+0   1024.0     113.697307     94.140564
+1   2048.0     141.155536    111.539698
+2   4096.0     156.701544    126.079583
+3   8192.0     167.796643    131.016755
+4  16384.0     174.028580    135.888018
 fused-attention-batch4-head32-d64-fwd-causal=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     158.215806    128.714628
-1   2048.0     168.736353    130.435120
-2   4096.0     171.165385    135.189044
-3   8192.0     173.641020    135.423011
-4  16384.0     170.087608    136.423963
+0   1024.0     158.423972    128.829129
+1   2048.0     167.728706    130.046366
+2   4096.0     169.124122    134.769985
+3   8192.0     174.387587    135.284794
+4  16384.0     176.729448    136.365486
 fused-attention-batch4-head32-d64-bwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      72.914234     71.978741
-1   2048.0      97.192045     97.079356
-2   4096.0     114.859580    115.403991
-3   8192.0     124.840631    125.993505
-4  16384.0     132.079690    131.815389
+0   1024.0      72.919252     71.823034
+1   2048.0      96.197546     97.035313
+2   4096.0     115.025696    114.837458
+3   8192.0     125.454726    127.059508
+4  16384.0     130.608044    132.239099
 </pre></div>
 </div>
 <div class="line-block">
@@ -782,7 +780,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 54.701 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 54.079 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>

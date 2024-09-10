@@ -76,9 +76,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Type Promotion</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html#broadcasting">Broadcasting</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html#differences-with-numpy">Differences with NumPy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul>
@@ -471,36 +469,36 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 </div>
 <img src="../../_images/sphx_glr_05-layer-norm_001.png" srcset="../../_images/sphx_glr_05-layer-norm_001.png" alt="05 layer norm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>layer-norm-backward:
           N      Triton       Torch
-0    1024.0  127.999995  378.092307
-1    1536.0  185.246229  449.560983
-2    2048.0  245.760006  517.389457
-3    2560.0  308.743716  574.205608
-4    3072.0  383.999986  614.400016
-5    3584.0  434.424255  547.872604
-6    4096.0  561.737163  561.737163
-7    4608.0  550.208948  567.138460
-8    5120.0  599.414623  566.267298
-9    5632.0  637.584909  563.200014
+0    1024.0  118.153847  378.092307
+1    1536.0  173.070417  444.144584
+2    2048.0  237.449270  517.389457
+3    2560.0  291.184826  568.888888
+4    3072.0  357.902918  609.322328
+5    3584.0  477.866659  547.872604
+6    4096.0  499.005073  561.737163
+7    4608.0  547.485160  567.138460
+8    5120.0  582.369652  566.267298
+9    5632.0  622.894028  563.200014
 10   6144.0  692.281669  562.809189
-11   6656.0  749.971808  566.468098
-12   7168.0  839.180472  540.981122
-13   7680.0  959.999966  548.571433
-14   8192.0  992.969726  549.184373
-15   8704.0  705.729699  561.548373
-16   9216.0  747.243211  567.138460
+11   6656.0  753.509437  566.468098
+12   7168.0  789.137611  540.981122
+13   7680.0  865.352086  546.943612
+14   8192.0  987.979890  547.654599
+15   8704.0  703.353556  561.548373
+16   9216.0  744.727294  565.687967
 17   9728.0  773.086092  570.836186
-18  10240.0  782.675148  562.379850
-19  10752.0  806.400020  553.751076
-20  11264.0  831.803075  559.701851
-21  11776.0  821.581395  567.518063
+18  10240.0  780.190446  562.379850
+19  10752.0  803.887852  553.751076
+20  11264.0  826.715629  559.701851
+21  11776.0  819.199982  567.518063
 22  12288.0  842.605744  572.644636
 23  12800.0  865.352121  578.531044
 24  13312.0  907.636357  579.833026
-25  13824.0  908.975307  579.015709
-26  14336.0  937.504086  569.642383
-27  14848.0  950.271992  570.163213
-28  15360.0  957.506513  580.992908
-29  15872.0  940.562966  582.458739
+25  13824.0  906.491821  579.015709
+26  14336.0  934.956501  569.642383
+27  14848.0  947.744653  570.163213
+28  15360.0  955.025907  579.622631
+29  15872.0  938.246290  581.569482
 </pre></div>
 </div>
 </section>
@@ -512,7 +510,7 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 <p>Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, “Layer Normalization”, Arxiv 2016</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 29.250 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 29.227 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-05-layer-norm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/ae7fff29e1b574187bc930ed94bcc353/05-layer-norm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">05-layer-norm.ipynb</span></code></a></p>
