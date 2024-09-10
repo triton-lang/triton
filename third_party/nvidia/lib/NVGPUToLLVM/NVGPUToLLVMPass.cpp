@@ -367,7 +367,9 @@ public:
     operandsAndConstraints.push_back({opB, "l"});
 
     // `scale-d`
-    operandsAndConstraints.push_back({opScaleD, "b"});
+    if (op.getOpC())
+      operandsAndConstraints.push_back({opScaleD, "b"});
+
     return operandsAndConstraints;
   }
 
@@ -465,7 +467,10 @@ public:
     args += "$" + std::to_string(asmOpIdx++) + ", ";
 
     // `scale-d`
-    args += "$" + std::to_string(asmOpIdx++);
+    if (op.getOpC())
+      args += "$" + std::to_string(asmOpIdx++);
+    else
+      args += "0";
 
     // `imm-scale-a`, and `imm-scale-b` are 1 by default only for float-based
     // WGMMA
