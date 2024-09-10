@@ -581,7 +581,7 @@ def get_install_requires():
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.0.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="3.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
