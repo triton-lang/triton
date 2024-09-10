@@ -543,6 +543,21 @@ createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
   return allocs;
 }
 
+static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
+                                            Value pred) {
+  // Predicate dot so select will be removed (reduces register pressure)
+  if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
+    auto loc = dotOp->getLoc();
+    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp.getResult().getType(), pred, true);
+    auto thenB = ifOp.getThenBodyBuilder();
+    auto yield = thenB.create<scf::YieldOp>(loc, dotOp.getResult());
+    dotOp->moveBefore(yield);
+    ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp.getC());
+    return ifOp;
+  }
+  return tt::predicateOp(rewriter, op, pred);
+}
+
 static bool preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
                                            tt::PipeliningOption &options) {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
@@ -599,7 +614,7 @@ static bool preprocessLoopAndBuildSchedule(scf::ForOp &forOp, int numStages,
         s = std::move(schedule);
       };
   options.peelEpilogue = true;
-  options.predicateFn = tt::predicateOp;
+  options.predicateFn = streamPredication;
   options.supportDynamicLoops = true;
 
   OpBuilder builder(forOp);
