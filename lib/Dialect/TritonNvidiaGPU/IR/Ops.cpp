@@ -79,7 +79,7 @@ bool WarpGroupDotOp::needsPartialAccumulator() {
                aElTy.isFloat8E5M2FNUZ() || aElTy.isFloat8E4M3FNUZ();
   bool accFP32 = cast<TensorOrMemDesc>(d.getType()).getElementType().isF32();
   uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
-  return isFP8 && accFP32 && maxNumImpreciseAcc < aTensorTy.getShape()[1];
+  return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
 }
 
 // -- WarpGroupDotWaitOp --
