@@ -544,14 +544,15 @@ createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
 }
 
 static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
-                                            Value pred) {
+                                    Value pred) {
   // The epilogue peeling generates a select for the stage output. This causes
   // too much register pressure with the loop result and the epilogue-dot in
   // regs for the select. Conditionally executing the dot will allow the backend
   // to optimize the select away as redundant.
   if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
     auto loc = dotOp->getLoc();
-    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp.getResult().getType(), pred, true);
+    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp.getResult().getType(),
+                                           pred, /*withElseRegion=*/true);
     auto thenB = ifOp.getThenBodyBuilder();
     auto yield = thenB.create<scf::YieldOp>(loc, dotOp.getResult());
     dotOp->moveBefore(yield);
