@@ -583,7 +583,7 @@ class CodeGenerator(ast.NodeVisitor):
         ret_types = []
         ir_ret_types = []
         # variables in livein whose value is updated in `if`
-        for name in liveins:
+        for name in sorted(liveins):
             # check type
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
                 if name in defs:
@@ -603,7 +603,7 @@ class CodeGenerator(ast.NodeVisitor):
                 then_defs[name] = liveins[name]
         # variables that are both in then and else but not in liveins
         # TODO: could probably be cleaned up
-        for name in then_defs.keys() & else_defs.keys():
+        for name in sorted(then_defs.keys() & else_defs.keys()):
             if name in names:
                 continue
             then_ty = then_defs[name].type
@@ -821,7 +821,7 @@ class CodeGenerator(ast.NodeVisitor):
             names = []
             ret_types = []
             init_args = []
-            for name in loop_defs:
+            for name in sorted(loop_defs):
                 if name in liveins:
                     # We should not def new constexpr
                     assert _is_triton_tensor(loop_defs[name]), f'cannot reassign constxpr {name} in the loop'
@@ -864,7 +864,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.scf_stack.pop()
             loop_defs = self.local_defs
             yields = []
-            for name in loop_defs:
+            for name in sorted(loop_defs):
                 if name in liveins:
                     yields.append(loop_defs[name])
             self.builder.create_yield_op([y.handle for y in yields])
@@ -968,7 +968,7 @@ class CodeGenerator(ast.NodeVisitor):
             init_args = []
             yields = []
             names = []
-            for name in self.local_defs:
+            for name in sorted(self.local_defs):
                 if name in liveins:
                     assert _is_triton_tensor(self.local_defs[name]), f'cannot reassign constxpr {name} in the loop'
                     assert _is_triton_tensor(liveins[name]), f'cannot reassign constxpr {name} in the loop'
@@ -997,7 +997,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
             yields = []
-            for name in self.local_defs:
+            for name in sorted(self.local_defs):
                 if name in liveins:
                     yields.append(language.semantic.to_tensor(self.local_defs[name], self.builder))
 
