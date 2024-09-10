@@ -99,7 +99,7 @@ struct DecomposeUnsupportedAMDConversions
         return;
       }
 
-      auto currLDSUsage = mlir::triton::AMD::getCvtOpLDSUsage(cvtOp);
+      auto currLDSUsage = triton::AMD::getCvtOpLDSUsage(cvtOp);
       if (currLDSUsage <= sharedMemoryLimit) {
         return;
       }
