@@ -545,7 +545,10 @@ createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
 
 static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
                                             Value pred) {
-  // Predicate dot so select will be removed (reduces register pressure)
+  // The epilogue peeling generates a select for the stage output. This causes
+  // too much register pressure with the loop result and the epilogue-dot in
+  // regs for the select. Conditionally executing the dot will allow the backend
+  // to optimize the select away as redundant.
   if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
     auto loc = dotOp->getLoc();
     auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp.getResult().getType(), pred, true);
