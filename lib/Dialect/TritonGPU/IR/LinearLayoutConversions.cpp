@@ -565,17 +565,35 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   // For wmma with 16x16 output, each of the 32 threads holds 8 elements.
   //
-  // For the register (i.e., element) dimension, these 8 elements are along
-  // the matrix C's M dimension, with 1 consecutive elements spanning 1 row
-  // and then the next 1 row being a gap.
+  // The first version of WMMA layout has following specific:
+  // for the register (i.e., element) dimension, these 8 elements are
+  // along the matrix C's M dimension, with 1 consecutive elements
+  // spanning 1 row and then the next 1 row being a gap.
   //
   // For the lane (i.e., thread) dimension, these threads are along the
   // matrix C's N dimension, with 16 consecutive threads covering a whole
   // row and the next 16 threads start at the next row.
-  LinearLayout tileLayout(
-      {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
-       {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
-      {outDimNames[order[0]], outDimNames[order[1]]});
+  //
+  // The second version of wmma layout is less tricky:
+  // for the register dimension 8 elements are along the matrix C's M
+  // dimension. First 16 lanes take 0-8 elems along M, second 16 take 8-15.
+  // We have 16 pair of threads in each warp, one pair covers the whole
+  // column.
+  //
+  // Please also check explaining comments in TritonGPUAttrDefs.td at the
+  // AMDWmmaEncodingAttr section.
+  unsigned ver = getVersion();
+  assert(ver == 1 || ver == 2);
+  LinearLayout tileLayout =
+      ver == 1
+          ? LinearLayout(
+                {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
+                 {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
+                {outDimNames[order[0]], outDimNames[order[1]]})
+          : LinearLayout(
+                {{kRegister, {{0, 1}, {0, 2}, {0, 4}}},
+                 {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}}},
+                {outDimNames[order[0]], outDimNames[order[1]]});
 
   if (hasBatchDim) {
     assert(order[2] == 0);
@@ -631,9 +649,12 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   parentShape.insert(parentShape.begin() + getDim(), 1);
   std::optional<LinearLayout> parentLL =
       triton::gpu::toLinearLayout(parentShape, getParent());
-  if (!parentLL.has_value())
+  if (!parentLL.has_value()) {
+    if (mlir::isa<DotOperandEncodingAttr>(getParent()))
+      return std::nullopt;
     llvm::report_fatal_error(
         "Failed to compute parent layout for slice layout.");
+  }
 
   // Remove dimension getDim() from the parent layout.
   //
@@ -770,6 +791,72 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
   // [offset, rep, block]
   return ret.reshapeIns(
       {{kOffset, totalOffsets}, {kIteration, totalIters}, {kBlock, 1}});
+}
+
+namespace {
+
+// TODO (Keren): Currently, we have more restrictions than necessary when using
+// stmatrix.  These restrictions are retained from legacy code, and we could
+// relax some of them in the future.
+bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+                    ArrayRef<unsigned> paddedRepShape,
+                    ArrayRef<unsigned> order) {
+  auto mmaLayout =
+      mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  if (!mmaLayout || !mmaLayout.isHopper())
+    return false;
+  if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
+    return false;
+  if (order[0] != 1)
+    return false;
+
+  auto tensorShape = tensorTy.getShape();
+  if (tensorShape.size() != 2)
+    return false;
+  auto numIterations = ceil<unsigned>(tensorShape[1], repShape[1]) *
+                       ceil<unsigned>(tensorShape[0], repShape[0]);
+  if (numIterations > 1)
+    return false;
+  if (paddedRepShape[1] % 8 != 0)
+    return false;
+  return true;
+}
+
+} // anonymous namespace
+
+std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
+    MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order) {
+  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order))
+    return std::nullopt;
+
+  StringAttr kReg = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+  StringAttr kCol = S("dim1");
+  StringAttr kRow = S("dim0");
+
+  std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
+  std::vector<std::vector<int>> basesLane = {
+      {0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}};
+  LinearLayout layout =
+      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
+
+  // Expand the `register` dimension so the size of columns matches `n`.
+  auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  int n = mma.getInstrShape()[1];
+  layout *=
+      LinearLayout::identity1D(n / layout.getOutDimSize(kCol), kReg, kCol);
+
+  // Expand the `warp` dimension according to warpsPerCTA.
+  layout *=
+      identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol})
+          .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
+  auto ret =
+      combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
+  return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
+      .reshapeOuts(
+          {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
 } // namespace mlir::triton::gpu

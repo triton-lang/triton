@@ -41,7 +41,7 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 git clone https://github.com/triton-lang/triton.git;
 cd triton;
 
-pip install ninja cmake wheel; # build-time dependencies
+pip install ninja cmake wheel pybind11; # build-time dependencies
 pip install -e python
 ```
 
@@ -54,7 +54,7 @@ cd triton;
 python -m venv .venv --prompt triton;
 source .venv/bin/activate;
 
-pip install ninja cmake wheel; # build-time dependencies
+pip install ninja cmake wheel pybind11; # build-time dependencies
 pip install -e python
 ```
 
@@ -117,9 +117,10 @@ arbitrary LLVM version.
   (probably because, in our build, users don't invoke cmake directly, but
   instead use setup.py).  Teach vscode how to compile Triton as follows.
 
-    - Do a local build.
+    - Do a local build. Run command `pip install -e python`
     - Get the full path to the `compile_commands.json` file produced by the build:
-      `find python/build -name 'compile_commands.json | xargs readlink -f'`
+      `find python/build -name 'compile_commands.json' | xargs readlink -f`.
+      You might get a full path similar to `/Users/{username}/triton/python/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
     - In vscode, install the
       [C/C++
       extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
@@ -174,6 +175,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
+  - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
   GPU.  You can insert Python breakpoints in your kernel code!

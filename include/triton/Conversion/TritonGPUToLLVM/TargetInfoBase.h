@@ -37,6 +37,9 @@ public:
                        pred);
   }
 
+  virtual void storeMatrixShared(RewriterBase &rewriter, Location loc,
+                                 Value ptr, Value val) const = 0;
+
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
@@ -53,12 +56,6 @@ public:
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned numLaneToReduce,
                           unsigned interleave) const = 0;
-
-  virtual bool canUseStMatrix(RankedTensorType srcTy,
-                              ArrayRef<unsigned> paddedRepShape,
-                              ArrayRef<unsigned> outOrd,
-                              unsigned accumNumReplicates,
-                              int swizzleByteWidth = 0) const = 0;
 
   // TODO (Keren): Remove this function once layout conversion using stmatrix is
   // handled by Linear Layout.

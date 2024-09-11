@@ -58,7 +58,7 @@ triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
     return triton::nvgpu::WGMMAEltType::s8;
   } else if (aTy.isFloat8E5M2()) {
     return triton::nvgpu::WGMMAEltType::e5m2;
-  } else if (aTy.isFloat8E4M3FNUZ()) {
+  } else if (aTy.isFloat8E4M3FN()) {
     return triton::nvgpu::WGMMAEltType::e4m3;
   } else {
     llvm::report_fatal_error("Unsupported mma operand type found");
@@ -357,9 +357,9 @@ static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
 LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
-                         Value loadedA, Value loadedB, Value loadedC,
-                         bool allowTF32, uint32_t maxNumImpreciseAcc, bool sync,
-                         Value thread) {
+                         Value useCOperand, Value loadedA, Value loadedB,
+                         Value loadedC, bool allowTF32,
+                         uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto aTensorTy = cast<TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<TensorOrMemDesc>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
@@ -436,8 +436,13 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       auto accTy =
           LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
       Value d;
-      if (!zeroAcc)
+      Value useC = i1_val(0);
+      if (!zeroAcc) {
         d = packLLElements(loc, typeConverter, mmaOut, rewriter, accTy);
+        useC = i1_val(true);
+      }
+      if (useCOperand)
+        useC = and_(useC, useCOperand);
       uint32_t numLowPrecisionAcc = 0;
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
@@ -463,8 +468,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
             (numLowPrecisionAcc >= maxNumImpreciseAcc || k == numRepK - 1);
         Value mmaAcc = needsPartialAccumulator ? partialAcc : d;
         mmaAcc = rewriter.create<triton::nvgpu::WGMMAOp>(
-            loc, accTy, a, b, mmaAcc, M, N, K, eltTypeC, eltTypeA, eltTypeB,
-            layoutA, layoutB);
+            loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC, eltTypeA,
+            eltTypeB, layoutA, layoutB);
+        useC = i1_val(1);
         if (needsPartialAccumulator)
           partialAcc = mmaAcc;
         else
@@ -510,9 +516,9 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
          mlir::isa<DotOperandEncodingAttr>(AEnc));
   assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
          "Operand B should use Shared layout.");
-  return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
-                    op.getA(), op.getB(), op.getC(), op.getD(),              //
-                    adaptor.getA(), adaptor.getB(), adaptor.getC(),
+  return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
+                    op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
+                    adaptor.getA(), adaptor.getB(), adaptor.getC(),           //
                     op.getInputPrecision() == InputPrecision::TF32,
                     op.getMaxNumImpreciseAcc(), !op.getIsAsync(), thread);
 }

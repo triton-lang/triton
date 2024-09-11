@@ -551,6 +551,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
       GenericOpPattern<triton::ExperimentalDescriptorLoadOp>,
       GenericOpPattern<triton::ExperimentalDescriptorStoreOp>,
+      GenericOpPattern<triton::ExperimentalTensormapCreateOp>,
+      GenericOpPattern<triton::ExperimentalTensormapFenceproxyAcquireOp>,
       GenericOpPattern<triton::CallOp>, TritonFuncOpPattern>(typeConverter,
                                                              context);
 }

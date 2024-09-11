@@ -103,10 +103,8 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
     // the column offset
     auto subprogramAttr = LLVM::DISubprogramAttr::get(
         context, distinctId, compileUnitAttr, fileAttr, funcNameAttr,
-        funcNameAttr, fileAttr,
-        /*line=*/line,
-        /*scopeline=*/line, subprogramFlags, subroutineTypeAttr,
-        /*retainedNodes=*/{});
+        funcNameAttr, fileAttr, /*line=*/line, /*scopeline=*/line,
+        subprogramFlags, subroutineTypeAttr, /*retainNodes=*/{});
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 

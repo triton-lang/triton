@@ -1040,7 +1040,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<LoadOpAxisInfoVisitor>();
 }
 
-void AxisInfoAnalysis::visitOperation(
+LogicalResult AxisInfoAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
   // TODO: For sure not the right way to do this
@@ -1049,8 +1049,10 @@ void AxisInfoAnalysis::visitOperation(
     if (op->getValue().getRank() == 0)
       setToEntryState((dataflow::Lattice<AxisInfo> *)op);
   AxisInfo curr = visitors.apply(op, operands);
-  if (curr.getRank() == 0)
-    return setAllToEntryStates(results);
+  if (curr.getRank() == 0) {
+    setAllToEntryStates(results);
+    return success();
+  }
   // override with hint
   auto newContiguity = curr.getContiguity();
   auto newDivisibility = curr.getDivisibility();
@@ -1072,6 +1074,7 @@ void AxisInfoAnalysis::visitOperation(
   // join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));
+  return success();
 }
 
 void AxisInfoAnalysis::visitForOpInductionVar(

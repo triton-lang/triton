@@ -173,7 +173,7 @@ def triton_key():
     contents.append(libtriton_hash.hexdigest())
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
-    for lib in pkgutil.iter_modules([language_path]):
+    for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
     return f'{__version__}' + '-'.join(contents)
@@ -196,6 +196,9 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
+    if os.getenv("TRITON_FRONT_END_DEBUGGING", "0") == "1":
+        return
+
     if e.__cause__ is not None:
         filter_traceback(e.__cause__)
     if e.__context__ is not None:

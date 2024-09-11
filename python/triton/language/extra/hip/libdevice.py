@@ -110,7 +110,7 @@ def isnan(arg0, _builder=None):
         ], {
             (core.dtype("fp32"), ): ("__ocml_isnan_f32", core.dtype("int32")),
             (core.dtype("fp64"), ): ("__ocml_isnan_f64", core.dtype("int32")),
-        }, is_pure=True, _builder=_builder)
+        }, is_pure=True, _builder=_builder).to(core.int1, _builder=_builder)
 
 
 @core.extern
@@ -139,7 +139,7 @@ def isinf(arg0, _builder=None):
         "", "", [arg0], {
             (core.dtype("fp32"), ): ("__ocml_isinf_f32", core.dtype("int32")),
             (core.dtype("fp64"), ): ("__ocml_isinf_f64", core.dtype("int32")),
-        }, is_pure=True, _builder=_builder)
+        }, is_pure=True, _builder=_builder).to(core.int1, _builder=_builder)
 
 
 @core.extern

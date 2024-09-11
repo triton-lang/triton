@@ -83,13 +83,14 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<I
     let arguments = (ins TT_TensorOrMemDesc:$a,
                          TT_TensorOrMemDesc:$b,
                          TT_FpIntTensor:$c,
+                         Optional<I1>:$useC,
                          DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
                          DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
                          DefaultValuedAttr<BoolAttr, "false">:$isAsync);
 
     let results = (outs TT_FpIntTensor:$d);
 
-    let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
+    let assemblyFormat = "$a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)";
 }
 
 def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
@@ -243,6 +244,5 @@ def TTNG_TMAStoreWait : TTNG_Op<"async_tma_store_wait"> {
 
   let assemblyFormat = "attr-dict";
 }
-
 
 #endif
