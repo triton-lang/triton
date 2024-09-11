@@ -166,9 +166,13 @@ public:
     });
 
     SmallVector<Operation *> moveOps;
-    // Move global loads early to prefetch. This may increase register pressure
-    // but it enables issuing global loads early.
-    m.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+    // Move global loads early to prefetch inside loops. This may increase
+    // register pressure but it enables issuing global loads early.
+    m.walk([&](triton::LoadOp op) {
+      if (op->getParentOfType<scf::ForOp>())
+        moveOps.push_back(op);
+    });
+
     // Move local_stores early if dependence distance greater than
     // one iteration.
     // Best perf on GEMM when these precede global loads.

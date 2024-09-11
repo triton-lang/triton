@@ -45,7 +45,6 @@ struct LoadInfo {
 
 static void createStreamCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                              Value extractIdx, tt::CoarseSchedule &schedule,
-                             tt::CoarseSchedule::Cluster prefetchCluster,
                              llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                              int numStages) {
   OpBuilder builder(forOp);
@@ -104,8 +103,8 @@ static void createStreamCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   // Prefetch load ahead of the dot stage if is used by the dot.
   if (loadToInfo[loadOp].usedByDot) {
     assert(numStages >= 2 && "requires num_stages=2 at least");
-    schedule.insert(storeOp, numStages - 2, prefetchCluster);
-    schedule.insert(viewLoad, numStages - 2, prefetchCluster);
+    schedule.insert(storeOp, numStages - 2, cluster);
+    schedule.insert(viewLoad, numStages - 2, cluster);
   }
   loadOp.erase();
 }
@@ -529,13 +528,10 @@ createStreamOps(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  // Create a cluster for prefetching global reads for the dot.
-  tt::CoarseSchedule::Cluster prefetchCluster = schedule.clusters.newAtBack();
-
   for (auto &[op, alloc] : loadToAllocs) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op))
-      createStreamCopy(forOp, loadOp, alloc, extractIdx, schedule,
-                       prefetchCluster, loadToInfo, numStages);
+      createStreamCopy(forOp, loadOp, alloc, extractIdx, schedule, loadToInfo,
+                       numStages);
   }
   // Patch the yield with the updated counters.
   appendToForOpYield(forOp, {extractIdx});
