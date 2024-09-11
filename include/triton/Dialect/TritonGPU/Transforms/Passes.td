@@ -169,4 +169,14 @@ def TritonGPUCombineTensorSelectAndIf: Pass<"tritongpu-combine-tensor-select-and
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUOptimizeAccumulatorInit: Pass<"tritongpu-optimize-accumulator-init", "mlir::ModuleOp"> {
+  let summary = "Replace accumulater zero-initialization with the flag indicating first use of the accumulator";
+
+  let description = "For the dot operations that support accumulator-use flag this pass replaces the zero-initialization "
+                    "of the accumulator with the flag indicating the first use of the accumulator.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 #endif
