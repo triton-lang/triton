@@ -109,7 +109,23 @@ def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers"
   let constructor = "mlir::createTritonAMDGPUCanonicalizePointersPass()";
 
   let dependentDialects = [];
+}
 
+def TritonAMDGPUOptimizeFMADot : Pass<"tritonamdgpu-optimize-fma-dot", "mlir::ModuleOp"> {
+  let summary = "Optimize small matrices operands: Load dot operands in layout compatible to dotOp.";
+
+  let description = [{
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUOptimizeFMADotPass()";
+
+  let options = [
+  Option<"kSplit", "ksplit",
+          "int32_t", /*default*/"64",
+          "split k dim up to given number of pieces, compute them in different threads and then reduce">,
+];
+
+  let dependentDialects = [];
 }
 
 def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
@@ -120,6 +136,32 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
                     "order more friendly to `ptxas`.";
 
   let constructor = "mlir::createTritonAMDGPUReorderInstructionsPass()";
+
+  let dependentDialects = [];
+}
+
+
+def TritonAMDGPUHoistReduction : Pass<"tritonamdgpu-hoist-reduction", "mlir::ModuleOp"> {
+  let summary = "hoist reduction operation applied to dot accumulator outside of loop over K";
+
+  let description = [{
+    Optimization hoists reduction operation out of the loop:
+
+    %acc = <zero tensor>
+    for k tiles:
+      %acc3d_input = reshape %acc
+      %acc3d_out = dot3d(%x, %y, %acc3d_input)
+      %acc = reduction batch %acc3d_out
+
+    transformed to:
+
+    %acc3d = <zero tensor>
+    for k tiles:
+      %acc3d = dot3d(%x, %y, %acc3d)
+    %acc = reduction batch %acc3d
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUHoistReductionPass()";
 
   let dependentDialects = [];
 }

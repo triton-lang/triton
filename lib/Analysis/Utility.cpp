@@ -484,12 +484,18 @@ bool supportMMA(triton::DotOp op, int version) {
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
+  auto retType = op.getType();
+  auto retShapePerCTA = getShapePerCTA(retType);
+  auto rank = retShapePerCTA.size();
+  auto aTensorTy = cast<RankedTensorType>(op.getA().getType());
+  auto aShape = aTensorTy.getShape();
+  auto encoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+  if (retShapePerCTA[rank - 2] < 16 || retShapePerCTA[rank - 1] < 16 ||
+      aShape[rank - 1] < 16)
+    return false;
   if (version == 3) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
-    auto retType = op.getType();
-    auto retShapePerCTA = getShapePerCTA(retType);
-    auto rank = retShapePerCTA.size();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = TritonGPUDialect::getNumWarps(mod);
     // TODO(Keren): for now, fallback to MMAv2 if handling batch matmul.
@@ -529,6 +535,50 @@ bool supportMMA(Value value, int version) {
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
+}
+
+bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+  auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (blockedLayout == nullptr || dotOperandLayout == nullptr)
+    return false;
+  auto parentLayout =
+      dyn_cast<BlockedEncodingAttr>(dotOperandLayout.getParent());
+  if (parentLayout == nullptr)
+    return false;
+  auto opShape = srcTy.getShape();
+  auto rank = opShape.size();
+
+  int kDim = dotOperandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  int nonKDim = dotOperandLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
+  auto ctaLayout = blockedLayout.getCTALayout();
+
+  bool ctaLayoutCompatible =
+      ctaLayout.getCTASplitNum()[kDim] == 1 &&
+      blockedLayout.getCTALayout() == parentLayout.getCTALayout();
+  bool threadHoldsWholeKDim =
+      blockedLayout.getSizePerThread()[kDim] == opShape[kDim];
+  bool nonKDimCompatible =
+      blockedLayout.getOrder() == parentLayout.getOrder() &&
+      blockedLayout.getSizePerThread()[nonKDim] ==
+          parentLayout.getSizePerThread()[nonKDim] &&
+      blockedLayout.getThreadsPerWarp()[nonKDim] ==
+          parentLayout.getThreadsPerWarp()[nonKDim] &&
+      blockedLayout.getWarpsPerCTA()[nonKDim] ==
+          parentLayout.getWarpsPerCTA()[nonKDim];
+  bool matrixDimsCompatible =
+      ctaLayoutCompatible && threadHoldsWholeKDim && nonKDimCompatible;
+  if (rank == 2)
+    return matrixDimsCompatible;
+  // additional check for batch dimension
+  assert(rank == 3);
+  bool bDimCompatible =
+      blockedLayout.getSizePerThread()[0] ==
+          parentLayout.getSizePerThread()[0] &&
+      blockedLayout.getThreadsPerWarp()[0] ==
+          parentLayout.getThreadsPerWarp()[0] &&
+      blockedLayout.getWarpsPerCTA()[0] == parentLayout.getWarpsPerCTA()[0];
+  return matrixDimsCompatible && bDimCompatible;
 }
 
 bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
@@ -619,12 +669,13 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut` and
-  // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
-  // checks.
+  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut`,
+  // `isBlockedToDotShortcut` and `isMfmaToDotShortcut`) once they're fully
+  // subsumed by the linear-layout checks.
   // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
+         !isBlockedToDotShortcut(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
 }

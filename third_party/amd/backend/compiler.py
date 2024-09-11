@@ -13,16 +13,7 @@ from pathlib import Path
 
 
 def min_dot_size(target: GPUTarget):
-    arch_str = target.arch
-    # CDNA 3.0 supports k==8 in all mfma variants except for int8
-    # (where the smallest `k` supported is 16)
-    if "gfx94" in arch_str:
-        return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.is_int8() or rhsType.is_int8()) else (16, 16, 8)
-    # CDNA 2.0 always supports `k==8`
-    if "gfx9" in arch_str:
-        return lambda lhsType, rhsType: (16, 16, 8)
-    # Other architectures will only support 16,16,16
-    return lambda lhsType, rhsType: (16, 16, 16)
+    return lambda lhsType, rhsType: (1, 1, 1)
 
 
 @dataclass(frozen=True)
@@ -160,6 +151,8 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
+        amd.passes.ttgpuir.add_optimize_fma_dot(pm)
+        amd.passes.ttgpuir.add_hoist_reduction(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "0") == "1"
         if amd.has_matrix_core_feature(options.arch):
