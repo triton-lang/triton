@@ -96,8 +96,16 @@ class ASTSource:
         self.attrs = attrs
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+        else:
+            for k in self.signature.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Signature keys must be string")
         if self.constants is None:
-            self.constants = dict()
+            self.constants = {}
+        else:
+            for k in self.constants.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Constants keys must be string")
         if self.attrs is None:
             self.attrs = AttrsDescriptor()
 
