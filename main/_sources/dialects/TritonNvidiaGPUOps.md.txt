@@ -284,7 +284,7 @@ _Warp group dot_
 Syntax:
 
 ```
-operation ::= `triton_nvidia_gpu.warp_group_dot` $a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)
+operation ::= `triton_nvidia_gpu.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)
 ```
 
 $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
@@ -312,6 +312,7 @@ Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
 | `a` | TensorOrMemDesc instance
 | `b` | TensorOrMemDesc instance
 | `c` | ranked tensor of floating-point or integer values
+| `useC` | 1-bit signless integer
 
 #### Results:
 

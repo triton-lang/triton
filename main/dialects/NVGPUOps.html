@@ -245,7 +245,7 @@
 <section id="nvgpu-wgmma-triton-nvgpu-wgmmaop">
 <h2><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma</span></code> (triton::nvgpu::WGMMAOp)<a class="headerlink" href="#nvgpu-wgmma-triton-nvgpu-wgmmaop" title="Link to this heading">¶</a></h2>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.wgmma` $opA `,` $opB (`,` $opC^)? attr-dict `:` functional-type(operands, $res)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.wgmma` $opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)
 </pre></div>
 </div>
 <section id="id2">
@@ -305,7 +305,10 @@
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">opB</span></code></p></td>
 <td><p>wgmma operand A/B type</p></td>
 </tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">opC</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">useC</span></code></p></td>
+<td><p>1-bit signless integer</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">opC</span></code></p></td>
 <td><p>LLVM structure type</p></td>
 </tr>
 </tbody>

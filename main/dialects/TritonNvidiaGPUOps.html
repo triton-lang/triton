@@ -457,7 +457,7 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 <h2><code class="docutils literal notranslate"><span class="pre">triton_nvidia_gpu.warp_group_dot</span></code> (triton::nvidia_gpu::WarpGroupDotOp)<a class="headerlink" href="#triton-nvidia-gpu-warp-group-dot-triton-nvidia-gpu-warpgroupdotop" title="Link to this heading">¶</a></h2>
 <p><em>Warp group dot</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.warp_group_dot` $a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `-&gt;` type($d)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_nvidia_gpu.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `-&gt;` type($d)
 </pre></div>
 </div>
 <p>$d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp</p>
@@ -492,6 +492,9 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">c</span></code></p></td>
 <td><p>ranked tensor of floating-point or integer values</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">useC</span></code></p></td>
+<td><p>1-bit signless integer</p></td>
 </tr>
 </tbody>
 </table>

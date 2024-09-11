@@ -104,7 +104,7 @@ operation ::= `nvgpu.wgmma_fence` attr-dict
 Syntax:
 
 ```
-operation ::= `nvgpu.wgmma` $opA `,` $opB (`,` $opC^)? attr-dict `:` functional-type(operands, $res)
+operation ::= `nvgpu.wgmma` $opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)
 ```
 
 
@@ -156,6 +156,7 @@ operation ::= `nvgpu.wgmma` $opA `,` $opB (`,` $opC^)? attr-dict `:` functional-
 | :-----: | ----------- |
 | `opA` | wgmma operand A/B type
 | `opB` | wgmma operand A/B type
+| `useC` | 1-bit signless integer
 | `opC` | LLVM structure type
 
 #### Results:
