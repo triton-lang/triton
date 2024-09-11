@@ -610,10 +610,9 @@ struct IndexCastOpLowering
     if (targetBits == sourceBits)
       return {operands[0][0]};
     if (targetBits < sourceBits)
-      return {rewriter.replaceOpWithNewOp<LLVM::TruncOp>(op, elemTy,
-                                                         operands[0][0])};
-    return {
-        rewriter.replaceOpWithNewOp<LLVM::SExtOp>(op, elemTy, operands[0][0])};
+      return {
+          rewriter.create<LLVM::TruncOp>(op.getLoc(), elemTy, operands[0][0])};
+    return {rewriter.create<LLVM::SExtOp>(op.getLoc(), elemTy, operands[0][0])};
   }
 };
 
