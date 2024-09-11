@@ -172,8 +172,8 @@ private:
 
   void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
     propagateIfChanged(
-        lattice,
-        lattice->join(AxisInfo::getPessimisticValueState(lattice->getPoint())));
+        lattice, lattice->join(
+                     AxisInfo::getPessimisticValueState(lattice->getAnchor())));
   }
 
   void visitNonControlFlowArguments(
@@ -195,9 +195,10 @@ public:
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
   using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
 
-  void visitOperation(Operation *op,
-                      ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
-                      ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
+  LogicalResult
+  visitOperation(Operation *op,
+                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
+                 ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
