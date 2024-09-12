@@ -913,7 +913,7 @@ static void createTMABarrierAndWait(
     Value pred = builder.create<arith::ConstantIntOp>(loc, 1, 1);
     Operation *expect = builder.create<ttng::BarrierExpectOp>(
         forOp.getLoc(), barrier, sizeInBytes, pred);
-    auto [stage, cluster] = schedule[asyncLoads[0].loadOp];
+    auto [stage, cluster] = schedule[group[0]->loadOp];
     schedule.insert(expect, stage, cluster);
 
     builder.setInsertionPointAfter(group.back()->loadOp);
