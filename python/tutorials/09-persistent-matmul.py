@@ -361,7 +361,7 @@ def matmul_tma_persistent(a, b):
 
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel_device_tma_persistent(workspace_ptr,  #
-                                        tiles_per_group: tl.constexpr,  #
+                                        tiles_per_update: tl.constexpr,  #
                                         a_ptr, b_ptr, c_ptr,  #
                                         M, N, K,  #
                                         BLOCK_SIZE_M: tl.constexpr,  #
@@ -419,7 +419,7 @@ def matmul_kernel_device_tma_persistent(workspace_ptr,  #
             ni += 1
 
             # Simulate a grouped gemm
-            if ni == tiles_per_group:
+            if ni == tiles_per_update:
                 tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=a_desc_ptr, global_address=a_ptr,
                                                                      load_size=[BLOCK_SIZE_M,
                                                                                 BLOCK_SIZE_K], global_size=[M, K],
@@ -461,7 +461,7 @@ def matmul_kernel_device_tma_persistent(workspace_ptr,  #
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
 
-def matmul_device_tma_persistent(a, b, tiles_per_group):
+def matmul_device_tma_persistent(a, b, tiles_per_update):
     # Autotuner does not work with TMA. Use manual config.
     configs = {
         torch.float8_e4m3fn: {
@@ -489,7 +489,7 @@ def matmul_device_tma_persistent(a, b, tiles_per_group):
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
     matmul_kernel_device_tma_persistent[grid](
         workspace,  #
-        tiles_per_group,  #
+        tiles_per_update,  #
         a, b, c,  #
         M, N, K,  #
         BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
@@ -530,7 +530,7 @@ def torch_matmul(a, b):
     return c
 
 
-def bench(K, dtype, reps=10):
+def bench(K, dtype, tiles_per_update, reps=10):
     M = 8192
     N = 8192
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
@@ -558,18 +558,18 @@ def bench(K, dtype, reps=10):
         for _ in range(reps):
             matmul_tma_persistent(a, b)
             time.sleep(0.01)
-        for tiles_per_group in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]:
-            with proton.scope(
-                    f"matmul_kernel_device_tma_persistent M={M}, N={N}, K={K}, tiles_per_group={tiles_per_group:02}",
-                {"bytes": a.element_size() * (M * K + N * K), "flops8": 2. * M * N * K}):
-                for _ in range(reps):
-                    matmul_device_tma_persistent(a, b, tiles_per_group)
-                    time.sleep(0.01)
+        flops_str = "flops8" if dtype == torch.float8_e4m3fn else "flops"
+        with proton.scope(
+                f"matmul_kernel_device_tma_persistent M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}",
+            {"bytes": a.element_size() * (M * K + N * K), flops_str: 2. * M * N * K}):
+            for _ in range(reps):
+                matmul_device_tma_persistent(a, b, tiles_per_update)
+                time.sleep(0.01)
 
     proton.deactivate(0)
 
 
-def validate(M, N, K, dtype):
+def validate(M, N, K, dtype, tiles_per_update):
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
@@ -579,7 +579,7 @@ def validate(M, N, K, dtype):
     naive_result = matmul(a, b.T)
     persistent_result = matmul_persistent(a, b.T)
     tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
-    device_tma_persistent_result = matmul_device_tma_persistent(a, b, 1) if supports_tma() else None
+    device_tma_persistent_result = matmul_device_tma_persistent(a, b, tiles_per_update) if supports_tma() else None
 
     if torch_result is not None:
         naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
@@ -613,6 +613,13 @@ if __name__ == "__main__":
     parser.add_argument("-K", type=int, required=False, default=512)
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=512)
+    parser.add_argument(
+        "--tiles_per_update",
+        type=int,
+        default=1,
+        help=
+        "Number of output tiles calculated for each update of the tma descriptor in matmul_device_tma_persistent_kernel",
+    )
     parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
     args = parser.parse_args()
 
@@ -628,11 +635,10 @@ if __name__ == "__main__":
 
     torch.manual_seed(0)
 
-    validate(32, 32, 32, dtype)
-    validate(8192, 8192, 512, dtype)
+    validate(32, 32, 32, dtype, args.tiles_per_update)
+    validate(8192, 8192, 512, dtype, args.tiles_per_update)
 
-    if 1:
-        proton.start("matmul", hook="triton")
-        for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-            bench(K, dtype)
-        proton.finalize()
+    proton.start("matmul", hook="triton")
+    for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+        bench(K, dtype, args.tiles_per_update)
+    proton.finalize()
