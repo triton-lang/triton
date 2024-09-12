@@ -552,6 +552,19 @@ bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   int nonKDim = dotOperandLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
   auto ctaLayout = blockedLayout.getCTALayout();
 
+  // Layout of blocked dot operand matches with parent blocked layout except K
+  // dim: while vector of elements across k dim is stored by one thread.
+  // clang-format off
+  //
+  // i.e. tensor<64x32xf16, #dot_op<{opIdx=0, parent=#blocked}>> will have sizePerThread = [<depends on #blocked>, 32]
+  // and  tensor<64x32xf16, #dot_op<{opIdx=1, parent=#blocked}>> will have sizePerThread = [64, <depends on #blocked>]
+  //
+  // For example tensor<64x32xf16, #dot_op<{opIdx=0, parent=#blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1]}>>>
+  // could be converted to tensor<128x64xf16,               #blocked<{sizePerThread = [2, 32], threadsPerWarp = [32, 1]}>>
+  //
+  // clang-format on
+  // Following conditions verifies that src layout holds all elements across K
+  // per thread, and the rest of src and dst layout matches.
   bool ctaLayoutCompatible =
       ctaLayout.getCTASplitNum()[kDim] == 1 &&
       blockedLayout.getCTALayout() == parentLayout.getCTALayout();
@@ -569,7 +582,8 @@ bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
       ctaLayoutCompatible && threadHoldsWholeKDim && nonKDimCompatible;
   if (rank == 2)
     return matrixDimsCompatible;
-  // additional check for batch dimension
+
+  // additional check for batch dimension if it is present
   assert(rank == 3);
   bool bDimCompatible =
       blockedLayout.getSizePerThread()[0] ==

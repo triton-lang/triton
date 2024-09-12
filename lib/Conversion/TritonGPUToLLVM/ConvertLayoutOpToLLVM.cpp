@@ -260,8 +260,8 @@ struct ConvertLayoutOpBlockedToDotOpShortcutConversion
     auto dstDotEncoding = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
     if (!dstDotEncoding)
       return failure();
-    if (!dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding()) ||
-        !dyn_cast<BlockedEncodingAttr>(dstDotEncoding.getParent()))
+    if (!isa<BlockedEncodingAttr>(srcTy.getEncoding()) ||
+        !isa<BlockedEncodingAttr>(dstDotEncoding.getParent()))
       return failure();
     if (cvtNeedsSharedMemory(srcTy, dstTy))
       return failure();
