@@ -14,7 +14,12 @@ namespace gpu {
 namespace {
 bool dotSupportsAccInitFlag(Operation *op) {
   assert(op->hasTrait<OpTrait::DotLike>() && "Expected a dot-like operation");
-  return isa<triton::nvidia_gpu::WarpGroupDotOp>(op);
+  if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
+    // Partial accumulation would require a select op to handle the
+    // initialization that would degrade the performance.
+    return !wgDotOp.needsPartialAccumulator();
+  }
+  return false;
 }
 
 std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {

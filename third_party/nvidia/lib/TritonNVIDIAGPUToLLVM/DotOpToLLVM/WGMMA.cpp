@@ -316,11 +316,6 @@ SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
   return results;
 }
 
-static bool isFP8(triton::nvgpu::WGMMAEltType eltType) {
-  return eltType == triton::nvgpu::WGMMAEltType::e5m2 ||
-         eltType == triton::nvgpu::WGMMAEltType::e4m3;
-}
-
 static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
                             Value a, Value b) {
   int numEl = cast<LLVM::LLVMStructType>(a.getType()).getBody().size();
@@ -359,6 +354,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Operation *op, Value a, Value b, Value c, Value d,
                          Value useCOperand, Value loadedA, Value loadedB,
                          Value loadedC, bool allowTF32,
+                         bool needsPartialAccumulator,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto aTensorTy = cast<TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<TensorOrMemDesc>(b.getType());
@@ -420,10 +416,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
   Operation *startSequence = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
-  // WGMMA fp8 -> fp32 accumulates in lower precision than fp32.
-  bool needsPartialAccumulator = isFP8(eltTypeA) &&
-                                 eltTypeC == triton::nvgpu::WGMMAEltType::f32 &&
-                                 maxNumImpreciseAcc <= aTensorTy.getShape()[1];
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
@@ -439,7 +431,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       Value useC = i1_val(0);
       if (!zeroAcc) {
         d = packLLElements(loc, typeConverter, mmaOut, rewriter, accTy);
-        useC = i1_val(true);
+        useC = i1_val(1);
       }
       if (useCOperand)
         useC = and_(useC, useCOperand);
@@ -520,5 +512,6 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),           //
                     op.getInputPrecision() == InputPrecision::TF32,
-                    op.getMaxNumImpreciseAcc(), !op.getIsAsync(), thread);
+                    op.needsPartialAccumulator(), op.getMaxNumImpreciseAcc(),
+                    !op.getIsAsync(), thread);
 }

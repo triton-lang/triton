@@ -17,8 +17,8 @@ def compile_fn(attrs):
 
     src = ASTSource(
         fn=kernel_sub,
-        constants={3: 32},
-        signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
+        constants={'N': 32},
+        signature={'a': "*fp32", 'b': "*fp32", 'o': "*fp32"},
         attrs=attrs,
     )
     triton.compile(src=src, target=target)
@@ -42,7 +42,7 @@ def compile_fn_dot(attrs):
         z = tl.dot(z, z)
         tl.store(Z + offs, z)
 
-    src = ASTSource(fn=kernel_dot, signature={0: "*fp32"}, attrs=attrs, constants=dict())
+    src = ASTSource(fn=kernel_dot, signature={'Z': "*fp32"}, attrs=attrs, constants={})
     triton.compile(src=src, target=target)
 
 
@@ -63,7 +63,7 @@ def compile_empty_kernel_with_gc(attrs):
 
     import gc
     gc.collect()
-    src = ASTSource(fn=empty_kernel, signature={}, attrs=attrs, constants=dict())
+    src = ASTSource(fn=empty_kernel, signature={}, attrs=attrs, constants={})
     triton.compile(src=src, target=target)
 
 

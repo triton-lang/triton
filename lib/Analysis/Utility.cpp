@@ -488,6 +488,11 @@ bool supportMMA(triton::DotOp op, int version) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
     auto retType = op.getType();
+    RankedTensorType typeA = op.getA().getType();
+    int k = typeA.getShape().back();
+    // If k size is smaller than the native mma size, we cannot use MMA.
+    if (k < 256 / aElemTy.getIntOrFloatBitWidth())
+      return false;
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
     auto mod = op->getParentOfType<ModuleOp>();
