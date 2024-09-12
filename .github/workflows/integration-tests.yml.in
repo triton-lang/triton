@@ -162,7 +162,7 @@ jobs:
           python3 -m pre_commit run --all-files --verbose
 
       - name: Print diff of changes if pre-commit failed
-        if: failure()
+        if: !success()
         run: |
           git diff
 
@@ -377,7 +377,7 @@ jobs:
           exit 1
 
       - name: Clean up after a failed build
-        if: failure()
+        if: !success()
         run: |
           rm -rf ~/.triton
 
