@@ -69,7 +69,7 @@ using namespace mlir;
 class PointerCanonicalizer {
 public:
   explicit PointerCanonicalizer(ModuleOp moduleOp)
-      : mod(moduleOp), rewriter(moduleOp.getContext()) {}
+      : rewriter(moduleOp.getContext()), mod(moduleOp) {}
 
   // Propagate fat pointers in all the functions of the module
   LogicalResult run();
