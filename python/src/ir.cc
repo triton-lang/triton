@@ -225,6 +225,7 @@ void init_triton_ir(py::module &&m) {
                     math::MathDialect, arith::ArithDialect, index::IndexDialect,
                     scf::SCFDialect, ::mlir::gpu::GPUDialect,
                     cf::ControlFlowDialect, LLVM::LLVMDialect>();
+    mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
     mlir::LLVM::registerInlinerInterface(registry);
