@@ -400,12 +400,18 @@ static bool loadIsMMAv3(Operation *loadOp) {
 static llvm::MapVector<Operation *, LoadInfo>
 assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
                         &loadOpToIndLevelAndUse,
-                    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+                    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                    int numStages) {
   llvm::MapVector<Operation *, LoadInfo> loadToInfo;
 
   for (auto &[op, dist, use] : loadOpToIndLevelAndUse) {
     if (loadToInfo.count(op))
       // TODO pawel: err, we'd need to verify that the distance is the same
+      continue;
+    if (numStages == 2 && dist > 0)
+      // Can't pipeline indirect loads when numStages is 2. We assume indirect
+      // loads are at different stages. If numStages is 2, we have no stage
+      // available for indirect loads.
       continue;
     LoadInfo loadInfo;
 
@@ -491,6 +497,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       // assumption is held by how loadOpsToIndirectionLevelAndUse recursively
       // collects loadOpToIndLevelAndUse using DFS.
       if (loadToInfo.count(loadOp) == 0) {
+        LDBG("Load " << *op << " use is a load that can't be pipelined");
         continue;
       }
     }
@@ -508,6 +515,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
     // If that still didn't work, bail on pipelining this load.
     if (!loadInfo.sharedEncoding) {
+      LDBG("Load " << *op << " has no sharedEncoding");
       continue;
     }
     loadToInfo[op] = loadInfo;
@@ -540,7 +548,7 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   // Check which loads are good for pipelining, and assign them
   // memory layouts.
   llvm::MapVector<Operation *, LoadInfo> loadToInfo =
-      assignMemoryLayouts(loadOpToIndLevelAndUse, axisInfoAnalysis);
+      assignMemoryLayouts(loadOpToIndLevelAndUse, axisInfoAnalysis, numStages);
 
   if (loadToInfo.empty())
     return {};
