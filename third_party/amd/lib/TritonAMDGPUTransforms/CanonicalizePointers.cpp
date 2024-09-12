@@ -16,6 +16,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include <utility>
 
@@ -225,17 +226,25 @@ Value getScalarConstant(IRRewriter &rewriter, Location loc, Value expr) {
   Operation *op = expr.getDefiningOp();
 
   // Check for splatness
-  if (auto splatOp = dyn_cast<triton::SplatOp>(op))
+  if (auto splatOp = dyn_cast_or_null<triton::SplatOp>(op))
     return splatOp.getSrc();
 
   // Check for constant
   DenseIntElementsAttr constVal;
-  if (auto constOp = dyn_cast<arith::ConstantOp>(op)) {
+  if (auto constOp = dyn_cast_or_null<arith::ConstantOp>(op)) {
     Value val = constOp.getResult();
     if (matchPattern(val, m_Constant(&constVal)) && constVal.isSplat())
       return rewriter.create<arith::ConstantOp>(
           loc, constVal.getSplatValue<IntegerAttr>());
   }
+
+  // Check for block arguments
+  if (auto blockArg = dyn_cast_or_null<BlockArgument>(expr)) {
+    Type type = blockArg.getType();
+    if (!isa<RankedTensorType>(type))
+      return blockArg;
+  }
+
   return Value();
 }
 
@@ -318,6 +327,14 @@ PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
     return {scalarConst, tensorZero};
   }
 
+  // Base case 2: block argument. Since it is not a scalar constant, it must be
+  // a tensor. Note that this means we won't be able to decompose across loop
+  // boundaries (TODO: giuseros).
+  if (auto blockArg = dyn_cast<BlockArgument>(expr)) {
+    Value scalarZero = rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+    return std::make_pair(scalarZero, expr);
+  }
+
   auto offsets =
       llvm::TypeSwitch<Operation *, std::pair<Value, Value>>(
           expr.getDefiningOp())
@@ -342,7 +359,7 @@ PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
             return decomposeOffsetFromMul(loc, expr, bitness);
           })
           .Default([&](Operation *op) {
-            // Base case 2: it is not a supported operation. We assume no
+            // Base case 3: it is not a supported operation. We assume no
             // uniform part
             Value scalarZero =
                 rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
