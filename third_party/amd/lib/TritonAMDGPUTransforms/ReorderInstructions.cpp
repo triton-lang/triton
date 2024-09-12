@@ -174,7 +174,7 @@ public:
     // Best perf on GEMM when these precede global loads.
     m.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
 
-    for (auto op : moveOps) {
+    for (auto op : llvm::reverse(moveOps)) {
       // Gather use-def chain in block.
       Block *block = op->getBlock();
       bool leadsToLoad = false;
