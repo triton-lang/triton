@@ -361,6 +361,7 @@ def matmul_tma_persistent(a, b):
 
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel_device_tma_persistent(workspace_ptr,  #
+                                        tiles_per_group: tl.constexpr,  #
                                         a_ptr, b_ptr, c_ptr,  #
                                         M, N, K,  #
                                         BLOCK_SIZE_M: tl.constexpr,  #
@@ -401,6 +402,7 @@ def matmul_kernel_device_tma_persistent(workspace_ptr,  #
 
     tile_id = start_pid - NUM_SMS
     ki = -1
+    ni = -1
 
     pid_m = 0
     pid_n = 0
@@ -414,6 +416,27 @@ def matmul_kernel_device_tma_persistent(workspace_ptr,  #
     for _ in range(0, k_tiles * tiles_per_SM):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
+            ni += 1
+
+            # Simulate a grouped gemm
+            if ni == tiles_per_group:
+                tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=a_desc_ptr, global_address=a_ptr,
+                                                                     load_size=[BLOCK_SIZE_M,
+                                                                                BLOCK_SIZE_K], global_size=[M, K],
+                                                                     element_ty=a_ptr.dtype.element_ty)
+                tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=b_desc_ptr, global_address=b_ptr,
+                                                                     load_size=[BLOCK_SIZE_N,
+                                                                                BLOCK_SIZE_K], global_size=[N, K],
+                                                                     element_ty=b_ptr.dtype.element_ty)
+                tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=c_desc_ptr, global_address=c_ptr,
+                                                                     load_size=[BLOCK_SIZE_M,
+                                                                                BLOCK_SIZE_N], global_size=[M, N],
+                                                                     element_ty=c_ptr.dtype.element_ty)
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(a_desc_ptr)
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(b_desc_ptr)
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
+                ni = 0
+
             tile_id += NUM_SMS
             group_id = tile_id // num_pid_in_group
             first_pid_m = group_id * GROUP_SIZE_M
@@ -434,10 +457,11 @@ def matmul_kernel_device_tma_persistent(workspace_ptr,  #
             c = accumulator.to(dtype)
 
             tl._experimental_descriptor_store(c_desc_ptr, c, [offs_am, offs_bn])
+
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
 
-def matmul_device_tma_persistent(a, b):
+def matmul_device_tma_persistent(a, b, tiles_per_group):
     # Autotuner does not work with TMA. Use manual config.
     configs = {
         torch.float8_e4m3fn: {
@@ -465,6 +489,7 @@ def matmul_device_tma_persistent(a, b):
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
     matmul_kernel_device_tma_persistent[grid](
         workspace,  #
+        tiles_per_group,  #
         a, b, c,  #
         M, N, K,  #
         BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
@@ -533,9 +558,13 @@ def bench(K, dtype, reps=10):
         for _ in range(reps):
             matmul_tma_persistent(a, b)
             time.sleep(0.01)
-        for _ in range(reps):
-            matmul_device_tma_persistent(a, b)
-            time.sleep(0.01)
+        for tiles_per_group in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]:
+            with proton.scope(
+                    f"matmul_kernel_device_tma_persistent M={M}, N={N}, K={K}, tiles_per_group={tiles_per_group:02}",
+                {"bytes": a.element_size() * (M * K + N * K), "flops8": 2. * M * N * K}):
+                for _ in range(reps):
+                    matmul_device_tma_persistent(a, b, tiles_per_group)
+                    time.sleep(0.01)
 
     proton.deactivate(0)
 
@@ -550,7 +579,7 @@ def validate(M, N, K, dtype):
     naive_result = matmul(a, b.T)
     persistent_result = matmul_persistent(a, b.T)
     tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
-    device_tma_persistent_result = matmul_device_tma_persistent(a, b) if supports_tma() else None
+    device_tma_persistent_result = matmul_device_tma_persistent(a, b, 1) if supports_tma() else None
 
     if torch_result is not None:
         naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
@@ -602,7 +631,8 @@ if __name__ == "__main__":
     validate(32, 32, 32, dtype)
     validate(8192, 8192, 512, dtype)
 
-    proton.start("matmul", hook="triton")
-    for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-        bench(K, dtype)
-    proton.finalize()
+    if 1:
+        proton.start("matmul", hook="triton")
+        for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+            bench(K, dtype)
+        proton.finalize()
