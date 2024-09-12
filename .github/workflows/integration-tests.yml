@@ -361,6 +361,12 @@ jobs:
           pip uninstall -y triton
           cd python
           pip install -v -e '.[tests]'
+          echo "Artificial erroring out"
+          exit 1
+      - name: Clean up after a failed build
+        if: failure()
+        run: |
+          rm -rf ~/.triton
       - name: Run lit tests
         run: |
           cd python
@@ -415,8 +421,7 @@ jobs:
           du -sh ~/.cache/ccache
       - name: Clean up caches
         run: |
-          rm -rf ~/.triton
-          rm -rf ~/.cache
+          rm -rf ~/.triton/cache
   Build-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
