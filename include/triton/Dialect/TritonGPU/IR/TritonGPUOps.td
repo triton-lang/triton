@@ -256,4 +256,45 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   }];
 }
 
+def TTG_LocalRecordOp : TTG_Op<"local_record", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "Record a hardware event";
+
+  let description = [{
+    The intra kernel profiler records an event from a special register or a hardware performance counter,
+    and save it in the shared memory. The bookkeeping is automatically maintained.
+  }];
+  let arguments = (
+    ins TT_MemDescType:$data,
+    TT_PtrLike :$indexPtr,
+    BoolAttr: $isStart,
+    I32Attr: $regionId,
+    DefaultValuedAttr<TT_ProtonMetricAttr, "triton::ProtonMetric::CYCLE">:$metric,
+    DefaultValuedAttr<TT_ProtonGranularityAttr, "triton::ProtonGranularity::WARPGROUP">:$granularity
+  );
+  let hasVerifier = 1;
+}
+
+def TTG_ProtonFinalizeOp : TTG_Op<"proton_finalize", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "Finalize the intra kernel profiler";
+
+  let description = [{
+    Finalize the intra kernel profiler, including dumping the metadata and measurements to the global memory.
+  }];
+  let arguments = (
+    ins TT_MemDescType:$data,
+    TT_PtrLike :$indexPtr,
+    TT_PtrLike :$ptr
+  );
+}
+
+def TTG_ProtonInitOp : TTG_Op<"proton_init", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+    let summary = "Initialize the intra kernel profiler";
+
+    let description = [{
+        Stack allocation and initialization for the intra kernel profiler.
+        `indexPtr` stores the number of entires proton measured, initialized as 0.
+    }];
+    let arguments = (ins);
+    let results = (outs TT_PtrLike :$indexPtr);
+}
 #endif

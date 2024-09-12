@@ -129,6 +129,17 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
+Value TargetInfo::smId(RewriterBase &rewriter, Location loc) const {
+  llvm::report_fatal_error("smid is not currently supported on AMDGPU");
+  return Value();
+}
+
+Value TargetInfo::clock(RewriterBase &rewriter, Location loc,
+                        bool isClock64) const {
+  llvm::report_fatal_error("clock is not currently supported on AMDGPU");
+  return Value();
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,

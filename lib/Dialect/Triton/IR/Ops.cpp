@@ -1034,5 +1034,128 @@ LogicalResult ExperimentalTensormapCreateOp::verify() {
   return success();
 }
 
+// -- ProtonRecordOp --
+void ProtonRecordOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       SideEffects::DefaultResource::get());
+}
+
+LogicalResult ProtonRecordOp::verify() {
+  // We only support the warpgroup granularity for now.
+  if (getGranularity() == ProtonGranularity::WARP)
+    return emitError("Proton warp granularity is not supported");
+
+  MLIRContext *ctx = getContext();
+  triton::FuncOp func = getOperation()->getParentOfType<triton::FuncOp>();
+
+  // Make sure the function is inlined.
+  if (func->hasAttr("noinline")) {
+    bool noinline = cast<BoolAttr>(func->getAttr("noinline")).getValue();
+    if (noinline)
+      return emitError("Intra kernel profiling only supports inlined kernels");
+  }
+
+  // Make sure the last argument of the function is a pointer of type i32.
+  BlockArgument arg = func.getArgument(func.getNumArguments() - 1);
+  if (auto ptrType = dyn_cast<triton::PointerType>(arg.getType())) {
+    if (ptrType.getPointeeType() == IntegerType::get(ctx, 32)) {
+      return success();
+    }
+  }
+  return emitError("The last argument of the function must be !tt.ptr<i32>");
+}
+
+ParseResult ProtonRecordOp::parse(OpAsmParser &parser, OperationState &result) {
+  MLIRContext *ctx = parser.getContext();
+  int idx = 0;
+  std::string tag, metric, granularity;
+  mlir::IntegerAttr rid;
+
+  auto parseAttr = [&]() {
+    switch (idx++) {
+    case 0:
+      return parser.parseAttribute(rid, mlir::IntegerType::get(ctx, 32));
+    case 1:
+      return parser.parseString(&tag);
+    case 2:
+      return parser.parseOptionalString(&metric);
+    case 3:
+      return parser.parseOptionalString(&granularity);
+    }
+    return ParseResult(failure());
+  };
+
+  if (parser.parseLess() || parser.parseCommaSeparatedList(parseAttr) ||
+      parser.parseGreater())
+    return failure();
+
+  bool isStart;
+  if (tag == "start")
+    isStart = true;
+  else if (tag == "end")
+    isStart = false;
+  else
+    return failure();
+  result.addAttribute("isStart", BoolAttr::get(ctx, isStart));
+
+  result.addAttribute("regionId", rid);
+
+  ProtonMetricAttr metricAttr;
+  if (!metric.empty()) {
+    if (metric == "cycle")
+      metricAttr = ProtonMetricAttr::get(ctx, ProtonMetric::CYCLE);
+    else if (metric == "invalid")
+      metricAttr = ProtonMetricAttr::get(ctx, ProtonMetric::INVALID);
+    else
+      return failure();
+    result.addAttribute("metric", metricAttr);
+  }
+
+  ProtonGranularityAttr granularityAttr;
+  if (!granularity.empty()) {
+    if (granularity == "warpgroup")
+      granularityAttr =
+          ProtonGranularityAttr::get(ctx, ProtonGranularity::WARPGROUP);
+    else if (granularity == "warp")
+      granularityAttr =
+          ProtonGranularityAttr::get(ctx, ProtonGranularity::WARP);
+    else
+      return failure();
+    result.addAttribute("granularity", granularityAttr);
+  }
+
+  return success();
+}
+
+void ProtonRecordOp::print(OpAsmPrinter &printer) {
+  Operation *op = getOperation();
+  printer << " <";
+  printer << getRegionId() << ", ";
+
+  if (getIsStart()) {
+    printer << "\"start\", ";
+  } else {
+    printer << "\"end\", ";
+  }
+
+  if (getMetric() == ProtonMetric::CYCLE) {
+    printer << "\"cycle\", ";
+  } else {
+    printer << "\"invalid\", ";
+  }
+
+  if (getGranularity() == ProtonGranularity::WARP) {
+    printer << "\"warp\"";
+  } else {
+    printer << "\"warpgroup\"";
+  }
+
+  printer << ">";
+}
+
 } // namespace triton
 } // namespace mlir

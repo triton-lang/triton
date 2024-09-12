@@ -94,3 +94,31 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+module attributes {"triton_gpu.num-warps" = 16 : i32, "triton_gpu.proton-slots" = 1 : i32} {
+  tt.func public @add_kernel(%arg0: !tt.ptr<i32>) attributes {noinline = false} {
+      %0 = "triton_gpu.proton_init"() : () -> !tt.ptr<i32>
+      %1 = triton_gpu.local_alloc  : () -> !tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>
+      // expected-error@+1 {{Proton slots must be greater than the number of warpgroups per CTA}}
+      "triton_gpu.local_record"(%1, %0) <{isStart = true, regionId = 0 : i32}> : (!tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>, !tt.ptr<i32>) -> ()
+      "triton_gpu.proton_finalize"(%1, %0, %arg0) : (!tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>, !tt.ptr<i32>, !tt.ptr<i32>) -> ()
+      tt.return
+  }
+}
+
+// -----
+
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+module attributes {"triton_gpu.num-warps" = 16 : i32} {
+  tt.func public @add_kernel(%arg0: !tt.ptr<i32>) attributes {noinline = false} {
+      %0 = "triton_gpu.proton_init"() : () -> !tt.ptr<i32>
+      %1 = triton_gpu.local_alloc  : () -> !tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>
+      // expected-error@+1 {{Intra-kernel profiling not enabled}}
+      "triton_gpu.local_record"(%1, %0) <{isStart = true, regionId = 0 : i32}> : (!tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>, !tt.ptr<i32>) -> ()
+      "triton_gpu.proton_finalize"(%1, %0, %arg0) : (!tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>, !tt.ptr<i32>, !tt.ptr<i32>) -> ()
+      tt.return
+  }
+}

@@ -339,3 +339,29 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32, #shared>) {
     tt.return
 }
 }  // end module
+
+// -----
+
+// Invalid proton profile memory argument.
+tt.func public @fn(%arg0: tensor<32xf32>) {
+    // expected-error @+1 {{The last argument of the function must be !tt.ptr<i32>}}
+    tt.proton_record <0, "start", "cycle", "warpgroup">
+    tt.return
+}
+
+// -----
+
+// Intra kernel profiling requires inline=false.
+tt.func public @fn(%arg0: !tt.ptr<i32>) attributes {noinline = true} {
+    // expected-error @+1 {{Intra kernel profiling only supports inlined kernels}}
+    tt.proton_record <0, "start", "cycle", "warpgroup">
+    tt.return
+}
+
+// -----
+
+// This one is valid.
+tt.func public @fn(%arg0: !tt.ptr<i32>) {
+    tt.proton_record <0, "start", "cycle", "warpgroup">
+    tt.return
+}

@@ -1729,3 +1729,75 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+module attributes {"triton_gpu.num-warps" = 16 : i32, "triton_gpu.proton-slots" = 64 : i32} {
+  tt.func public @proton(%arg0: !tt.ptr<i32>) attributes {noinline = false} {
+    // CHECK-LABEL: @proton
+    %0 = "triton_gpu.proton_init"() : () -> !tt.ptr<i32>
+    // CHECK: %[[ARG1:.*]] = llvm.alloca {{.*}} -> !llvm.ptr<1>
+    // CHECK: llvm.store %{{.*}}, %[[ARG1]] : i32, !llvm.ptr<1>
+    %1 = triton_gpu.local_alloc  : () -> !tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>
+    // CHECK: llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    "triton_gpu.local_record"(%1, %0) <{granularity = 0 : i32, isStart = true, metric = 0 : i32, regionId = 0 : i32}> : (!tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>, !tt.ptr<i32>) -> ()
+    // CHECK: %[[ARG13:.*]] = nvvm.read.ptx.sreg.tid.x : i32
+    // CHECK: %[[ARG14:.*]] = llvm.mlir.constant(128 : i32) : i32
+    // CHECK: %[[ARG15:.*]] = llvm.udiv %[[ARG13]], %[[ARG14]]  : i32
+    // CHECK: %[[ARG16:.*]] = llvm.urem %[[ARG13]], %[[ARG14]]  : i32
+    // CHECK: %[[ARG17:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[ARG18:.*]] = llvm.icmp "eq" %[[ARG16]], %[[ARG17]] : i32
+    // CHECK: %[[ARG19:.*]] = llvm.load %[[ARG1]] : !llvm.ptr<1> -> i32
+    // CHECK: %[[ARG20:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK: %[[ARG21:.*]] = llvm.add %[[ARG19]], %[[ARG20]] : i32
+    // CHECK: llvm.store %[[ARG21]], %[[ARG1]] : i32, !llvm.ptr<1>
+    // CHECK: %[[ARG22:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK: %[[ARG23:.*]] = llvm.mul %[[ARG15]], %[[ARG22]] : i32
+    // CHECK: %[[ARG24:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK: %[[ARG25:.*]] = llvm.urem %[[ARG19]], %[[ARG24]]  : i32
+    // CHECK: %[[ARG26:.*]] = llvm.add %[[ARG23]], %[[ARG25]] : i32
+    // CHECK: %[[ARG27:.*]] = llvm.getelementptr %{{.*}}[%[[ARG26]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, %clock;", "=r"  : () -> i32
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$3 st.shared.v2.b32 [ $0 + 0 ], { $1, $2 };", "r,r,r,b" %[[ARG27]], %{{.*}}, %{{.*}}, %[[ARG18]] : {{.*}}
+    "triton_gpu.proton_finalize"(%1, %0, %arg0) : (!tt.memdesc<64xi32, #shared, #triton_gpu.shared_memory, mutable>, !tt.ptr<i32>, !tt.ptr<i32>) -> ()
+    // CHECK: %[[ARG40:.*]] = nvvm.read.ptx.sreg.tid.x : i32
+    // CHECK: %[[ARG41:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[ARG42:.*]] = llvm.icmp "eq" %[[ARG40]], %[[ARG41]] : i32
+    // CHECK: llvm.cond_br %[[ARG42]], ^[[BB1:.*]], ^[[BB3:.*]]
+    // CHECK: ^[[BB1]]:
+    // CHECK: %[[ARG43:.*]] = llvm.inline_asm asm_dialect = att operand_attrs = [] "mov.u32 $0, %ctaid.x;", "=r"  : () -> i32
+    // CHECK: %[[ARG44:.*]] = llvm.inline_asm asm_dialect = att operand_attrs = [] "mov.u32 $0, %ctaid.y;", "=r"  : () -> i32
+    // CHECK: %[[ARG45:.*]] = llvm.inline_asm asm_dialect = att operand_attrs = [] "mov.u32 $0, %ctaid.z;", "=r"  : () -> i32
+    // CHECK: %[[ARG46:.*]] = llvm.inline_asm asm_dialect = att operand_attrs = [] "mov.u32 $0, %smid;", "=r"  : () -> i32
+    // CHECK: %[[ARG47:.*]] = nvvm.read.ptx.sreg.nctaid.x : i32
+    // CHECK: %[[ARG48:.*]] = nvvm.read.ptx.sreg.nctaid.y : i32
+    // CHECK: %[[ARG49:.*]] = llvm.mul %[[ARG44]], %[[ARG47]] : i32
+    // CHECK: %[[ARG50:.*]] = llvm.add %[[ARG43]], %[[ARG49]] : i32
+    // CHECK: %[[ARG51:.*]] = llvm.mul %[[ARG47]], %[[ARG48]] : i32
+    // CHECK: %[[ARG52:.*]] = llvm.mul %[[ARG45]], %[[ARG51]] : i32
+    // CHECK: %[[ARG53:.*]] = llvm.add %[[ARG50]], %[[ARG52]] : i32
+    // CHECK: %[[ARG54:.*]] = llvm.mlir.constant(131 : i32) : i32
+    // CHECK: %[[ARG55:.*]] = llvm.mul %[[ARG54]], %[[ARG53]] : i32
+    // CHECK: llvm.store %[[ARG53]], %{{.*}} : i32, !llvm.ptr<1>
+    // CHECK: llvm.store %[[ARG46]], %{{.*}} : i32, !llvm.ptr<1>
+    // CHECK: %[[ARG62:.*]] = llvm.load %[[ARG1]] : !llvm.ptr<1> -> i32
+    // CHECK: llvm.store %[[ARG62]], %{{.*}} : i32, !llvm.ptr<1>
+    // CHECK: %[[ARG66:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.mlir.constant(3 : i32) : i32
+    // CHECK: llvm.br ^[[BB2:.*]](%[[ARG66]] : i32)
+    // CHECK: ^bb2(%[[ARG69:.*]]: i32):
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$2 ld.shared.b32 $0, [ $1 + 0 ];", "=r,r,b" {{.*}}
+    // CHECK: llvm.store
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$2 ld.shared.b32 $0, [ $1 + 0 ];", "=r,r,b" {{.*}}
+    // CHECK: llvm.store
+    // CHECK: %[[ARG95:.*]] = llvm.mlir.constant(126 : i32) : i32
+    // CHECK: %[[ARG96:.*]] = llvm.icmp "slt" %{{.*}}, %[[ARG95]] : i32
+    // CHECK: %[[ARG97:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK: %[[ARG98:.*]] = llvm.add %[[ARG69]], %[[ARG97]] : i32
+    // CHECK: llvm.cond_br %[[ARG96]], ^[[BB2]](%[[ARG98]] : i32), ^[[BB3]]
+    // CHECK: ^[[BB3]]:
+    // CHECK: llvm.return
+    tt.return
+  }
+}

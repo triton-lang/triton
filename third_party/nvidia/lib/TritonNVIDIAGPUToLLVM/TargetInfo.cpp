@@ -539,6 +539,27 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
+
+Value TargetInfo::smId(RewriterBase &rewriter, Location loc) const {
+  return LLVM::NVIDIA::getSRegValue(rewriter, loc, "%smid");
+}
+
+Value TargetInfo::clock(RewriterBase &rewriter, Location loc,
+                        bool isClock64) const {
+  assert(!isClock64 && "clock64 is not supported yet.");
+
+  // TODO (fywkevin): refactor the getSRegValue for side effect to avoid
+  // redundant code.
+  PTXBuilder builder;
+  auto &mov = builder.create("mov")->o("u32");
+  auto *destOpr = builder.newOperand("=r");
+  auto *sRegOpr = builder.newConstantOperand("%clock");
+  mov(destOpr, sRegOpr);
+  Value val = builder.launch(rewriter, loc, rewriter.getIntegerType(32), true);
+
+  return val;
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,

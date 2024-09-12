@@ -8,3 +8,4 @@ from .profile import (
     profile,
     DEFAULT_PROFILE_NAME,
 )
+from .trace_replay import (IntraKernelConfig, intra_kernel_smem, dump_chrome_trace)

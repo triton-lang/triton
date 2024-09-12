@@ -37,6 +37,11 @@ public:
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
                   int axis) const override;
 
+  Value smId(RewriterBase &rewriter, Location loc) const override;
+
+  Value clock(RewriterBase &rewriter, Location loc,
+              bool isClock64) const override;
+
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op, unsigned numLaneToReduce,
                   unsigned interleave) const override;

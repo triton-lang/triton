@@ -150,7 +150,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
-                                           options.num_ctas)
+                                           options.num_ctas, 0)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()

@@ -244,3 +244,10 @@ tt.func @experimental_descriptor_load(%0: !tt.ptr<i8>) {
   %1 = tt.experimental_descriptor_load %0[%c0_i32] : !tt.ptr<i8> -> tensor<128xf32>
   tt.return
 }
+
+// CHECK-LABEL: proton
+tt.func @proton(%0: !tt.ptr<i32>) {
+  // CHECK: tt.proton_record <{{.*}}>
+  tt.proton_record <0, "start", "cycle", "warpgroup">
+  tt.return
+}

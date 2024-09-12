@@ -52,6 +52,11 @@ public:
   virtual Value programId(RewriterBase &rewriter, Location loc,
                           ModuleOp moduleOp, int axis) const = 0;
 
+  virtual Value smId(RewriterBase &rewriter, Location loc) const = 0;
+
+  virtual Value clock(RewriterBase &rewriter, Location loc,
+                      bool isClock64) const = 0;
+
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned numLaneToReduce,

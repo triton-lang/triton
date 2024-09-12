@@ -14,7 +14,7 @@ namespace triton {
 constexpr static char AttrNumWarpsName[] = "triton_gpu.num-warps";
 constexpr static char AttrNumCTAsName[] = "triton_gpu.num-ctas";
 constexpr static char AttrTargetName[] = "triton_gpu.target";
-
+constexpr static char AttrProtonSlotsName[] = "triton_gpu.proton-slots";
 constexpr static char AttrNumThreadsPerWarp[] = "triton_gpu.threads-per-warp";
 
 // Create the pass with numWarps passed from cl::opt.
@@ -23,7 +23,8 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass();
 // Create the pass with numWarps set explicitly.
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonToTritonGPUPass(const std::string &target, int numWarps,
-                                   int threadsPerWarp = 32, int numCTAs = 1);
+                                   int threadsPerWarp = 32, int numCTAs = 1,
+                                   int protonSlots = 0);
 
 } // namespace triton
 } // namespace mlir
