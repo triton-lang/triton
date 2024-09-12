@@ -346,8 +346,7 @@ void init_triton_llvm(py::module &&m) {
         // and break the lowering of some target specific intrinsics.
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
         if (!arch.empty() && pluginFile.empty())
-          targetMachine = std::move(
-              createTargetMachine(mod, arch, enable_fp_fusion, features));
+          targetMachine = createTargetMachine(mod, arch, enable_fp_fusion, features);
         PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
                        std::nullopt, instrCbPtr);
 
