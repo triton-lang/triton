@@ -96,8 +96,16 @@ class ASTSource:
         self.attrs = attrs
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+        else:
+            for k in self.signature.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Signature keys must be string")
         if self.constants is None:
-            self.constants = dict()
+            self.constants = {}
+        else:
+            for k in self.constants.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Constants keys must be string")
         if self.attrs is None:
             self.attrs = AttrsDescriptor()
 
@@ -196,6 +204,9 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
+    if os.getenv("TRITON_FRONT_END_DEBUGGING", "0") == "1":
+        return
+
     if e.__cause__ is not None:
         filter_traceback(e.__cause__)
     if e.__context__ is not None:

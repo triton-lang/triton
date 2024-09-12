@@ -1,8 +1,12 @@
 #include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::getFunctionType;
@@ -35,6 +39,35 @@ std::string mangleFunc(std::string name, Type type) {
   }
   return mangled;
 }
+
+// Utility function to create a constant vector mask of length `vecSize` with
+// the same `pred` value
+Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
+                                    Value pred, int64_t vecSize) {
+  auto vecMaskTy = LLVM::getFixedVectorType(rewriter.getI1Type(), vecSize);
+  Value maskVal = undef(vecMaskTy);
+  for (size_t s = 0; s < vecSize; ++s) {
+    Value indexVal =
+        rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64IntegerAttr(s));
+    maskVal = insert_element(vecMaskTy, maskVal, pred, indexVal);
+  }
+  return maskVal;
+}
+
+// Utility function to get the number of elements of a vector or a scalar
+int64_t getNumElements(Type ty) {
+  if (auto vecType = dyn_cast<VectorType>(ty))
+    return vecType.getNumElements();
+  return 1;
+}
+
+// Utility function to cast the given scalar or vector type to a vector type
+Type castToVectorType(Type ty) {
+  if (isa<VectorType>(ty))
+    return ty;
+  return LLVM::getFixedVectorType(ty, 1);
+}
+
 } // namespace
 
 namespace mlir::LLVM::AMD {
@@ -157,6 +190,25 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm) {
+
+  // Try to emit llvm.intr.masked.load if we can. In theory the backend should
+  // be happier because we emit less branchy code to optimize. The backend will
+  // lower it down however it wants at some point.
+  if (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE) {
+    // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we need
+    // to bitcast to `vector<1xelemTy>` (and back)
+    int64_t vecSize = getNumElements(elemTy);
+    Type vecType = castToVectorType(elemTy);
+    falseVal = bitcast(falseVal, vecType);
+    Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
+    bool nt = (cm == triton::CacheModifier::CG);
+    Value vecData = rewriter.create<LLVM::MaskedLoadOp>(
+        loc, vecType, ptr, maskVal, falseVal, vecSize, nt);
+    // If it is not a vector, remember to bitcast back to a scalar
+    vecData = bitcast(vecData, elemTy);
+    return vecData;
+  }
+
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
   auto getLoadNameRaw = [](triton::CacheModifier cm) {
@@ -173,7 +225,6 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
   };
 
   auto funcName = mangleFunc(getLoadNameRaw(cm), funcType);
-
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
   auto loadVal =
@@ -185,6 +236,22 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, triton::CacheModifier cm) {
+  // Try to emit llvm.intr.masked.store if we can. In theory the backend should
+  // be happier because we emit less branchy code to optimize. The backend will
+  // lower it down however it wants at some point.
+  if (cm == triton::CacheModifier::NONE) {
+    // `llvm.intr.masked.store` only accepts vectors. If we see a scalar we need
+    // to bitcast to `vector<1xelemTy>`
+    Type elemTy = val.getType();
+    int64_t vecSize = getNumElements(elemTy);
+    Type vecType = castToVectorType(elemTy);
+    val = bitcast(val, vecType);
+    Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
+    auto op =
+        rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal, vecSize);
+    return;
+  }
+
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
