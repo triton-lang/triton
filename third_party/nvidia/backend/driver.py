@@ -162,7 +162,7 @@ def make_launcher(constants, signature, ids):
 
     def gen_c_def_macro(macro_name, macro_value):
         return f"#define {macro_name} {macro_value}\n"
-    
+
     # macros to define:
     """
     #define EXTRA_INNER_LAUNCH_PARAM_DECLS
@@ -176,21 +176,24 @@ def make_launcher(constants, signature, ids):
     """
     macro_defs = gen_c_def_macro("EXTRA_INNER_LAUNCH_PARAM_DECLS", ", " + arg_decls if arg_decls else "")
     macro_defs += gen_c_def_macro("INNER_LAUNCH_CUDA_CHECK_ARGS", ', '.join(f"&arg{i}" for i in params))
-    macro_defs += gen_c_def_macro("LAUNCH_PY_ARGS", ';'.join([f"{_extracted_type(ty)} _arg{i}" for i, ty in signature.items()]))
+    macro_defs += gen_c_def_macro("LAUNCH_PY_ARGS",
+                                  ';'.join([f"{_extracted_type(ty)} _arg{i}" for i, ty in signature.items()]))
     macro_defs += gen_c_def_macro("PY_ARG_FORMAT_STR", f'"{format}"')
     macro_defs += gen_c_def_macro("EXTRA_LAUNCH_PARSE_PY_ARGS", ", " + args_list if args_list else "")
     device_ptr_info_var_list = []
     tma_desc_var_list = []
     for i, ty in signature.items():
         if ty[0] == "*":
-            device_ptr_info_var_list.append(f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;")
+            device_ptr_info_var_list.append(
+                f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;")
         elif ty == "nvTmaDesc":
             tma_desc_var_list.append(f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;")
 
     macro_defs += gen_c_def_macro("DEVICE_PTR_INFO_VARS", "  \\\n".join(device_ptr_info_var_list))
     macro_defs += gen_c_def_macro("TMA_DESC_VARS", "  \\\n".join(tma_desc_var_list))
     extra_inner_launch_call_args = ', '.join(internal_args_list)
-    macro_defs += gen_c_def_macro("EXTRA_INNER_LAUNCH_CALL_ARGS", ', ' + extra_inner_launch_call_args if extra_inner_launch_call_args else "")
+    macro_defs += gen_c_def_macro("EXTRA_INNER_LAUNCH_CALL_ARGS",
+                                  ', ' + extra_inner_launch_call_args if extra_inner_launch_call_args else "")
     src = macro_defs + Path(os.path.join(dirname, "cuda_launcher.c")).read_text()
     return src
 
