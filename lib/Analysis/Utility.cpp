@@ -495,9 +495,6 @@ bool supportMMA(triton::DotOp op, int version) {
       return false;
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
-    // TODO: do we need this condition?
-    if (retShapePerCTA[rank - 2] < 16 || retShapePerCTA[rank - 1] < 16)
-      return false;
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = TritonGPUDialect::getNumWarps(mod);
     // TODO(Keren): for now, fallback to MMAv2 if handling batch matmul.
@@ -516,6 +513,16 @@ bool supportMMA(triton::DotOp op, int version) {
         cast<RankedTensorType>(op.getType()).getElementType().isF32()) {
       return false;
     }
+  } else {
+    assert(version == 1 || version == 2);
+    auto retShapePerCTA = getShapePerCTA(op.getType());
+    auto rank = retShapePerCTA.size();
+    if (retShapePerCTA[rank - 2] < 16 || retShapePerCTA[rank - 1] < 16)
+      return false;
+    RankedTensorType typeA = op.getA().getType();
+    int k = typeA.getShape().back();
+    if (k < 16)
+      return false;
   }
   if (aElemTy.isF32() && bElemTy.isF32()) {
     return op.getInputPrecision() == InputPrecision::TF32 && version >= 2;
