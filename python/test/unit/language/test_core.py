@@ -3924,7 +3924,7 @@ def test_store_cache_modifier(cache, device):
         cs_cache_modifier_str = 'nt'
         wt_cache_modifier_str = 'sc0 sc1'
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
-        if (not global_store_line):
+        if not global_store_line:
             return
         if cache == '' or cache == '.cg':
             assert cs_cache_modifier_str not in global_store_line[0]
