@@ -889,7 +889,11 @@ static void scheduleRemainingToLastStage(scf::ForOp forOp,
     for (auto user : op->getUsers()) {
       if (opToCluster.count(user)) {
         CoarseSchedule::Cluster userCluster = opToCluster[user];
-        CoarseSchedule::Cluster opCluster = schedule[op].second;
+        CoarseSchedule::Cluster opCluster;
+        if (schedule.count(op))
+          opCluster = schedule[op].second;
+        else
+          opCluster = opToCluster[op];
         if (*userCluster < *opCluster) {
           opToCluster[user] = opCluster;
           queue.push_back(user);
