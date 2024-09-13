@@ -755,32 +755,6 @@ struct TruncFOpConversion
   }
 };
 
-struct ExpOpConversionApprox
-    : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
-  using Base = ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(math::ExpOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    // For non-FP32 input, call __nv_expf for higher-precision calculation
-    if (elemTy.getIntOrFloatBitWidth() != 32)
-      return {};
-
-    const double log2e = 1.4426950408889634;
-    Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
-
-    PTXBuilder ptxBuilder;
-    auto &exp2 = ptxBuilder.create<PTXInstr>("ex2")->o("approx").o("f32");
-    auto output = ptxBuilder.newOperand("=f");
-    auto input = ptxBuilder.newOperand(prod, "f");
-    exp2(output, input);
-    return {ptxBuilder.launch(rewriter, loc, f32_ty, false)};
-  }
-};
-
 struct ClampFOpConversion
     : ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion> {
   using Base = ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion>;
@@ -951,11 +925,6 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
 
-  // ExpOpConversionApprox will try using ex2.approx if the input type is
-  // FP32. For other input types, ExpOpConversionApprox will return failure and
-  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
-  patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   bool hwNanPropagationSupported = computeCapability >= 80;
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, hwNanPropagationSupported,
