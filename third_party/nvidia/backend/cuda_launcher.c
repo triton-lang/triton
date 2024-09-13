@@ -7,7 +7,7 @@
 #define IS_EMPTY_HELPER_ 1
 #define IS_EMPTY(x) IS_EMPTY_HELPER(x)
 
-// macros that should be filled in by driver.py:
+// macros that should be filled in from driver.py:
 // #define EXTRA_INNER_LAUNCH_PARAM_DECLS
 // #define INNER_LAUNCH_CUDA_CHECK_ARGS
 // #define LAUNCH_PY_ARGS
@@ -21,34 +21,6 @@
 // call, which requires adding a comma to the end of the previous arg in
 // driver.py. "INNER" means the inner function call of `_launch()`.
 //
-
-// #ifndef PARAMS
-//   #error "PARAMS must be defined"
-// #endif
-
-// #ifndef VAR_LIST_IN_LAUNCH
-//   #error "VAR_LIST_IN_LAUNCH must be defined"
-// #endif
-
-// #ifndef PY_ARG_FORMAT_STR
-//   #error "PY_ARG_FORMAT_STR must be defined"
-// #endif
-
-// #ifndef LAUNCH_PARSE_PY_ARGS
-//   #error "LAUNCH_PARSE_PY_ARGS must be defined"
-// #endif
-
-// #ifndef DEVICE_PTR_INFO_VARS
-//   #error "DEVICE_PTR_INFO_VARS must be defined"
-// #endif
-
-// #ifndef TMA_DESC_VARS
-//   #error "TMA_DESC_VARS must be defined"
-// #endif
-
-// #ifndef EXTRA_INNER_LAUNCH_CALL_ARGS
-//   #error "EXTRA_INNER_LAUNCH_CALL_ARGS must be defined"
-// #endif
 
 static inline void gpuAssert(CUresult code, const char *file, int line) {
   if (code != CUDA_SUCCESS) {
@@ -93,18 +65,10 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {
   return cuLaunchKernelExHandle;
 }
 
-// define a macro from driver.py to introduce extra args
-// e.g.:
-//     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in
-//     signature.items()) cuda_launcher_src += f"#define ARG_DECLS
-//     {arg_decls}".format(arg_decls=arg_decls)
 static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int clusterDimX, int clusterDimY,
                     int clusterDimZ, int shared_memory, CUstream stream,
                     CUfunction function EXTRA_INNER_LAUNCH_PARAM_DECLS) {
-  // define a macro from driver.py to introduce extra params
-  // e.g.: cuda_launcher_src += f"#define PARAMS {params}".format(params=',
-  // '.join(f"&arg{i}" for i in params))
   void *params[] = {INNER_LAUNCH_CUDA_CHECK_ARGS};
   if (gridX * gridY * gridZ > 0) {
     if (num_ctas == 1) {
@@ -253,9 +217,7 @@ static PyObject *launch(PyObject *self, PyObject *args) {
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
-  // example python code to generate the arg list:
-  // ' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in
-  // signature.items()])
+
   LAUNCH_PY_ARGS;
   if (!PyArg_ParseTuple(args, PY_ARG_FORMAT_STR, &gridX, &gridY, &gridZ,
                         &_stream, &_function, &kernel_metadata,
@@ -282,13 +244,7 @@ static PyObject *launch(PyObject *self, PyObject *args) {
   }
 
   // raise exception asap
-  // python string: "".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i},
-  // {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i,
-  // ty in signature.items()])
   DEVICE_PTR_INFO_VARS;
-  // python string:"".join([f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if
-  // (!tma_ptr{i}) return NULL;" if ty == "nvTmaDesc" else "" for i, ty in
-  // signature.items()])
   TMA_DESC_VARS;
 
   Py_BEGIN_ALLOW_THREADS;
