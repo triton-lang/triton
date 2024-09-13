@@ -77,6 +77,56 @@ LinearLayout identityND(StringAttr inDimName, ArrayRef<unsigned> shape,
   return ret;
 }
 
+LinearLayout transposeND(StringAttr inDimName, ArrayRef<unsigned> shape,
+                        ArrayRef<unsigned> order,
+                        ArrayRef<StringAttr> outDimNames) {
+  assert(shape.size() == order.size());
+  assert((order.size() == 2) && "only support dim of 2 now");
+
+  MLIRContext *ctx = inDimName.getContext();
+  StringAttr kRegister = S("register");
+  StringAttr kDim0 = S("dim0");
+  StringAttr kDim1 = S("dim1");
+
+  LinearLayout ret = LinearLayout::empty();
+  std::vector<std::vector<int32_t>> bases;
+  int dim = order[1];
+  // llvm::outs() << "i=" << 1 << "; dim=" << dim <<"; shape=" << shape[dim] <<
+  //  "; outDimNames=" << outDimNames[dim] << "\n";
+  for (int basis = 1; basis < shape[dim]; basis <<= 1) {
+    // llvm::outs() << "basis = " << basis << "\n";
+    bases.push_back({0, basis});
+  }
+  dim = order[0];
+  // llvm::outs() << "i=" << 0 << "; dim=" << dim <<"; shape=" << shape[dim] <<
+  //  "; outDimNames=" << outDimNames[dim] << "\n";
+  for (int basis = 1; basis < shape[dim]; basis <<= 1) {
+    // llvm::outs() << "basis = " << basis << "\n";
+    bases.push_back({basis, 0});
+  }
+  auto dimMinor = "dim"+std::to_string(order[0]);
+  auto dimMajor = "dim"+std::to_string(order[1]);
+  StringAttr kDimMinor = S(dimMinor);
+  StringAttr kDimMajor = S(dimMajor);
+  ret = LinearLayout(
+        {{kRegister, bases}},
+        {{kDimMinor, shape[order[0]]},
+         {kDimMajor, shape[order[1]]}},
+        false);
+
+  // llvm::outs() << "transposeND test:" << ret << "\n";
+  // ret = LinearLayout(
+  //       {{kRegister, {{0, 1}, {1, 0}, {2, 0}, {4, 0}}}},
+  //       {{kDim1, 8}, {kDim0, 2}}, false);
+
+  // ret = LinearLayout(
+  //       {{kRegister, {{0, 1}, {0, 2}, {1, 0}, {2, 0}, {4, 0}}}},
+  //       {{kDim1, 8}, {kDim0, 4}}, false);
+
+  // llvm::outs() << "transposeND ret" << ret << "\n";
+  return ret;
+}
+
 // Make a LinearLayout that maps a block-id to an N-dimensional index.
 //
 // The tensor is split up into CTAsPerCGA pieces, which are distributed among
@@ -243,6 +293,7 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   llvm::SmallDenseMap<StringAttr, int64_t> labeledShape;
   for (auto [dim, size] : llvm::zip(outDimNames, shape)) {
     labeledShape[dim] = size;
+    // llvm::outs() << "labeledShape[" << dim << "] = " << labeledShape[dim] << "\n";
   }
 
   LinearLayout cgaLayout =
@@ -257,10 +308,13 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   for (auto dim : ctaLayout.getOutDimNames()) {
     ctaShape[dim] =
         std::max(int64_t{1}, labeledShape[dim] / cgaLayout.getOutDimSize(dim));
+    // llvm::outs() << "ctaShape[" << dim << "] = " << ctaShape[dim] << "\n";
   }
 
   ctaLayout = ensureLayoutNotSmallerThan(ctaLayout, ctaShape);
+  // llvm::outs() << "after ensureLayoutNotSmallerThan" << ctaLayout << "\n";
   ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
+  // llvm::outs() << "after ensureLayoutNotLargerThan" << ctaLayout << "\n";
 
   LinearLayout ret = (ctaLayout * cgaLayout).transposeOuts(outDimNames);
   for (auto dim : ret.getOutDimNames()) {
@@ -550,6 +604,29 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
+std::optional<LinearLayout> blockedToLinearLayoutThreadRake(
+    ArrayRef<int64_t> shape, Attribute blockedAttr) {
+  auto blocked = dyn_cast<BlockedEncodingAttr>(blockedAttr);
+  if (!blocked)
+    return std::nullopt;
+
+  MLIRContext *ctx = blocked.getContext();
+  int rank = shape.size();
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  const auto &order = blocked.getOrder();
+
+  auto sizePerThread = blocked.getSizePerThread();
+  // if (llvm::any_of(sizePerThread, [](int32_t s) { return s == 1; }))
+  //   return blocked.toLinearLayout(shape);
+  auto ctaLayout =
+      transposeND(S("register"), sizePerThread, order, outDimNames) *
+      identityND(S("lane"), blocked.getThreadsPerWarp(), order, outDimNames) *
+      identityND(S("warp"), blocked.getWarpsPerCTA(), order, outDimNames);
+
+  return combineCtaCgaWithShape(ctaLayout, blocked.getCTALayout(), shape);
+}
+
 std::optional<LinearLayout>
 dotOperandMfmaToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
                              ArrayRef<int64_t> shape) {
@@ -752,11 +829,14 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
   const auto &order = getOrder();
+
+  auto sizePerThread = this->getSizePerThread();
+  auto threadsPerWarp = this->getThreadsPerWarp();
+  auto warpsPerCTA = this->getWarpsPerCTA();
   LinearLayout ctaLayout =
       identityND(S("register"), getSizePerThread(), order, outDimNames) *
       identityND(S("lane"), getThreadsPerWarp(), order, outDimNames) *
       identityND(S("warp"), getWarpsPerCTA(), order, outDimNames);
-
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 

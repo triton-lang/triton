@@ -7,6 +7,9 @@
 #include <optional>
 
 #include "triton/Tools/LinearLayout.h"
+// #include "triton/Dialect/Triton/IR/Utility.h"
+// #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+// #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu {
 
@@ -250,6 +253,10 @@ chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
                      ArrayRef<unsigned> repShape,
                      ArrayRef<unsigned> paddedRepShape,
                      ArrayRef<unsigned> order, int swizzleByteSize);
+// Convert shared encoding to linear layout, but instead of swizzle on column,
+// this functions swizzles on row to achieve the thread rake pattern
+std::optional<LinearLayout> blockedToLinearLayoutThreadRake(
+    ArrayRef<int64_t> shape, Attribute blockedAttr);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H
