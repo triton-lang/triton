@@ -10,7 +10,6 @@ from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_ma
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
-from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
 import re
@@ -18,24 +17,88 @@ import functools
 import os
 
 
-@dataclass
+# Common argument specializations
+def common_specializations(params, args):
+    arg_properties = {}
+
+    def is_divisible_by_16(x):
+        if hasattr(x, "data_ptr"):
+            return x.data_ptr() % 16 == 0
+        elif isinstance(x, int):
+            return x % 16 == 0
+        if x is None:
+            return True
+        return False
+
+    # Divisibility specialization
+    arg_properties["tt.divisibility"] = {
+        (param.num, 16)
+        for param, arg in zip(params, args)
+        if is_divisible_by_16(arg) and not param.do_not_specialize and not param.do_not_specialize_on_alignment
+    }
+
+    # Equal to 1 specialization
+    arg_properties["tt.equal_to_1"] = {
+        (param.num, 1)
+        for param, arg in zip(params, args)
+        if isinstance(arg, int) and not isinstance(arg, bool) and arg == 1 and not param.do_not_specialize
+    }
+    return arg_properties
+
+
+# Backend specific specializations
+def cuda_specializations(specializations, params, args):
+    return specializations
+
+
+def hip_specializations(specializations, params, args):
+    return specializations
+
+
+# This class handles the specialization for the given function attributes.
 class AttrsDescriptor:
-    divisible_by_16: set = None
-    equal_to_1: set = None
+    target_specializations = {"hip": hip_specializations, "cuda": cuda_specializations}
+    arg_properties: dict[str, set]
 
-    def __post_init__(self):
-        if self.divisible_by_16 is None:
-            self.divisible_by_16 = set()
-        if self.equal_to_1 is None:
-            self.equal_to_1 = set()
+    def __init__(self, backend=None, params=[], args=[]):
+        self.arg_properties = common_specializations(params, args)
+        if backend in AttrsDescriptor.target_specializations:
+            self.arg_properties = AttrsDescriptor.target_specializations[backend](self.arg_properties, params, args)
 
-    def to_dict(self):
-        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
+    # Get the function attributes as a dict like:
+    # {
+    #   "arg0" : [(prop_name00, val00), (prop_name01, val01), ...)]}
+    #   "arg1" : [(prop_name10, val10), (prop_name11, val11), ...)]}
+    # }
+    def get_fn_attrs(self):
+        attrs = {}
+        for prop_name, arg_set in self.arg_properties.items():
+            for arg, val in arg_set:
+                attrs[arg] = attrs.get(arg, []) + [(prop_name, val)]
+            return attrs
 
+    # Return the same object, without the given attribute `attr_name`
+    def erase_property(self, attr_name):
+        import copy
+        c = copy.deepcopy(self)
+        if attr_name in c.arg_properties:
+            c.arg_properties.pop(attr_name)
+        return c
+
+    def __getitem__(self, attr_name):
+        if attr_name in self.arg_properties:
+            return self.arg_properties[attr_name]
+        return None
+
+    # Create the class from a set of hints that are passed out. So instead
+    # of calling the specializations, it's the user that tells us what property
+    # each argument has
     @staticmethod
-    def from_dict(data):
-        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
-                               equal_to_1=set(data.get('equal_to_1', [])))
+    def from_hints(hints):
+        attrsDescriptor = AttrsDescriptor()
+        for prop_name, arg_set in hints.items():
+            attrsDescriptor.arg_properties[prop_name] = arg_set
+        return attrsDescriptor
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])

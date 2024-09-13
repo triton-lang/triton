@@ -25,7 +25,7 @@ def compile_fn(attrs):
 
 
 def test_compile_in_subproc() -> None:
-    config = triton.compiler.AttrsDescriptor(tuple(range(4)), ())
+    config = triton.compiler.AttrsDescriptor(target.backend, tuple(range(4)), ())
     multiprocessing.set_start_method('fork')
     proc = multiprocessing.Process(target=compile_fn, args=(config, ))
     proc.start()
@@ -47,7 +47,7 @@ def compile_fn_dot(attrs):
 
 
 def test_compile_in_forked_subproc(fresh_triton_cache) -> None:
-    config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
+    config = triton.compiler.AttrsDescriptor(target.backend, tuple(range(1)), ())
     assert multiprocessing.get_start_method() == 'fork'
     proc = multiprocessing.Process(target=compile_fn_dot, args=(config, ))
     proc.start()
@@ -86,7 +86,7 @@ def test_compile_in_forked_subproc_with_forced_gc(fresh_triton_cache) -> None:
     gc.disable()
 
     # stage 1.p
-    config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
+    config = triton.compiler.AttrsDescriptor(target.backend, tuple(range(1)), ())
     compile_empty_kernel_with_gc(config)
 
     # stage 2.p

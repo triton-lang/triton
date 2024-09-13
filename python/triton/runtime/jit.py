@@ -445,7 +445,6 @@ class JITFunction(KernelInterface[T]):
     # Hook to signal that a kernel is done compiling and inspect compiled function.
     # cache_hook will always be called before compilation and compiled_hook after.
     compiled_hook = None
-    divisibility = 16
 
     @staticmethod
     def _key_of(arg):
@@ -467,41 +466,10 @@ class JITFunction(KernelInterface[T]):
         else:
             raise TypeError(f"Unsupported type {type(arg)} for {arg}")
 
-    @staticmethod
-    def _spec_of(arg):
-        if hasattr(arg, "data_ptr"):
-            return arg.data_ptr() % JITFunction.divisibility == 0
-        elif isinstance(arg, int):
-            return (arg % 16 == 0, arg == 1)
-        return (arg is None, )
-
     def _get_config(self, *args):
         from ..compiler import AttrsDescriptor
-
-        def is_divisible_by_16(x):
-            if hasattr(x, "data_ptr"):
-                return x.data_ptr() % JITFunction.divisibility == 0
-            elif isinstance(x, int):
-                return x % JITFunction.divisibility == 0
-            if x is None:
-                return True
-            return False
-
-        divisible_by_16 = {
-            param.num
-            for param, arg in zip(self.params, args)
-            if is_divisible_by_16(arg) and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-        }
-        equal_to_1 = {
-            param.num
-            for param, arg in zip(self.params, args)
-            if isinstance(arg, int) and not isinstance(arg, bool) and arg == 1 and not param.do_not_specialize
-        }
-        # folded equal_to_1 and None
-        # TODO: method to collect all folded args
-        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1))
-        # return _triton.code_gen.instance_descriptor(divisible_by_16,
-        # equal_to_1)
+        target = driver.active.get_current_target()
+        return AttrsDescriptor(target, self.params, args)
 
     @staticmethod
     def _type_of(key, is_const=False):
@@ -644,7 +612,7 @@ class JITFunction(KernelInterface[T]):
             constants = {
                 p.name: v
                 for (v, p) in zip(bound_vals, self.params)
-                if p.is_constexpr or p.num in configs[0].equal_to_1 or v is None
+                if p.is_constexpr or (p.num, 1) in configs[0]["tt.equal_to_1"] or v is None
             }
             for i, arg in constants.items():
                 if callable(arg):
