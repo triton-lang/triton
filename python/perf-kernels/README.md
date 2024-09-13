@@ -77,3 +77,6 @@ Kernel that implements Softmax over a row of tensor.
 ## `rmsnorm.py`
 
 Kernel that implements RMS Norm over a row of tensor.
+
+## `layernorm.py`
+Kernel that implements Layer Normalization over a row on tensor
