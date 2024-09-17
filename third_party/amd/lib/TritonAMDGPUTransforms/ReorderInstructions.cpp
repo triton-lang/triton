@@ -50,6 +50,9 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
       // Atomics used for global synchronization.
       if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
         ipnt = bi;
+      // Break at barrier
+      if (isa<gpu::BarrierOp>(wop))
+        ipnt = bi;
       // Break at loops.
       if (isa<scf::ForOp, scf::WhileOp>(wop))
         ipnt = bi;

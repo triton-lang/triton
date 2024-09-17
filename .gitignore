@@ -65,3 +65,6 @@ docs/sg_execution_times.rst
 
 # Vim
 *.swp
+
+# macOS
+.DS_Store
