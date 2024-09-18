@@ -88,8 +88,34 @@ jobs:
         key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
         restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
 
-    - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
-      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
+    - name: Configure, Build, Test, and Install LLVM (Ubuntu)
+      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu')
+      run: >
+        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+
+        cmake -GNinja -Bllvm-project/build
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=clang-12 -DCMAKE_CXX_COMPILER=clang++-12
+        -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+        -DCMAKE_LINKER=lld
+        -DLLVM_BUILD_UTILS=ON
+        -DLLVM_BUILD_TOOLS=ON
+        -DLLVM_ENABLE_ASSERTIONS=ON
+        -DMLIR_ENABLE_BINDINGS_PYTHON=ON
+        -DLLVM_ENABLE_PROJECTS=mlir
+        -DLLVM_INSTALL_UTILS=ON
+        -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+        -DLLVM_ENABLE_TERMINFO=OFF
+        llvm-project/llvm
+
+        ninja -C llvm-project/build check-mlir install
+
+        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+
+
+    - name: Configure, Build, Test, and Install LLVM (macOS x64)
+      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'macos')
       run: >
         python3 -m pip install -r llvm-project/mlir/python/requirements.txt
 
@@ -107,7 +133,6 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
-        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -131,7 +156,6 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
-        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -177,7 +201,6 @@ jobs:
         -DCMAKE_LINKER=$LINKER \
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
         -DLLVM_ENABLE_ZSTD=OFF \
-        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF \
         -DLLVM_INSTALL_UTILS=ON \
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
@@ -228,7 +251,6 @@ jobs:
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
         -DLLVM_USE_HOST_TOOLS=ON
         -DLLVM_ENABLE_TERMINFO=OFF
-        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build install
