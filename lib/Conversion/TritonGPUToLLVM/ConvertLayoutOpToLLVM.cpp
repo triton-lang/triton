@@ -483,9 +483,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Input dims: [reg, lane, warp]
     // Output dims: [offset, iteration]
     std::optional<LinearLayout> shmemStoreLayout =
-        chooseStMatrixLayoutForRegToRegConversion(
-            ctx, op.getSrc().getType(), scratchConfig.repShape,
-            scratchConfig.paddedRepShape, scratchConfig.order);
+        chooseStMatrixLayout(ctx, op.getSrc().getType(), scratchConfig.repShape,
+                             scratchConfig.paddedRepShape, scratchConfig.order,
+                             /*swizzleByteSize=*/0);
     bool isStMatrix = shmemStoreLayout.has_value();
     if (!isStMatrix) {
       shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);

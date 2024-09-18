@@ -807,7 +807,8 @@ namespace {
 // relax some of them in the future.
 bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
                     ArrayRef<unsigned> paddedRepShape,
-                    ArrayRef<unsigned> order) {
+                    ArrayRef<unsigned> order,
+                    int swizzleByteSize) {
   auto mmaLayout =
       mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   if (!mmaLayout || !mmaLayout.isHopper())
@@ -826,15 +827,18 @@ bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     return false;
   if (paddedRepShape[1] % 8 != 0)
     return false;
+  if (swizzleByteSize != 0 && swizzleByteSize != 32 && swizzleByteSize != 64 &&
+      swizzleByteSize != 128)
+    return false;
   return true;
 }
 
 } // anonymous namespace
 
-std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
+std::optional<LinearLayout> chooseStMatrixLayout(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order) {
-  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order))
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order, int swizzleByteSize) {
+  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order, swizzleByteSize))
     return std::nullopt;
 
   StringAttr kReg = S("register");
@@ -843,9 +847,27 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   StringAttr kCol = S("dim1");
   StringAttr kRow = S("dim0");
 
+  int perPhase = 1;
+  int maxPhase = 1;
+  if (swizzleByteSize == 32) {
+    perPhase = 4;
+    maxPhase = 2;
+  } else if (swizzleByteSize == 64) {
+    perPhase = 2;
+    maxPhase = 4;
+  } else if (swizzleByteSize == 128) {
+    perPhase = 1;
+    maxPhase = 8;
+  }
+  // Construct a single stmatrix.x4 (16x16) tile
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
-  std::vector<std::vector<int>> basesLane = {
-      {0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}};
+  std::vector<std::vector<int>> basesLane;
+  for (int logRow = 0; logRow < 4; logRow++) {
+    int row = 1 << logRow;
+    basesLane.push_back({8 * ((row / perPhase) % maxPhase), row});
+  }
+  basesLane.push_back({8, 0});
+
   LinearLayout layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
 
