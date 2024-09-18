@@ -51,6 +51,11 @@ private:
         mlir::LLVM::AMD::predicatedLoadCG);
   }
 
+  bool isPredicatedLoadCV(LLVM::CallOp callOp) const {
+    return callOp.getCallee().value().contains(
+        mlir::LLVM::AMD::predicatedLoadCV);
+  }
+
   bool isPredicatedStore(LLVM::CallOp callOp) const {
     return callOp.getCallee().value().contains(
         mlir::LLVM::AMD::predicatedStore);
@@ -137,8 +142,9 @@ private:
                  | vialatile | non-tmp | gcn instr gfx94
     LLVM::LoadOp | 0         | 0       | (ca) global load
                  | 0/1       | 1       | (cg) global load nt
+                 | 1         | 0       | (cv) flat load sc0 sc1
     */
-    bool vialatileFlag = false;
+    bool vialatileFlag = isPredicatedLoadCV(callOp);
     bool nonTmpFlag = isPredicatedLoadCG(callOp);
     auto loadOp = rewriter.create<LLVM::LoadOp>(
         loc, elemTy, ptr, /*alignment=*/0, vialatileFlag, nonTmpFlag);
