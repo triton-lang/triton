@@ -364,8 +364,8 @@ jobs:
           pip install -v -e '.[tests]'
           echo "Artificial erroring out"
           exit 1
-      - name: Clean up after a failed build
-        if: steps.amd-install-triton.outcome != 'success'
+      - name: Clean up after an unsuccessful build
+        if: '!success()' && steps.amd-install-triton.outcome != 'success'
         run: |
           rm -rf ~/.triton
       - name: Run lit tests
