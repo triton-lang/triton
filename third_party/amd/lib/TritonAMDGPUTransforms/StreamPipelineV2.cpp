@@ -558,6 +558,8 @@ static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     dotOp->moveBefore(yield);
     ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp.getC());
     return ifOp;
+  } else if (isa<gpu::BarrierOp>(op)) {
+    return op;
   }
   return tt::predicateOp(rewriter, op, pred);
 }
