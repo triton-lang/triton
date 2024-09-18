@@ -584,7 +584,7 @@ for mode in ["fwd", "bwd"]:
                 line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
                 (["Flash-2"] if HAS_FLASH else []),
                 styles=[("red", "-"), ("blue", "-"), ("green", "-")],
-                ylabel="ms",
+                ylabel="TFLOPS",
                 plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}",
                 args={
                     "H": N_HEADS,
