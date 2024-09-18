@@ -6,6 +6,9 @@ on:
       - llvm-head
     paths:
       - cmake/llvm-hash.txt
+  pull_request:
+    paths:
+      - .github/workflows/llvm-build.yml
   workflow_dispatch:
 
 env:
@@ -265,29 +268,6 @@ jobs:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
-
-    - name: Azure Login
-      if: ${{ (github.repository == 'triton-lang/triton') }}
-      uses: azure/login@v2
-      with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-    - name: Upload LLVM Artifacts to Azure
-      if: ${{ (github.repository == 'triton-lang/triton') }}
-      run: |
-        az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz" --overwrite
-
-        URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name public --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz")
-        echo "Blob URL: ${URL}"
-
-    - name: Azure Logout
-      if: ${{ (github.repository == 'triton-lang/triton') }}
-      run: |
-        az logout
-        az cache purge
-        az account clear
 
     - name: Dump Sccache Statistics
       run: sccache --show-stats
