@@ -378,7 +378,7 @@ jobs:
           exit 1
 
       - name: Clean up after an unsuccessful build
-        if: '!success() && steps.amd-install-triton.outcome != "success"'
+        if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
         run: |
           rm -rf ~/.triton
 
