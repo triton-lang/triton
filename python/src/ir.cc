@@ -1,4 +1,4 @@
-#include <pybind11/functional.h>
+﻿#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -135,6 +135,11 @@ void outputWarning(Location loc, const std::string &msg) {
                /*stack_level=*/2);
 }
 
+template <typename OpTy> OpTy approxMath(OpTy op) {
+  op.setFastmath(arith::FastMathFlags::afn);
+  return op;
+}
+
 } // anonymous namespace
 
 /*****************************************************************************/
@@ -157,6 +162,7 @@ void init_triton_ir(py::module &&m) {
       .value("WB", CacheModifier::WB)
       .value("CS", CacheModifier::CS)
       .value("WT", CacheModifier::WT)
+      .value("CV", CacheModifier::CV)
       .export_values();
 
   py::enum_<MemSemantic>(m, "MEM_SEMANTIC", py::module_local())
@@ -225,6 +231,7 @@ void init_triton_ir(py::module &&m) {
                     math::MathDialect, arith::ArithDialect, index::IndexDialect,
                     scf::SCFDialect, ::mlir::gpu::GPUDialect,
                     cf::ControlFlowDialect, LLVM::LLVMDialect>();
+    mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
     mlir::LLVM::registerInlinerInterface(registry);
@@ -1446,27 +1453,27 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_exp",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return self.create<math::ExpOp>(val);
+             return approxMath(self.create<math::ExpOp>(val));
            })
       .def("create_exp2",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return self.create<math::Exp2Op>(val);
+             return approxMath(self.create<math::Exp2Op>(val));
            })
       .def("create_cos",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return self.create<math::CosOp>(val);
+             return approxMath(self.create<math::CosOp>(val));
            })
       .def("create_sin",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return self.create<math::SinOp>(val);
+             return approxMath(self.create<math::SinOp>(val));
            })
       .def("create_log",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return self.create<math::LogOp>(val);
+             return approxMath(self.create<math::LogOp>(val));
            })
       .def("create_log2",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return self.create<math::Log2Op>(val);
+             return approxMath(self.create<math::Log2Op>(val));
            })
       .def("create_erf",
            [](TritonOpBuilder &self, Value &val) -> Value {
