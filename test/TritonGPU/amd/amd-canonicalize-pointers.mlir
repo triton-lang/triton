@@ -486,3 +486,37 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL  tt.func @condBranch
+  tt.func @select(%arg0 : !tt.ptr<f32>, %i1 : i1) -> tensor<1024xf32, #blocked>{
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0 = arith.constant 0: index
+    %c128 = arith.constant 128: index
+    %c1 = arith.constant 1 : index
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    // CHECK: %[[scalarOffset:.*]] = arith.addi {{.*}}, {{.*}} : i32
+    // CHECK: %[[variableOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32, #blocked>
+    // CHECK: %[[base_offset:.*]] = tt.splat %{{.*}} : i64
+    // CHECK: %[[scalarPtr:.*]] = tt.addptr %arg0, %[[scalarOffset]]
+    // CHECK: %[[ext_offset0:.*]] = arith.extsi %[[variableOffset]]
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    // CHECK: %[[offset2:.*]] = arith.addi %[[ext_offset0]], %[[base_offset]]
+    // CHECK: %[[scalarPtr1:.*]] = arith.select %arg1, %arg0, %[[scalarPtr]]
+    // CHECK: %[[offset0:.*]] = arith.select %arg1, {{.*}}, %[[offset2]]
+    // CHECK: %[[offset1:.*]] = arith.trunci %[[offset0]]
+    // CHECK: %[[ptr:.*]] = tt.splat %[[scalarPtr1]]
+    // CHECK: tt.addptr %[[ptr]], %[[offset1]]
+    %7 = arith.select %i1, %5 , %6 : tensor<1024x!tt.ptr<f32>, #blocked>
+    %out = tt.load %7: tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %out : tensor<1024xf32, #blocked>
+  }
+}

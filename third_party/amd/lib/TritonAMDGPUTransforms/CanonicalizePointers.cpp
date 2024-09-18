@@ -127,6 +127,8 @@ private:
                                    Value &nextPtr);
   LogicalResult rewriteCondBranchOp(cf::CondBranchOp condBrOp, Location curLoc,
                                     OpOperand *operand, Value &nextPtr);
+  LogicalResult rewriteSelectOp(arith::SelectOp selectOp, Location curLoc,
+                                OpOperand *operand, Value &nextPtr);
   LogicalResult rewriteBranchOp(cf::BranchOp branchOp, Location curLoc,
                                 OpOperand *operand, Value &nextPtr);
 
@@ -737,6 +739,47 @@ LogicalResult PointerCanonicalizer::rewriteCondBranchOp(
   return success();
 }
 
+LogicalResult PointerCanonicalizer::rewriteSelectOp(arith::SelectOp selectOp,
+                                                    Location curLoc,
+                                                    OpOperand *curOperand,
+                                                    Value &nextPtr) {
+  const auto &operands = selectOp->getOpOperands();
+  bool otherIsFalse = &operands[1] == curOperand;
+  assert(otherIsFalse || &operands[2] == curOperand);
+
+  OpOperand *otherOperand = &operands[otherIsFalse ? 2 : 1];
+
+  // If we didn't traverse both operands, simply create the pointers
+  // for the operand we reached and save the fat pointer back. When (and if)
+  // the traversal meets the select again we can rewrite it properly
+  if (!pointers.contains(otherOperand->get())) {
+    FatPtr fatPtr = pointers[curOperand->get()];
+    Value tensorPtr = createTensorPointer(fatPtr, curLoc);
+    curOperand->set(tensorPtr);
+    pointers[curOperand->get()] = fatPtr;
+    return success();
+  }
+
+  // If both have been traversed, then we can rewrite select of pointers as a
+  // select of base and offset
+  FatPtr fatPtrT =
+      pointers[otherIsFalse ? curOperand->get() : otherOperand->get()];
+  FatPtr fatPtrF =
+      pointers[!otherIsFalse ? curOperand->get() : otherOperand->get()];
+
+  // Rewrite `select` for base and offset
+  Value newBase = rewriter.create<arith::SelectOp>(
+      curLoc, selectOp.getCondition(), fatPtrT.basePtr, fatPtrF.basePtr);
+  Value newOffset = rewriter.create<arith::SelectOp>(
+      curLoc, selectOp.getCondition(), fatPtrT.offset, fatPtrF.offset);
+  assert(fatPtrT.canNarrow == fatPtrF.canNarrow);
+
+  nextPtr = selectOp.getResult();
+  pointers[nextPtr] = fatPtrT.copy(newBase, newOffset);
+  opToDelete.insert(selectOp);
+  return success();
+}
+
 LogicalResult PointerCanonicalizer::rewriteBranchOp(cf::BranchOp branchOp,
                                                     Location curLoc,
                                                     OpOperand *curOperand,
@@ -803,6 +846,9 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
         .Case<cf::CondBranchOp>([&](auto condBrOp) {
           res = rewriteCondBranchOp(condBrOp, curLoc, curOperand, nextPtr);
         })
+        .Case<arith::SelectOp>([&](auto selectOp) {
+          res = rewriteSelectOp(selectOp, curLoc, curOperand, nextPtr);
+        })
         .Case<cf::BranchOp>([&](auto branchOp) {
           res = rewriteBranchOp(branchOp, curLoc, curOperand, nextPtr);
         })
@@ -820,7 +866,8 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
     // Keep propagating the fat pointer down the IR
     if (nextPtr)
       for (OpOperand &use : nextPtr.getUses())
-        queue.push_back(&use);
+        if (!opToDelete.contains(use.getOwner()))
+          queue.push_back(&use);
   }
   return success();
 }
@@ -843,8 +890,11 @@ LogicalResult PointerCanonicalizer::rewriteFunction(triton::FuncOp funcOp) {
       return failure();
 
     // Clean-up
-    for (Operation *op : llvm::reverse(opToDelete))
-      op->erase();
+    for (Operation *op : opToDelete) {
+      op->dropAllReferences();
+      op->dropAllDefinedValueUses();
+      rewriter.eraseOp(op);
+    }
   }
   return success();
 }
