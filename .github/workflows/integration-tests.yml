@@ -146,7 +146,7 @@ jobs:
           git reset --hard
           python3 -m pre_commit run --all-files --verbose
       - name: Print diff of changes if pre-commit failed
-        if: '!success()'
+        if: failure()
         run: |
           git diff
   Integration-Tests:
@@ -356,6 +356,7 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install lit
       - name: Install Triton
+        id: amd-install-triton
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton
@@ -364,7 +365,7 @@ jobs:
           echo "Artificial erroring out"
           exit 1
       - name: Clean up after a failed build
-        if: '!success()'
+        if: ${{ steps.amd-install-triton.outcome != 'success' }}
         run: |
           rm -rf ~/.triton
       - name: Run lit tests
