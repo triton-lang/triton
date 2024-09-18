@@ -859,14 +859,22 @@ std::optional<LinearLayout> chooseStMatrixLayout(
     perPhase = 1;
     maxPhase = 8;
   }
+  int numRows = 16;
+  int numCols = 8 * swizzleByteSize / 16;
   // Construct a single stmatrix.x4 (16x16) tile
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane;
-  for (int logRow = 0; logRow < 4; logRow++) {
+  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
     int row = 1 << logRow;
     basesLane.push_back({8 * ((row / perPhase) % maxPhase), row});
   }
   basesLane.push_back({8, 0});
+
+  // Expand the tile's register dimension to fit the swizzleByteSize.
+  for (int logChunk = 0; logChunk < llvm::Log2_32(numCols / 16); logChunk++) {
+    int chunk = 1 << logChunk;
+    basesReg.push_back({16 * chunk, 0});
+  }
 
   LinearLayout layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});

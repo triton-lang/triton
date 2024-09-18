@@ -756,10 +756,10 @@ struct LocalAllocOpConversion
                                       {kWarp, warpId},
                                       {kBlock, i32_val(0)}})[0]
                        .second;
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto inVec = layout->getNumConsecutiveInOut();
+    auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto srcVec = layout->getNumConsecutiveInOut();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
-    for (int i = 0; i < inVals.size(); i += inVec) {
+    for (int i = 0; i < srcVals.size(); i += srcVec) {
       auto regIdx = layout
                         ->apply({{kRegister, i},
                                  {kLane, 0},
@@ -770,8 +770,8 @@ struct LocalAllocOpConversion
       auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);
       vecAddr.setInbounds(true);
       SmallVector<Value> inValsVec;
-      for (int j = 0; j < inVec; j++)
-        inValsVec.push_back(inVals[i + j]);
+      for (int j = 0; j < srcVec; j++)
+        inValsVec.push_back(srcVals[i + j]);
       Value valsVec = packLLVector(loc, inValsVec, rewriter);
       targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
     }
