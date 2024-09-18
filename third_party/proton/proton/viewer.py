@@ -2,9 +2,12 @@ import argparse
 from collections import namedtuple
 import json
 import pandas as pd
-import hatchet as ht
+try:
+    import hatchet as ht
+    from hatchet.query import NegationQuery
+except ImportError:
+    raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
-from hatchet.query import NegationQuery
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME, TritonHook
 
 
@@ -187,6 +190,15 @@ def parse(metrics, filename, include, exclude, threshold, depth, format):
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
+        emitWarnings(gf, metrics)
+
+
+def emitWarnings(gf, metrics):
+    if "bytes (inc)" in metrics:
+        byte_values = gf.dataframe["bytes (inc)"].values
+        min_byte_value = np.nanmin(byte_values)
+        if min_byte_value < 0:
+            print("Warning: Negative byte values detected, this is usually the result of a datatype overflow\n")
 
 
 def show_metrics(file_name):

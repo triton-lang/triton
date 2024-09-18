@@ -14,7 +14,6 @@ using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Data loader for mma.16816 instruction.
@@ -496,7 +495,12 @@ Type getSharedMemTy(Type argType) {
     return type::f32Ty(ctx);
   else if (argType.getIntOrFloatBitWidth() == 8)
     return type::i8Ty(ctx);
-  else
+  else if (argType.isInteger(16) || argType.isInteger(32)) {
+    auto bitwidth = argType.getIntOrFloatBitWidth();
+    auto signed_type =
+        argType.isSignedInteger() ? IntegerType::Signed : IntegerType::Unsigned;
+    return IntegerType::get(ctx, bitwidth, signed_type);
+  } else
     llvm::report_fatal_error("mma16816 data type not supported");
 }
 

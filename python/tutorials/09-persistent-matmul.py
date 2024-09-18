@@ -89,7 +89,7 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
-    if (c_ptr.dtype == tl.float8e4nv):
+    if (c_ptr.dtype.element_ty == tl.float8e4nv):
         c = accumulator.to(tl.float8e4nv)
     else:
         c = accumulator.to(tl.float16)
@@ -204,7 +204,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
             offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
             c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
             c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-            if (c_ptr.dtype == tl.float8e4nv):
+            if (c_ptr.dtype.element_ty == tl.float8e4nv):
                 c = accumulator.to(tl.float8e4nv)
             else:
                 c = accumulator.to(tl.float16)
@@ -259,14 +259,6 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                                  GROUP_SIZE_M: tl.constexpr,  #
                                  FP8_OUTPUT: tl.constexpr,  #
                                  NUM_SMS: tl.constexpr):  #
-    # TODO(embg) remove TMA fence after __grid_constant__ lands
-    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
-                              [a_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
-    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
-                              [b_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
-    tl.inline_asm_elementwise("fence.proxy.tensormap::generic.acquire.gpu [$1], 128; // $0 dummy reg", "=r, l",
-                              [c_desc_ptr], dtype=tl.int32, is_pure=False, pack=1)
-
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -367,6 +359,150 @@ def matmul_tma_persistent(a, b):
     return c
 
 
+@triton.jit(launch_metadata=_matmul_launch_metadata)
+def matmul_kernel_device_tma_persistent(workspace_ptr,  #
+                                        tiles_per_update: tl.constexpr,  #
+                                        a_ptr, b_ptr, c_ptr,  #
+                                        M, N, K,  #
+                                        BLOCK_SIZE_M: tl.constexpr,  #
+                                        BLOCK_SIZE_N: tl.constexpr,  #
+                                        BLOCK_SIZE_K: tl.constexpr,  #
+                                        GROUP_SIZE_M: tl.constexpr,  #
+                                        NUM_SMS: tl.constexpr):  #
+    # Matmul using TMA and device-side descriptor creation
+    dtype = c_ptr.dtype.element_ty
+    start_pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+    num_tiles = num_pid_m * num_pid_n
+
+    TMA_SIZE: tl.constexpr = 128
+    workspace_base = workspace_ptr + start_pid * 3 * TMA_SIZE
+    a_desc_ptr = workspace_base
+    b_desc_ptr = workspace_base + TMA_SIZE
+    c_desc_ptr = workspace_base + 2 * TMA_SIZE
+
+    tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=a_desc_ptr, global_address=a_ptr,
+                                                         load_size=[BLOCK_SIZE_M, BLOCK_SIZE_K], global_size=[M, K],
+                                                         element_ty=a_ptr.dtype.element_ty)
+    tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=b_desc_ptr, global_address=b_ptr,
+                                                         load_size=[BLOCK_SIZE_N, BLOCK_SIZE_K], global_size=[N, K],
+                                                         element_ty=b_ptr.dtype.element_ty)
+    tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=c_desc_ptr, global_address=c_ptr,
+                                                         load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N], global_size=[M, N],
+                                                         element_ty=c_ptr.dtype.element_ty)
+    tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(a_desc_ptr)
+    tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(b_desc_ptr)
+    tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
+
+    tiles_per_SM = num_tiles // NUM_SMS
+    if start_pid < num_tiles % NUM_SMS:
+        tiles_per_SM += 1
+
+    tile_id = start_pid - NUM_SMS
+    ki = -1
+    ni = -1
+
+    pid_m = 0
+    pid_n = 0
+    offs_am = 0
+    offs_bn = 0
+
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    for _ in range(0, k_tiles * tiles_per_SM):
+        ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
+        if ki == 0:
+            ni += 1
+
+            # Simulate a grouped gemm
+            if ni == tiles_per_update:
+                tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=a_desc_ptr, global_address=a_ptr,
+                                                                     load_size=[BLOCK_SIZE_M,
+                                                                                BLOCK_SIZE_K], global_size=[M, K],
+                                                                     element_ty=a_ptr.dtype.element_ty)
+                tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=b_desc_ptr, global_address=b_ptr,
+                                                                     load_size=[BLOCK_SIZE_N,
+                                                                                BLOCK_SIZE_K], global_size=[N, K],
+                                                                     element_ty=b_ptr.dtype.element_ty)
+                tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=c_desc_ptr, global_address=c_ptr,
+                                                                     load_size=[BLOCK_SIZE_M,
+                                                                                BLOCK_SIZE_N], global_size=[M, N],
+                                                                     element_ty=c_ptr.dtype.element_ty)
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(a_desc_ptr)
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(b_desc_ptr)
+                tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
+                ni = 0
+
+            tile_id += NUM_SMS
+            group_id = tile_id // num_pid_in_group
+            first_pid_m = group_id * GROUP_SIZE_M
+            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+            pid_m = first_pid_m + (tile_id % group_size_m)
+            pid_n = (tile_id % num_pid_in_group) // group_size_m
+
+            offs_am = pid_m * BLOCK_SIZE_M
+            offs_bn = pid_n * BLOCK_SIZE_N
+
+        offs_k = ki * BLOCK_SIZE_K
+
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
+        accumulator = tl.dot(a, b.T, accumulator)
+
+        if ki == k_tiles - 1:
+            c = accumulator.to(dtype)
+
+            tl._experimental_descriptor_store(c_desc_ptr, c, [offs_am, offs_bn])
+
+            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+
+def matmul_device_tma_persistent(a, b, tiles_per_update):
+    # Autotuner does not work with TMA. Use manual config.
+    configs = {
+        torch.float8_e4m3fn: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
+            "num_warps": 8
+        }, torch.float16: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
+            "num_warps": 8
+        }
+    }
+
+    # Check constraints.
+    assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
+    assert a.dtype == b.dtype, "Incompatible dtypes"
+
+    M, K = a.shape
+    N, K = b.shape
+    dtype = a.dtype
+
+    c = torch.zeros((M, N), device=a.device, dtype=dtype)
+    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    tma_size = 128
+    workspace = torch.empty(NUM_SMS * 3 * tma_size, dtype=torch.uint8, device="cuda")
+
+    grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
+    matmul_kernel_device_tma_persistent[grid](
+        workspace,  #
+        tiles_per_update,  #
+        a, b, c,  #
+        M, N, K,  #
+        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
+        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
+        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
+        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
+        NUM_SMS=NUM_SMS,  #
+        num_stages=configs[dtype]["num_stages"],  #
+        num_warps=configs[dtype]["num_warps"],  #
+    )
+    return c
+
+
 def cublas_matmul(a, b):
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
@@ -394,7 +530,7 @@ def torch_matmul(a, b):
     return c
 
 
-def bench(K, dtype, reps=10):
+def bench(K, dtype, tiles_per_update, reps=10):
     M = 8192
     N = 8192
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
@@ -422,11 +558,18 @@ def bench(K, dtype, reps=10):
         for _ in range(reps):
             matmul_tma_persistent(a, b)
             time.sleep(0.01)
+        flops_str = "flops8" if dtype == torch.float8_e4m3fn else "flops"
+        with proton.scope(
+                f"matmul_kernel_device_tma_persistent M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}",
+            {"bytes": a.element_size() * (M * K + N * K), flops_str: 2. * M * N * K}):
+            for _ in range(reps):
+                matmul_device_tma_persistent(a, b, tiles_per_update)
+                time.sleep(0.01)
 
     proton.deactivate(0)
 
 
-def validate(M, N, K, dtype):
+def validate(M, N, K, dtype, tiles_per_update):
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
@@ -436,6 +579,7 @@ def validate(M, N, K, dtype):
     naive_result = matmul(a, b.T)
     persistent_result = matmul_persistent(a, b.T)
     tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
+    device_tma_persistent_result = matmul_device_tma_persistent(a, b, tiles_per_update) if supports_tma() else None
 
     if torch_result is not None:
         naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
@@ -448,6 +592,9 @@ def validate(M, N, K, dtype):
     if tma_persistent_result is not None:
         naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
                                                         tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
+    if device_tma_persistent_result is not None:
+        naive_vs_device_tma_persistent = "✅" if torch.allclose(cublas_result.to(
+            torch.float16), device_tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
     print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
     if torch_result is not None:
         print(f"torch: {naive_vs_torch} ", end="")
@@ -455,7 +602,10 @@ def validate(M, N, K, dtype):
         print(f"cublas: {naive_vs_cublas} ", end="")
     print(f"persistent: {naive_vs_persistent} ", end="")
     if tma_persistent_result is not None:
-        print(f"TMA persistent: {naive_vs_tma_persistent}")
+        print(f"TMA persistent: {naive_vs_tma_persistent} ", end="")
+    if device_tma_persistent_result is not None:
+        print(f"Device TMA persistent: {naive_vs_device_tma_persistent} ", end="")
+    print()
 
 
 if __name__ == "__main__":
@@ -463,6 +613,13 @@ if __name__ == "__main__":
     parser.add_argument("-K", type=int, required=False, default=512)
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=512)
+    parser.add_argument(
+        "--tiles_per_update",
+        type=int,
+        default=1,
+        help=
+        "Number of output tiles calculated for each update of the tma descriptor in matmul_device_tma_persistent_kernel",
+    )
     parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
     args = parser.parse_args()
 
@@ -478,10 +635,10 @@ if __name__ == "__main__":
 
     torch.manual_seed(0)
 
-    validate(32, 32, 32, dtype)
-    validate(8192, 8192, 512, dtype)
+    validate(32, 32, 32, dtype, args.tiles_per_update)
+    validate(8192, 8192, 512, dtype, args.tiles_per_update)
 
     proton.start("matmul", hook="triton")
     for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-        bench(K, dtype)
+        bench(K, dtype, args.tiles_per_update)
     proton.finalize()

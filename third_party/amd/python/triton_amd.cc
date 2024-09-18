@@ -56,6 +56,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      const std::string, int, int);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
+  ADD_PASS_WRAPPER_0("add_canonicalize_pointers",
+                     mlir::createTritonAMDGPUCanonicalizePointersPass);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
   ADD_PASS_WRAPPER_0("add_stream_pipeline",
@@ -193,11 +195,9 @@ void init_triton_amd(py::module &&m) {
             target->createMCCodeEmitter(*mcii, ctx));
         std::unique_ptr<llvm::MCAsmBackend> mab(
             target->createMCAsmBackend(*sti, *mri, mcOptions));
+        std::unique_ptr<llvm::MCObjectWriter> ow(mab->createObjectWriter(svos));
         mcStreamer.reset(target->createMCObjectStreamer(
-            triple, ctx, std::move(mab), mab->createObjectWriter(svos),
-            std::move(ce), *sti, mcOptions.MCRelaxAll,
-            mcOptions.MCIncrementalLinkerCompatible,
-            /*DWARFMustBeAtTheEnd=*/false));
+            triple, ctx, std::move(mab), std::move(ow), std::move(ce), *sti));
 
         std::unique_ptr<llvm::MCAsmParser> parser(
             createMCAsmParser(srcMgr, ctx, *mcStreamer, *mai));

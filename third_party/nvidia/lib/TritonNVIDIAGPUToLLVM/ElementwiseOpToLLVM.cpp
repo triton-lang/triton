@@ -234,6 +234,21 @@ static const std::string S8_to_Bf16 =
     "prmt.b32 $0, f0, f1, 0x7632;                \n" // f32->bf16 + pack
     "prmt.b32 $1, f2, f3, 0x7632;                \n" //
     "}";
+// Conversions have low throughput, rely on bit tricks instead of cvt
+// instruction on Hopper and later GPUs.
+static const std::string S8_to_Bf16_sm90 =
+    "{                               \n"
+    ".reg .b32 l<3>;                 \n"
+    ".reg .b32 h<3>;                 \n"
+    "prmt.b32 l0, $2, 0x43, 0x4140;  \n" // Unpack to shifted bf16.
+    "prmt.b32 h0, $2, 0x43, 0x4342;  \n"
+    "and.b32 l1, l0, 0xff7fff7f;     \n" // Zero the least exp bit.
+    "and.b32 h1, h0, 0xff7fff7f;     \n"
+    "and.b32 l2, l0, 0xff80ff80;     \n" // Zero the mantissa.
+    "and.b32 h2, h0, 0xff80ff80;     \n"
+    "sub.bf16x2 $0, l1, l2;          \n" // Subtract the offset.
+    "sub.bf16x2 $1, h1, h2;          \n"
+    "}";
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
@@ -386,7 +401,7 @@ struct FpToFpOpConversion
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3TyID = TypeID::get<Float8E4M3FNUZType>();
+    auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
@@ -430,7 +445,7 @@ struct FpToFpOpConversion
       llvm::report_fatal_error("Unsupported rounding mode for conversion.");
     }
     if (computeCapability < 89 &&
-        (srcTy.isFloat8E4M3FNUZ() || dstTy.isFloat8E4M3FNUZ())) {
+        (srcTy.isFloat8E4M3FN() || dstTy.isFloat8E4M3FN())) {
       llvm::errs() << "Conversion from/to f8e4m3nv is only supported on "
                       "compute capability >= 89"
                    << "\n";
@@ -452,7 +467,7 @@ struct FpToFpOpConversion
     auto dstElementType = getElementType(op.getResult());
     auto roundingMode = op.getRounding();
 
-    if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FNUZ()) {
+    if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FN()) {
       assert(roundingMode.has_value() &&
              "Rounding mode must be specified for convertsions to fp8");
 
@@ -489,7 +504,7 @@ struct FpToFpOpConversion
 
     bool useFP16IntermediateSrc =
         srcElementType.isF32() &&
-        (!(computeCapability >= 90 && (dstElementType.isFloat8E4M3FNUZ() ||
+        (!(computeCapability >= 90 && (dstElementType.isFloat8E4M3FN() ||
                                        dstElementType.isFloat8E5M2())) ||
          roundingMode.value() == RoundingMode::RTZ);
     bool isDstFP32 = dstElementType.isF32();
@@ -646,8 +661,14 @@ struct FSubOpConversion
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
-  using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
+
+  explicit SIToFPOpConversion(LLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              int computeCapability,
+                              PatternBenefit benefit = patternBenefitDefault)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        computeCapability(computeCapability) {}
 
   SmallVector<Value> createDestOps(arith::SIToFPOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
@@ -657,7 +678,8 @@ struct SIToFPOpConversion
     Type outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
       auto cvtFunc = makeConverterFromPtx(
-          S8_to_Bf16, getTypeConverter()->convertType(inElemTy),
+          computeCapability >= 90 ? S8_to_Bf16_sm90 : S8_to_Bf16,
+          getTypeConverter()->convertType(inElemTy),
           getTypeConverter()->convertType(outElemTy));
       SmallVector<Value> inVals = {operands[0][0], operands[1][0],
                                    operands[2][0], operands[3][0]};
@@ -668,6 +690,9 @@ struct SIToFPOpConversion
       return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
     }
   }
+
+private:
+  int computeCapability;
 };
 
 struct FPToSIOpConversion
@@ -727,32 +752,6 @@ struct TruncFOpConversion
     } else {
       return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
     }
-  }
-};
-
-struct ExpOpConversionApprox
-    : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
-  using Base = ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(math::ExpOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    // For non-FP32 input, call __nv_expf for higher-precision calculation
-    if (elemTy.getIntOrFloatBitWidth() != 32)
-      return {};
-
-    const double log2e = 1.4426950408889634;
-    Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
-
-    PTXBuilder ptxBuilder;
-    auto &exp2 = ptxBuilder.create<PTXInstr>("ex2")->o("approx").o("f32");
-    auto output = ptxBuilder.newOperand("=f");
-    auto input = ptxBuilder.newOperand(prod, "f");
-    exp2(output, input);
-    return {ptxBuilder.launch(rewriter, loc, f32_ty, false)};
   }
 };
 
@@ -920,16 +919,12 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
+  patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
+                                   computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
 
-  // ExpOpConversionApprox will try using ex2.approx if the input type is
-  // FP32. For other input types, ExpOpConversionApprox will return failure and
-  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
-  patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   bool hwNanPropagationSupported = computeCapability >= 80;
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, hwNanPropagationSupported,

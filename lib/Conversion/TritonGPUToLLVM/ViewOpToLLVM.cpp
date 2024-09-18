@@ -172,11 +172,21 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     // verifier):
     //
     // - The op has a blocked encoding.
-    // - The last dimension (the one we're spliting) is also the most minor
-    //   dimension, and has sizePerThread=2.
+    // - The last dimension (the one we're spliting) has sizePerThread=2,
+    // threadPerWarp=1 and warpPerBlock=1.
     //
-    // With these invariants, split is trivial: Every other value goes into
-    // return value 0, and every other goes into return value 1.
+    // With these invariants, split is trivial: We can count how many contiguous
+    // registers belong to the same chunk then we separate the registers between
+    // two different chunks.
+    int numContiguousValues = 1;
+    auto encoding = cast<BlockedEncodingAttr>(
+        cast<RankedTensorType>(op.getSrc().getType()).getEncoding());
+    int splitDim = encoding.getOrder().size() - 1;
+    for (int i = 0; i < encoding.getOrder().size(); i++) {
+      if (encoding.getOrder()[i] == splitDim)
+        break;
+      numContiguousValues *= encoding.getSizePerThread()[i];
+    }
     Location loc = op->getLoc();
     auto typeConverter = getTypeConverter();
     SmallVector<Value> srcVals =
@@ -184,9 +194,11 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     assert(srcVals.size() % 2 == 0);
     SmallVector<Value> outLhsVals;
     SmallVector<Value> outRhsVals;
-    for (int i = 0; i < srcVals.size(); i += 2) {
-      outLhsVals.push_back(srcVals[i]);
-      outRhsVals.push_back(srcVals[i + 1]);
+    for (int i = 0; i < srcVals.size(); i += 2 * numContiguousValues) {
+      for (int j = 0; j < numContiguousValues; j++) {
+        outLhsVals.push_back(srcVals[i + j]);
+        outRhsVals.push_back(srcVals[i + numContiguousValues + j]);
+      }
     }
     auto resultTy = cast<RankedTensorType>(op.getResult(0).getType());
     Value retLhs =

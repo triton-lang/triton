@@ -96,8 +96,16 @@ class ASTSource:
         self.attrs = attrs
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+        else:
+            for k in self.signature.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Signature keys must be string")
         if self.constants is None:
-            self.constants = dict()
+            self.constants = {}
+        else:
+            for k in self.constants.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Constants keys must be string")
         if self.attrs is None:
             self.attrs = AttrsDescriptor()
 
@@ -109,8 +117,9 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, context):
-        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+    def make_ir(self, options, codegen_fns, module_map, context):
+        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
 
     def parse_options(self):
         return dict()
@@ -132,7 +141,7 @@ class IRSource:
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, context):
+    def make_ir(self, options, codegen_fns, module_map, context):
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
@@ -172,7 +181,7 @@ def triton_key():
     contents.append(libtriton_hash.hexdigest())
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
-    for lib in pkgutil.iter_modules([language_path]):
+    for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
     return f'{__version__}' + '-'.join(contents)
@@ -195,6 +204,9 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
+    if os.getenv("TRITON_FRONT_END_DEBUGGING", "0") == "1":
+        return
+
     if e.__cause__ is not None:
         filter_traceback(e.__cause__)
     if e.__context__ is not None:
@@ -277,8 +289,9 @@ def compile(src, target=None, options=None):
     ir.load_dialects(context)
     backend.load_dialects(context)
     codegen_fns = backend.get_codegen_implementation()
+    module_map = backend.get_module_map()
     try:
-        module = src.make_ir(options, codegen_fns, context)
+        module = src.make_ir(options, codegen_fns, module_map, context)
     except Exception as e:
         filter_traceback(e)
         raise
@@ -286,9 +299,8 @@ def compile(src, target=None, options=None):
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
-        if (fn_override_manager is not None and fn_override_manager.has_file(ir_filename)):
-            print(f"\nOverriding kernel with file {ir_filename}")
-            full_name = fn_override_manager.get_file(ir_filename)
+        if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
+            print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
