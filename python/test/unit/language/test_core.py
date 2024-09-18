@@ -3708,7 +3708,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
                          [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
                           for B in [1, 2, 4, 8]
                           for num_warps in [1, 2, 4, 8, 16]
-                          for BLOCK_M, BLOCK_N in [(32, 32)]
+                          for BLOCK_M, BLOCK_N in [(32, 32) if not is_cpu() else (4, 4)]
                           for M, N, K in [(64, 64, 64), (32, 32, 32)]
                           for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
                                                               ('float16', 'float32'), ('float32', 'float32')]] +
@@ -3725,7 +3725,9 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
             if out_dtype_str == "float16":
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     elif is_cpu():
-        pytest.skip("Test is skipped due to too long execution time on CPU")
+        if out_dtype_str == "float16":
+            pytest.skip("Test is skipped due to float16 accuracy issue")
+        input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
     else:
         input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
 
