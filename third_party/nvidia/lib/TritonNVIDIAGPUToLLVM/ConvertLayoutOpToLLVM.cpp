@@ -725,7 +725,7 @@ struct LocalAllocOpConversion
     else
       return failure();
 
-    constexpr bool USE_OLD_PATH = true;
+    constexpr bool USE_OLD_PATH = false;
 
     if (USE_OLD_PATH) {
       Location loc = op->getLoc();
@@ -780,28 +780,23 @@ struct LocalAllocOpConversion
       auto kRegister = str_attr("register");
       auto kLane = str_attr("lane");
       auto kWarp = str_attr("warp");
-      auto kBlock = str_attr("block");
 
       Value threadId = getThreadId(rewriter, loc);
       Value threadsPerWarp = i32_val(layout->getInDimSize(kLane));
       Value laneId = urem(threadId, threadsPerWarp);
       Value warpId = udiv(threadId, threadsPerWarp);
 
-      auto regBase = applyLinearLayout(loc, rewriter, *layout,
-                                       {{kRegister, i32_val(0)},
-                                        {kLane, laneId},
-                                        {kWarp, warpId},
-                                        {kBlock, i32_val(0)}})[0]
-                         .second;
+      auto regBase =
+          applyLinearLayout(
+              loc, rewriter, *layout,
+              {{kRegister, i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
+              .second;
       auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       auto srcVec = layout->getNumConsecutiveInOut();
       Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
       for (int i = 0; i < srcVals.size(); i += srcVec) {
         auto regIdx =
-            layout
-                ->apply(
-                    {{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
-                .second;
+            layout->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}})[0].second;
         Value offset = xor_(regBase, i32_val(regIdx));
         auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);
         vecAddr.setInbounds(true);

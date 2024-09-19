@@ -833,19 +833,16 @@ bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
   return true;
 }
 
-} // anonymous namespace
 
-std::optional<LinearLayout> chooseStMatrixLayout(
+std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order, int swizzleByteSize) {
-  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order, swizzleByteSize))
-    return std::nullopt;
-
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
   StringAttr kCol = S("dim1");
   StringAttr kRow = S("dim0");
+  StringAttr kOffset = S("offset");
 
   int perPhase = 1;
   int maxPhase = 1;
@@ -858,11 +855,17 @@ std::optional<LinearLayout> chooseStMatrixLayout(
   } else if (swizzleByteSize == 128) {
     perPhase = 1;
     maxPhase = 8;
+  } else {
+    llvm::errs() << "Illegal swizzleByteSize: " << swizzleByteSize << "\n";
+    llvm::report_fatal_error("Illegal swizzleByteSize");
   }
+
+  // NVIDIA's stmatrix only support 16-bit elements.
   int elemBitWidth = 16;
   int vecSize = 8;
   int numRows = 16;
   int numCols = 8 * swizzleByteSize / elemBitWidth;
+
   // Construct a single stmatrix.x4 (16x16) tile
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane;
@@ -872,12 +875,48 @@ std::optional<LinearLayout> chooseStMatrixLayout(
   }
   basesLane.push_back({8, 0});
 
-  // Expand the tile's register dimension to fit the swizzleByteSize.
+  // Expand the tile's register dimension to fit swizzleByteSize, which is a
+  // "chunk"
   for (int logChunk = 0; logChunk < llvm::Log2_32(numCols / 16); logChunk++) {
     int chunk = 1 << logChunk;
     basesReg.push_back({16 * chunk, 0});
   }
 
+  // Construct the layout for a single chunk
+  LinearLayout layout =
+      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
+
+  // Expand the `warp` dimension according to warpsPerCTA.
+  auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  layout *=
+      identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol})
+          .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
+
+  // Expand the `register` dimension so the size of columns matches `n`.
+  int n = mma.getInstrShape()[1];
+  layout = layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
+           LinearLayout::identity1D(n / numCols, kReg, kOffset)
+               .reshapeOuts({{kCol, numCols}, {kRow, numRows}});
+
+  auto ret =
+      combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
+  return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
+      .reshapeOuts(
+          {{kOffset, ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+}
+
+std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
+    MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order) {
+  StringAttr kReg = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+  StringAttr kCol = S("dim1");
+  StringAttr kRow = S("dim0");
+
+  std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
+  std::vector<std::vector<int>> basesLane = {
+      {0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}};
   LinearLayout layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
 
@@ -896,6 +935,22 @@ std::optional<LinearLayout> chooseStMatrixLayout(
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
       .reshapeOuts(
           {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+}
+
+} // anonymous namespace
+
+std::optional<LinearLayout> chooseStMatrixLayout(
+    MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order, int swizzleByteSize) {
+  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order, swizzleByteSize))
+    return std::nullopt;
+
+  if (swizzleByteSize == 0)
+    return chooseStMatrixLayoutNoLeadingOffset(ctx, tensorTy, repShape,
+                                               paddedRepShape, order);
+  else
+    return chooseStMatrixLayoutLeadingOffset(ctx, tensorTy, repShape,
+                                             paddedRepShape, order, swizzleByteSize);
 }
 
 } // namespace mlir::triton::gpu
