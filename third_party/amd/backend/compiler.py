@@ -235,6 +235,7 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, '')
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -258,7 +259,6 @@ class HIPBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, '')
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         # Get some metadata
