@@ -1,6 +1,8 @@
 from ..runtime.jit import jit
 from . import core as tl
 from . import math
+from triton.language.extra import libdevice
+import os
 
 N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
 
@@ -167,12 +169,20 @@ def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 # -------------------
 
 
+def is_interpreter():
+    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+
 @jit
 def pair_uniform_to_normal(u1, u2):
     """Box-Muller transform"""
     u1 = tl.maximum(1.0e-7, u1)
     th = 6.283185307179586 * u2
-    r = math.sqrt(-2.0 * math.log(u1))
+    # Workaround: use libdevice.log to have extra precision. Since the interpreter doesn't support libdevice, use math.log.
+    if is_interpreter():
+        r = math.sqrt(-2.0 * math.log(u1))
+    else:
+        r = math.sqrt(-2.0 * libdevice.log(u1))
     return r * math.cos(th), r * math.sin(th)
 
 
