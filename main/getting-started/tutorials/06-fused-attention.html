@@ -126,25 +126,25 @@ Credits: OpenAI kernel team</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     114.972653     94.227299
-1   2048.0     141.873533    111.234891
-2   4096.0     153.650211    124.271553
-3   8192.0     167.056940    131.725424
-4  16384.0     173.548061    136.143589
+0   1024.0     114.559463     94.277051
+1   2048.0     142.161305    111.359318
+2   4096.0     154.747575    123.605326
+3   8192.0     165.957008    131.138971
+4  16384.0     173.440601    136.206896
 fused-attention-batch4-head32-d64-fwd-causal=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     159.125738    128.809899
-1   2048.0     168.211458    127.781332
-2   4096.0     172.681112    131.318720
-3   8192.0     173.922282    130.924972
-4  16384.0     165.032371    130.565966
+0   1024.0     158.718664    128.733771
+1   2048.0     168.252859    127.737797
+2   4096.0     168.764301    130.132691
+3   8192.0     171.807279    130.670041
+4  16384.0     160.902385    131.248235
 fused-attention-batch4-head32-d64-bwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      72.729711     72.025823
-1   2048.0      96.263158     96.185578
-2   4096.0     115.353158    114.745430
-3   8192.0     122.181340    125.528049
-4  16384.0     130.458883    132.226068
+0   1024.0      72.592660     71.475186
+1   2048.0      96.194431     95.861207
+2   4096.0     115.131758    113.747451
+3   8192.0     124.221040    125.564754
+4  16384.0     131.817016    130.649367
 </pre></div>
 </div>
 <div class="line-block">
@@ -723,7 +723,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
                 <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Triton [FP16]&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;Triton [FP8]&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="k">else</span> <span class="p">[])</span> <span class="o">+</span>
                 <span class="p">([</span><span class="s2">&quot;Flash-2&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
                 <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;red&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;green&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
-                <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;ms&quot;</span><span class="p">,</span>
+                <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;TFLOPS&quot;</span><span class="p">,</span>
                 <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;fused-attention-batch</span><span class="si">{</span><span class="n">BATCH</span><span class="si">}</span><span class="s2">-head</span><span class="si">{</span><span class="n">N_HEADS</span><span class="si">}</span><span class="s2">-d</span><span class="si">{</span><span class="n">HEAD_DIM</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s2">-causal=</span><span class="si">{</span><span class="n">causal</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
                 <span class="n">args</span><span class="o">=</span><span class="p">{</span>
                     <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">N_HEADS</span><span class="p">,</span>
@@ -772,7 +772,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
         <span class="n">total_flops</span> <span class="o">*=</span> <span class="mf">0.5</span>
     <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;bwd&quot;</span><span class="p">:</span>
         <span class="n">total_flops</span> <span class="o">*=</span> <span class="mf">2.5</span>  <span class="c1"># 2.0(bwd) + 0.5(recompute)</span>
-    <span class="k">return</span> <span class="n">total_flops</span> <span class="o">/</span> <span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-9</span>
+    <span class="k">return</span> <span class="n">total_flops</span> <span class="o">*</span> <span class="mf">1e-12</span> <span class="o">/</span> <span class="p">(</span><span class="n">ms</span> <span class="o">*</span> <span class="mf">1e-3</span><span class="p">)</span>
 
 
 <span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
@@ -780,7 +780,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 52.149 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 51.302 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>

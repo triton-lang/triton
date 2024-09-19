@@ -1122,13 +1122,14 @@ This op will be removed in the future.</p>
 <h3>Attributes:<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
 * none (`NONE`)
 * ca (`CA`)
 * cg (`CG`)
 * wb (`WB`)
 * cs (`CS`)
-* wt (`WT`){{% /markdown %}}</details></td></tr>
+* wt (`WT`)
+* cv (`CV`){{% /markdown %}}</details></td></tr>
 <tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
 * evict_normal (`NORMAL`)
 * evict_first (`EVICT_FIRST`)
@@ -1617,13 +1618,14 @@ the two input tensors must have the same shape.</p>
 <tr><td><code>padding</code></td><td>::mlir::triton::PaddingOptionAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2</summary>{{% markdown %}}Enum cases:
 * zero (`PAD_ZERO`)
 * nan (`PAD_NAN`){{% /markdown %}}</details></td></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
 * none (`NONE`)
 * ca (`CA`)
 * cg (`CG`)
 * wb (`WB`)
 * cs (`CS`)
-* wt (`WT`){{% /markdown %}}</details></td></tr>
+* wt (`WT`)
+* cv (`CV`){{% /markdown %}}</details></td></tr>
 <tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
 * evict_normal (`NORMAL`)
 * evict_first (`EVICT_FIRST`)
@@ -2274,13 +2276,14 @@ shape 4x8xf32.</p>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>boundaryCheck</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
 * none (`NONE`)
 * ca (`CA`)
 * cg (`CG`)
 * wb (`WB`)
 * cs (`CS`)
-* wt (`WT`){{% /markdown %}}</details></td></tr>
+* wt (`WT`)
+* cv (`CV`){{% /markdown %}}</details></td></tr>
 <tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
 * evict_normal (`NORMAL`)
 * evict_first (`EVICT_FIRST`)
