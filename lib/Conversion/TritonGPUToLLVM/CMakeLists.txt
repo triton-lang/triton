@@ -1,4 +1,5 @@
 add_triton_library(TritonGPUToLLVM
+    BlockPtrOpToLLVM.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     DotOpToLLVM/FMA.cpp
     TypeConverter.cpp
