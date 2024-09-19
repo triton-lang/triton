@@ -725,106 +725,72 @@ struct LocalAllocOpConversion
     else
       return failure();
 
-    constexpr bool USE_OLD_PATH = false;
+    auto *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
 
-    if (USE_OLD_PATH) {
-      Location loc = op->getLoc();
-      RankedTensorType srcTy = op.getSrc().getType();
-      Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
-      auto srcs = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      SmallVector<unsigned> shape;
-      for (int64_t dim : srcTy.getShape())
-        shape.push_back(dim);
-      bool loweredToStMatrix = targetInfo.processReplicaUsingStMatrix(
-          rewriter, loc, smemBase, srcs, srcTy,
-          getTypeConverter()->convertType(srcTy.getElementType()), shape, shape,
-          sharedLayout.getOrder(), 1, swizzleByteSize);
-      if (!loweredToStMatrix)
-        return failure();
+    RankedTensorType srcTy = op.getSrc().getType();
+    SmallVector<unsigned> shape =
+        convertType<unsigned, int64_t>(srcTy.getShape());
+    auto order = sharedLayout.getOrder();
+    auto layout = chooseStMatrixLayout(rewriter.getContext(), srcTy, shape,
+                                       shape, order, swizzleByteSize);
+    if (!layout.has_value())
+      return failure();
 
-      auto resultTy = cast<MemDescType>(op.getType());
-      // Workaround for 3D tensors
-      // TODO: we need to modify the pipeline pass to give a proper shared
-      // encoding to 3D tensors
-      auto order = sharedLayout.getOrder();
-      SmallVector<unsigned> newOrder;
-      if (resultTy.getShape().size() != order.size()) {
-        for (auto i = 0; i < order.size(); ++i)
-          newOrder.push_back(order[i] + 1);
-        newOrder.push_back(0);
-      } else {
-        newOrder = SmallVector<unsigned>(order.begin(), order.end());
-      }
-      auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
-      auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
-      auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                        newOrder, loc, rewriter);
-      auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-      rewriter.replaceOp(op, retVal);
-    } else {
-      auto *ctx = rewriter.getContext();
-      Location loc = op->getLoc();
+    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
+    auto smemPtrTy = ptr_ty(ctx, 3);
 
-      RankedTensorType srcTy = op.getSrc().getType();
-      SmallVector<unsigned> shape =
-          convertType<unsigned, int64_t>(srcTy.getShape());
-      auto order = sharedLayout.getOrder();
-      auto layout = chooseStMatrixLayout(rewriter.getContext(), srcTy, shape,
-                                         shape, order, swizzleByteSize);
-      if (!layout.has_value())
-        return failure();
+    auto kRegister = str_attr("register");
+    auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
+    auto kBlock = str_attr("block");
 
-      Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
-      auto smemPtrTy = ptr_ty(ctx, 3);
+    Value threadId = getThreadId(rewriter, loc);
+    Value threadsPerWarp = i32_val(layout->getInDimSize(kLane));
+    Value laneId = urem(threadId, threadsPerWarp);
+    Value warpId = udiv(threadId, threadsPerWarp);
 
-      auto kRegister = str_attr("register");
-      auto kLane = str_attr("lane");
-      auto kWarp = str_attr("warp");
-
-      Value threadId = getThreadId(rewriter, loc);
-      Value threadsPerWarp = i32_val(layout->getInDimSize(kLane));
-      Value laneId = urem(threadId, threadsPerWarp);
-      Value warpId = udiv(threadId, threadsPerWarp);
-
-      auto regBase =
-          applyLinearLayout(
-              loc, rewriter, *layout,
-              {{kRegister, i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
+    auto regBase = applyLinearLayout(loc, rewriter, *layout,
+                                     {{kRegister, i32_val(0)},
+                                      {kLane, laneId},
+                                      {kWarp, warpId},
+                                      {kBlock, i32_val(0)}})[0]
+                       .second;
+    auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto srcVec = layout->getNumConsecutiveInOut();
+    Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
+    for (int i = 0; i < srcVals.size(); i += srcVec) {
+      auto regIdx =
+          layout
+              ->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
               .second;
-      auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      auto srcVec = layout->getNumConsecutiveInOut();
-      Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
-      for (int i = 0; i < srcVals.size(); i += srcVec) {
-        auto regIdx =
-            layout->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}})[0].second;
-        Value offset = xor_(regBase, i32_val(regIdx));
-        auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);
-        vecAddr.setInbounds(true);
-        SmallVector<Value> inValsVec;
-        for (int j = 0; j < srcVec; j++)
-          inValsVec.push_back(srcVals[i + j]);
-        Value valsVec = packLLVector(loc, inValsVec, rewriter);
-        targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
-      }
-
-      auto resultTy = cast<MemDescType>(op.getType());
-      // Workaround for 3D tensors
-      // TODO: we need to modify the pipeline pass to give a proper shared
-      // encoding to 3D tensors
-      SmallVector<unsigned> newOrder;
-      if (resultTy.getShape().size() != order.size()) {
-        for (auto i = 0; i < order.size(); ++i)
-          newOrder.push_back(order[i] + 1);
-        newOrder.push_back(0);
-      } else {
-        newOrder = SmallVector<unsigned>(order.begin(), order.end());
-      }
-      auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
-      auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                        newOrder, loc, rewriter);
-      auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-      rewriter.replaceOp(op, retVal);
+      Value offset = xor_(regBase, i32_val(regIdx));
+      auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);
+      vecAddr.setInbounds(true);
+      SmallVector<Value> inValsVec;
+      for (int j = 0; j < srcVec; j++)
+        inValsVec.push_back(srcVals[i + j]);
+      Value valsVec = packLLVector(loc, inValsVec, rewriter);
+      targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
     }
+
+    auto resultTy = cast<MemDescType>(op.getType());
+    // Workaround for 3D tensors
+    // TODO: we need to modify the pipeline pass to give a proper shared
+    // encoding to 3D tensors
+    SmallVector<unsigned> newOrder;
+    if (resultTy.getShape().size() != order.size()) {
+      for (auto i = 0; i < order.size(); ++i)
+        newOrder.push_back(order[i] + 1);
+      newOrder.push_back(0);
+    } else {
+      newOrder = SmallVector<unsigned>(order.begin(), order.end());
+    }
+    auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
+    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
+                                      newOrder, loc, rewriter);
+    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
     return success();
   }
 

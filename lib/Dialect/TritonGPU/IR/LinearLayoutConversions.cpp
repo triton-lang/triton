@@ -806,8 +806,7 @@ namespace {
 // stmatrix.  These restrictions are retained from legacy code, and we could
 // relax some of them in the future.
 bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-                    ArrayRef<unsigned> paddedRepShape,
-                    ArrayRef<unsigned> order,
+                    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
                     int swizzleByteSize) {
   auto mmaLayout =
       mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
@@ -833,10 +832,10 @@ bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
   return true;
 }
 
-
 std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order, int swizzleByteSize) {
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
+    int swizzleByteSize) {
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
@@ -844,8 +843,8 @@ std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
   StringAttr kRow = S("dim0");
   StringAttr kOffset = S("offset");
 
-  int perPhase = 1;
-  int maxPhase = 1;
+  int perPhase;
+  int maxPhase;
   if (swizzleByteSize == 32) {
     perPhase = 4;
     maxPhase = 2;
@@ -860,7 +859,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
     llvm::report_fatal_error("Illegal swizzleByteSize");
   }
 
-  // NVIDIA's stmatrix only support 16-bit elements.
+  // stmatrix only support 16-bit elements, and each vector has 8 elements.
   int elemBitWidth = 16;
   int vecSize = 8;
   int numRows = 16;
@@ -894,15 +893,15 @@ std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
 
   // Expand the `register` dimension so the size of columns matches `n`.
   int n = mma.getInstrShape()[1];
-  layout = layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
-           LinearLayout::identity1D(n / numCols, kReg, kOffset)
-               .reshapeOuts({{kCol, numCols}, {kRow, numRows}});
+  int numWarpRows = layout.getOutDimSize(kRow);
+  layout = (layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
+            LinearLayout::identity1D(n / numCols, kReg, kOffset))
+               .reshapeOuts({{kCol, n}, {kRow, numWarpRows}});
 
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
-      .reshapeOuts(
-          {{kOffset, ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+      .reshapeOuts({{kOffset, ret.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
 std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
@@ -939,18 +938,21 @@ std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
 
 } // anonymous namespace
 
-std::optional<LinearLayout> chooseStMatrixLayout(
-    MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order, int swizzleByteSize) {
-  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order, swizzleByteSize))
+std::optional<LinearLayout>
+chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
+                     ArrayRef<unsigned> repShape,
+                     ArrayRef<unsigned> paddedRepShape,
+                     ArrayRef<unsigned> order, int swizzleByteSize) {
+  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order,
+                      swizzleByteSize))
     return std::nullopt;
 
   if (swizzleByteSize == 0)
     return chooseStMatrixLayoutNoLeadingOffset(ctx, tensorTy, repShape,
                                                paddedRepShape, order);
   else
-    return chooseStMatrixLayoutLeadingOffset(ctx, tensorTy, repShape,
-                                             paddedRepShape, order, swizzleByteSize);
+    return chooseStMatrixLayoutLeadingOffset(
+        ctx, tensorTy, repShape, paddedRepShape, order, swizzleByteSize);
 }
 
 } // namespace mlir::triton::gpu
