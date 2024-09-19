@@ -235,6 +235,7 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, '')
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
