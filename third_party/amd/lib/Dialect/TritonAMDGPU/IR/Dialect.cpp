@@ -25,24 +25,24 @@
 #include "mlir/IR/OpImplementation.h"
 
 // clang-format off
-#include "Dialect/AMDGPU/IR/Dialect.h"
-#include "Dialect/AMDGPU/IR/Dialect.cpp.inc"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.cpp.inc"
 // clang-format on
 
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
 
-void mlir::triton::amdgpu::AMDGPUDialect::initialize() {
+void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "Dialect/AMDGPU/IR/AMDGPUAttrDefs.cpp.inc"
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.cpp.inc"
       >();
 
   addOperations<
 #define GET_OP_LIST
-#include "Dialect/AMDGPU/IR/Ops.cpp.inc"
+#include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
       >();
 }
 
 #define GET_OP_CLASSES
-#include "Dialect/AMDGPU/IR/Ops.cpp.inc"
+#include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"

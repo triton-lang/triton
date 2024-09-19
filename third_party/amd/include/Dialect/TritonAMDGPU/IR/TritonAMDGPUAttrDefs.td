@@ -21,20 +21,15 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef AMDGPU_DIALECT
-#define AMDGPU_DIALECT
+#ifndef TRITON_AMDGPU_ATTRDEFS
+#define TRITON_AMDGPU_ATTRDEFS
 
-include "mlir/IR/OpBase.td"
+include "mlir/IR/AttrTypeBase.td"
+include "TritonAMDGPUDialect.td"
 
-def AMDGPU_Dialect : Dialect {
-  let name = "amdgpu";
-  let cppNamespace = "::mlir::triton::amdgpu";
-
-  let description = [{
-    AMDGPU Dialect.
-  }];
-
-  let dependentDialects = [];
+class TritonAMDGPU_Attr<string name, list<Trait> traits = [],
+                     string baseCppClass = "::mlir::Attribute">
+  : AttrDef<TritonAMDGPU_Dialect, name, traits, baseCppClass> {
 }
 
 #endif

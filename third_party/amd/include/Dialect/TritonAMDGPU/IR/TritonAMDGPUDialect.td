@@ -21,25 +21,20 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef TRITON_DIALECT_AMDGPU_IR_DIALECT_H_
-#define TRITON_DIALECT_AMDGPU_IR_DIALECT_H_
+#ifndef TRITON_AMDGPU_DIALECT
+#define TRITON_AMDGPU_DIALECT
 
-#include "amd/include/Dialect/AMDGPU/IR/Dialect.h.inc"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dialect.h"
+include "mlir/IR/OpBase.td"
 
-#define GET_ATTRDEF_CLASSES
-#include "amd/include/Dialect/AMDGPU/IR/AMDGPUAttrDefs.h.inc"
+def TritonAMDGPU_Dialect : Dialect {
+  let name = "amdgpu";
+  let cppNamespace = "::mlir::triton::amdgpu";
 
-#define GET_OP_CLASSES
-#include "amd/include/Dialect/AMDGPU/IR/Ops.h.inc"
+  let description = [{
+    TritonAMDGPU Dialect hosts AMD specific ops at TritonGPU abstraction level.
+  }];
 
-namespace mlir {
-namespace triton {
-namespace amdgpu {} // namespace amdgpu
-} // namespace triton
-} // namespace mlir
+  let dependentDialects = [];
+}
 
-#endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
+#endif

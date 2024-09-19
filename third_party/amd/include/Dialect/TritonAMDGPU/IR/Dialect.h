@@ -21,15 +21,28 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#ifndef TRITON_DIALECT_AMDGPU_IR_DIALECT_H_
+#define TRITON_DIALECT_AMDGPU_IR_DIALECT_H_
 
-#ifndef AMDGPU_OPS
-#define AMDGPU_OPS
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dialect.h"
+#include "mlir/IR/PatternMatch.h"
+// clang-format off
+#include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc"
+// clang-format on
 
-include "mlir/IR/OpBase.td"
-include "mlir/IR/EnumAttr.td"
-include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
-include "mlir/Interfaces/InferTypeOpInterface.td"
-include "AMDGPUDialect.td"
-include "AMDGPUAttrDefs.td"
+#define GET_ATTRDEF_CLASSES
+#include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.h.inc"
 
-#endif
+#define GET_OP_CLASSES
+#include "amd/include/Dialect/TritonAMDGPU/IR/Ops.h.inc"
+
+namespace mlir {
+namespace triton {
+namespace amdgpu {} // namespace amdgpu
+} // namespace triton
+} // namespace mlir
+
+#endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

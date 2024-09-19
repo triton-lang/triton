@@ -21,15 +21,15 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef AMDGPU_ATTRDEFS
-#define AMDGPU_ATTRDEFS
 
-include "mlir/IR/AttrTypeBase.td"
-include "AMDGPUDialect.td"
+#ifndef TRITON_AMDGPU_OPS
+#define TRITON_AMDGPU_OPS
 
-class AMDGPU_Attr<string name, list<Trait> traits = [],
-                     string baseCppClass = "::mlir::Attribute">
-  : AttrDef<AMDGPU_Dialect, name, traits, baseCppClass> {
-}
+include "mlir/IR/OpBase.td"
+include "mlir/IR/EnumAttr.td"
+include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
+include "TritonAMDGPUDialect.td"
+include "TritonAMDGPUAttrDefs.td"
 
 #endif

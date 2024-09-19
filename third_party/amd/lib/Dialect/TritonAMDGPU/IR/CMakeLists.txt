@@ -1,9 +1,9 @@
-add_triton_library(AMDGPUIR
+add_triton_library(TritonAMDGPUIR
   Dialect.cpp
 
   DEPENDS
-  AMDGPUTableGen
-  AMDGPUAttrDefsIncGen
+  TritonAMDGPUTableGen
+  TritonAMDGPUAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   MLIRLLVMDialect
