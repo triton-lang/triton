@@ -18,6 +18,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/LogicalResult.h"
 #include <utility>
 
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -372,7 +373,8 @@ PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
 }
 
 // Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
-// obtained by splatting the scalar pointer using the `fatPtr.offset` shape.
+// obtained by splatting the `fatPtr.basePtr` using the `fatPtr.offset` shape
+// and adding the offset to it.
 Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   Value basePtr = fatPtr.basePtr;
   Value offset = fatPtr.offset;
@@ -382,8 +384,14 @@ Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   // Splat the scalar pointer
   auto tensorPtrType = RankedTensorType::get(offsetShape, basePtr.getType(),
                                              offsetType.getEncoding());
+  if (fatPtr.canNarrow)
+    offset = narrow64bitOffsetTo32bits(rewriter, loc, offset);
+
   Value tensorPtr =
       rewriter.create<triton::SplatOp>(loc, tensorPtrType, basePtr);
+
+  tensorPtr =
+      rewriter.create<triton::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
   return tensorPtr;
 }
 
@@ -394,17 +402,14 @@ LogicalResult PointerCanonicalizer::materializeFatPointer(Operation *op,
   auto fatPtr = pointers[ptr];
   Value basePtr = fatPtr.basePtr;
   Value offset = fatPtr.offset;
-  if (fatPtr.canNarrow)
-    offset = narrow64bitOffsetTo32bits(rewriter, loc, offset);
 
+  // Create the tensor pointer (i.e., splat the base && add the offset)
   Value newPtr = basePtr;
-  if (isa<RankedTensorType>(ptr.getType())) {
-    // Splat the base pointer
-    Value tensorPtr = createTensorPointer(fatPtr, loc);
-    // Add the tensor offset to the base pointer
-    newPtr = rewriter.create<triton::AddPtrOp>(loc, tensorPtr.getType(),
-                                               tensorPtr, offset);
-  }
+  if (isa<RankedTensorType>(ptr.getType()))
+    newPtr = createTensorPointer(fatPtr, loc);
+
+  // Save the fat pointer in the table
+  pointers[newPtr] = fatPtr;
 
   // Map and replace the load
   IRMapping mapper;
@@ -743,35 +748,23 @@ LogicalResult PointerCanonicalizer::rewriteSelectOp(arith::SelectOp selectOp,
                                                     Location curLoc,
                                                     OpOperand *curOperand,
                                                     Value &nextPtr) {
-  const auto &operands = selectOp->getOpOperands();
-  bool otherIsFalse = &operands[1] == curOperand;
-  assert(otherIsFalse || &operands[2] == curOperand);
-
-  OpOperand *otherOperand = &operands[otherIsFalse ? 2 : 1];
-
-  // If we didn't traverse both operands, simply create the pointers
-  // for the operand we reached and save the fat pointer back. When (and if)
-  // the traversal meets the select again we can rewrite it properly
-  if (!pointers.contains(otherOperand->get())) {
-    FatPtr fatPtr = pointers[curOperand->get()];
-    Value tensorPtr = createTensorPointer(fatPtr, curLoc);
-    curOperand->set(tensorPtr);
-    pointers[curOperand->get()] = fatPtr;
-    return success();
-  }
+  Value trueVal = selectOp.getTrueValue();
+  Value falseVal = selectOp.getFalseValue();
+  Value cond = selectOp.getCondition();
+  // If we didn't traverse both operands, simply materialize the pointer
+  if (!pointers.contains(trueVal) || !pointers.contains(falseVal))
+    return (materializeFatPointer(selectOp, curLoc, curOperand->get()));
 
   // If both have been traversed, then we can rewrite select of pointers as a
   // select of base and offset
-  FatPtr fatPtrT =
-      pointers[otherIsFalse ? curOperand->get() : otherOperand->get()];
-  FatPtr fatPtrF =
-      pointers[!otherIsFalse ? curOperand->get() : otherOperand->get()];
+  FatPtr fatPtrT = pointers[trueVal];
+  FatPtr fatPtrF = pointers[falseVal];
 
   // Rewrite `select` for base and offset
   Value newBase = rewriter.create<arith::SelectOp>(
-      curLoc, selectOp.getCondition(), fatPtrT.basePtr, fatPtrF.basePtr);
+      curLoc, cond, fatPtrT.basePtr, fatPtrF.basePtr);
   Value newOffset = rewriter.create<arith::SelectOp>(
-      curLoc, selectOp.getCondition(), fatPtrT.offset, fatPtrF.offset);
+      curLoc, cond, fatPtrT.offset, fatPtrF.offset);
   assert(fatPtrT.canNarrow == fatPtrF.canNarrow);
 
   nextPtr = selectOp.getResult();
@@ -889,7 +882,8 @@ LogicalResult PointerCanonicalizer::rewriteFunction(triton::FuncOp funcOp) {
     if (failed(rewritePointer(arg)))
       return failure();
 
-    // Clean-up
+    // Clean-up: don't assume the operation to delete are in the correct order,
+    // but force dropping the reference of the ops before we delete them
     for (Operation *op : opToDelete) {
       op->dropAllReferences();
       op->dropAllDefinedValueUses();

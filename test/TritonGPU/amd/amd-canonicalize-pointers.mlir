@@ -271,7 +271,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL  tt.func @whileOp
+  // CHECK-LABEL: tt.func @whileOp
   tt.func @whileOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>, %cond : i1)-> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0: index
@@ -307,7 +307,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL  tt.func @condBranch
+  // CHECK-LABEL: tt.func @condBranch
   tt.func @condBranch(%arg0 : !tt.ptr<f32>, %i1 : i1) -> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0: index
@@ -445,6 +445,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // The scalar offset we want is (%1*%arg1), while the variable offset should be (%2*%arg1 + %8)
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func public @matmul_kernel
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
     %c128_i32 = arith.constant 128 : i32
     %0 = tt.get_program_id x : i32
@@ -491,7 +492,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL  tt.func @condBranch
+  // CHECK-LABEL: tt.func @select
   tt.func @select(%arg0 : !tt.ptr<f32>, %i1 : i1) -> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0: index
@@ -502,14 +503,14 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
     // CHECK: %[[scalarOffset:.*]] = arith.addi {{.*}}, {{.*}} : i32
     // CHECK: %[[variableOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32, #blocked>
-    // CHECK: %[[base_offset:.*]] = tt.splat %{{.*}} : i64
+    // CHECK: %[[baseOffset:.*]] = tt.splat %{{.*}} : i64
     // CHECK: %[[scalarPtr:.*]] = tt.addptr %arg0, %[[scalarOffset]]
-    // CHECK: %[[ext_offset0:.*]] = arith.extsi %[[variableOffset]]
+    // CHECK: %[[extVariableOffset:.*]] = arith.extsi %[[variableOffset]]
     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-    // CHECK: %[[offset2:.*]] = arith.addi %[[ext_offset0]], %[[base_offset]]
+    // CHECK: %[[offset2:.*]] = arith.addi %[[extVariableOffset]], %[[baseOffset]]
     // CHECK: %[[scalarPtr1:.*]] = arith.select %arg1, %arg0, %[[scalarPtr]]
     // CHECK: %[[offset0:.*]] = arith.select %arg1, {{.*}}, %[[offset2]]
     // CHECK: %[[offset1:.*]] = arith.trunci %[[offset0]]
