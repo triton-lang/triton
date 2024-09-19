@@ -153,10 +153,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value other = op.getOther();
     LDBG("Lower LoadOp for " << ptr);
 
+    SmallVector<Value> ptrElems;
+    SmallVector<Value> maskElems;
+    SmallVector<Value> otherElems;
+    unsigned numElems;
+
+    bool otherIsSplatConstInt = false;
+    DenseElementsAttr constAttr;
+    int64_t splatVal = 0;
+
     // adaptor values
-    assert(!isTensorPointerType(ptr.getType()) &&
-           "Cannot convert load with a tensor pointer into LLVM; "
-           "this case should be transformed to normal load before lowering");
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
@@ -165,48 +171,73 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned vec = getVectorSize(ptr);
-    unsigned numElems = getTotalElemsPerThread(ptr.getType());
     unsigned vecOrig = vec;
-    if (llMask) {
-      LLVM_DEBUG(DBGS() << "vec = " << vec
-                        << " mask_alignment = " << getMaskAlignment(mask));
-      vec = std::min<size_t>(vec, getMaskAlignment(mask));
-      LLVM_DEBUG(llvm::dbgs() << " vec = " << vec << '\n');
+    if (isTensorPointerType(ptr.getType())) {
+      auto blockPointerElems =
+          unpackLLElements(loc, adaptor.getPtr(), rewriter);
+      auto rank = (blockPointerElems.size() - 1) / 3;
+      SmallVector<Value> offsets(blockPointerElems.begin(),
+                                 blockPointerElems.begin() + rank),
+          shape(blockPointerElems.begin() + rank,
+                blockPointerElems.begin() + 2 * rank),
+          strides(blockPointerElems.begin() + 2 * rank,
+                  blockPointerElems.begin() + 3 * rank);
+      Value basePtr = blockPointerElems.back();
+      // TODO: Masking is important
+      auto dstTy = mlir::cast<RankedTensorType>(getPointeeType(ptr.getType()));
+      numElems = triton::gpu::getTotalElemsPerThread(dstTy);
+      ptrElems = getBlockPtrs(loc, rewriter, targetInfo, offsets, strides,
+                              basePtr, dstTy);
+      maskElems = getBlockPtrMask(loc, rewriter, targetInfo, offsets, strides,
+                                  shape, dstTy);
+      if (op.getPadding()) {
+        if (isa<IntegerType>(valueElemTy)) {
+          assert(op.getPadding().value() == triton::PaddingOption::PAD_ZERO);
+          otherIsSplatConstInt = true;
+          splatVal = 0;
+        }
+        otherElems =
+            getBlockPtrOther(loc, rewriter, targetInfo, dstTy, op.getPadding());
+      }
+
     }
 
-    if (vec == 1 && numElems > 1) {
-      int maskValue = !llMask ? -1 : getMaskAlignment(mask);
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
-                       << " numElems = " << numElems << " mask is " << maskValue
-                       << "\n";
-    }
-    // Get the LLVM values for pointers
-    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
-    assert(ptrElems.size() == numElems);
+    else {
+      numElems = getTotalElemsPerThread(ptr.getType());
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
 
-    // Get the LLVM values for mask
-    SmallVector<Value> maskElems;
-    if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
-      assert(maskElems.size() == numElems);
-    }
+      // Get the LLVM values for mask
+      if (llMask) {
+        maskElems = unpackLLElements(loc, llMask, rewriter);
+        assert(maskElems.size() == numElems);
+        LLVM_DEBUG(DBGS() << "vec = " << vec
+                          << " mask_alignment = " << getMaskAlignment(mask));
+        vec = std::min<size_t>(vec, getMaskAlignment(mask));
+        LLVM_DEBUG(llvm::dbgs() << " vec = " << vec << '\n');
+      }
 
-    // Get the LLVM values for `other`
-    // TODO: (goostavz) handle when other is const but not splat, which
-    //       should be rarely seen
-    bool otherIsSplatConstInt = false;
-    DenseElementsAttr constAttr;
-    int64_t splatVal = 0;
-    if (other && isa<IntegerType>(valueElemTy) &&
-        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        isa<IntegerType>(constAttr.getElementType())) {
-      otherIsSplatConstInt = true;
-      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-    }
-    SmallVector<Value> otherElems;
-    if (other) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
+      if (vec == 1 && numElems > 1) {
+        int maskValue = !llMask ? -1 : getMaskAlignment(mask);
+        op->emitRemark() << "Warning: vectorization fails vec = " << vec
+                         << " origin vec = " << vecOrig
+                         << " numElems = " << numElems << " mask is "
+                         << maskValue << "\n";
+      }
+
+      Value llOther = adaptor.getOther();
+      // Get the LLVM values for `other`
+      // TODO: (goostavz) handle when other is const but not splat, which
+      //       should be rarely seen
+      if (other && isa<IntegerType>(valueElemTy) &&
+          matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
+          isa<IntegerType>(constAttr.getElementType())) {
+        otherIsSplatConstInt = true;
+        splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
+      }
+
+      if (other) {
+        otherElems = unpackLLElements(loc, llOther, rewriter);
+      }
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -383,31 +414,53 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
 
     unsigned vec = getVectorSize(ptr);
-    unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
-
-    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
-    auto valueElems = unpackLLElements(loc, llValue, rewriter);
-    assert(ptrElems.size() == valueElems.size());
-
     // Determine the vectorization size
     unsigned vecOrig = vec;
+
+    unsigned elemsPerThread;
+    SmallVector<Value> ptrElems;
     SmallVector<Value> maskElems;
-    if (llMask) {
-      Value mask = op.getMask();
-      maskElems = unpackLLElements(loc, llMask, rewriter);
-      assert(valueElems.size() == maskElems.size());
 
-      unsigned maskAlign = getMaskAlignment(mask);
-      vec = std::min(vec, maskAlign);
+    if (isTensorPointerType(ptr.getType())) {
+      auto blockPointerElems =
+          unpackLLElements(loc, adaptor.getPtr(), rewriter);
+      auto rank = (blockPointerElems.size() - 1) / 3;
+      SmallVector<Value> offsets(blockPointerElems.begin(),
+                                 blockPointerElems.begin() + rank),
+          shape(blockPointerElems.begin() + rank,
+                blockPointerElems.begin() + 2 * rank),
+          strides(blockPointerElems.begin() + 2 * rank,
+                  blockPointerElems.begin() + 3 * rank);
+      Value basePtr = blockPointerElems.back();
+      // TODO: Masking is important
+      auto dstTy = mlir::cast<RankedTensorType>(getPointeeType(ptr.getType()));
+      elemsPerThread = triton::gpu::getTotalElemsPerThread(dstTy);
+      ptrElems = getBlockPtrs(loc, rewriter, targetInfo, offsets, strides,
+                              basePtr, dstTy);
+      maskElems = getBlockPtrMask(loc, rewriter, targetInfo, offsets, strides,
+                                  shape, dstTy);
+
+    } else {
+      elemsPerThread = getTotalElemsPerThread(ptr.getType());
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
+      if (llMask) {
+        Value mask = op.getMask();
+        maskElems = unpackLLElements(loc, llMask, rewriter);
+        unsigned maskAlign = getMaskAlignment(mask);
+        vec = std::min(vec, maskAlign);
+      }
+      if (vec == 1 && elemsPerThread > 1) {
+        int mask = !llMask ? -1 : getMaskAlignment(op.getMask());
+        op->emitRemark() << "Warning: vectorization fails vec = " << vec
+                         << " origin vec = " << vecOrig
+                         << " elemsPerThread = " << elemsPerThread
+                         << " mask is " << mask << "\n";
+      }
     }
 
-    if (vec == 1 && elemsPerThread > 1) {
-      int mask = !llMask ? -1 : getMaskAlignment(op.getMask());
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
-                       << " elemsPerThread = " << elemsPerThread << " mask is "
-                       << mask << "\n";
-    }
+    auto valueElems = unpackLLElements(loc, llValue, rewriter);
+    assert(ptrElems.size() == valueElems.size());
+    assert(valueElems.size() == maskElems.size());
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     const size_t dtsize =
