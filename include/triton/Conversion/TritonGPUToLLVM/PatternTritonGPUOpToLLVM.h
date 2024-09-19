@@ -102,6 +102,10 @@ void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                   const TargetInfoBase &targetInfo,
                                   PatternBenefit benefit);
 
+void populateBlockPtrOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns,
+                                     PatternBenefit benefit);
+
 } // namespace triton
 } // namespace mlir
 

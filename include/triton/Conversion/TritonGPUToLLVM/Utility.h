@@ -1172,6 +1172,97 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
+inline SmallVector<Value> getBlockPtrs(Location loc, RewriterBase &rewriter,
+                                       const TargetInfoBase &target,
+                                       SmallVector<Value> &offset,
+                                       SmallVector<Value> &strides,
+                                       Value basePtr, RankedTensorType dstTy) {
+  auto indices =
+      emitIndices(loc, rewriter, target, dstTy.getEncoding(), dstTy, false);
+  unsigned numElems = triton::gpu::getTotalElemsPerThread(dstTy);
+  SmallVector<Value> results(numElems);
+  for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx++) {
+    auto idx = indices[elemIdx];
+    auto resPtr = basePtr;
+    // inttoptr could be at beginning
+    for (int i = 0; i < idx.size(); i++) {
+      // basePtr += strides[i] * (idx[i] + offset[i]) * ;
+      // TODO: use gep
+      auto idx64 = zext(i64_ty, idx[i]);
+      resPtr = inttoptr(
+          resPtr.getType(),
+          add(ptrtoint(i64_ty, resPtr),
+              mul(strides[i],
+                  mul(add(idx64, sext(i64_ty, offset[i])),
+                      i64_val(dstTy.getElementType().getIntOrFloatBitWidth() /
+                              8)))));
+    }
+    results[elemIdx] = resPtr;
+  }
+  return results;
+}
+
+inline SmallVector<Value> getBlockPtrMask(Location loc, RewriterBase &rewriter,
+                                          const TargetInfoBase &target,
+                                          SmallVector<Value> &offsets,
+                                          SmallVector<Value> &strides,
+                                          SmallVector<Value> &shape,
+                                          RankedTensorType dstTy) {
+  // TODO: boundary check being done on all dims instead of only the ones being
+  // specified
+  auto indices =
+      emitIndices(loc, rewriter, target, dstTy.getEncoding(), dstTy, false);
+  unsigned numElems = triton::gpu::getTotalElemsPerThread(dstTy);
+  SmallVector<Value> results(numElems);
+  for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx++) {
+    auto idx = indices[elemIdx];
+    auto integer_ty = rewriter.getIntegerType(1);
+    Value result = rewriter.create<LLVM::ConstantOp>(
+        loc, integer_ty, IntegerAttr::get(integer_ty, 1));
+
+    for (int i = 0; i < idx.size(); i++) {
+      auto idx64 = zext(i64_ty, idx[i]);
+      auto offset = add(idx64, sext(i64_ty, offsets[i]));
+      auto intermediateResult =
+          and_(icmp_ugt(offset, i64_val(0)),
+               icmp_ule(add(offset, i64_val(dstTy.getShape()[i])), shape[i]));
+      result = and_(result, intermediateResult);
+    }
+    results[elemIdx] = result;
+  }
+  return results;
+}
+
+inline SmallVector<Value>
+getBlockPtrOther(Location loc, RewriterBase &rewriter,
+                 const TargetInfoBase &target, RankedTensorType dstTy,
+                 const std::optional<triton::PaddingOption> &padding) {
+
+  auto indices =
+      emitIndices(loc, rewriter, target, dstTy.getEncoding(), dstTy, false);
+  unsigned numElems = triton::gpu::getTotalElemsPerThread(dstTy);
+  auto elementType = dstTy.getElementType();
+  // Taken from rewriteTensorPointer
+  // Set zero padding value
+  TypedAttr attr =
+      elementType.isIntOrIndex()
+          ? cast<TypedAttr>(rewriter.getIntegerAttr(elementType, 0))
+          : cast<TypedAttr>(rewriter.getFloatAttr(elementType, 0));
+
+  // Float NaN padding case
+  if (padding.value() == triton::PaddingOption::PAD_NAN) {
+    assert(!elementType.isIntOrIndex());
+    auto apNaN =
+        llvm::APFloat::getNaN(cast<FloatAttr>(attr).getValue().getSemantics());
+    attr = rewriter.getFloatAttr(elementType, apNaN);
+  }
+
+  // Create tensor
+  Value constant = rewriter.create<arith::ConstantOp>(loc, attr);
+  SmallVector<Value> results(numElems, constant);
+  return results;
+}
+
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.
 //
