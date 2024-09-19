@@ -410,8 +410,8 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
     LoadInfo loadInfo;
 
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      assert(!isLoadFromTensorPtr(loadOp) &&
-             "Block ptr should have been lowered before this pass.");
+      if (!isLoadFromTensorPtr(loadOp))
+        continue;
       auto ptr = loadOp.getPtr();
       unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
       if (auto mask = loadOp.getMask())
