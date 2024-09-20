@@ -3,7 +3,7 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget
+from ..backends.compiler import GPUTarget, AttrsDescriptor
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
@@ -15,95 +15,6 @@ from pathlib import Path
 import re
 import functools
 import os
-
-
-# Common argument specializations
-def common_specializations(params, args):
-    arg_properties = {}
-
-    def is_divisible_by_16(x):
-        if hasattr(x, "data_ptr"):
-            return x.data_ptr() % 16 == 0
-        elif isinstance(x, int):
-            return x % 16 == 0
-        if x is None:
-            return True
-        return False
-
-    # Divisibility specialization
-    arg_properties["tt.divisibility"] = {
-        (param.num, 16)
-        for param, arg in zip(params, args)
-        if is_divisible_by_16(arg) and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-    }
-
-    # Equal to 1 specialization
-    arg_properties["tt.equal_to_1"] = {
-        (param.num, 1)
-        for param, arg in zip(params, args)
-        if isinstance(arg, int) and not isinstance(arg, bool) and arg == 1 and not param.do_not_specialize
-    }
-    return arg_properties
-
-
-# Backend specific specializations
-def cuda_specializations(specializations, params, args):
-    return specializations
-
-
-def hip_specializations(specializations, params, args):
-    return specializations
-
-
-# This class handles the specialization for the given function attributes.
-class AttrsDescriptor:
-    target_specializations = {"hip": hip_specializations, "cuda": cuda_specializations}
-    arg_properties: dict[str, set]
-
-    def __init__(self, backend=None, params=[], args=[]):
-        self.arg_properties = common_specializations(params, args)
-        if backend in AttrsDescriptor.target_specializations:
-            self.arg_properties = AttrsDescriptor.target_specializations[backend](self.arg_properties, params, args)
-
-    # Get the function attributes as a dict like:
-    # {
-    #   "arg0" : [(prop_name00, val00), (prop_name01, val01), ...)]}
-    #   "arg1" : [(prop_name10, val10), (prop_name11, val11), ...)]}
-    # }
-    def get_fn_attrs(self):
-        attrs = {}
-        for prop_name, arg_set in self.arg_properties.items():
-            for arg, val in arg_set:
-                attrs[arg] = attrs.get(arg, []) + [(prop_name, val)]
-            return attrs
-
-    # Return the same object, without the given attribute `attr_name`
-    def erase_property(self, attr_name):
-        import copy
-        c = copy.deepcopy(self)
-        if attr_name in c.arg_properties:
-            c.arg_properties.pop(attr_name)
-        return c
-
-    def __getitem__(self, attr_name):
-        if attr_name in self.arg_properties:
-            return self.arg_properties[attr_name]
-        return None
-
-    # Create the class from a set of hints that are passed out. So instead
-    # of calling the specializations, it's the user that tells us what property
-    # each argument has
-    @staticmethod
-    def from_hints(hints):
-        attrsDescriptor = AttrsDescriptor()
-        for prop_name, arg_set in hints.items():
-            attrsDescriptor.arg_properties[prop_name] = arg_set
-        return attrsDescriptor
-
-    def hash(self):
-        key = str([sorted(x) for x in self.__dict__.values()])
-        return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace

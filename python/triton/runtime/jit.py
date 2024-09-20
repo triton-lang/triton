@@ -342,7 +342,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
-def create_function_from_signature(sig, kparams):
+def create_function_from_signature(sig, kparams, backend):
     """
     Equivalent to sig.bind followed by apply_defaults. This generates a
     native Python function (using exec) which can be memoized on a per-kernel
@@ -401,7 +401,7 @@ def create_function_from_signature(sig, kparams):
     }
 
     func_namespace['mangle_type'] = mangle_type
-    func_namespace['compute_spec_key'] = compute_spec_key
+    func_namespace['compute_spec_key'] = backend.compute_spec_key
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -465,11 +465,6 @@ class JITFunction(KernelInterface[T]):
             return None
         else:
             raise TypeError(f"Unsupported type {type(arg)} for {arg}")
-
-    def _get_config(self, *args):
-        from ..compiler import AttrsDescriptor
-        target = driver.active.get_current_target()
-        return AttrsDescriptor(target, self.params, args)
 
     @staticmethod
     def _type_of(key, is_const=False):
@@ -549,7 +544,7 @@ class JITFunction(KernelInterface[T]):
         assert callable(hook)
         self.pre_run_hooks.append(hook)
 
-    def create_binder(self):
+    def create_binder(self, backend):
         """
         Precompute as much as possible.
         """
@@ -558,7 +553,7 @@ class JITFunction(KernelInterface[T]):
         self.compile = compile
         self.ASTSource = ASTSource
         self.make_backend = make_backend
-        self.binder = create_function_from_signature(self.signature, self.params)
+        self.binder = create_function_from_signature(self.signature, self.params, backend)
         self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
         self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
         self.specialised_indices = [
@@ -567,8 +562,11 @@ class JITFunction(KernelInterface[T]):
 
     def run(self, *args, grid, warmup, **kwargs):
         # parse options
+        from ..compiler import make_backend
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
+        target = driver.active.get_current_target()
+        backend = make_backend(target)
         kwargs["debug"] = self.debug
 
         # Execute pre run hooks with args and kwargs
@@ -576,7 +574,7 @@ class JITFunction(KernelInterface[T]):
             hook(*args, **kwargs)
 
         if self.binder is None:
-            self.create_binder()
+            self.create_binder(backend)
 
         bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
 
@@ -586,8 +584,6 @@ class JITFunction(KernelInterface[T]):
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
-            target = driver.active.get_current_target()
-            backend = self.make_backend(target)
             options = backend.parse_options(kwargs)
 
             # deprecated arguments
@@ -608,11 +604,11 @@ class JITFunction(KernelInterface[T]):
             sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
-            configs = (self._get_config(*bound_vals), )
+            configs = (backend.get_attrs_descriptor(self.params, bound_vals), )
             constants = {
                 p.name: v
                 for (v, p) in zip(bound_vals, self.params)
-                if p.is_constexpr or (p.num, 1) in configs[0]["tt.equal_to_1"] or v is None
+                if p.is_constexpr or p.num in configs[0]["tt.equal_to_1"] or v is None
             }
             for i, arg in constants.items():
                 if callable(arg):
@@ -731,7 +727,8 @@ class JITFunction(KernelInterface[T]):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
     def preload(self, specialization_data):
-        from ..compiler import AttrsDescriptor, compile, ASTSource
+        from ..compiler import compile, ASTSource
+        from triton.backends.compiler import AttrsDescriptor
         import json
         import triton.language as tl
         device = driver.active.get_current_device()

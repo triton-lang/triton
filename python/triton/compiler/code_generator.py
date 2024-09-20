@@ -1268,9 +1268,9 @@ def kernel_suffix(signature, specialization):
     suffix = ''
     for i, _ in enumerate(signature):
         suffix += str(i)
-        if (i, 1) in specialization["tt.equal_to_1"]:
+        if i in specialization["tt.equal_to_1"]:
             suffix += 'c'
-        if (i, 16) in specialization["tt.divisibility"]:
+        if i in specialization["tt.divisibility"]:
             suffix += 'd'
     return suffix
 
@@ -1284,7 +1284,8 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     gscope = fn.__globals__.copy()
     function_name = fn.repr(specialization)
     tys = list(specialization.signature.values())
-    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for (k, _) in attrs["tt.equal_to_1"]}
+    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs["tt.equal_to_1"]}
+    print(new_constants)
     new_attrs = attrs.erase_property("tt.equal_to_1")
     fn_attrs = new_attrs.get_fn_attrs()
     all_constants = constants.copy()

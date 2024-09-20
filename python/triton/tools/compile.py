@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 import triton
+import triton.backends
 from triton.compiler.code_generator import kernel_suffix
 from triton.backends.nvidia.driver import ty_to_cpp
 
@@ -106,11 +107,8 @@ if __name__ == "__main__":
     # compile ast into cubin
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
-    divisible_by_16 = [(i, 16) for i, h in hints.items() if h == 16]
-    equal_to_1 = [(i, 1) for i, h in hints.items() if h == 1]
-    attrs = triton.compiler.AttrsDescriptor.from_hints(
-        {"tt.divisibility": divisible_by_16, "tt.equal_to_1": equal_to_1})
-    for i in equal_to_1:
+    attrs = triton.backends.compiler.AttrsDescriptor.from_hints(hints)
+    for i in attrs["tt.equal_to_1"]:
         constants.update({kernel.arg_names[i]: 1})
     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
@@ -125,7 +123,7 @@ if __name__ == "__main__":
             arg_types.append(signature[arg_name])
             arg_names_not_1.append(arg_name)
             arg_types_not_1.append(signature[arg_name])
-        elif i in equal_to_1:
+        elif i in attrs["tt.equal_to_1"]:
             arg_names.append(arg_name)
             arg_types.append(signature[arg_name])
 
