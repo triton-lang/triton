@@ -160,9 +160,11 @@ LogicalResult Prefetcher::initialize() {
   for (Operation &op : *loop)
     if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
       // bail out if there exist non v2 dots.
-      auto dstEnc =
+      auto dstMmaEnc =
           dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
-      if (!dstEnc || dstEnc.getVersionMajor() != 2)
+      auto dstMfmaEnc =
+          dyn_cast<AMDMfmaEncodingAttr>(getEncoding(dotOp.getResult()));
+      if (!dstMfmaEnc && (!dstMmaEnc || dstMmaEnc.getVersionMajor() != 2))
         return failure();
       dotsInFor.push_back(dotOp);
     }
