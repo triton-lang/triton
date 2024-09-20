@@ -113,6 +113,14 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 //   row0  reg[0-1]   reg[4-5]
 //   row8  reg[2-3]   reg[6-7]
 //
+// When swizzleByteSize is non-zero, the layout is constructed differently.
+// The swizzled layout will have the leading dimension (i.e., column dimension)
+// strided by swizzleByteSize.  For example, in a matrix of size 128x128 with a
+// data type of f16, stored in shared memory using 128B-swizzle mode, the offset
+// of the element at index (1, 0) will be 72 due to the stride.  Without
+// swizzling, the offset would be 64, and if there were no leading offset, the
+// offset would be 136.
+//
 // TODO(Keren): We should replace tensorTy with a LinearLayout and the element
 // bit width of the tensor in the future to support more flexible tensor
 // encodings
