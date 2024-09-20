@@ -8,6 +8,7 @@ from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
+from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
@@ -346,6 +347,19 @@ class LazyDict:
 
     def add(self, func, args):
         self.extras.append((func, args))
+
+
+class AsmDict(dict):
+
+    def __missing__(self, key):
+
+        if key == "sass":
+            value = get_sass(self["cubin"])
+        else:
+            raise KeyError("Unknown key: '%s'" % key)
+
+        self[key] = value
+        return value
 
 
 class CompiledKernel:
