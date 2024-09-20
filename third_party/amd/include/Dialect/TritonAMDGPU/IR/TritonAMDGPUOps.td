@@ -34,6 +34,9 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
+include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
+include "mlir/Interfaces/ViewLikeInterface.td" // OffsetSizeAndStrideOpInterface
+
 
 class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])> {
@@ -43,6 +46,61 @@ class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def TritonAMDGPU_ViewSliceOp : TritonAMDGPU_Op<"view_slice",
+                                [AttrSizedOperandSegments,
+                                 Pure,
+                                 OffsetSizeAndStrideOpInterface
+                                 ]> {
+  let summary = "view slice operation";
+  let description = [{
+    Represents view of the slice of the tensor in registers. Syntax of the operation is the same
+    as for extract_slice op. However, unlike 'extract_slice' which slices in shared memory,
+    'view_slice' specifically slices within registers.
+    Slice of the tensor is required to have the same layout as the original tensor.
+    In a way, semantics of the 'view_slice' operation is a combination of the 'extract_slice' and 'view' operations semantics.
+    }];
+
+  let arguments = (ins
+    AnyRankedTensor:$source,
+    Variadic<I32>:$offsets,
+    Variadic<I32>:$sizes,
+    Variadic<I32>:$strides,
+    DenseI64ArrayAttr:$static_offsets,
+    DenseI64ArrayAttr:$static_sizes,
+    DenseI64ArrayAttr:$static_strides
+  );
+  let results = (outs AnyRankedTensor:$result);
+
+  let builders = [
+    // Build a ViewSliceOp with mixed static and dynamic entries and the same
+    // result type
+    OpBuilder<(ins "RankedTensorType":$resultType, "Value":$source,
+      "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
+      "ArrayRef<OpFoldResult>":$strides,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
+  ];
+
+  let extraClassDeclaration = [{
+    /// Return the number of leading operands before the `offsets`, `sizes` and
+    /// and `strides` operands.
+    static unsigned getOffsetSizeAndStrideStartOperandIndex() { return 1; }
+
+    std::array<unsigned, 3> getArrayAttrMaxRanks() {
+      unsigned rank = getSource().getType().getRank();
+      return {rank, rank, rank};
+    }
+  }];
+
+  let assemblyFormat = [{
+    $source ``
+    custom<DynamicIndexList>($offsets, $static_offsets)
+    custom<DynamicIndexList>($sizes, $static_sizes)
+    custom<DynamicIndexList>($strides, $static_strides)
+    attr-dict `:` type($source) `to` type($result)
+  }];
+
+  let hasVerifier = 1;
+}
 
 def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   let summary = "A placeholder op for instruction scheduling hints within a basic block";
