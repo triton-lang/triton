@@ -14,8 +14,10 @@
 
 namespace mlir {
 namespace triton {
+namespace cpu {
 #define GEN_PASS_DEF_CONVERTREDUCTIONOP
 #include "cpu/include/TritonToTritonCPU/Passes.h.inc"
+} // namespace cpu
 } // namespace triton
 } // namespace mlir
 
@@ -42,16 +44,20 @@ public:
 struct ReduceOpConversion
     : public ReduceScanOpConversionBase<triton::ReduceOp,
                                         triton::ReduceReturnOp> {
-  using ReduceScanOpConversionBase::ReduceScanOpConversionBase;
+  ReduceOpConversion(bool useMultiDimReductionOp,
+                     const TypeConverter &typeConverter, MLIRContext *context)
+      : ReduceScanOpConversionBase(typeConverter, context) {
+    this->useMultiDimReductionOp = useMultiDimReductionOp;
+  }
 
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // More simple cases with a single input and a single combine
-    // operation can utilize target-specific reduction operations like
-    // horizaontal vector operations. We detect such cases here and map
-    // them to the vector::MultiDimReductionOp.
-    if (succeeded(mapToMultiDimReductionOp(op, rewriter)))
+    // More simple cases with a single input and a single combine operation
+    // can be mapped to a vector::MultiDimReductionOp. The resulting code
+    // depends on a quality of LLVM backend and is not always perfect though.
+    if (useMultiDimReductionOp &&
+        succeeded(mapToMultiDimReductionOp(op, rewriter)))
       return success();
 
     return ReduceScanOpConversionBase::matchAndRewrite(op, adaptor, rewriter);
@@ -249,13 +255,18 @@ struct ReduceOpConversion
 
     return rewriter.create<arith::ConstantOp>(loc, resTy, initVal);
   }
+
+private:
+  bool useMultiDimReductionOp;
 };
 
 struct ConvertReductionOp
-    : public triton::impl::ConvertReductionOpBase<ConvertReductionOp> {
-  using ConvertReductionOpBase::ConvertReductionOpBase;
+    : public triton::cpu::impl::ConvertReductionOpBase<ConvertReductionOp> {
+  ConvertReductionOp() = default;
 
-  ConvertReductionOp() : ConvertReductionOpBase() {}
+  ConvertReductionOp(bool useMultiDimReductionOp) {
+    this->useMultiDimReductionOp = useMultiDimReductionOp;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -264,7 +275,8 @@ struct ConvertReductionOp
     TritonToTritonCPUTypeConverter typeConverter;
     ReductionConversionTarget convTarget(*context, typeConverter);
     RewritePatternSet patterns(context);
-    patterns.add<ReduceOpConversion>(typeConverter, context);
+    patterns.add<ReduceOpConversion>(useMultiDimReductionOp, typeConverter,
+                                     context);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
@@ -279,6 +291,11 @@ namespace cpu {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertReductionOp() {
   return std::make_unique<ConvertReductionOp>();
+}
+
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertReductionOp(bool useMultiDimReductionOp) {
+  return std::make_unique<ConvertReductionOp>(useMultiDimReductionOp);
 }
 
 } // namespace cpu
