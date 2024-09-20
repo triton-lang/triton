@@ -79,6 +79,8 @@ SmallVector<unsigned> getWarpOrder(Attribute layout);
 
 SmallVector<unsigned> getOrder(Attribute layout);
 
+SmallVector<unsigned> getThreadOrder(Attribute layout);
+
 CTALayoutAttr getCTALayout(Attribute layout);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
