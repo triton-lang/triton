@@ -215,15 +215,9 @@ private:
       if (repId != 0) {
         barrier();
       }
-      auto successful = targetInfo.processReplicaUsingStMatrix(
-          rewriter, loc, smemBase, vals, srcTy,
-          getTypeConverter()->convertType(srcTy.getElementType()),
-          paddedRepShape, origRepShape, outOrd, accumNumReplicates);
-      if (!successful) {
-        processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
-                       multiDimRepId, inVec, paddedRepShape, origRepShape,
-                       outOrd, vals, smemBase);
-      }
+      processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
+                     multiDimRepId, inVec, paddedRepShape, origRepShape, outOrd,
+                     vals, smemBase);
       barrier();
       processReplica(loc, rewriter, /*stNotRd*/ false, dstTy, outNumCTAsEachRep,
                      multiDimRepId, outVec, paddedRepShape, origRepShape,
