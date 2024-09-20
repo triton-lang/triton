@@ -256,14 +256,6 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     auto rank = distributedLayout.getWarpsPerCTA().size();
     SmallVector<unsigned> order(rank);
     std::iota(order.rbegin(), order.rend(), 0);
-    auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout);
-    if (!mfmaLayout)
-      return order;
-    // For transposed MFMA layouts, we swap M and N dimensions, which is
-    // always the first two in order; as we can have an optional batch
-    // dimension following them.
-    if (mfmaLayout.getIsTransposed())
-      std::swap(order[0], order[1]);
     return order;
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
