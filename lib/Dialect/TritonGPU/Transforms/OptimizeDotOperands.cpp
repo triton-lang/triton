@@ -55,7 +55,6 @@ bool canHoistDotOpEncV2(Operation* op, DotOperandEncodingAttr& dotOpEnc) {
 
 bool canHoistDotOpEncV3(Operation* op) {
   // Only consider custom conversions or arith ops.
-  // TODO(jlebar): Is this too restrictive?
   if (!isa<FpToFpOp, BitcastOp>(op) && !isPureUnaryInlineAsm(op) &&
       op->getDialect()->getTypeID() != TypeID::get<arith::ArithDialect>())
     return false;
@@ -388,7 +387,7 @@ struct MMAV3UseRegOperand
 //  elementwise(convert(x, #dot_operand)).
 //
 // Whereas (MMAV2) HoistLayoutConversion hoists thru one op at a time and requires
-// multiple passes will directly hoist the convert to the right place in one pass.
+// multiple passes, this will directly hoist the convert to the right place in one pass.
 struct MMAV3HoistLayoutConversion
     : public OpRewritePattern<triton::nvidia_gpu::WarpGroupDotOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -407,7 +406,7 @@ struct MMAV3HoistLayoutConversion
     if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
       return failure();
 
-    // Performs checks for early stop
+    // Step 1: Performs checks for early stop
     Type inputEltTy;
     auto srcEnc = dyn_cast<BlockedEncodingAttr>(getEncoding(alloc.getSrc()));
     auto dstEnc =
@@ -431,7 +430,7 @@ struct MMAV3HoistLayoutConversion
     if (!canHoistDotOpEncV3(src))
       return failure();
 
-    // Obtain backward slice
+    // Step 2: Obtain slice of ops between load/constant and local_alloc
     SetVector<Operation *> slice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
@@ -443,7 +442,7 @@ struct MMAV3HoistLayoutConversion
     };
     getBackwardSlice(alloc.getOperation(), &slice, opt);
 
-    // Verify slice can be hoisted through
+    // Step 3: Verify slice can be hoisted through
     if (slice.empty())
       return failure();
 
@@ -476,8 +475,10 @@ struct MMAV3HoistLayoutConversion
       }
     }
 
+    // Step 4: Clone slice
     auto [newSlice, sliceMap] = cloneSlice(rewriter, slice);
 
+    // Step 5: Modify slice (add convert_layouts and change encoding of results)
     // For each frontierOp (i.e. op whose defining op is not in slice):
     //  load/constant; frontierOp; [hoistableElementwiseOps...]; local_alloc; warp_group_dot
     //  -> load/constant; convert_layout; frontierOp; [hoistableOps...]; warp_group_dot
@@ -513,7 +514,7 @@ struct MMAV3HoistLayoutConversion
           resTy.getShape(), resTy.getElementType(), dotOperandEnc));
     }
 
-    // replace LHS operand with alloc's parent (cloned)
+    // Step 6: replace LHS operand with alloc's parent in cloned slice
     auto newDotOperand = sliceMap.lookup(alloc.getSrc());
     rewriter.modifyOpInPlace(dotOp, [&]() {
       dotOp.setOperand(0, newDotOperand);
