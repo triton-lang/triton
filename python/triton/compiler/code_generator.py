@@ -234,9 +234,6 @@ class CodeGenerator(ast.NodeVisitor):
         self.local_defs: Dict[str, tensor] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
-        # Are we currently visiting an ast.arg's default value?  These have some
-        # special handling.
-        self.visiting_arg_default_value = False
 
     builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (len, list, range, float, int, isinstance, getattr)}
     builtin_namespace.update((
@@ -281,10 +278,6 @@ class CodeGenerator(ast.NodeVisitor):
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     isinstance(val, language.dtype),  #
                     self._is_constexpr_global(name),  #
-                    # Allow accesses to globals while visiting an ast.arg
-                    # because you should be able to do
-                    #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
-                    self.visiting_arg_default_value,  #
                     os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"
             ]):
                 return val
@@ -385,23 +378,6 @@ class CodeGenerator(ast.NodeVisitor):
         arg_names, kwarg_names = self.visit(node.args)
         if self.fn:
             raise self._unsupported(node, "nested function definition is not supported.")
-        # initialize defaults
-        for i, default_value in enumerate(node.args.defaults[::-1]):
-            arg_node = node.args.args[-i - 1]
-            annotation = arg_node.annotation
-            name = arg_node.arg
-            st_target = ast.Name(id=name, ctx=ast.Store())
-            if annotation is None:
-                init_node = ast.Assign(targets=[st_target], value=default_value)
-            else:
-                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
-
-            try:
-                assert not self.visiting_arg_default_value
-                self.visiting_arg_default_value = True
-                self.visit(init_node)
-            finally:
-                self.visiting_arg_default_value = False
 
         # initialize function
         visibility = "public" if self.is_kernel else "private"
