@@ -441,7 +441,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
         loadInfo.sharedEncoding =
             getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
-
+#if 0
         // HACK: Triton LLVM codegen has a bug where local_loads from #shared to
         // #mma layout can lead to invalid code if the loaded shape is smaller
         // than the mma tile (e.g. loading a 128x1 tensor for an MMAv2 dot with
@@ -472,6 +472,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
               continue;
           }
         }
+#endif
       }
     } else if (auto loadOp = dyn_cast<tt::LoadOp>(use)) {
       // The use of this loadOp is another loadOp. If the use is not in the
