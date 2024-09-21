@@ -5635,12 +5635,6 @@ def test_unroll_attr(device):
             tl.atomic_add(dst + pid, i + pid)
 
     def check_loop_unroll_count(ir, opStr, loop_unroll_factor):
-
-        # Loop unrolling pass only working on Nvidia backend at the moment
-        if not is_cuda():
-            assert f'tt.loop_unroll_factor = {loop_unroll_factor}' in ir
-            return
-
         for line in ir.splitlines():
             if opStr in line:
                 loop_unroll_factor = loop_unroll_factor - 1
