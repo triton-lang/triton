@@ -10,11 +10,13 @@ Triton MLIR Dialects and Ops
    ./TritonGPUDialect.md
    ./NVGPUDialect.md
    ./TritonDialect.md
+   ./TritonAMDGPUDialect.md
 
 .. toctree::
    :maxdepth: 1
    :caption: Dialect Ops
 
+   ./TritonAMDGPUOps.md
    ./TritonGPUOps.md
    ./TritonOps.md
    ./TritonNvidiaGPUOps.md
