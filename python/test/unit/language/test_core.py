@@ -4385,7 +4385,7 @@ def test_unary_math(func_str, device):
     k = kernel[(1, )](x, y, BLOCK=shape[0])
     torch.allclose(getattr(torch, func_str)(x), y, rtol=1e-3)
 
-    if func_str in ['log', 'log2'] and is_cuda():
+    if func_str in ['log2'] and is_cuda():
         assert 'lg2.approx.ftz.f32' in k.asm['ptx']
     if func_str in ['exp', 'exp2'] and is_cuda():
         assert 'ex2.approx.ftz.f32' in k.asm['ptx']

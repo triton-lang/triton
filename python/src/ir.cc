@@ -1469,7 +1469,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_log",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::LogOp>(val));
+             // TODO: switch to approxMath.
+             return self.create<math::LogOp>(val);
            })
       .def("create_log2",
            [](TritonOpBuilder &self, Value &val) -> Value {
