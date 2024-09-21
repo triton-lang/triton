@@ -376,10 +376,7 @@ Value convertFp32ToFp8E5M2B16Rtne(Location loc, Value src,
 FpToFpConvFn
 getFpToFpConversionFn(Type srcTy, Type dstTy,
                       std::optional<arith::RoundingMode> roundMode) {
-  // TODO: Float8E4M3FNUZType is used for both float8e4nv and float8e4b8 by
-  // frontend. float8e4b8 tests are skipped for CPU so we interpret this type as
-  // float8e4nv. Needs to be fixed. See get_fp8e4nv_ty at ir.cc.
-  auto F8E4M3TyID = TypeID::get<Float8E4M3FNUZType>();
+  auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
   auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
   auto F8E5M2B16TyID = TypeID::get<Float8E5M2FNUZType>();
   auto F16TyID = TypeID::get<Float16Type>();

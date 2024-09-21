@@ -33,6 +33,8 @@ class CPUOptions:
     cluster_dims: tuple = (1, 1, 1)
     extern_libs: dict = None
     debug: bool = False
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15", "fp8e4nv")
+    deprecated_fp8_dtypes: Tuple[str] = ()
     allowed_dot_input_precisions: Tuple[str] = ("ieee", "tf32", "tf32x3")
     allow_fp8e4nv: bool = True
     allow_fp8e4b15: bool = True
@@ -81,6 +83,9 @@ class CPUBackend(BaseBackend):
         args = {k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts}
         if "enable_fast_math" not in args:
             args["enable_fast_math"] = os.getenv("TRITON_CPU_FAST_MATH", "1") != "0"
+        if "supported_fp8_dtypes" not in args:
+            supported_fp8_dtypes = set(CPUOptions.supported_fp8_dtypes)
+            args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
         return CPUOptions(**args)
 
     def pack_metadata(self, metadata):

@@ -192,7 +192,8 @@ struct ConvertAtomicOps
     patterns.add<AtomicRMWOpConversion>(typeConverter, context);
     patterns.add<AtomicCASOpConversion>(typeConverter, context);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversionNoBuildMaterializations(
+            mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };

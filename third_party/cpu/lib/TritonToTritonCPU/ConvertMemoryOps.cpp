@@ -914,7 +914,8 @@ struct ConvertMemoryOps
     patterns.add<StoreOpConversion>(axisInfoAnalysis, shapeInfoAnalysis,
                                     pointerConverter, useScalarLoops, context);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversionNoBuildMaterializations(
+            mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };

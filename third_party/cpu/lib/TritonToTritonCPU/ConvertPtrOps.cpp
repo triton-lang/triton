@@ -177,7 +177,8 @@ struct ConvertPtrOps : public triton::impl::ConvertPtrOpsBase<ConvertPtrOps> {
     patterns.add<PtrToIntOpConversion>(typeConverter, context);
     patterns.add<IntToPtrOpConversion>(typeConverter, context);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversionNoBuildMaterializations(
+            mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };

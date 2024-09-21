@@ -229,7 +229,8 @@ struct ConvertElemManipOps
     patterns.add<CatOpConversion>(typeConverter, context);
     patterns.add<SplitOpConversion>(typeConverter, context);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversionNoBuildMaterializations(
+            mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };

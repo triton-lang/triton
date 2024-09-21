@@ -37,6 +37,14 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertDebugOps();
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonToTritonCPU/Passes.h.inc"
 
+inline LogicalResult applyPartialConversionNoBuildMaterializations(
+    Operation *op, const ConversionTarget &target,
+    const FrozenRewritePatternSet &patterns,
+    ConversionConfig config = ConversionConfig()) {
+  config.buildMaterializations = false;
+  return applyPartialConversion(llvm::ArrayRef(op), target, patterns, config);
+}
+
 } // namespace cpu
 } // namespace triton
 

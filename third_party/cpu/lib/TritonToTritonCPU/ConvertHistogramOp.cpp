@@ -114,7 +114,8 @@ struct ConvertHistogramOp
     RewritePatternSet patterns(context);
     patterns.add<HistogramOpConversion>(typeConverter, context);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversionNoBuildMaterializations(
+            mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };

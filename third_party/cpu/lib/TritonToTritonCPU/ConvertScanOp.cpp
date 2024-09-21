@@ -136,7 +136,8 @@ struct ConvertScanOp : public triton::impl::ConvertScanOpBase<ConvertScanOp> {
     RewritePatternSet patterns(context);
     patterns.add<ScanOpConversion>(typeConverter, context);
 
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversionNoBuildMaterializations(
+            mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };
