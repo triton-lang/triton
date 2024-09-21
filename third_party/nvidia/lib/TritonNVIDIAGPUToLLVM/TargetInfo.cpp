@@ -290,7 +290,7 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
   }
 }
 
-static bool isTruePred(Value pred) {
+static bool isConstantTruePred(Value pred) {
   if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
     return cast<IntegerAttr>(constOp.getValue()).getInt() != 0;
   }
@@ -509,7 +509,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                 .b(elemBitwidth);
 
   Value load;
-  if (isTruePred(pred)) {
+  if (isConstantTruePred(pred)) {
     Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
                              : Type(vec_ty(int_ty(elemBitwidth), vec));
     load = load(resultTy, ptr);
