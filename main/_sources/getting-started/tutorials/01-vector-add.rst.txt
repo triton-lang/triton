@@ -230,7 +230,7 @@ We can now run the decorated function above. Pass `print_data=True` to see the p
 
     vector-add-performance:
                size       Triton        Torch
-    0        4096.0     8.000000     8.000000
+    0        4096.0     8.000000     9.600000
     1        8192.0    15.999999    15.999999
     2       16384.0    31.999999    31.999999
     3       32768.0    63.999998    63.999998
@@ -253,7 +253,7 @@ We can now run the decorated function above. Pass `print_data=True` to see the p
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 14.810 seconds)
+   **Total running time of the script:** (0 minutes 14.793 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_01-vector-add.py:
