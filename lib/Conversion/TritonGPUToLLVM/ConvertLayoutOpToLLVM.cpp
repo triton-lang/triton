@@ -490,6 +490,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     bool isStMatrix = shmemStoreLayout.has_value();
     if (!isStMatrix) {
       shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
+    } else {
+      shmemStoreLayout = removeBlockDim(ctx, *shmemStoreLayout);
     }
     assert(shmemStoreLayout.has_value());
 
