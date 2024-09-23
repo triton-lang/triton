@@ -54,35 +54,62 @@ def layernorm_kernel(x_ptr, y_ptr, w_ptr, b_ptr, x_row_stride, y_row_stride, n_r
     x_ptr_start = x_ptr + (row * x_row_stride)
     y_ptr_start = y_ptr + (row * y_row_stride)
 
+    loop_num = tl.cdiv(n_cols, BLOCK_SIZE) - 1
+
     #calculate mean
     mean = 0
     _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    for b in range(0, n_cols, BLOCK_SIZE):
-        col_offsets = b + tl.arange(0, BLOCK_SIZE)
-        x_block = tl.load(x_ptr_start + col_offsets, mask=col_offsets < n_cols, other=0.).to(tl.float32)
+    loop_num_l = loop_num
+    for b in range(0, loop_num_l):
+        col_offsets = b * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x_block = tl.load(x_ptr_start + col_offsets).to(tl.float32)  #Unmasked loads
         _mean += x_block
+
+    #For last iteration, do masked load
+    col_offsets = loop_num_l * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    x_block = tl.load(x_ptr_start + col_offsets, mask=col_offsets < n_cols, other=0.).to(tl.float32)
+    _mean += x_block
+
     mean = tl.sum(_mean, axis=0) / n_cols
 
     #variance
     _var = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    for b in range(0, n_cols, BLOCK_SIZE):
-        col_offsets = b + tl.arange(0, BLOCK_SIZE)
-        x_block = tl.load(x_ptr_start + col_offsets, mask=col_offsets < n_cols, other=0.).to(tl.float32)
-        x_block = tl.where(col_offsets < n_cols, x_block - mean, 0.)
+    loop_num_l = loop_num
+    for b in range(0, loop_num_l):
+        col_offsets = b * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x_block = tl.load(x_ptr_start + col_offsets).to(tl.float32)  #Unmasked loads
+        x_block = x_block - mean
         _var += x_block * x_block
+
+    #For last iteration, do masked load
+    col_offsets = loop_num_l * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    x_block = tl.load(x_ptr_start + col_offsets, mask=col_offsets < n_cols, other=0.).to(tl.float32)
+    x_block = tl.where(col_offsets < n_cols, x_block - mean, 0.)
+    _var += x_block * x_block
+
     var = tl.sum(_var, axis=0) / n_cols
     rstd = tl.rsqrt(var + eps)
 
     #Normalize and store
-    for b in range(0, n_cols, BLOCK_SIZE):
-        col_offsets = b + tl.arange(0, BLOCK_SIZE)
-        mask = col_offsets < n_cols
-        w_block = tl.load(w_ptr + col_offsets, mask=mask)
-        b_block = tl.load(b_ptr + col_offsets, mask=mask)
-        x_block = tl.load(x_ptr_start + col_offsets, mask=mask)
+    loop_num_l = loop_num
+    for b in range(0, loop_num_l):
+        col_offsets = b * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        w_block = tl.load(w_ptr + col_offsets)
+        b_block = tl.load(b_ptr + col_offsets)
+        x_block = tl.load(x_ptr_start + col_offsets).to(tl.float32)
         y_block = (x_block - mean) * rstd
         y_block = y_block * w_block + b_block
-        tl.store(y_ptr_start + col_offsets, y_block, mask=mask)
+        tl.store(y_ptr_start + col_offsets, y_block)
+
+    #For last iteration, do masked load and store
+    col_offsets = loop_num_l * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = col_offsets < n_cols
+    w_block = tl.load(w_ptr + col_offsets, mask=mask, other=0.0)
+    b_block = tl.load(b_ptr + col_offsets, mask=mask, other=0.0)
+    x_block = tl.load(x_ptr_start + col_offsets, mask=mask, other=0.0).to(tl.float32)
+    y_block = (x_block - mean) * rstd
+    y_block = y_block * w_block + b_block
+    tl.store(y_ptr_start + col_offsets, y_block, mask=mask)
 
 
 def layernorm(x, w, b, eps=1e-5):
@@ -95,18 +122,7 @@ def layernorm(x, w, b, eps=1e-5):
     num_programs = n_rows
 
     grid = lambda meta: (num_programs, )
-    layernorm_kernel[grid](
-        x,
-        y,
-        w,
-        b,
-        x.stride(0),
-        y.stride(0),
-        n_rows,
-        n_cols,
-        eps,
-        BLOCK_SIZE,
-    )
+    layernorm_kernel[grid](x, y, w, b, x.stride(0), y.stride(0), n_rows, n_cols, eps, BLOCK_SIZE)
 
     return y
 
