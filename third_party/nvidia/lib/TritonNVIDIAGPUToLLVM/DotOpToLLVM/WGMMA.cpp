@@ -288,7 +288,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 //
 // Additionally, note that WGMMA expects quadK ordered before quadM, i.e. the layout
 // is quadM-major. This is opposite to Ampere's  ordering for ldmatrix and dotOp.
-// (see SharedToDotOperandMMAv2.cpp)
+// (see SharedToDotOperandMMAv2OrV3.cpp)
 llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Location loc,
                                  const SmallVector<Value> &elements,
