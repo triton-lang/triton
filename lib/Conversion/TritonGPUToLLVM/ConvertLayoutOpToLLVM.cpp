@@ -424,18 +424,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    StringAttr kBlock = str_attr("block");
-    auto srcBases = srcLayout.getBases();
-    srcBases[kBlock] = {};
-    auto dstBases = dstLayout.getBases();
-    dstBases[kBlock] = {};
-    auto srcLayoutBlock =
-        LinearLayout(srcBases, llvm::to_vector<4>(srcLayout.getOutDimNames()));
-    auto dstLayoutBlock =
-        LinearLayout(dstBases, llvm::to_vector<4>(dstLayout.getOutDimNames()));
-
-    SmallVector<Value> outVals = transferWithinBlockOrGroupImpl(
-        inVals, op, srcLayoutBlock, dstLayoutBlock, adaptor, rewriter);
+    auto srcLayoutWithinBlock = removeBlockDim(ctx, srcLayout);
+    auto dstLayoutWithinBlock = removeBlockDim(ctx, dstLayout);
+    SmallVector<Value> outVals =
+        transferWithinBlock(inVals, op, srcLayoutWithinBlock,
+                            dstLayoutWithinBlock, adaptor, rewriter);
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
@@ -452,10 +445,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  SmallVector<Value> transferWithinBlockOrGroupImpl(
-      ArrayRef<Value> inVals, ConvertLayoutOp op, const LinearLayout &srcLayout,
-      const LinearLayout &dstLayout, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const {
+  SmallVector<Value>
+  transferWithinBlock(ArrayRef<Value> inVals, ConvertLayoutOp op,
+                      const LinearLayout &srcLayout,
+                      const LinearLayout &dstLayout, OpAdaptor adaptor,
+                      ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
 
@@ -653,6 +647,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       ret[idx.begin()->second].push_back(reg);
     }
     return ret;
+  }
+
+  const LinearLayout removeBlockDim(MLIRContext *ctx,
+                                    const LinearLayout &layout) const {
+    StringAttr kBlock = str_attr("block");
+    auto bases = layout.getBases();
+    bases[kBlock] = {};
+    return LinearLayout(bases, llvm::to_vector<4>(layout.getOutDimNames()));
   }
 };
 
