@@ -425,16 +425,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     }
 
     StringAttr kBlock = str_attr("block");
-    auto inDimNames = llvm::to_vector<4>(srcLayout.getInDimNames());
-    auto inDimNamesNoBlock = llvm::to_vector<4>(llvm::make_filter_range(
-        inDimNames, [&](StringAttr name) { return name != kBlock; }));
-    auto outDimNames = llvm::to_vector<4>(dstLayout.getOutDimNames());
-    auto srcLayoutBlock = srcLayout.sublayout(inDimNamesNoBlock, outDimNames);
-    auto dstLayoutBlock = dstLayout.sublayout(inDimNamesNoBlock, outDimNames);
+    auto identityBlock = LinearLayout::identity1D(
+        srcLayout.getInDimSize(kBlock), kBlock, kBlock);
+    auto srcLayoutBlock = srcLayout.divideRight(identityBlock);
+    auto dstLayoutBlock = dstLayout.divideRight(identityBlock);
+    assert(srcLayoutBlock.has_value() && dstLayoutBlock.has_value());
 
     SmallVector<Value> outVals =
-        transferWithinBlockOrGroupImpl(inVals, conversion, op, srcLayoutBlock,
-                                       dstLayoutBlock, adaptor, rewriter);
+        transferWithinBlockOrGroupImpl(inVals, conversion, op, *srcLayoutBlock,
+                                       *dstLayoutBlock, adaptor, rewriter);
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
