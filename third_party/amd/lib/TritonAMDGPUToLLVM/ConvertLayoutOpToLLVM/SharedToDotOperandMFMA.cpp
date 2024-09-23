@@ -57,12 +57,12 @@ namespace SharedToDotOperandMFMA {
  *
  * @param rewriter
  * @param loc
- * @param elemsPerInstr operand tile shape consumed by one ds_read instruction
+ * @param elemsPerInstr operand tile shape consumed by one MFMA instruction
  * @param warpId id component of 2d warp grid along non-K axis
  * @param laneId lane id in warp [0..63]
  * @param numOfElems number of elements accessed by thread per repetition
  * @param reps number of instructions repetition to fully cover dot operand
- * @param smemOffsets offsets in LDS tensor
+ * @param smemStrides strides in LDS tensor
  * @param loadVecSize number of elements loaded by one operation
  * @param iNonKDim non-K dimension size of one MFMA instruction
  * @param iKDim K dimension size of one MFMA instruction
@@ -320,7 +320,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
           spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
           sharedLayout, nDim, mfmaInstrK);
     }
-    smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
+    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
   }
 
   Type resElemTy = typeConverter->convertType(elemTy);
