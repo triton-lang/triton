@@ -21,6 +21,7 @@
 // output correctly.
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
@@ -657,12 +658,13 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   // Emit different versions of the induction variable. They will be
   // removed by dead code if not used.
 
-  // bounds_range = ub - lb
+  // bounds_range = abs(ub - lb)
   // total_iterations = (bounds_range + step - 1) / step
   Type t = lb.getType();
   Value minus1 =
       rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -1));
-  Value boundsRange = rewriter.create<arith::SubIOp>(loc, ub, lb);
+  Value boundsRange = rewriter.create<math::AbsIOp>(
+      loc, t, rewriter.create<arith::SubIOp>(loc, ub, lb));
   Value rangeIncr = rewriter.create<arith::AddIOp>(loc, boundsRange, step);
   Value rangeDecr = rewriter.create<arith::AddIOp>(loc, rangeIncr, minus1);
   Value totalIterations = rewriter.create<arith::DivUIOp>(loc, rangeDecr, step);

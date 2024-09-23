@@ -77,7 +77,8 @@
 //       AMD:       scf.yield %[[ADDPTR_36]], %[[ADDPTR_37]], %[[DOT_35]], %[[SELECT_42]], %[[MEMDESC_SUBVIEW_43]], %[[MEMDESC_SUBVIEW_44]]
 //       AMD:   }
 //       AMD:   %[[SUBI_21:.*]] = arith.subi %{{.*}}, %{{.*}}
-//       AMD:   %[[ADDI_22:.*]] = arith.addi %[[SUBI_21]], %{{.*}}
+//       AMD:   %[[ABSI_21:.*]] = math.absi %[[SUBI_21]]
+//       AMD:   %[[ADDI_22:.*]] = arith.addi %[[ABSI_21]], %{{.*}}
 //       AMD:   %[[ADDI_23:.*]] = arith.addi %[[ADDI_22]], %{{.*}}-1
 //       AMD:   %[[DIVUI_24:.*]] = arith.divui %[[ADDI_23]], %{{.*}}
 //       AMD:   %[[ADDI_25:.*]] = arith.addi %[[DIVUI_24]], %{{.*}}-1
