@@ -9,46 +9,78 @@ from typing import Dict, Union
 from types import ModuleType
 
 
-# This class handles the properties for the given function parameters
-# Different backends can add more properties to the common ones
 class AttrsDescriptor:
-    arg_properties: dict[str, list]
-    property_val: dict[str, int]
+    """
+    This class handles the compile-time properties for the given function
+    parameters. Different backends can add more properties to the common ones.
+    The class contains two fields:
 
-    def __init__(self, params=None, args=None):
-        self.arg_properties = {}
+    `arg_properties`: a dictionary containing the different compile-time properties for different
+        parameters. I.e., the dictionary will look like:
+        {
+        "prop0": (0, 2, 3)
+        "prop1": (0, 4, 5)
+        }
+        Different backend might need different properties on those paraemters to enable
+        specific optimizations. The common compile time properties contained in this class
+        are :
+        - "tt.divisibility", i.e., is the given parameter divisible by 16
+        - "tt.equal_to_1", i.e., is the given parameter an integer constant 1
+
+    `arg_value`: a dictionary containing the value of the different compile-time properties, like:
+        {
+            "prop0": val0
+            "prop1": val1
+        }
+
+    """
+    __slots__ = ('arg_properties', 'property_val', '__dict__')
+
+    def __init__(self, params=None, values=None):
+        """
+        We can initialize the AttrsDescriptor class by passing the list of params
+        of the function and their `values`. The function will try to apply the properties
+        to the values and save the parameters in the `arg_properties` list. If we don't pass
+        either the `params` or the `values` we should initialize the class via an alternative method
+        (see `from_dict` or `from_hints`)
+        """
         self.property_val = {"tt.divisibility": 16, "tt.equal_to_1": 1}
-
-        if (params is None) or (args is None):
+        self.arg_properties = {}
+        if (params is None) or (values is None):
             return
 
-        assert (len(params) == len(args))
+        assert (len(params) == len(values))
 
         # Divisibility property
         self.arg_properties["tt.divisibility"] = [
-            param.num for param, arg in zip(params, args) if AttrsDescriptor.is_divisible_by_16(arg)
+            param.num for param, arg in zip(params, values) if AttrsDescriptor.is_divisible_by_16(arg)
             and not param.do_not_specialize and not param.do_not_specialize_on_alignment
         ]
 
         # Equal to 1 property
         self.arg_properties["tt.equal_to_1"] = [
-            param.num for param, arg in zip(params, args) if AttrsDescriptor.is_1(arg) and not param.do_not_specialize
+            param.num
+            for param, arg in zip(params, values)
+            if AttrsDescriptor.is_equal_to_1(arg) and not param.do_not_specialize
         ]
 
-    # Get the function attributes as a dict like:
-    # {
-    #   "arg0" : [(prop_name00, val00), (prop_name01, val01), ...)]}
-    #   "arg1" : [(prop_name10, val10), (prop_name11, val11), ...)]}
-    # }
     def get_fn_attrs(self):
+        """
+        Get the function attributes as a dict like:
+            {
+            "arg0" : [(prop_name00, val00), (prop_name01, val01), ...)]}
+            "arg1" : [(prop_name10, val10), (prop_name11, val11), ...)]}
+            }
+        """
         attrs = {}
         for prop_name, arg_set in self.arg_properties.items():
+            prop_val = self.property_val[prop_name]
             for arg in arg_set:
-                attrs[arg] = attrs.get(arg, []) + [(prop_name, 16)]
+                attrs[arg] = attrs.get(arg, []) + [(prop_name, prop_val)]
         return attrs
 
-    # Return the same object, without the given attribute `attr_name`
-    def erase_property(self, attr_name):
+    def filter_out_property(self, attr_name):
+        """ Return the same object, without the given attribute `attr_name`"""
         import copy
         c = copy.deepcopy(self)
         if attr_name in c.arg_properties:
@@ -58,7 +90,7 @@ class AttrsDescriptor:
     def __getitem__(self, attr_name):
         if attr_name in self.arg_properties:
             return self.arg_properties[attr_name]
-        return None
+        return []
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
@@ -67,11 +99,15 @@ class AttrsDescriptor:
     def to_dict(self):
         return self.arg_properties
 
-    # Create the class from a set of hints that are passed out. So instead
-    # of calling the specializations, it's the user that tells us what property
-    # each argument has
     @staticmethod
-    def from_hints(hints):
+    def from_hints(hints: list[tuple[int, int]]):
+        """
+        Create the class from a set of hints that are passed in. So, instead
+        of deducing the properties from a list of paramaters and values, the user
+        can pass in a list of `hints=[(param_index, val)]` and if `val` matches
+        one of the values of the properties (e.g., `prop_val[prop0]`), then we insert
+        `param_index` into the correct list (e.g., in `arg_properties[prop0]`)
+        """
         attrsDescriptor = AttrsDescriptor()
         for prop_name, prop_val in attrsDescriptor.property_val.items():
             attrsDescriptor.arg_properties[prop_name] = [i for i, h in hints.items() if h == prop_val]
@@ -79,6 +115,7 @@ class AttrsDescriptor:
 
     @staticmethod
     def is_divisible_by_16(x):
+        """ Return if the argument is a multiple of 16"""
         if hasattr(x, "data_ptr"):
             return x.data_ptr() % 16 == 0
         elif isinstance(x, int):
@@ -89,6 +126,7 @@ class AttrsDescriptor:
 
     @staticmethod
     def is_equal_to_1(x):
+        """ Return if the argument is a constant 1"""
         return True if isinstance(x, int) and not isinstance(x, bool) and x == 1 else False
 
     @staticmethod
@@ -175,7 +213,7 @@ class BaseBackend(metaclass=ABCMeta):
     @abstractmethod
     def get_module_map(self) -> Dict[str, ModuleType]:
         """
-        Return a map of interface modules to their device-specific implementations.
+        Return a map of interface modules to their device-specific implementations
         """
         raise NotImplementedError
 

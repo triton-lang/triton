@@ -1285,8 +1285,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     function_name = fn.repr(specialization)
     tys = list(specialization.signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs["tt.equal_to_1"]}
-    print(new_constants)
-    new_attrs = attrs.erase_property("tt.equal_to_1")
+    new_attrs = attrs.filter_out_property("tt.equal_to_1")
     fn_attrs = new_attrs.get_fn_attrs()
     all_constants = constants.copy()
     all_constants.update(new_constants)
