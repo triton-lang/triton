@@ -10,6 +10,10 @@ import traceback
 from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300
 
 
+def is_cpu():
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cpu"
+
+
 def test_err_undefined_variable():
 
     @triton.jit
@@ -356,6 +360,8 @@ def test_fp8_support(dtype):
             supported_dtypes += [tl.float8e4nv, tl.float8e4b8, tl.float8e5b16]
     elif is_interpreter():
         supported_dtypes = [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15]
+    elif is_cpu():
+        supported_dtypes = [tl.float8e5, tl.float8e5b16, tl.float8e4nv]
 
     @triton.jit
     def dtype_kernel(dtype: tl.constexpr):

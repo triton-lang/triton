@@ -279,12 +279,10 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     if src_dtype == 'float8e4nv' and is_hip() and (dst_dtype != 'bfloat16' or not is_hip_mi300()):
         pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
 
-    if src_dtype in ('float8e4b8', 'float8e4b15') and is_cpu():
-        pytest.skip(f"Conversion from {src_dtype} to {dst_dtype} is not supported on CPU")
-
     if ((src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (8, 9))
        or (src_dtype in ('float8e4b15') and is_hip())
-       or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_hip_mi300()))):
+       or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or (is_hip() and not is_hip_mi300())))
+       or (src_dtype in ('float8e4b8', 'float8e4b15') and is_cpu())):
         # If the dtype should error out in the given device, we assert that and return
         with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
             launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
@@ -329,6 +327,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 ])
 def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
     if is_cpu() and dst_dtype not in ['float8e5', 'float8e4nv', 'float8e5b16']:
+        # TODO check if 'float8e4b15' downcast is fine for cpu if it will enable in this test
         pytest.skip(f"Conversion from {src_dtype} to {dst_dtype} is not supported on CPU")
 
     if src_dtype != 'float32' and is_cuda() and torch.cuda.get_device_capability(0) < (9, 0):

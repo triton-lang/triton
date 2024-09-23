@@ -1139,6 +1139,8 @@ def test_abs_fp8(in_dtype, device):
             pytest.skip("float8e4b15 not supported on CUDA >= 9.0")
         if in_dtype == tl.float8e4nv and cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
+    elif is_cpu():
+        pytest.skip('CPU not supports "fp8e4b15"')
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):

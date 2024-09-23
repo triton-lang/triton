@@ -33,7 +33,7 @@ class CPUOptions:
     cluster_dims: tuple = (1, 1, 1)
     extern_libs: dict = None
     debug: bool = False
-    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15", "fp8e4nv")
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv")
     deprecated_fp8_dtypes: Tuple[str] = ()
     allowed_dot_input_precisions: Tuple[str] = ("ieee", "tf32", "tf32x3")
     allow_fp8e4nv: bool = True

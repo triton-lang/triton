@@ -222,15 +222,13 @@ Value convertToFp8(Location loc, Value src, Type dstFpTy, int dstExpBits,
 
 Value convertFp16ToFp8E4M3Rtz(Location loc, Value src,
                               PatternRewriter &rewriter) {
-  // TODO: Fix type to Float8E4M3FN.
-  return convertToFp8(loc, src, rewriter.getFloat8E4M3FNUZType(), 4, 7, false,
+  return convertToFp8(loc, src, rewriter.getFloat8E4M3FNType(), 4, 7, false,
                       false, rewriter);
 }
 
 Value convertFp16ToFp8E4M3Rtne(Location loc, Value src,
                                PatternRewriter &rewriter) {
-  // TODO: Fix type to Float8E4M3FN.
-  return convertToFp8(loc, src, rewriter.getFloat8E4M3FNUZType(), 4, 7, true,
+  return convertToFp8(loc, src, rewriter.getFloat8E4M3FNType(), 4, 7, true,
                       false, rewriter);
 }
 
@@ -287,19 +285,17 @@ Value convertFp16ToFp8E5M2B16Rtne(Location loc, Value src,
 
 Value convertBf16ToFp8E4M3Rtz(Location loc, Value src,
                               PatternRewriter &rewriter) {
-  // TODO: Fix type to Float8E4M3FN.
   Value f32Src =
       rewriter.create<arith::ExtFOp>(loc, toFp32(src.getType()), src);
-  return convertToFp8(loc, f32Src, rewriter.getFloat8E4M3FNUZType(), 4, 7,
-                      false, false, rewriter);
+  return convertToFp8(loc, f32Src, rewriter.getFloat8E4M3FNType(), 4, 7, false,
+                      false, rewriter);
 }
 
 Value convertBf16ToFp8E4M3Rtne(Location loc, Value src,
                                PatternRewriter &rewriter) {
-  // TODO: Fix type to Float8E4M3FN.
   Value f32Src =
       rewriter.create<arith::ExtFOp>(loc, toFp32(src.getType()), src);
-  return convertToFp8(loc, f32Src, rewriter.getFloat8E4M3FNUZType(), 4, 7, true,
+  return convertToFp8(loc, f32Src, rewriter.getFloat8E4M3FNType(), 4, 7, true,
                       false, rewriter);
 }
 
@@ -337,15 +333,13 @@ Value convertBf16ToFp8E5M2B16Rtne(Location loc, Value src,
 
 Value convertFp32ToFp8E4M3Rtz(Location loc, Value src,
                               PatternRewriter &rewriter) {
-  // TODO: Fix type to Float8E4M3FN.
-  return convertToFp8(loc, src, rewriter.getFloat8E4M3FNUZType(), 4, 7, false,
+  return convertToFp8(loc, src, rewriter.getFloat8E4M3FNType(), 4, 7, false,
                       false, rewriter);
 }
 
 Value convertFp32ToFp8E4M3Rtne(Location loc, Value src,
                                PatternRewriter &rewriter) {
-  // TODO: Fix type to Float8E4M3FN.
-  return convertToFp8(loc, src, rewriter.getFloat8E4M3FNUZType(), 4, 7, true,
+  return convertToFp8(loc, src, rewriter.getFloat8E4M3FNType(), 4, 7, true,
                       false, rewriter);
 }
 
