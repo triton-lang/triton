@@ -424,10 +424,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    auto srcLayoutWithinBlock = getLayoutWithinCTA(srcLayout);
+    auto srcLayoutWithinCTA = getLayoutWithinCTA(srcLayout);
     auto dstLayoutWithinBlock = getLayoutWithinCTA(dstLayout);
     SmallVector<Value> outVals =
-        transferWithinBlock(inVals, op, srcLayoutWithinBlock,
+        transferWithinBlock(inVals, op, srcLayoutWithinCTA,
                             dstLayoutWithinBlock, adaptor, rewriter);
 
     // Unmunge output values

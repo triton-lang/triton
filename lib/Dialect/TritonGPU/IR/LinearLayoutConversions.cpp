@@ -873,7 +873,6 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
           .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
-
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
       .reshapeOuts(
           {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
