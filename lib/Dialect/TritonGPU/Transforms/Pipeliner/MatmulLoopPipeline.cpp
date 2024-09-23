@@ -448,9 +448,10 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         loadInfo.sharedEncoding =
             getSharedEncIfAllUsersAreDotEnc(op->getResult(0), incompatible)
                 .value_or(nullptr);
-        // If we can't agree on a shared encoding skip pipelinig the load.
-        if (incompatible)
-          continue;
+        // Incompatible shared encoding has been handled in
+        // splitLoadsForIncompatible.
+        assert(!incompatible && "incompatible shared encoding");
+
         // HACK: Triton LLVM codegen has a bug where local_loads from #shared to
         // #mma layout can lead to invalid code if the loaded shape is smaller
         // than the mma tile (e.g. loading a 128x1 tensor for an MMAv2 dot with
@@ -516,9 +517,85 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
   return loadToInfo;
 }
 
+// Split users to groups, each group has the same shared encoding.
+// If not all users are Dot encoding, return empty vector.
+static DenseMap<ttg::SharedEncodingAttr, SmallVector<Operation *>>
+handleIncompatibleSharedEncoding(Operation *loadOp) {
+  DenseMap<ttg::SharedEncodingAttr, SmallVector<Operation *>> loadGroups;
+  // Go through transitive uses of the loadOp in the same block.
+  for (Operation *user : loadOp->getUsers()) {
+    if (user->getBlock() != loadOp->getBlock())
+      continue;
+    if (user->getNumResults() != 1)
+      return loadGroups;
+
+    ttg::SharedEncodingAttr tempAttr;
+    if (auto memDesc =
+            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
+      tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
+      loadGroups[tempAttr].push_back(user);
+    } else {
+      if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
+        return loadGroups;
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
+          cast<TensorOrMemDesc>(user->getResult(0).getType()).getEncoding());
+      if (!dotOpEnc)
+        return loadGroups;
+      auto srcTy = cast<TensorOrMemDesc>(loadOp->getResult(0).getType());
+      auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
+      auto order = ttg::getOrder(srcTy.getEncoding());
+      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+      tempAttr = ttg::SharedEncodingAttr::get(
+          loadOp->getContext(), dotOpEnc, srcTy.getShape(),
+          ttg::getOrder(srcTy.getEncoding()),
+          ttg::getCTALayout(srcTy.getEncoding()),
+          srcTy.getElementType().getIntOrFloatBitWidth(), /*needTrans=*/false);
+      loadGroups[tempAttr].push_back(user);
+    }
+  }
+  return loadGroups;
+}
+
+// Clone loads so each group of uses with same shared encoding will have a
+// corresponding Load.
+static void splitLoadsForIncompatible(
+    OpBuilder &builder, Operation *loadOp,
+    DenseMap<ttg::SharedEncodingAttr, SmallVector<Operation *>> &lGroups) {
+  // The first group will use the original load, create new loads for other
+  // groups.
+  unsigned idx = 0;
+  builder.setInsertionPointAfter(loadOp);
+  for (auto pair : lGroups) {
+    SmallVector<Operation *> &group = pair.second;
+    if (idx++ == 0)
+      continue;
+    Operation *newLoad = builder.clone(*loadOp);
+    for (auto *user : group) {
+      user->replaceUsesOfWith(loadOp->getResult(0), newLoad->getResult(0));
+    }
+  }
+}
+
 static llvm::MapVector<Operation *, LoadInfo>
 scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
               DenseSet<Operation *> &rootUsers, int numStages) {
+
+  // Get the list of all loads.
+  SmallVector<Operation *> loads;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
+      loads.push_back(&op);
+    }
+  }
+  OpBuilder builder(forOp);
+  for (auto *loadOp : loads) {
+    auto lGroups = handleIncompatibleSharedEncoding(loadOp);
+    LDBG("groups with different encoding: " << lGroups.size() << " "
+                                            << *loadOp);
+    if (lGroups.size() > 1)
+      splitLoadsForIncompatible(builder, loadOp, lGroups);
+  }
+
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
