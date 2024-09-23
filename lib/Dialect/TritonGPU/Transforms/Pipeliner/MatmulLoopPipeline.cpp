@@ -400,18 +400,12 @@ static bool loadIsMMAv3(Operation *loadOp) {
 static llvm::MapVector<Operation *, LoadInfo>
 assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
                         &loadOpToIndLevelAndUse,
-                    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                    int numStages) {
+                    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   llvm::MapVector<Operation *, LoadInfo> loadToInfo;
 
   for (auto &[op, dist, use] : loadOpToIndLevelAndUse) {
     if (loadToInfo.count(op))
       // TODO pawel: err, we'd need to verify that the distance is the same
-      continue;
-    if (numStages == 2 && dist > 0)
-      // Can't pipeline indirect loads when numStages is 2. We assume indirect
-      // loads are at different stages. If numStages is 2, we have no stage
-      // available for indirect loads.
       continue;
     LoadInfo loadInfo;
 
@@ -497,7 +491,6 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       // assumption is held by how loadOpsToIndirectionLevelAndUse recursively
       // collects loadOpToIndLevelAndUse using DFS.
       if (loadToInfo.count(loadOp) == 0) {
-        LDBG("Load " << *op << " use is a load that can't be pipelined");
         continue;
       }
     }
@@ -515,7 +508,6 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
     // If that still didn't work, bail on pipelining this load.
     if (!loadInfo.sharedEncoding) {
-      LDBG("Load " << *op << " has no sharedEncoding");
       continue;
     }
     loadToInfo[op] = loadInfo;
@@ -545,10 +537,22 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   if (loadOpToIndLevelAndUse.empty())
     return {};
 
+  for (auto iter = loadOpToIndLevelAndUse.begin();
+       iter != loadOpToIndLevelAndUse.end();) {
+    auto iterNext = iter + 1;
+    if (std::get<1>(*iter) >= numStages - 1)
+      // We assume loads with different dist are assigned to different stages.
+      // If numStages is 2, we will have no stage available for indirect loads
+      // with dist >= 1. In general, when dist is equal to numStages - 1, we
+      // should pipeline it.
+      loadOpToIndLevelAndUse.erase(iter);
+    iter = iterNext;
+  }
+
   // Check which loads are good for pipelining, and assign them
   // memory layouts.
   llvm::MapVector<Operation *, LoadInfo> loadToInfo =
-      assignMemoryLayouts(loadOpToIndLevelAndUse, axisInfoAnalysis, numStages);
+      assignMemoryLayouts(loadOpToIndLevelAndUse, axisInfoAnalysis);
 
   if (loadToInfo.empty())
     return {};
@@ -913,7 +917,7 @@ static void createTMABarrierAndWait(
     Value pred = builder.create<arith::ConstantIntOp>(loc, 1, 1);
     Operation *expect = builder.create<ttng::BarrierExpectOp>(
         forOp.getLoc(), barrier, sizeInBytes, pred);
-    auto [stage, cluster] = schedule[group[0]->loadOp];
+    auto [stage, cluster] = schedule[asyncLoads[0].loadOp];
     schedule.insert(expect, stage, cluster);
 
     builder.setInsertionPointAfter(group.back()->loadOp);
