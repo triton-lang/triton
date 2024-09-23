@@ -217,6 +217,8 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
       return predicatedLoadCA;
     case triton::CacheModifier::CG:
       return predicatedLoadCG;
+    case triton::CacheModifier::CV:
+      return predicatedLoadCV;
     default:
       // Do not fail in compile time in the case of unsupported modifier.
       // Just apply default config.
