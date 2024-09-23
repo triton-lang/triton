@@ -424,8 +424,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    auto srcLayoutWithinBlock = removeBlockDim(ctx, srcLayout);
-    auto dstLayoutWithinBlock = removeBlockDim(ctx, dstLayout);
+    auto srcLayoutWithinBlock = getLayoutWithinCTA(srcLayout);
+    auto dstLayoutWithinBlock = getLayoutWithinCTA(dstLayout);
     SmallVector<Value> outVals =
         transferWithinBlock(inVals, op, srcLayoutWithinBlock,
                             dstLayoutWithinBlock, adaptor, rewriter);
@@ -491,7 +491,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     if (!isStMatrix) {
       shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
     } else {
-      shmemStoreLayout = removeBlockDim(ctx, *shmemStoreLayout);
+      shmemStoreLayout = getLayoutWithinCTA(*shmemStoreLayout);
     }
     assert(shmemStoreLayout.has_value());
 
@@ -649,14 +649,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       ret[idx.begin()->second].push_back(reg);
     }
     return ret;
-  }
-
-  const LinearLayout removeBlockDim(MLIRContext *ctx,
-                                    const LinearLayout &layout) const {
-    StringAttr kBlock = str_attr("block");
-    auto bases = layout.getBases();
-    bases[kBlock] = {};
-    return LinearLayout(bases, llvm::to_vector<4>(layout.getOutDimNames()));
   }
 };
 
