@@ -859,9 +859,8 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   layout *=
       identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol})
           .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
-  auto tensorShapePerCTA = getShapePerCTA(mma, tensorTy.getShape());
   auto ret =
-      combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorShapePerCTA);
+      combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
       .reshapeOuts(
           {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
