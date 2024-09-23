@@ -842,6 +842,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   StringAttr kWarp = S("warp");
   StringAttr kCol = S("dim1");
   StringAttr kRow = S("dim0");
+  StringAttr kBlock = S("block");
 
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane = {
@@ -859,8 +860,13 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   layout *=
       identityND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1}, {kRow, kCol})
           .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
-  auto ret =
-      combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
+  auto tensorShapePerCTA = getShapePerCTA(mma, tensorTy.getShape());
+  llvm::SmallDenseMap<StringAttr, int64_t> namedTensorShape = {
+      std::make_pair(kRow, tensorShapePerCTA[0]),
+      std::make_pair(kCol, tensorShapePerCTA[1]),
+  };
+  auto ret = ensureLayoutNotSmallerThan(layout, namedTensorShape);
+  ret = ensureLayoutNotLargerThan(ret, namedTensorShape);
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
       .reshapeOuts(
           {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
