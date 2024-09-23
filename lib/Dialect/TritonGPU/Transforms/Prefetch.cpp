@@ -159,12 +159,13 @@ LogicalResult Prefetcher::initialize() {
   SmallVector<triton::DotOp> dotsInFor;
   for (Operation &op : *loop)
     if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
-      // bail out if there exist non v2 dots.
+      // Only accepts dotOps encoded as Nvidia MMA v2 or AMD MFMA
       auto dstMmaEnc =
           dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
       auto dstMfmaEnc =
           dyn_cast<AMDMfmaEncodingAttr>(getEncoding(dotOp.getResult()));
       if (!dstMfmaEnc && (!dstMmaEnc || dstMmaEnc.getVersionMajor() != 2))
+        // Don't rewrite if any other type is found.
         return failure();
       dotsInFor.push_back(dotOp);
     }
