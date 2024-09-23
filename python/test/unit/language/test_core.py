@@ -11,6 +11,8 @@ import numpy as np
 import pytest
 import torch
 import os
+os.environ['TRITON_ALWAYS_COMPILE'] = '1'
+os.environ['MLIR_ENABLE_DUMP'] = '1'
 import inspect
 from numpy.random import RandomState
 
