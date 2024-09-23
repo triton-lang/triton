@@ -873,9 +873,16 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
           .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
+  auto tensorShapePerCTA = getShapePerCTA(mma, tensorTy.getShape());
+  llvm::SmallDenseMap<StringAttr, int64_t> namedTensorShape;
+  namedTensorShape[kRow] = tensorShapePerCTA[0];
+  namedTensorShape[kCol] = tensorShapePerCTA[1];
+  ret = ensureLayoutNotSmallerThan(ret, namedTensorShape);
+  ret = ensureLayoutNotLargerThan(ret, namedTensorShape);
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
-      .reshapeOuts(
-          {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+             .reshapeOuts({{S("offset"), ret.getTotalOutDimSize()},
+                           {S("iteration"), 1}}) *
+         identityND(kBlock, 1, {0, 1}, {S("offset"), S("iteration")});
 }
 
 } // namespace mlir::triton::gpu
