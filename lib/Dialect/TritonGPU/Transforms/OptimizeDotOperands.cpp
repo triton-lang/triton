@@ -4,6 +4,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -14,6 +15,66 @@ namespace triton {
 namespace gpu {
 
 namespace {
+
+// Helpers
+
+// Returns whether we can hoist DotOp Encoding through `op`.
+// Roughly, whether op is elementwise and thus threads don't need
+// to exchange elements. But some ops are not current supported even though
+// they meet that criterion.
+bool canHoistDotOpEncV2(Operation* op, DotOperandEncodingAttr& dotOpEnc) {
+  // Only consider custom conversions or arith ops.
+  // TODO(jlebar): Is this too restrictive?
+  if (!isa<FpToFpOp, BitcastOp>(op) && !isPureUnaryInlineAsm(op) &&
+      op->getDialect()->getTypeID() != TypeID::get<arith::ArithDialect>())
+    return false;
+
+  // Quick handling to fix loading issues when computing the original
+  // bitwidth is unable to realize that there is a mixed-precision dot
+  // (hence kWidth = 1) but wants to hoist through the type conversion.
+  if (isa<arith::ExtFOp>(op) && dotOpEnc.getKWidth() == 1)
+      return false;
+
+  // Currently, these instructions are not supported during lowering of
+  // shared -> dot_operand layout. Not all types and type conversions are
+  // supported.
+  if (isa<arith::TruncIOp, arith::TruncFOp, arith::SelectOp>(op))
+    return false;
+
+  // Don't hoist through u1 -> fp casts as they aren't supported in
+  // ElementwiseOpToLLVM::reorderValues().
+  if (isa<arith::UIToFPOp>(op)) {
+    Type opType = getElementTypeOrSelf(op->getOperand(0));
+    if (opType.isInteger(1))
+      return false;
+  }
+
+  return true;
+}
+
+bool canHoistDotOpEncV3(Operation* op) {
+  // Only consider custom conversions or arith ops.
+  // TODO(jlebar): Is this too restrictive?
+  if (!isa<FpToFpOp, BitcastOp>(op) && !isPureUnaryInlineAsm(op) &&
+      op->getDialect()->getTypeID() != TypeID::get<arith::ArithDialect>())
+    return false;
+
+  // Currently, these instructions are not supported during lowering of
+  // shared -> dot_operand layout. Not all types and type conversions are
+  // supported.
+  if (isa<arith::TruncIOp, arith::TruncFOp, arith::SelectOp>(op))
+    return false;
+
+  // Don't hoist through u1 -> fp casts as they aren't supported in
+  // ElementwiseOpToLLVM::reorderValues().
+  if (isa<arith::UIToFPOp>(op)) {
+    Type opType = getElementTypeOrSelf(op->getOperand(0));
+    if (opType.isInteger(1))
+      return false;
+  }
+
+  return true;
+}
 
 // Given
 //   convert(trans(src)) #dot_operand ->
@@ -111,7 +172,8 @@ public:
                                 PatternRewriter &rewriter) const override {
     // Only consider conversions to dot operand.
     auto cvtTy = cast<RankedTensorType>(cvt.getType());
-    if (!isa<DotOperandEncodingAttr>(cvtTy.getEncoding()))
+    auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(cvtTy.getEncoding());
+    if (!dotOpEnc)
       return failure();
 
     auto src = cvt.getSrc().getDefiningOp();
@@ -126,16 +188,7 @@ public:
                 [](Type ty) { return isa<RankedTensorType>(ty); }))
       return failure();
 
-    // Only consider custom conversions or arith ops.
-    // TODO(jlebar): Is this too restrictive?
-    if (!isa<FpToFpOp, BitcastOp>(src) && !isPureUnaryInlineAsm(src) &&
-        src->getDialect()->getTypeID() != TypeID::get<arith::ArithDialect>())
-      return failure();
-
-    // Currently, these instructions are not supported during lowering of
-    // shared -> dot_operand layout. Not all types and type conversions are
-    // supported.
-    if (isa<arith::TruncIOp, arith::TruncFOp, arith::SelectOp>(src))
+    if (!canHoistDotOpEncV2(src, dotOpEnc))
       return failure();
 
     // Check that the conversion is transitively dependent on a load, and all
@@ -165,12 +218,7 @@ public:
       if (isa<LoadOp>(currOp)) {
         foundLoad = true;
       } else if (foundLoad) {
-        // Bail out if there exists an op after Load that is not FpToFp,
-        // Bitcast, or Arith.
-        if (!isa<FpToFpOp, BitcastOp>(currOp) &&
-            !isPureUnaryInlineAsm(currOp) &&
-            currOp->getDialect()->getTypeID() !=
-                TypeID::get<arith::ArithDialect>())
+        if (!canHoistDotOpEncV2(currOp, dotOpEnc))
           return failure();
       }
     }
@@ -301,6 +349,147 @@ struct MMAV3UseRegOperand
   }
 };
 
+// TODO(ggengnv) more tests (multiple elt-wise ops) and document
+struct MMAV3HoistLayoutConversion
+    : public OpRewritePattern<triton::nvidia_gpu::WarpGroupDotOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::WarpGroupDotOp dotOp,
+                                PatternRewriter &rewriter) const override {
+    auto alloc = dotOp.getOperand(0).getDefiningOp<LocalAllocOp>();
+    if (!alloc || !alloc.getSrc())
+      return failure();
+
+    auto getEncoding = [](Value v) {
+      return cast<TensorOrMemDesc>(v.getType()).getEncoding();
+    };
+
+    if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
+      return failure();
+
+    // Performs checks for early stop
+    NvidiaMmaEncodingAttr dstEnc;
+    {
+      auto srcEnc = dyn_cast<BlockedEncodingAttr>(getEncoding(alloc.getSrc()));
+      dstEnc =
+          dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
+      // Want: A's Encoding to be Blocked and D's encoding to be NvidiaMmA v3
+      if (!srcEnc || !dstEnc || dstEnc.getVersionMajor() != 3)
+        return failure();
+
+      auto src = alloc.getSrc().getDefiningOp();
+
+      // Value passed to alloc must have Tensor arguments and single Tensor result
+      if (!src || src->getNumOperands() == 0 || src->getNumResults() != 1)
+        return failure();
+      if (!all_of(src->getOperandTypes(),
+                  [](Type ty) { return isa<RankedTensorType>(ty); }))
+        return failure();
+      auto srcTy = dyn_cast<RankedTensorType>(src->getResult(0).getType());
+      if (!srcTy)
+        return failure();
+
+      if (!canHoistDotOpEncV3(src))
+        return failure();
+    }
+
+    SetVector<Operation *> slice;
+    BackwardSliceOptions opt;
+    opt.omitBlockArguments = true;
+    opt.filter = [&](Operation *op) {
+      return (op->getParentRegion() == alloc->getParentRegion()) && !isa<LoadOp, LocalLoadOp>(op)
+        && (op->getNumOperands() != 0);  // Ensures all ops in slice have operands
+    };
+
+    getBackwardSlice(alloc.getOperation(), &slice, opt);
+
+    auto isBlockedRankedTensor = [&](auto val) {
+      return isa<BlockedEncodingAttr>(getEncoding(val)) && isa<RankedTensorType>(val.getType());
+    };
+
+    SmallVector<Operation *> frontierOps;
+    for (Operation *currOp : slice) {
+      if (!canHoistDotOpEncV3(currOp))
+        return failure();
+
+      // We previously ensured that all ops in slice have at least one operand
+      bool isFrontier = false;
+      for (auto operand : currOp->getOperands()) {
+        auto op = operand.getDefiningOp();
+        if (!slice.contains(op)) {
+          // TODO that this is overly restrictive. Can add support for ConstantOp and LocalLoad
+          if (!isa<LoadOp>(op))
+            return failure();
+
+          isFrontier = true;
+        }
+      }
+
+      if (isFrontier) {
+        if (!isa<LoadOp>(currOp->getOperand(0).getDefiningOp()))
+          return failure();
+
+        auto res = currOp->getResult(0);
+        if (!isBlockedRankedTensor(res))
+          return failure();
+
+        if (!llvm::all_of(currOp->getOperands(), isBlockedRankedTensor))
+          return failure();
+
+        frontierOps.push_back(currOp);
+      }
+    }
+
+    // Nothing to hoist through
+    if (frontierOps.empty())
+      return failure();
+
+    auto dotOperandEnc = DotOperandEncodingAttr::get(
+        dotOp.getContext(), /*opIdx=*/0, dstEnc, /*kWidth=*/0);
+
+    // For each frontierOp:
+    //  load; frontierOp; ...; warp_group_dot
+    //  -> load; local_alloc; local_load; convert_layout; frontierOp; ...; warp_group_dot
+    for (Operation *frontierOp : frontierOps) {
+      auto frontierTy = dyn_cast<RankedTensorType>(frontierOp->getResult(0).getType());
+
+      SmallVector<ConvertLayoutOp> newOperands;
+      for (auto operand : frontierOp->getOperands()) {
+        // We checked earlier that all operands are ranked tensors.
+        auto operandTy = cast<RankedTensorType>(operand.getType());
+        auto operandEltTy = operandTy.getElementType();
+
+        auto oldAllocTy = alloc.getType();
+        // TODO(ggengnv) previous encoding (oldAllocTy.getEncoding()) was for shared operand.
+        // Is it still appropriate for loading into registers?
+        auto newAllocTy = MemDescType::get(operandTy.getShape(), operandEltTy,
+                                        oldAllocTy.getEncoding(), oldAllocTy.getMemorySpace());
+        auto localAlloc = rewriter.create<LocalAllocOp>(alloc.getLoc(), newAllocTy, operand);
+        auto localLoad = rewriter.create<LocalLoadOp>(alloc.getLoc(), operandTy, localAlloc);
+
+        Type cvtTy = RankedTensorType::get(
+            operandTy.getShape(), operandTy.getElementType(), dotOperandEnc);
+        auto cvt = rewriter.create<ConvertLayoutOp>(alloc.getLoc(), cvtTy, localLoad);
+
+        newOperands.push_back(cvt);
+      }
+
+      auto newFrontier = rewriter.clone(*frontierOp);
+      for (int i = 0; i < newOperands.size(); i++)
+        newFrontier->setOperand(i, newOperands[i]);
+      newFrontier->getResult(0).setType(RankedTensorType::get(
+          frontierTy.getShape(), frontierTy.getElementType(), dotOperandEnc));
+
+      rewriter.replaceOp(frontierOp, newFrontier);
+    }
+
+    // replace LHS operand with its parent (in dotOpEnc)
+    rewriter.modifyOpInPlace(dotOp, [&]() { dotOp.setOperand(0, alloc.getSrc()); });
+
+    return success();
+  }
+};
+
 } // namespace
 
 #define GEN_PASS_DEF_TRITONGPUOPTIMIZEDOTOPERANDS
@@ -323,10 +512,12 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
-    if (this->hoistLayoutConversion.getValue())
+    if (this->hoistLayoutConversion.getValue()) {
       patterns.add<HoistLayoutConversion>(context);
+    }
     patterns.add<FuseTransHopper>(context);
     patterns.add<MMAV3UseRegOperand>(context);
+    patterns.add<MMAV3HoistLayoutConversion>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
       signalPassFailure();

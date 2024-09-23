@@ -208,3 +208,27 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
     tt.return %td : tensor<128x128xf32, #mma>
   }
 }
+
+// -----
+
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
+#shared1 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
+module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+// CHECK: tt.func @mma_v3_reg_push_elementwise
+//    CHECK: %[[A_LOADED:.*]] = tt.load %{{.*}} : tensor<128x64x!tt.ptr<bf16>, #blocked>
+//    CHECK: %[[A_MEMDESC:.*]] = triton_gpu.local_alloc %[[A_LOADED]] : (tensor<128x64xbf16, #blocked>) -> !tt.memdesc<128x64xbf16, #shared>
+//    CHECK: %[[A_REG:.*]] = triton_gpu.local_load %[[A_MEMDESC]] : !tt.memdesc<128x64xbf16, #shared> -> tensor<128x64xbf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
+//    CHECK: %[[A_CASTED:.*]] = tt.fp_to_fp %[[A_REG]] : tensor<128x64xbf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
+//    CHECK: %[[R:.*]] = triton_nvidia_gpu.warp_group_dot %[[A_CASTED]], %{{.*}}, %{{.*}} : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * !tt.memdesc<64x64xf16, #shared> -> tensor<128x64xf32, #mma>
+  tt.func @mma_v3_reg_push_elementwise(%pa: tensor<128x64x!tt.ptr<bf16>, #blocked>, %dotb: !tt.memdesc<64x64xf16, #shared>, %dotc: tensor<128x64xf32, #mma>) -> tensor<128x64xf32, #mma>{
+    %a_bf16 = tt.load %pa : tensor<128x64x!tt.ptr<bf16>, #blocked>
+    %a = tt.fp_to_fp %a_bf16 : tensor<128x64xbf16, #blocked> -> tensor<128x64xf16, #blocked>
+    %dota = triton_gpu.local_alloc %a: (tensor<128x64xf16, #blocked>) -> !tt.memdesc<128x64xf16, #shared1>
+    %r = triton_nvidia_gpu.warp_group_dot %dota, %dotb, %dotc : !tt.memdesc<128x64xf16, #shared1> * !tt.memdesc<64x64xf16, #shared> -> tensor<128x64xf32, #mma>
+    tt.return %r : tensor<128x64xf32, #mma>
+  }
+}
+
