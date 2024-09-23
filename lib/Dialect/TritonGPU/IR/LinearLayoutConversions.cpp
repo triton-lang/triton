@@ -817,11 +817,11 @@ bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
   if (order[0] != 1)
     return false;
 
-  auto tensorShape = tensorTy.getShape();
-  if (tensorShape.size() != 2)
+  auto tensorShapePerCTA = getShapePerCTA(mmaLayout, tensorTy.getShape());
+  if (tensorShapePerCTA.size() != 2)
     return false;
-  auto numIterations = ceil<unsigned>(tensorShape[1], repShape[1]) *
-                       ceil<unsigned>(tensorShape[0], repShape[0]);
+  auto numIterations = ceil<unsigned>(tensorShapePerCTA[1], repShape[1]) *
+                       ceil<unsigned>(tensorShapePerCTA[0], repShape[0]);
   if (numIterations > 1)
     return false;
   if (paddedRepShape[1] % 8 != 0)

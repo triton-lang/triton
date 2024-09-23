@@ -378,9 +378,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // 2. Handling NVIDIA's MMA layout when CTA per CGA > 1
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-        if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
-          return false;
-        }
         if (useLegacyMMAConversion) {
           return false;
         }
@@ -427,8 +424,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    SmallVector<Value> outVals = transferWithinBlockOrGroupImpl(
-        inVals, conversion, op, srcLayout, dstLayout, adaptor, rewriter);
+    StringAttr kBlock = str_attr("block");
+    auto inDimNames = llvm::to_vector<4>(srcLayout.getInDimNames());
+    auto inDimNamesNoBlock = llvm::to_vector<4>(llvm::make_filter_range(
+        inDimNames, [&](StringAttr name) { return name != kBlock; }));
+    auto outDimNames = llvm::to_vector<4>(dstLayout.getOutDimNames());
+    auto srcLayoutBlock = srcLayout.sublayout(inDimNamesNoBlock, outDimNames);
+    auto dstLayoutBlock = dstLayout.sublayout(inDimNamesNoBlock, outDimNames);
+
+    SmallVector<Value> outVals =
+        transferWithinBlockOrGroupImpl(inVals, conversion, op, srcLayoutBlock,
+                                       dstLayoutBlock, adaptor, rewriter);
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
@@ -469,11 +475,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto scratchConfig =
         getScratchConfigForCvt(op.getSrc().getType(), op.getType());
-    auto tensorShape = convertType<unsigned, int64_t>(op.getType().getShape());
+    auto tensorShapePerCTA = convertType<unsigned, int64_t>(getShapePerCTA(
+        op.getSrc().getType().getEncoding(), op.getType().getShape()));
     // Input dims: [offset, iteration, block]
     // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
     LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
-        ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
+        ctx, tensorShapePerCTA, scratchConfig.repShape, scratchConfig.order);
 
     // Layout for the store from registers to shared memory.
     //
