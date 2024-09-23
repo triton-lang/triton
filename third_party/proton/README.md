@@ -195,9 +195,9 @@ Similar to the comparison between Proton and Nsight Systems (Nsys), Proton has a
 However, Nsight Compute supports the collection of more detailed metrics than Proton, such as memory access patterns, memory transactions, and other instruction-level metrics.
 In contrast, Proton only supports instruction sampling and is designed to be lightweight and portable.
 
-## Known Issues
+## Known issues
 
-- CUDA Graph
+- CUDA graph
 
 `hooks` cannot be used to accurately accumulate the number of FLOPs in CUDA graph mode profiling because kernels are captured and launched separately; metrics are not accumulated when kernels are launched in graph mode. This issue can be circumvented by using `scope` to supply FLOPs.
 
