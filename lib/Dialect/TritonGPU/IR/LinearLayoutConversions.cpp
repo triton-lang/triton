@@ -882,7 +882,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutForRegToRegConversion(
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
              .reshapeOuts({{S("offset"), ret.getTotalOutDimSize()},
                            {S("iteration"), 1}}) *
-         identityND(kBlock, 1, {0, 1}, {S("offset"), S("iteration")});
+         identityND(kBlock, {1, 1}, {0, 1}, {S("offset"), S("iteration")});
 }
 
 } // namespace mlir::triton::gpu
