@@ -331,17 +331,25 @@ void init_triton_llvm(py::module &&m) {
         // regressions with some scheduling solution.
         tuningOptions.SLPVectorization = true;
 
-        // We don't pass the targetMachine to the LLVM-IR pass builder, unless
-        // `arch` is specified
-        std::unique_ptr<TargetMachine> targetMachine = nullptr;
-        if (!arch.empty())
-          targetMachine = std::move(
-              createTargetMachine(mod, arch, enable_fp_fusion, features));
-        PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
-                       std::nullopt, instrCbPtr);
-
         std::string pluginFile =
             mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
+
+        // We don't pass the targetMachine to the LLVM-IR pass builder, unless
+        // `arch` is specified.
+        //
+        // Don't set target machine in LLVM pass builder when using LLVM IR
+        // level plugins. LLVM IR level plugin passes typically want to insert
+        // calls to externally generated code (i.e. precompile a Cuda/Hip kernel
+        // with Clang and then insert a call to it within an instrumentation
+        // pass) setting the targetMachine value here can can cause a mis-match
+        // in the target machine between the MLIR and Clang generated kernels
+        // and break the lowering of some target specific intrinsics.
+        std::unique_ptr<TargetMachine> targetMachine = nullptr;
+        if (!arch.empty() && pluginFile.empty())
+          targetMachine =
+              createTargetMachine(mod, arch, enable_fp_fusion, features);
+        PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
+                       std::nullopt, instrCbPtr);
 
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM

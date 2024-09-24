@@ -180,8 +180,8 @@ public:
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
       initialize(funcOp);
       funcOp.walk([&](CallOpInterface callOp) {
-        auto callee =
-            dyn_cast<FunctionOpInterface>(callOp.resolveCallable(&symbolTable));
+        auto callee = dyn_cast<FunctionOpInterface>(
+            callOp.resolveCallableInTable(&symbolTable));
         update(callOp, callee);
       });
     }

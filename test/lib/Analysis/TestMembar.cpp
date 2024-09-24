@@ -1,3 +1,4 @@
+#include "../third_party/nvidia/include/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/Dialect.h"
@@ -25,7 +26,8 @@ struct TestMembarPass
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     // Print all ops after membar pass
     ModuleAllocation allocation(moduleOp);
-    ModuleMembarAnalysis membarPass(&allocation);
+    ModuleMembarAnalysis membarPass(&allocation,
+                                    mlir::triton::NVIDIA::canSkipBarSync);
     membarPass.run();
   }
 };

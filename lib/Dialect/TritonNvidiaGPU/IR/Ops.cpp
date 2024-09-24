@@ -70,6 +70,18 @@ void WarpGroupDotOp::getEffects(
                          mlir::triton::gpu::SharedMemory::get());
 }
 
+bool WarpGroupDotOp::needsPartialAccumulator() {
+  const auto &a = getA();
+  const auto &d = getD();
+  auto aTensorTy = cast<TensorOrMemDesc>(a.getType());
+  auto aElTy = cast<TensorOrMemDesc>(a.getType()).getElementType();
+  bool isFP8 = aElTy.isFloat8E5M2() || aElTy.isFloat8E4M3FN() ||
+               aElTy.isFloat8E5M2FNUZ() || aElTy.isFloat8E4M3FNUZ();
+  bool accFP32 = cast<TensorOrMemDesc>(d.getType()).getElementType().isF32();
+  uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
+  return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
+}
+
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
     ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
@@ -141,12 +153,11 @@ LogicalResult WaitBarrierOp::verify() {
 void WaitBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // The wait will flip the phase therefore it reads and writes the barrier.
   effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
                        mlir::triton::gpu::SharedMemory::get());
-  // Need a side effect to prevent compiler from reordering and removing
-  // the wait operation.
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       mlir::SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --

@@ -8,6 +8,7 @@ from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
+from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
@@ -96,8 +97,16 @@ class ASTSource:
         self.attrs = attrs
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+        else:
+            for k in self.signature.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Signature keys must be string")
         if self.constants is None:
-            self.constants = dict()
+            self.constants = {}
+        else:
+            for k in self.constants.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Constants keys must be string")
         if self.attrs is None:
             self.attrs = AttrsDescriptor()
 
@@ -196,6 +205,9 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
+    if os.getenv("TRITON_FRONT_END_DEBUGGING", "0") == "1":
+        return
+
     if e.__cause__ is not None:
         filter_traceback(e.__cause__)
     if e.__context__ is not None:
@@ -337,6 +349,19 @@ class LazyDict:
         self.extras.append((func, args))
 
 
+class AsmDict(dict):
+
+    def __missing__(self, key):
+
+        if key == "sass":
+            value = get_sass(self["cubin"])
+        else:
+            raise KeyError("Unknown key: '%s'" % key)
+
+        self[key] = value
+        return value
+
+
 class CompiledKernel:
 
     # Hooks for external tools to monitor the execution of triton kernels
@@ -362,10 +387,10 @@ class CompiledKernel:
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         binary_ext = backend.binary_ext
-        self.asm = {
+        self.asm = AsmDict({
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
-        }
+        })
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things

@@ -2528,9 +2528,12 @@ class range:
         kernel argument.  The kernel argument only pipelines loads that feed
         into :code:`dot` operations, while this attribute tries to pipeline most
         (though not all) loads in this loop.
+    :param loop_unroll_factor: Tells the Triton IR level loop unroller how many
+        times to unroll a for loop that this range is used with. Less than 2 for
+        this value implies no unrolling.
     """
 
-    def __init__(self, arg1, arg2=None, step=None, num_stages=None):
+    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2542,6 +2545,7 @@ class range:
             self.start = arg1
             self.end = arg2
         self.num_stages = num_stages
+        self.loop_unroll_factor = loop_unroll_factor
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

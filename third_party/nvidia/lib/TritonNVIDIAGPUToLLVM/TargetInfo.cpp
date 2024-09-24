@@ -290,6 +290,13 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
   }
 }
 
+static bool isConstantTruePred(Value pred) {
+  if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
+    return cast<IntegerAttr>(constOp.getValue()).getInt() != 0;
+  }
+  return false;
+}
+
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Value val,
                               Value pred) const {
@@ -501,16 +508,32 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                 .v(vec, /*predicate=*/vec > 1)
                 .b(elemBitwidth);
 
-  std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
-  auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
-                          : builder.newListOperand(vec, elemConstraint);
-  ld(outOpr, builder.newAddrOperand(ptr, "r")).predicate(pred, "b");
+  Value load;
+  if (isConstantTruePred(pred)) {
+    Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
+                             : Type(vec_ty(int_ty(elemBitwidth), vec));
+    load = load(resultTy, ptr);
+    if (vec > 1) {
+      Type structTy = struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth)));
+      Value structValue = undef(structTy);
+      for (int i = 0; i < vec; i++) {
+        structValue = insert_val(structTy, structValue,
+                                 extract_element(load, i32_val(i)), i);
+      }
+      load = structValue;
+    }
+  } else {
+    std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
+    auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
+                            : builder.newListOperand(vec, elemConstraint);
+    ld(outOpr, builder.newAddrOperand(ptr, "r")).predicate(pred, "b");
 
-  Type resultTy =
-      vec == 1 ? Type(int_ty(elemBitwidth))
-               : Type(struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth))));
-  Value load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
-
+    Type resultTy =
+        vec == 1
+            ? Type(int_ty(elemBitwidth))
+            : Type(struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth))));
+    load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
+  }
   SmallVector<Value> resultVals = unpackLLElements(loc, load, rewriter);
   return packLLVector(loc, resultVals, rewriter);
 }

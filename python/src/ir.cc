@@ -157,6 +157,7 @@ void init_triton_ir(py::module &&m) {
       .value("WB", CacheModifier::WB)
       .value("CS", CacheModifier::CS)
       .value("WT", CacheModifier::WT)
+      .value("CV", CacheModifier::CV)
       .export_values();
 
   py::enum_<MemSemantic>(m, "MEM_SEMANTIC", py::module_local())
@@ -225,6 +226,7 @@ void init_triton_ir(py::module &&m) {
                     math::MathDialect, arith::ArithDialect, index::IndexDialect,
                     scf::SCFDialect, ::mlir::gpu::GPUDialect,
                     cf::ControlFlowDialect, LLVM::LLVMDialect>();
+    mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
     mlir::LLVM::registerInlinerInterface(registry);

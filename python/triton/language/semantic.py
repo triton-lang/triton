@@ -182,6 +182,10 @@ def binary_op_type_checking_impl(lhs: tl.tensor | numbers.Number, rhs: tl.tensor
     check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
     if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_ptr():
         ret_sca_ty = computation_type_impl(lhs_sca_ty, lhs_is_scalar, rhs_sca_ty, rhs_is_scalar, div_or_mod)
+        if (lhs_is_scalar and lhs_scalar < 0 and ret_sca_ty.is_int_unsigned()
+                or rhs_is_scalar and rhs_scalar < 0 and ret_sca_ty.is_int_unsigned()):
+            raise ValueError("Cannot perform a binary operation between an unsigned tensor and a negative scalar. "
+                             "Perform a explicit cast on one of them.")
         lhs = full(
             (), lhs_scalar, dtype=ret_sca_ty, builder=builder) if lhs_is_scalar else cast(lhs, ret_sca_ty, builder)
         rhs = full(
@@ -918,6 +922,8 @@ def _str_to_load_cache_modifier(cache_modifier):
             cache = ir.CACHE_MODIFIER.CA
         elif cache_modifier == ".cg":
             cache = ir.CACHE_MODIFIER.CG
+        elif cache_modifier == ".cv":
+            cache = ir.CACHE_MODIFIER.CV
         else:
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
