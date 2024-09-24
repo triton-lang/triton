@@ -87,10 +87,18 @@ public:
     if (!encoding)
       // encoding not available
       return resultVals;
-    if (!dyn_cast<BlockedEncodingAttr>(encoding) &&
-        !dyn_cast<SliceEncodingAttr>(encoding)) {
-      // TODO: constraining the ecndoing type here is necessary for avoiding
-      // crashes in the getElemsPerThread call below happening in the
+    Attribute baseEncoding = encoding;
+    if (isa<AMDMfmaEncodingAttr>(baseEncoding))
+      // TODO: this logic seems incorrect for mfma layout. Skip for now.
+      // We saw mismatches for some flash-attention tests on AMD backend.
+      // Note that this logic works for sliced layout whose parent is
+      // mfma layout. Therefore, this is not combined with the following check.
+      return resultVals;
+    while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
+      baseEncoding = sliced.getParent();
+    if (isa<NvidiaMmaEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
+      // TODO: this logic seems incorrect for mma layout. Skip for now.
+      // The following test crashes and some other miscompile:
       // test_core::test_fp8_dot_acc
       return resultVals;
     }
