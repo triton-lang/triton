@@ -18,8 +18,9 @@ def parse_arguments():
                         choices=["shadow", "python"])
     parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree"])
     parser.add_argument("-k", "--hook", type=str, help="Profiling hook", default=None, choices=[None, "triton"])
-    args, target_args = parser.parse_known_args()
-    return args, target_args
+    parser.add_argument('target_args', nargs=argparse.REMAINDER, help='Subcommand and its arguments')
+    args = parser.parse_args()
+    return args, args.target_args
 
 
 def is_pytest(script):

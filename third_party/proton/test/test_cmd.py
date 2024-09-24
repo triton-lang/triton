@@ -22,7 +22,8 @@ def test_exec(mode):
             ret = subprocess.check_call(["python3", "-m", "triton.profiler.proton", "-n", name, helper_file, "test"],
                                         stdout=subprocess.DEVNULL)
         elif mode == "pytest":
-            ret = subprocess.check_call(["proton", "-n", name, "pytest", helper_file], stdout=subprocess.DEVNULL)
+            ret = subprocess.check_call(["proton", "-n", name, "pytest", "-k", "test_main", helper_file],
+                                        stdout=subprocess.DEVNULL)
         assert ret == 0
         data = json.load(f, )
         kernels = data[0]["children"]
