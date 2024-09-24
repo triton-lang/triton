@@ -45,6 +45,15 @@ jobs:
         with:
           # Only fetch two commits to check the latest changed files.
           fetch-depth: 2
+      - name: Detect if build deps (e.g., LLVM hash) exist
+        if: github.event_name == 'push'
+        uses: andstor/file-existence-action@v3
+        with:
+          fail: true
+          files: |
+            cmake/llvm-hash.txt
+            cmake/nvidia-toolchain-version.json
+            cmake/json-version.txt
       - name: Detect if build deps (e.g. LLVM hash) changed
         id: detect-change
         if: github.event_name == 'push'
@@ -52,6 +61,7 @@ jobs:
         with:
           files: |
             cmake/*.txt
+            cmake/*.json
       - name: Detect if enough time has passed since last post-submit run
         id: detect-time
         if: github.event_name == 'push'
@@ -127,7 +137,7 @@ jobs:
       - name: Compute hash of pre-commit config
         id: cache-key
         run: |
-          echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml)" >> $GITHUB_OUTPUT
+          echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache pre-commit's cache dir
         uses: actions/cache@v4
@@ -166,7 +176,7 @@ jobs:
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum cmake/nvidia-toolchain-version.json | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
@@ -307,7 +317,7 @@ jobs:
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum cmake/nvidia-toolchain-version.json | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
@@ -442,7 +452,7 @@ jobs:
         id: cache-key
         run: |
           echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum cmake/nvidia-toolchain-version.json | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
