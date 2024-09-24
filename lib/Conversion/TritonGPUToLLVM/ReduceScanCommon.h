@@ -4,15 +4,14 @@
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
-#include "triton/Analysis/Allocation.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Transforms/DialectConversion.h"
 
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 //
 #include "mlir/IR/TypeUtilities.h"
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include <set>
+#include <iterator>
 #include <type_traits>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
@@ -32,6 +31,91 @@ namespace ttng = ::mlir::triton::nvidia_gpu;
 namespace mlir::triton {
 class ReduceOp;
 class ScanOp;
+
+inline SmallVector<Value>
+inlineCombineBlock(ConversionPatternRewriter &rewriter, Block &combineBlock,
+                   Block *insertionBlock, Block::iterator insertionPoint,
+                   ValueRange combineArgs) {
+  auto returnOp = combineBlock.getTerminator();
+  rewriter.inlineBlockBefore(&combineBlock, insertionBlock, insertionPoint,
+                             combineArgs);
+
+  auto results = SmallVector<Value>(returnOp->getOperands());
+
+  // Delete the terminator, which is no longer used
+  rewriter.eraseOp(returnOp);
+  return results;
+}
+
+inline SmallVector<Value> applyCombineOp(Location loc,
+                                         ConversionPatternRewriter &rewriter,
+                                         Region &combineOp, ValueRange acc,
+                                         ValueRange cur, Value pred = {}) {
+  // Allows for passing an unitialized acc and use cur as the neutral element
+  if (acc.size() == 0) {
+    return cur;
+  }
+  assert(cur.size() == acc.size());
+
+  // Create a new copy of the combine block, and try to speculatively inline it
+  Block *currentBlock = rewriter.getBlock();
+  Region &parent = *currentBlock->getParent();
+
+  rewriter.cloneRegionBefore(combineOp, parent,
+                             std::next(currentBlock->getIterator()));
+  Block &newCombine = *currentBlock->getNextNode();
+
+  llvm::SmallVector<Value> combineArgs(2 * acc.size());
+  for (unsigned i = 0; i < acc.size(); ++i) {
+    combineArgs[i] = acc[i];
+    combineArgs[acc.size() + i] = cur[i];
+  }
+
+  auto isRegionSpeculatable =
+      std::all_of(newCombine.begin(), newCombine.end(),
+                  [](auto &op) { return isSpeculatable(&op); });
+
+  if (!pred || isRegionSpeculatable) {
+    // Fast path, region has no side effects so we can unconditionally execute
+    return inlineCombineBlock(rewriter, newCombine, currentBlock,
+                              rewriter.getInsertionPoint(), combineArgs);
+  }
+
+  // Slow case, create an if to only execute region when pred is true
+  // #currentBlock
+  // if (pred) {
+  //   #newCombine
+  //   results = combineOp(cur, acc)
+  //   yield results
+  // } else {
+  //    yield undef
+  // }
+  // #thenBlock
+  Block *thenBlock =
+      rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+
+  auto returnOp = newCombine.getTerminator();
+  auto results = SmallVector<Value>(returnOp->getOperands());
+
+  rewriter.setInsertionPointToEnd(currentBlock);
+  SmallVector<Value> thenBlockArgs;
+  thenBlockArgs.reserve(results.size());
+  for (auto result : results) {
+    auto ty = result.getType();
+    auto undef = rewriter.create<LLVM::UndefOp>(loc, ty);
+    thenBlockArgs.push_back(undef);
+    thenBlock->addArgument(ty, loc);
+  }
+  rewriter.create<cf::CondBranchOp>(loc, pred, &newCombine, combineArgs,
+                                    thenBlock, thenBlockArgs);
+
+  // Split a block after the call.
+  rewriter.setInsertionPointToEnd(&newCombine);
+  rewriter.replaceOpWithNewOp<cf::BranchOp>(returnOp, thenBlock, results);
+  rewriter.setInsertionPointToStart(thenBlock);
+  return SmallVector<Value>(thenBlock->getArguments());
+}
+
 } // namespace mlir::triton
 
 template <typename SourceOp>
