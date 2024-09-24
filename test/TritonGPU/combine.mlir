@@ -2307,7 +2307,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 :
 tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i1>, #blocked>) {
   %0 = tt.load %ptr : tensor<1024x!tt.ptr<i1>, #blocked>
   %1 = triton_gpu.convert_layout %0 : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
-  tt.assert %1, "cond must be true ", "unknown", "unknown", 0 : tensor<1024xi1, #blocked1>
+  tt.assert %1, "cond must be true " : tensor<1024xi1, #blocked1>
   tt.return
 }
 }
