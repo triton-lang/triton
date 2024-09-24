@@ -12,6 +12,44 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 namespace tta = mlir::triton::amdgpu;
 
+// clang-format off
+/***
+   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+   # WO   #  W1 #                                     |                                #
+   #      #     #                                     |                                #
+   #  #   #  #  #                                     |                                #
+   # W2   # W3  #   ....                              |                                #
+   #      #     #                                     |  SkipElems                     #
+   #  #   #  #  #                                     |                                #
+   #                                                  |                                #
+   #                                        Slice     |                                #
+   #    .                                 /        \  |                                #
+   #    .                                /          \ |                                #
+   #    .                               /            \|                                #
+   #                                    #   #  #  #  #                                 #
+   #                                    #  W0  #  W1 #                                 #
+   #                                    #      #     #                                 #
+   #                                    #  #   #  #  #    tensorStride                 #
+   #                                    #  W2  #  W3 # --------------------------------#
+   #                                    #      #     #                                 #
+   #                                    #  #   #  #  #                                 #
+   #          tensorStride              #  W0  #  W1 #                                 #
+   # ---------------------------------- #      #     #                                 #
+   #                                    #  #   #  #  #                                 #
+   #                                    #  W2  #  W3 #                                 #
+   #                                    #      #     #                                 #
+   #                                    #  #   #  #  # ---> lastIdx                    #
+   #                                         .                                         #
+   #                                         .                                         #
+   #                                         .                                         #
+   #                                                                                   #
+   #                                                                                   #
+   #                                                                                   #
+   #                                                                                   #
+   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+***/
+// clang-format on
+
 namespace {
 struct ViewSliceOpConversion : public ConvertOpToLLVMPattern<tta::ViewSliceOp> {
   explicit ViewSliceOpConversion(LLVMTypeConverter &typeConverter,
