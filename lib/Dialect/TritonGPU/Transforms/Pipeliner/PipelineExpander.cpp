@@ -21,7 +21,6 @@
 // output correctly.
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
@@ -663,14 +662,14 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   Type t = lb.getType();
   Value zero =
       rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, 0));
-  Value plus1 =
+  Value one =
       rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, 1));
-  Value minus1 =
+  Value minusOne =
       rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -1));
   Value stepLessZero = rewriter.create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::slt, step, zero);
   Value stepDecr =
-      rewriter.create<arith::SelectOp>(loc, stepLessZero, plus1, minus1);
+      rewriter.create<arith::SelectOp>(loc, stepLessZero, one, minusOne);
 
   Value rangeDiff = rewriter.create<arith::SubIOp>(loc, ub, lb);
   Value rangeIncrStep = rewriter.create<arith::AddIOp>(loc, rangeDiff, step);
@@ -687,7 +686,7 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
     Value minusI =
         rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -i));
     Value iterI = rewriter.create<arith::AddIOp>(
-        loc, rewriter.create<arith::AddIOp>(loc, totalIterations, minus1),
+        loc, rewriter.create<arith::AddIOp>(loc, totalIterations, minusOne),
         minusI);
     // newLastIter = lb + step * iterI
     Value newlastIter = rewriter.create<arith::AddIOp>(
