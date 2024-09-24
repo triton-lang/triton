@@ -108,8 +108,8 @@ if __name__ == "__main__":
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
     attrs = triton.backends.compiler.AttrsDescriptor.from_hints(hints)
-    for i in attrs["tt.equal_to_1"]:
-        constants.update({kernel.arg_names[i]: 1})
+    for p, v in attrs.get_constants().items():
+        constants.update({kernel.arg_names[p]: v})
     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     ccinfo = triton.compile(src, options=opts)

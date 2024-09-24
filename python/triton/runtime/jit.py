@@ -605,10 +605,11 @@ class JITFunction(KernelInterface[T]):
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
             configs = (backend.get_attrs_descriptor(self.params, bound_vals), )
+            constant_params = configs[0].get_constants()
             constants = {
                 p.name: v
                 for (v, p) in zip(bound_vals, self.params)
-                if p.is_constexpr or p.num in configs[0]["tt.equal_to_1"] or v is None
+                if p.is_constexpr or (p.num in constant_params) or v is None
             }
             for i, arg in constants.items():
                 if callable(arg):
