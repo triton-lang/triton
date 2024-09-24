@@ -207,9 +207,21 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+      SmallVector<unsigned> sharedOrder;
+      int rank = order.size();
+      // TODO rework this when shared -> dotOp conversions support arbitrary
+      // shared memory ordering
+      if (rank == 3) {
+        // add all elements except the element that is zero
+        for (unsigned i = 0; i < rank; ++i)
+          if (order[i] != 0)
+            sharedOrder.emplace_back(order[i]);
+        sharedOrder.emplace_back(0);
+      } else {
+        sharedOrder = order;
+      }
       tempAttr = ttg::SharedEncodingAttr::get(
-          val.getContext(), dotOpEnc, srcTy.getShape(),
-          ttg::getOrder(srcTy.getEncoding()),
+          val.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
           ttg::getCTALayout(srcTy.getEncoding()),
           srcTy.getElementType().getIntOrFloatBitWidth(), /*needTrans=*/false);
     }
