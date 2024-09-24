@@ -36,7 +36,7 @@ def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
     M, N, K = args["M"], args["N"], args["K"]
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
-    ret["flops8"] = 2. * M * N * K
+    ret["flops"] = 2. * M * N * K
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
     else:
