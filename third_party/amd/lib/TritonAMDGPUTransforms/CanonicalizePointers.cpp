@@ -16,7 +16,9 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/LogicalResult.h"
 #include <utility>
 
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -69,7 +71,7 @@ using namespace mlir;
 class PointerCanonicalizer {
 public:
   explicit PointerCanonicalizer(ModuleOp moduleOp)
-      : mod(moduleOp), rewriter(moduleOp.getContext()) {}
+      : rewriter(moduleOp.getContext()), mod(moduleOp) {}
 
   // Propagate fat pointers in all the functions of the module
   LogicalResult run();
@@ -126,6 +128,8 @@ private:
                                    Value &nextPtr);
   LogicalResult rewriteCondBranchOp(cf::CondBranchOp condBrOp, Location curLoc,
                                     OpOperand *operand, Value &nextPtr);
+  LogicalResult rewriteSelectOp(arith::SelectOp selectOp, Location curLoc,
+                                OpOperand *operand, Value &nextPtr);
   LogicalResult rewriteBranchOp(cf::BranchOp branchOp, Location curLoc,
                                 OpOperand *operand, Value &nextPtr);
 
@@ -225,17 +229,25 @@ Value getScalarConstant(IRRewriter &rewriter, Location loc, Value expr) {
   Operation *op = expr.getDefiningOp();
 
   // Check for splatness
-  if (auto splatOp = dyn_cast<triton::SplatOp>(op))
+  if (auto splatOp = dyn_cast_or_null<triton::SplatOp>(op))
     return splatOp.getSrc();
 
   // Check for constant
   DenseIntElementsAttr constVal;
-  if (auto constOp = dyn_cast<arith::ConstantOp>(op)) {
+  if (auto constOp = dyn_cast_or_null<arith::ConstantOp>(op)) {
     Value val = constOp.getResult();
     if (matchPattern(val, m_Constant(&constVal)) && constVal.isSplat())
       return rewriter.create<arith::ConstantOp>(
           loc, constVal.getSplatValue<IntegerAttr>());
   }
+
+  // Check for block arguments
+  if (auto blockArg = dyn_cast_or_null<BlockArgument>(expr)) {
+    Type type = blockArg.getType();
+    if (!isa<RankedTensorType>(type))
+      return blockArg;
+  }
+
   return Value();
 }
 
@@ -318,6 +330,14 @@ PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
     return {scalarConst, tensorZero};
   }
 
+  // Base case 2: block argument. Since it is not a scalar constant, it must be
+  // a tensor. Note that this means we won't be able to decompose across loop
+  // boundaries (TODO: giuseros).
+  if (auto blockArg = dyn_cast<BlockArgument>(expr)) {
+    Value scalarZero = rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
+    return std::make_pair(scalarZero, expr);
+  }
+
   auto offsets =
       llvm::TypeSwitch<Operation *, std::pair<Value, Value>>(
           expr.getDefiningOp())
@@ -342,7 +362,7 @@ PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
             return decomposeOffsetFromMul(loc, expr, bitness);
           })
           .Default([&](Operation *op) {
-            // Base case 2: it is not a supported operation. We assume no
+            // Base case 3: it is not a supported operation. We assume no
             // uniform part
             Value scalarZero =
                 rewriter.create<arith::ConstantIntOp>(loc, 0, bitness);
@@ -353,7 +373,8 @@ PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
 }
 
 // Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
-// obtained by splatting the scalar pointer using the `fatPtr.offset` shape.
+// obtained by splatting the `fatPtr.basePtr` using the `fatPtr.offset` shape
+// and adding the offset to it.
 Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   Value basePtr = fatPtr.basePtr;
   Value offset = fatPtr.offset;
@@ -363,8 +384,14 @@ Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   // Splat the scalar pointer
   auto tensorPtrType = RankedTensorType::get(offsetShape, basePtr.getType(),
                                              offsetType.getEncoding());
+  if (fatPtr.canNarrow)
+    offset = narrow64bitOffsetTo32bits(rewriter, loc, offset);
+
   Value tensorPtr =
       rewriter.create<triton::SplatOp>(loc, tensorPtrType, basePtr);
+
+  tensorPtr =
+      rewriter.create<triton::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
   return tensorPtr;
 }
 
@@ -375,17 +402,14 @@ LogicalResult PointerCanonicalizer::materializeFatPointer(Operation *op,
   auto fatPtr = pointers[ptr];
   Value basePtr = fatPtr.basePtr;
   Value offset = fatPtr.offset;
-  if (fatPtr.canNarrow)
-    offset = narrow64bitOffsetTo32bits(rewriter, loc, offset);
 
+  // Create the tensor pointer (i.e., splat the base && add the offset)
   Value newPtr = basePtr;
-  if (isa<RankedTensorType>(ptr.getType())) {
-    // Splat the base pointer
-    Value tensorPtr = createTensorPointer(fatPtr, loc);
-    // Add the tensor offset to the base pointer
-    newPtr = rewriter.create<triton::AddPtrOp>(loc, tensorPtr.getType(),
-                                               tensorPtr, offset);
-  }
+  if (isa<RankedTensorType>(ptr.getType()))
+    newPtr = createTensorPointer(fatPtr, loc);
+
+  // Save the fat pointer in the table
+  pointers[newPtr] = fatPtr;
 
   // Map and replace the load
   IRMapping mapper;
@@ -720,6 +744,43 @@ LogicalResult PointerCanonicalizer::rewriteCondBranchOp(
   return success();
 }
 
+LogicalResult PointerCanonicalizer::rewriteSelectOp(arith::SelectOp selectOp,
+                                                    Location curLoc,
+                                                    OpOperand *curOperand,
+                                                    Value &nextPtr) {
+  Value trueVal = selectOp.getTrueValue();
+  Value falseVal = selectOp.getFalseValue();
+  Value cond = selectOp.getCondition();
+  // If we didn't traverse both operands, simply materialize the pointer
+  if (!pointers.contains(trueVal) || !pointers.contains(falseVal))
+    return materializeFatPointer(selectOp, curLoc, curOperand->get());
+
+  // If both have been traversed, then we can rewrite select of pointers as a
+  // select of base and offset
+  FatPtr fatPtrT = pointers[trueVal];
+  FatPtr fatPtrF = pointers[falseVal];
+  nextPtr = selectOp.getResult();
+
+  // Simple case of a scalar select: update the base pointer
+  if (!isa<RankedTensorType>(selectOp.getType())) {
+    FatPtr fatPtr = pointers[trueVal];
+    pointers[nextPtr] = fatPtr.copyWithOffset(nextPtr);
+    nextPtr = selectOp.getResult();
+    return success();
+  }
+
+  // Rewrite `select` for base and offset
+  Value newBase = rewriter.create<arith::SelectOp>(
+      curLoc, cond, fatPtrT.basePtr, fatPtrF.basePtr);
+  Value newOffset = rewriter.create<arith::SelectOp>(
+      curLoc, cond, fatPtrT.offset, fatPtrF.offset);
+  assert(fatPtrT.canNarrow == fatPtrF.canNarrow);
+
+  pointers[nextPtr] = fatPtrT.copy(newBase, newOffset);
+  opToDelete.insert(selectOp);
+  return success();
+}
+
 LogicalResult PointerCanonicalizer::rewriteBranchOp(cf::BranchOp branchOp,
                                                     Location curLoc,
                                                     OpOperand *curOperand,
@@ -786,6 +847,9 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
         .Case<cf::CondBranchOp>([&](auto condBrOp) {
           res = rewriteCondBranchOp(condBrOp, curLoc, curOperand, nextPtr);
         })
+        .Case<arith::SelectOp>([&](auto selectOp) {
+          res = rewriteSelectOp(selectOp, curLoc, curOperand, nextPtr);
+        })
         .Case<cf::BranchOp>([&](auto branchOp) {
           res = rewriteBranchOp(branchOp, curLoc, curOperand, nextPtr);
         })
@@ -803,7 +867,8 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
     // Keep propagating the fat pointer down the IR
     if (nextPtr)
       for (OpOperand &use : nextPtr.getUses())
-        queue.push_back(&use);
+        if (!opToDelete.contains(use.getOwner()))
+          queue.push_back(&use);
   }
   return success();
 }
@@ -825,9 +890,13 @@ LogicalResult PointerCanonicalizer::rewriteFunction(triton::FuncOp funcOp) {
     if (failed(rewritePointer(arg)))
       return failure();
 
-    // Clean-up
-    for (Operation *op : llvm::reverse(opToDelete))
-      op->erase();
+    // Clean-up: don't assume the operation to delete are in the correct order,
+    // but force dropping the reference of the ops before we delete them
+    for (Operation *op : opToDelete) {
+      op->dropAllReferences();
+      op->dropAllDefinedValueUses();
+      rewriter.eraseOp(op);
+    }
   }
   return success();
 }

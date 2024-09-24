@@ -603,7 +603,7 @@ class CodeGenerator(ast.NodeVisitor):
                 then_defs[name] = liveins[name]
         # variables that are both in then and else but not in liveins
         # TODO: could probably be cleaned up
-        for name in then_defs.keys() & else_defs.keys():
+        for name in sorted(then_defs.keys() & else_defs.keys()):
             if name in names:
                 continue
             then_ty = then_defs[name].type
@@ -904,6 +904,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ast.NodeVisitor.generic_visit(self, stmt)
             return
         num_stages = None
+        loop_unroll_factor = None
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -913,6 +914,7 @@ class CodeGenerator(ast.NodeVisitor):
             ub = iterator.end
             step = iterator.step
             num_stages = iterator.num_stages
+            loop_unroll_factor = iterator.loop_unroll_factor
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -986,6 +988,8 @@ class CodeGenerator(ast.NodeVisitor):
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
             if num_stages is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
+            if loop_unroll_factor is not None:
+                for_op.set_attr("tt.loop_unroll_factor", self.builder.get_int32_attr(loop_unroll_factor))
 
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))

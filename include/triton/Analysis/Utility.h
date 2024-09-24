@@ -316,7 +316,7 @@ private:
     moduleOp.walk([&](Operation *op) {
       auto caller = op->getParentOfType<FunctionOpInterface>();
       if (auto callOp = dyn_cast<CallOpInterface>(op)) {
-        auto *callee = callOp.resolveCallable(&symbolTable);
+        auto *callee = callOp.resolveCallableInTable(&symbolTable);
         auto funcOp = dyn_cast_or_null<FunctionOpInterface>(callee);
         if (funcOp) {
           graph[caller].emplace_back(

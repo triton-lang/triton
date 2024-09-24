@@ -120,6 +120,10 @@ class TritonGPUOptimizeThreadLocalityPass
       // TODO: relax this restriction
       if (!(isa<triton::gpu::BlockedEncodingAttr>(srcEncoding) && rank > 1))
         return;
+      // The code currently assumes that the reduction is happening on the most
+      // inner dim.
+      if (reduce.getAxis() != rank - 1)
+        return;
       for (auto operand : reduce->getOperands()) {
         if (!operand.getDefiningOp<triton::LoadOp>())
           return;

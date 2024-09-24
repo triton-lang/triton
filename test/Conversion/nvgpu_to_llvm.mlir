@@ -71,7 +71,8 @@ llvm.func @st_matrix(%i: i32, %ptr: !llvm.ptr<3>) {
 // CHECK-LABEL: @wgmma
 llvm.func @wgmma(%desc: i64, %in: !struct_64xf32) {
 // CHECK: wgmma.mma_async.sync.aligned.m64n256k32.f32.e5m2.e5m2
-%acc0 = nvgpu.wgmma %desc, %desc {
+%false = llvm.mlir.constant(false) : i1
+%acc0 = nvgpu.wgmma %desc, %desc, %false {
   eltTypeA = 3 : i32,
   eltTypeB = 3 : i32,
   eltTypeC = 7 : i32,
@@ -80,7 +81,7 @@ llvm.func @wgmma(%desc: i64, %in: !struct_64xf32) {
   m = 64 : i32,
   n = 256 : i32,
   k = 32 : i32
-} : (i64, i64) -> !struct_128xf32
+} : (i64, i64, i1) -> !struct_128xf32
 
   // CHECK: // wait for regs: $0,$1,$2,{{.*}},$127
   // CHECK: wgmma.wait_group.sync.aligned 0;
