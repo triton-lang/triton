@@ -544,7 +544,7 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
       // We assume loads with different dist are assigned to different stages.
       // If numStages is 2, we will have no stage available for indirect loads
       // with dist >= 1. In general, when dist is equal to numStages - 1, we
-      // should pipeline it.
+      // should not pipeline it.
       loadOpToIndLevelAndUse.erase(iter);
     iter = iterNext;
   }
