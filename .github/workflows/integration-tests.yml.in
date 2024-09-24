@@ -51,16 +51,6 @@ jobs:
           # Only fetch two commits to check the latest changed files.
           fetch-depth: 2
 
-      - name: Detect if build deps (e.g., LLVM hash) exist
-        if : github.event_name == 'push'
-        uses: andstor/file-existence-action@v3
-        with:
-          fail: true
-          files: |
-            cmake/llvm-hash.txt
-            cmake/nvidia-toolchain-version.json
-            cmake/json-version.txt
-
       - name: Detect if build deps (e.g. LLVM hash) changed
         id: detect-change
         if: github.event_name == 'push'
@@ -199,9 +189,20 @@ jobs:
         name: Compute cache keys
         id: cache-key
         run: |
-          echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(sha256sum cmake/nvidia-toolchain-version.json | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
-          echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          # Check if files exist before proceeding
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          # Process the files if they exist
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
 
