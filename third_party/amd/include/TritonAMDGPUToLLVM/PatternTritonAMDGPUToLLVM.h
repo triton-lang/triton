@@ -5,7 +5,6 @@
 #include "triton/Analysis/AxisInfo.h"
 
 using namespace mlir;
-// using namespace mlir::triton;
 
 namespace mlir::triton::AMD {
 

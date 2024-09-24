@@ -53,11 +53,9 @@ def TritonAMDGPU_ViewSliceOp : TritonAMDGPU_Op<"view_slice",
                                  ]> {
   let summary = "view slice operation";
   let description = [{
-    Represents view of the slice of the tensor in registers. Syntax of the operation is the same
-    as for extract_slice op. However, unlike 'extract_slice' which slices in shared memory,
+    Represents view of the slice of the tensor in registers. However, unlike 'memdesc_subview' which provides a view in shared memory,
     'view_slice' specifically slices within registers.
     Slice of the tensor is required to have the same layout as the original tensor.
-    In a way, semantics of the 'view_slice' operation is a combination of the 'extract_slice' and 'view' operations semantics.
     }];
 
   let arguments = (ins
