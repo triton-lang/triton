@@ -58,7 +58,7 @@ def matmul_kernel_16bx8b(
 
     tl.store(out_ptr + out_tile, acc, mask=mask)
 
-
+# this are the test cases for mixed dtype GEMM (16-bit and 8-bit) when the tile size is small (e.g., 16)
 @pytest.mark.parametrize(
     'M,N,K,block_m,block_n,block_k,dtype_a,dtype_b',
     [
@@ -142,6 +142,7 @@ def matmul_kernel_8bx16b(
     tl.store(out_ptr + out_tile, acc, mask=mask)
 
 
+# this are the test cases for mixed dtype GEMM (8-bit and 16-bit) when the tile size is small (e.g., 16)
 @pytest.mark.parametrize(
     'M,N,K,block_m,block_n,block_k,dtype_a,dtype_b',
     [
