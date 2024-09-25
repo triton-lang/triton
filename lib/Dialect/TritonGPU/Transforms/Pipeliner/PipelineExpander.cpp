@@ -675,7 +675,7 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   Value rangeIncrStep = rewriter.create<arith::AddIOp>(loc, rangeDiff, step);
   Value rangeDecr =
       rewriter.create<arith::AddIOp>(loc, rangeIncrStep, stepDecr);
-  Value totalIterations = rewriter.create<arith::DivUIOp>(loc, rangeDecr, step);
+  Value totalIterations = rewriter.create<arith::DivSIOp>(loc, rangeDecr, step);
 
   // Capture predicates for dynamic loops.
   SmallVector<Value> predicates(maxStage + 1);
