@@ -123,7 +123,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     ForOp op, const triton::PipeliningOption &options) {
   LDBG("Start initializeLoopInfo");
   forOp = op;
-  maxStage = options.numStages;
+
   ub = forOp.getUpperBound();
   lb = forOp.getLowerBound();
   step = forOp.getStep();
@@ -154,7 +154,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     int64_t lbImm = lowerBoundCst->getInt();
     int64_t stepImm = stepCst->getInt();
     int64_t numIteration = llvm::divideCeilSigned(ubImm - lbImm, stepImm);
-    if (numIteration > maxStage) {
+    if (numIteration > options.numStages) {
       dynamicLoop = false;
     } else {
       LDBG("--fewer loop iterations than pipeline stages");
@@ -164,7 +164,6 @@ bool LoopPipelinerInternal::initializeLoopInfo(
       } else {
         PERF_WARNING(forOp, "fewer loop iterations than pipeline stages. The "
                             "loop will be treated as a dynamic loop");
-        maxStage = 0;
       }
     }
   }
