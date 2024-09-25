@@ -81,3 +81,47 @@ def test_remark_vectorization(capfd):
     _, err = capfd.readouterr()
     assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
     os.environ["MLIR_ENABLE_REMARK"] = "0"
+
+def test_remark_swp_num_stages_greater_than_loop_iters(capfd):
+    os.environ["MLIR_ENABLE_REMARK"] = "1"
+
+    @triton.jit
+    def kernel_pipe_num_stages_gt_loop_iters(in_ptr, out_ptr):
+        SIZE : tl.constexpr = 64
+        in_ptrs = in_ptr + tl.arange(0, SIZE)
+        for i in tl.range(0, 2, num_stages=3):
+            val = tl.load(in_ptrs)
+            in_ptrs += SIZE
+            out_ptrs = out_ptr + (tl.arange(0, SIZE) + i * SIZE)
+            tl.store(out_ptrs, val)
+
+    triton.compile(
+        triton.compiler.ASTSource(fn=kernel_pipe_num_stages_gt_loop_iters, signature={0: '*fp32', 1: '*fp32'}, constants={}), options={"cluster_dims": (1, 1, 1)})
+
+    _, err = capfd.readouterr()
+    os.environ["MLIR_ENABLE_REMARK"] = "0"
+    assert ("remark: Warning: fewer loop iterations than pipeline stages. The loop will be treated as a dynamic loop" in err), "expect performance warning remark:" + err
+
+def test_remark_swp_op_before_operands(capfd):
+    os.environ["MLIR_ENABLE_REMARK"] = "1"
+
+    @triton.jit
+    def kernel_pipe_error(in_ptr, out_ptr):
+        SIZE : tl.constexpr = 64
+        in_ptrs = in_ptr + tl.arange(0, SIZE)
+        val = tl.zeros((SIZE, ), dtype=tl.float32)
+        k = 0
+        for i in tl.range(0, 64, num_stages=3):
+            in_ptrs = in_ptr + tl.arange(0, SIZE) + SIZE * k
+            val = tl.load(in_ptrs)
+            out_ptrs = out_ptr + (tl.arange(0, SIZE) + i * SIZE)
+            tl.store(out_ptrs, val)
+            if tl.max(val) > 0:
+                k += 1
+
+    triton.compile(
+        triton.compiler.ASTSource(fn=kernel_pipe_error, signature={0: '*fp32', 1: '*fp32'}, constants={}), options={"cluster_dims": (1, 1, 1)})
+
+    _, err = capfd.readouterr()
+    os.environ["MLIR_ENABLE_REMARK"] = "0"
+    assert ("remark: Warning: operation scheduled before its operands" in err), "expect performance warning remark:" + err
