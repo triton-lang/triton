@@ -570,10 +570,10 @@ that contains the operation.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">tt.assert</span></code> (triton::AssertOp)<a class="headerlink" href="#tt-assert-triton-assertop" title="Link to this heading">¶</a></h2>
 <p><em>Device-side assert, as in CUDA for correctness checking</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.assert` $condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.assert` $condition `,` $message attr-dict `:` type($condition)
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">tt.assert</span></code> takes a condition tensor, a message string, a file string, a function string, and a line number.
+<p><code class="docutils literal notranslate"><span class="pre">tt.assert</span></code> takes a condition tensor and a message string.
 If the condition is false, the message is printed, and the program is aborted.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
@@ -583,9 +583,6 @@ If the condition is false, the message is printed, and the program is aborted.</
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>message</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
-<tr><td><code>file</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
-<tr><td><code>func</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
-<tr><td><code>line</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
 <section id="id8">

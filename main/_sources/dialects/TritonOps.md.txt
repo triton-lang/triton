@@ -203,10 +203,10 @@ _Device-side assert, as in CUDA for correctness checking_
 Syntax:
 
 ```
-operation ::= `tt.assert` $condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)
+operation ::= `tt.assert` $condition `,` $message attr-dict `:` type($condition)
 ```
 
-`tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.
+`tt.assert` takes a condition tensor and a message string.
 If the condition is false, the message is printed, and the program is aborted.
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
@@ -220,9 +220,6 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>message</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
-<tr><td><code>file</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
-<tr><td><code>func</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
-<tr><td><code>line</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
 #### Operands:
