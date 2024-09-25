@@ -42,9 +42,12 @@ def test_mma_remark(capfd):
             }, constants={}))
     captured = capfd.readouterr()
 
+    # Turn off remark to avoid polluting other tests.
+    # Setting before the assert to make sure it is always executed.
+    os.environ['MLIR_ENABLE_REMARK'] = '0'
+
     assert "remark: Warning: can't use MMA V3 for the dot op" in captured.err, "expect MMA V3 remark"
     assert "note: see current operation:" in captured.err
-    os.environ['MLIR_ENABLE_REMARK'] = '0'
 
 
 def test_remark_vectorization(capfd):
@@ -79,8 +82,10 @@ def test_remark_vectorization(capfd):
                                   constants={"XBLOCK": XBLOCK}), options={"num_warps": 1})
 
     _, err = capfd.readouterr()
-    assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
+
     os.environ["MLIR_ENABLE_REMARK"] = "0"
+
+    assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
 
 
 def test_remark_swp_num_stages_greater_than_loop_iters(capfd):
