@@ -19,6 +19,7 @@ After profiling is done, `proton-viewer` can be used to visualize the results:
     python 09-persistent-matmul.py --prec fp16 --K_range 512 4096
     proton-viewer -m flop16/s,time/s matmul.hatchet  # for FP16 throughput and time
 
+Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
 
 import argparse
