@@ -1,11 +1,11 @@
 """
-Persistent FP8 Matmul
+Persistent Matmul
 =====================
 This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
-It includes various matmul methods, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches.
-It support both FP16 and FP8 data types but the FP8 implementation is only available on CUDA devices with compute capability >= 9.0.
+Various matmul methods are included, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches.
+The kernels support both FP16 and FP8 data types but the FP8 implementation is only available on CUDA devices with compute capability >= 9.0.
 
-Triton and CuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
+Triton and cuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
 Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.
 After profiling is done, `proton-viewer` can be used to visualize the results:
 
@@ -13,11 +13,11 @@ After profiling is done, `proton-viewer` can be used to visualize the results:
 
     # FP8
     python 09-persistent-matmul.py --prec fp8 --K_range 128 1024 --K_step 128
-    proton-viewer -m tflop8/s,time/s matmul.hatchet  # for FP8 throughput and time
+    proton-viewer -m tflop8/s,time/s matmul.hatchet
 
     # FP16
     python 09-persistent-matmul.py --prec fp16 --K_range 128 1024 --K_step 128
-    proton-viewer -m tflop16/s,time/s matmul.hatchet  # for FP16 throughput and time
+    proton-viewer -m tflop16/s,time/s matmul.hatchet
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
