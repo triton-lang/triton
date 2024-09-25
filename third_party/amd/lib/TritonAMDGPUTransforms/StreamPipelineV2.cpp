@@ -208,10 +208,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       tempAttr = ttg::SharedEncodingAttr::get(
-          val.getContext(), dotOpEnc, srcTy.getShape(),
-          ttg::getOrder(srcTy.getEncoding()),
-          ttg::getCTALayout(srcTy.getEncoding()),
-          srcTy.getElementType().getIntOrFloatBitWidth(), /*needTrans=*/false);
+          val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
+          bitWidth, /*needTrans=*/false);
     }
     // Check that the shared encodings needed by the users are compatible.
     if (!tempAttr || (attr != nullptr && attr != tempAttr))
