@@ -75,8 +75,8 @@ LogicalResult ViewSliceOp::verify() {
 
   auto srcShape = srcTy.getShape();
   auto shapePerCTA = mlir::triton::gpu::getShapePerCTATile(srcLayout, srcShape);
-  shapePerCTA[0] = std::min(srcShape[0], (long)shapePerCTA[0]);
-  shapePerCTA[1] = std::min(srcShape[1], (long)shapePerCTA[1]);
+  shapePerCTA[0] = std::min(static_cast<unsigned>(srcShape[0]), shapePerCTA[0]);
+  shapePerCTA[1] = std::min(static_cast<unsigned>(srcShape[1]), shapePerCTA[1]);
 
   auto offsets = getStaticOffsets();
   auto sizes = getStaticSizes();

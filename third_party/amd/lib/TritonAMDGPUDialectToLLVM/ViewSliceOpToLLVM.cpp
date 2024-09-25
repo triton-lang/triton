@@ -69,8 +69,10 @@ struct ViewSliceOpConversion : public ConvertOpToLLVMPattern<tta::ViewSliceOp> {
     auto totalSizePerThread = sizePerThread[0] * sizePerThread[1];
     auto order = getOrder(srcLayout);
     auto shapePerCTA = getShapePerCTATile(srcLayout, srcShape);
-    shapePerCTA[0] = std::min(srcShape[0], (long)shapePerCTA[0]);
-    shapePerCTA[1] = std::min(srcShape[1], (long)shapePerCTA[1]);
+    shapePerCTA[0] =
+        std::min(static_cast<unsigned>(srcShape[0]), shapePerCTA[0]);
+    shapePerCTA[1] =
+        std::min(static_cast<unsigned>(srcShape[1]), shapePerCTA[1]);
 
     auto offsets = op.getStaticOffsets();
     auto sizes = op.getStaticSizes();
