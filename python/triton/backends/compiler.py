@@ -28,14 +28,16 @@ class AttrsDescriptor:
         - "tt.divisibility", i.e., is the given parameter divisible by 16
         - "tt.equal_to_1", i.e., is the given parameter an integer constant 1
 
-    `arg_value`: a dictionary containing the value of the different compile-time properties, like:
+    `property_values`: a dictionary containing the value of the different compile-time properties, like:
         {
             "prop0": val0
             "prop1": val1
         }
 
+    `constant_properties`: a set containing the properties that can be used to determine if a parameter is constant
+
     """
-    __slots__ = ('divisibility', 'equal_to_1', '__dict__')
+    __slots__ = ('divisibility', 'equal_to_1', 'arg_properties', 'property_values', 'constant_properties')
 
     def __init__(self, params=None, values=None):
         """
@@ -48,9 +50,20 @@ class AttrsDescriptor:
         (see `from_dict` or `from_hints`)
         """
         # Default initialization
-        self.property_values = {"tt.divisibility": 16, "tt.equal_to_1": 1}
-        self.constant_properties = {"tt.equal_to_1"}
         self.arg_properties = {}
+        self.property_values = {}
+        self.constant_properties = set()
+
+        self.add_common_properties(params, values)
+        self.add_additional_properties(params, values)
+        self.init_slots()
+
+    def add_common_properties(self, params, values):
+        """ Add common compile-time properties """
+        self.property_values["tt.divisibility"] = 16
+        self.property_values["tt.equal_to_1"] = 1
+        self.constant_properties.add("tt.equal_to_1")
+
         if (params is None) or (values is None):
             return
 
@@ -70,12 +83,14 @@ class AttrsDescriptor:
             if AttrsDescriptor.is_equal_to_1(arg) and not param.do_not_specialize
         ]
 
-        self.init_slots()
+    def add_additional_properties(self, params=None, values=None):
+        """ This method is for different subclasses to implement their own compile-time properties """
+        pass
 
     def init_slots(self):
         """ Initialize the slots of this class """
-        self.divisibility = self.arg_properties["tt.divisibility"]
-        self.equal_to_1 = self.arg_properties["tt.equal_to_1"]
+        for name, val in self.arg_properties.items():
+            setattr(self, name.removeprefix('tt.'), val)
 
     def get_fn_attrs(self) -> Dict:
         """
@@ -95,7 +110,7 @@ class AttrsDescriptor:
         return attrs
 
     def get_constants(self) -> Dict:
-        """ Return the a dict of constant properties and their values """
+        """ Return a mapping of constant parameters to their values """
         constants = {}
         for prop_name in self.constant_properties:
             for p in self.arg_properties.get(prop_name, []):
@@ -108,20 +123,27 @@ class AttrsDescriptor:
         c = copy.deepcopy(self)
         for prop_name in c.constant_properties:
             c.arg_properties.pop(prop_name, None)
+            c.property_values.pop(prop_name, None)
         c.constant_properties = {}
         return c
 
-    def __getitem__(self, attr_name: str):
-        if attr_name in self.arg_properties:
-            return self.arg_properties[attr_name]
-        return []
-
     def hash(self):
-        key = str([sorted(x) for x in self.__dict__.values()])
+        values = [sorted(self.arg_properties.values())]
+        values += [sorted(self.property_values.values())]
+        values += [sorted(self.constant_properties)]
+        key = str(values)
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def to_dict(self):
         return self.arg_properties
+
+    @staticmethod
+    def from_dict(data):
+        attrsDescriptor = AttrsDescriptor()
+        for prop_name, param_ids in data.items():
+            attrsDescriptor.arg_properties[prop_name] = param_ids
+        attrsDescriptor.init_slots()
+        return attrsDescriptor
 
     @staticmethod
     def from_hints(hints: list[tuple[int, int]]):
@@ -155,10 +177,6 @@ class AttrsDescriptor:
     def is_equal_to_1(x):
         """ Return if the argument is a constant 1"""
         return True if isinstance(x, int) and not isinstance(x, bool) and x == 1 else False
-
-    @staticmethod
-    def from_dict(data):
-        return AttrsDescriptor(data)
 
     @staticmethod
     def get_property_key(val, align):
