@@ -30,7 +30,6 @@ import triton
 import triton.language as tl
 import triton.tools.experimental_descriptor
 import triton.profiler as proton
-import triton.profiler.viewer as proton_viewer
 
 if torch.cuda.is_available():
     from triton._C.libtriton import nvidia
@@ -344,7 +343,7 @@ def matmul_tma_persistent(a, b):
     N, K = b.shape
     dtype = a.dtype
 
-    c = torch.zeros((M, N), device=a.device, dtype=dtype)
+    c = torch.empty((M, N), device=a.device, dtype=dtype)
     desc_a = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K,
                                                                            configs[dtype]["BLOCK_SIZE_M"],
                                                                            configs[dtype]["BLOCK_SIZE_K"],
@@ -497,7 +496,7 @@ def matmul_device_tma_persistent(a, b, tiles_per_update):
     N, K = b.shape
     dtype = a.dtype
 
-    c = torch.zeros((M, N), device=a.device, dtype=dtype)
+    c = torch.empty((M, N), device=a.device, dtype=dtype)
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
     tma_size = 128
     workspace = torch.empty(NUM_SMS * 3 * tma_size, dtype=torch.uint8, device="cuda")
@@ -528,7 +527,7 @@ def cublas_matmul(a, b):
     c = torch.empty((M, N), device=a.device, dtype=dtype)
     bytes_per_elem = a.element_size()
     flops_str = f"flops{bytes_per_elem * 8}"
-    with proton.scope(f"cublas M={M}, N={N}, K={K}",
+    with proton.scope(f"cublas [M={M}, N={N}, K={K}]",
                       {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
         cublas.matmul(a, b, c)
     return c
@@ -539,7 +538,7 @@ def torch_matmul(a, b):
     N, K = b.shape
     bytes_per_elem = a.element_size()
     flops_str = f"flops{bytes_per_elem * 8}"
-    with proton.scope(f"torch M={M}, N={N}, K={K}",
+    with proton.scope(f"torch [M={M}, N={N}, K={K}]",
                       {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
         c = torch.matmul(a, b.T)
     return c
@@ -573,14 +572,9 @@ def bench(K, dtype, tiles_per_update, reps=10):
         for _ in range(reps):
             matmul_tma_persistent(a, b)
             time.sleep(0.01)
-        bytes_per_elem = a.element_size()
-        flops_str = f"flops{bytes_per_elem * 8}"
-        with proton.scope(
-                f"matmul_kernel_device_tma_persistent M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}",
-            {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
-            for _ in range(reps):
-                matmul_device_tma_persistent(a, b, tiles_per_update)
-                time.sleep(0.01)
+        for _ in range(reps):
+            matmul_device_tma_persistent(a, b, tiles_per_update)
+            time.sleep(0.01)
 
     proton.deactivate(0)
 
@@ -624,14 +618,15 @@ def validate(M, N, K, dtype, tiles_per_update):
     print()
 
 
-def show_profile(args, profile_name):
-    metrics = ""
-    if args.prec == 'fp8':
-        metrics = "flop8/s,time/s"
-    elif args.prec == 'fp16':
-        metrics = "flop16/s,time/s"
+def show_profile(precision, profile_name):
+    import triton.profiler.viewer as proton_viewer
+    metrics = ["time/ms"]
+    if precision == 'fp8':
+        metrics = ["tflop8/s"] + metrics
+    elif precision == 'fp16':
+        metrics = ["tflop16/s"] + metrics
     file_name = f"{profile_name}.hatchet"
-    proton_viewer.parse(metrics, file_name)
+    proton_viewer.parse(metrics, file_name, depth=100)
 
 
 if __name__ == "__main__":
@@ -668,3 +663,4 @@ if __name__ == "__main__":
     for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
         bench(K, dtype, args.tiles_per_update)
     proton.finalize()
+    show_profile(args.prec, "matmul")
