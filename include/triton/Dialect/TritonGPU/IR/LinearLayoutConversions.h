@@ -118,7 +118,7 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 // strided by swizzleByteSize.  For example, in a matrix of size 128x128 with a
 // data type of f16, stored in shared memory using 128B-swizzle mode, the offset
 // of the element at index (1, 0) will be 72 due to the stride.  Without
-// swizzling, the offset would be 64, and if there were no leading offset, the
+// swizzling, the offset would be 64.  With swizzling but no leading offset, the
 // offset would be 136.
 //
 // TODO(Keren): We should replace tensorTy with a LinearLayout and the element
