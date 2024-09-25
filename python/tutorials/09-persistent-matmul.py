@@ -12,12 +12,12 @@ After profiling is done, `proton-viewer` can be used to visualize the results:
 .. code-block:: bash
 
     # FP8
-    python 09-persistent-matmul.py --prec fp8 --K_range 512 4096
-    proton-viewer -m flop8/s,time/s matmul.hatchet  # for FP8 throughput and time
+    python 09-persistent-matmul.py --prec fp8 --K_range 128 1024 --K_step 128
+    proton-viewer -m tflop8/s,time/s matmul.hatchet  # for FP8 throughput and time
 
     # FP16
-    python 09-persistent-matmul.py --prec fp16 --K_range 512 4096
-    proton-viewer -m flop16/s,time/s matmul.hatchet  # for FP16 throughput and time
+    python 09-persistent-matmul.py --prec fp16 --K_range 128 1024 --K_step 128
+    proton-viewer -m tflop16/s,time/s matmul.hatchet  # for FP16 throughput and time
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
