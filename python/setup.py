@@ -307,7 +307,6 @@ def get_cmake_dir():
     python_version = sysconfig.get_python_version()
     dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
     cmake_dir = Path(get_base_dir()) / "python" / "build" / dir_name
-    cmake_dir.mkdir(parents=True, exist_ok=True)
     return cmake_dir
 
 
@@ -315,7 +314,9 @@ class CMakeClean(clean):
 
     def initialize_options(self):
         clean.initialize_options(self)
-        self.build_temp = get_cmake_dir()
+        cmake_dir = get_cmake_dir()
+        cmake_dir.mkdir(parents=True, exist_ok=True)
+        self.build_temp = cmake_dir
 
 
 class CMakeBuildPy(build_py):
@@ -469,7 +470,11 @@ class CMakeBuild(build_ext):
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
-        subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
+        # Use TRITON_REBUILD_ALL=OFF to build only changed files. Ensure that the ninja_dir
+        # was preserved from the previous build.
+        if check_env_flag("TRITON_REBUILD_ALL", "ON") or not os.path.exists(cmake_dir):
+          cmake_dir.mkdir(parents=True, exist_ok=True)
+          subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
