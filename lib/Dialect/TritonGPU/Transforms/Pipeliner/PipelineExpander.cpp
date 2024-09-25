@@ -130,7 +130,8 @@ bool LoopPipelinerInternal::initializeLoopInfo(
 
   dynamicLoop = true;
 
-  auto getIntegerAttrFromValue = [](mlir::Value value) -> std::optional<mlir::IntegerAttr> {
+  auto getIntegerAttrFromValue =
+      [](mlir::Value value) -> std::optional<mlir::IntegerAttr> {
     auto constantOp = value.getDefiningOp<arith::ConstantOp>();
     if (!constantOp) {
       // Not defined by a ConstantOp
@@ -161,7 +162,8 @@ bool LoopPipelinerInternal::initializeLoopInfo(
         PERF_WARNING(forOp, "fewer loop iterations than pipeline stages");
         return false;
       } else {
-        PERF_WARNING(forOp, "fewer loop iterations than pipeline stages. The loop will be treated as a dynamic loop");
+        PERF_WARNING(forOp, "fewer loop iterations than pipeline stages. The "
+                            "loop will be treated as a dynamic loop");
         maxStage = 0;
       }
     }
@@ -279,7 +281,8 @@ bool LoopPipelinerInternal::verifySchedule() {
         continue;
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-        LDBG("--operation scheduled before its operands: " << *consumer << " ->  BAIL");
+        LDBG("--operation scheduled before its operands: " << *consumer
+                                                           << " ->  BAIL");
         PERF_WARNING(*consumer, "operation scheduled before its operands");
         return false;
       }
