@@ -82,26 +82,38 @@ Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
 struct InstructionSchedHintsRewriter
     : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
-  InstructionSchedHintsRewriter(mlir::MLIRContext *ctx, uint32_t variant)
+  InstructionSchedHintsRewriter(mlir::MLIRContext *ctx, std::string variant)
       : OpRewritePattern(ctx) {
-    assert(variant < static_cast<uint32_t>(SchedulingType::COUNT) &&
-           "instruction scheduling hint must have a valid value");
-    schedulingType = static_cast<SchedulingType>(variant);
+    std::transform(variant.begin(), variant.end(), variant.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    this->schedulingType = llvm::StringSwitch<SchedulingType>(variant)
+                               .Case("default", SchedulingType::NONE)
+                               .Case("iglp0", SchedulingType::IGLP0)
+                               .Case("iglp1", SchedulingType::IGLP1)
+                               .Default(SchedulingType::UNKNOWN);
   }
 
-  enum class SchedulingType : uint32_t { NONE = 0, IGLP_0, IGLP_1, COUNT };
+  enum class SchedulingType : uint32_t { NONE = 0, IGLP0, IGLP1, UNKNOWN };
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::InstructionSchedHint instructionSchedHint,
                   PatternRewriter &rewriter) const override {
+
+    if (this->schedulingType == SchedulingType::UNKNOWN) {
+      llvm::dbgs()
+          << "[" << getDebugName() << "]: "
+          << "unknown instruction scheduling variant has been provided\n";
+      return mlir::failure();
+    }
 
     // The switch controls whether instructions are allowed to cross the basic
     // block boundaries at the very top and at the very bottom. Note, this is
     // not supposed to be used together with IGLP OPT according to the AMDGPU
     // backend documentation.
     const bool limitSchedulingRange =
-        !(schedulingType == SchedulingType::IGLP_0 ||
-          schedulingType == SchedulingType::IGLP_1);
+        !(schedulingType == SchedulingType::IGLP0 ||
+          schedulingType == SchedulingType::IGLP1);
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
     if (limitSchedulingRange) {
@@ -112,9 +124,9 @@ struct InstructionSchedHintsRewriter
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
     switch (schedulingType) {
-    case SchedulingType::IGLP_0:
+    case SchedulingType::IGLP0:
       [[fallthrough]];
-    case SchedulingType::IGLP_1: {
+    case SchedulingType::IGLP1: {
       createIglpOpt(rewriter, loc, static_cast<int>(schedulingType) - 1);
       break;
     }
@@ -140,7 +152,7 @@ struct LowerInstructionSchedHints
     : public triton::impl::LowerInstructionSchedHintsBase<
           LowerInstructionSchedHints> {
 
-  explicit LowerInstructionSchedHints(uint32_t variant) {
+  explicit LowerInstructionSchedHints(std::string variant) {
     this->variant = variant;
   }
 
@@ -182,7 +194,7 @@ struct InsertInstructionSchedHints
 
 namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
-createLowerInstructionSchedHintsPass(uint32_t variant) {
+createLowerInstructionSchedHintsPass(std::string variant) {
   return std::make_unique<LowerInstructionSchedHints>(variant);
 }
 

@@ -48,7 +48,7 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addPass(createInsertInstructionSchedHintsPass());
   });
   m.def("lower_instruction_sched_hints",
-        [](mlir::PassManager &pm, uint32_t variant) {
+        [](mlir::PassManager &pm, std::string variant) {
           pm.addPass(createLowerInstructionSchedHintsPass(variant));
         });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,

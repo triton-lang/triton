@@ -64,12 +64,12 @@ def InsertInstructionSchedHints : Pass<"insert-instruction-sched-hints", "mlir::
 
 def LowerInstructionSchedHints : Pass<"lower-insert-instruction-sched-hints", "mlir::ModuleOp"> {
     let summary = "Lower instruction scheduling hints to LLVM intrinsics";
-    let constructor = "mlir::triton::createLowerInstructionSchedHintsPass(0)";
+    let constructor = "mlir::triton::createLowerInstructionSchedHintsPass(\"\")";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 
     let options = [
-        Option<"variant", "variant", "uint32_t", /*default*/"0",
+        Option<"variant", "variant", "std::string", /*default*/"\"default\"",
                "instruction scheduling variant">,
     ];
 }

@@ -37,7 +37,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertBuiltinFuncToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
 createInsertInstructionSchedHintsPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-createLowerInstructionSchedHintsPass(uint32_t variant);
+createLowerInstructionSchedHintsPass(std::string variant);
 
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
