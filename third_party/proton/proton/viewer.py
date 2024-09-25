@@ -189,7 +189,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=N
         metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
-        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
+        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth if depth else 100, render_header=False))
         emit_warnings(gf, metrics)
 
 
