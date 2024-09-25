@@ -13,8 +13,9 @@ def matmul_kernel_16bx8b(lhs_ptr,  # (M, K)
                          # shape information (strides)
                          M, N, K,
                          # block information
-                         block_m: tl.constexpr, block_n: tl.constexpr, block_k: tl.constexpr, dtype_a: tl.constexpr,
-                         dtype_b: tl.constexpr, mode: tl.constexpr):
+                         block_m: tl.constexpr, block_n: tl.constexpr, block_k: tl.constexpr,
+                         # different test cases
+                         dtype_a: tl.constexpr, dtype_b: tl.constexpr, mode: tl.constexpr):
     start_m = tl.program_id(0)  # start (axis m)
     start_n = tl.program_id(1)  # start (axis n)
 
@@ -70,7 +71,7 @@ def matmul_kernel_16bx8b(lhs_ptr,  # (M, K)
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 8, reason="Requires compute capability == 8")
 def test_gemm_mixed_dtype_small_tile_16bx8b(M, N, K, block_m, block_n, block_k, dtype_16b, dtype_8b, mode):
     assert M == K
-    assert K == N  # let M == K == N for input matrix to simplify the testing logic, otherwise, we need to tranpose A and B for '8bx16b'
+    assert K == N  # let M == K == N for input matrix to simplify the data initialization; Otherwise, we need to tranpose A and B for '8bx16b';
     operand_16b = torch.randn((M, K), dtype=dtype_16b, device="cuda")
     if dtype_8b == torch.int8:
         operand_8b = torch.randint(0, 127, (K, N), dtype=dtype_8b, device="cuda")
