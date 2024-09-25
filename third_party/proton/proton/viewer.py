@@ -180,7 +180,7 @@ WHERE p."name" =~ "{exclude}"
     return gf
 
 
-def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=None, format=None):
+def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)
@@ -189,7 +189,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=N
         metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
-        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth if depth else 100, render_header=False))
+        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
         emit_warnings(gf, metrics)
 
 
