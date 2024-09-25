@@ -1119,6 +1119,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   options.peelEpilogue = false;
   options.predicateFn = tt::predicateOp;
   options.supportDynamicLoops = true;
+  options.numStages = numStages;
   options.annotateFn = [](Operation *op,
                           mlir::triton::PipeliningOption::PipelinerPart part,
                           unsigned iteration) {};

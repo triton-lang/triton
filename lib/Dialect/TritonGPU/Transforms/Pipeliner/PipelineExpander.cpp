@@ -24,12 +24,17 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include <cstdint>
+#include <iostream>
+#include <optional>
 
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 
@@ -118,14 +123,25 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     ForOp op, const triton::PipeliningOption &options) {
   LDBG("Start initializeLoopInfo");
   forOp = op;
+  maxStage = options.numStages;
   ub = forOp.getUpperBound();
   lb = forOp.getLowerBound();
   step = forOp.getStep();
 
   dynamicLoop = true;
-  auto upperBoundCst = ub.getDefiningOp<arith::ConstantIndexOp>();
-  auto lowerBoundCst = lb.getDefiningOp<arith::ConstantIndexOp>();
-  auto stepCst = step.getDefiningOp<arith::ConstantIndexOp>();
+
+  auto getIntegerAttrFromValue = [](mlir::Value value) -> std::optional<mlir::IntegerAttr> {
+    auto constantOp = value.getDefiningOp<arith::ConstantOp>();
+    if (!constantOp) {
+      // Not defined by a ConstantOp
+      return std::nullopt;
+    }
+    // return constantOp.getValue().dyn_cast<mlir::IntegerAttr>();
+    return mlir::cast<mlir::IntegerAttr>(constantOp.getValue());
+  };
+  auto upperBoundCst = getIntegerAttrFromValue(ub);
+  auto lowerBoundCst = getIntegerAttrFromValue(lb);
+  auto stepCst = getIntegerAttrFromValue(step);
   if (!upperBoundCst || !lowerBoundCst || !stepCst) {
     if (!options.supportDynamicLoops) {
       LDBG("--dynamic loop not supported -> BAIL");
@@ -133,16 +149,21 @@ bool LoopPipelinerInternal::initializeLoopInfo(
       return false;
     }
   } else {
-    int64_t ubImm = upperBoundCst.value();
-    int64_t lbImm = lowerBoundCst.value();
-    int64_t stepImm = stepCst.value();
+    int64_t ubImm = upperBoundCst->getInt();
+    int64_t lbImm = lowerBoundCst->getInt();
+    int64_t stepImm = stepCst->getInt();
     int64_t numIteration = llvm::divideCeilSigned(ubImm - lbImm, stepImm);
     if (numIteration > maxStage) {
       dynamicLoop = false;
-    } else if (!options.supportDynamicLoops) {
-      LDBG("--fewer loop iterations than pipeline stages -> BAIL");
-      PERF_WARNING(forOp, "fewer loop iterations than pipeline stages");
-      return false;
+    } else {
+      LDBG("--fewer loop iterations than pipeline stages");
+      if (!options.supportDynamicLoops) {
+        PERF_WARNING(forOp, "fewer loop iterations than pipeline stages");
+        return false;
+      } else {
+        PERF_WARNING(forOp, "fewer loop iterations than pipeline stages. The loop will be treated as a dynamic loop");
+        maxStage = 0;
+      }
     }
   }
   peelEpilogue = options.peelEpilogue;
@@ -178,7 +199,6 @@ bool LoopPipelinerInternal::initializeLoopInfo(
 
   if (!verifySchedule()) {
     LDBG("--invalid schedule: " << op << " -> BAIL");
-    PERF_WARNING(op, "invalid schedule");
     return false;
   }
 
@@ -259,7 +279,8 @@ bool LoopPipelinerInternal::verifySchedule() {
         continue;
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-        consumer->emitError("operation scheduled before its operands");
+        LDBG("--operation scheduled before its operands: " << *consumer << " ->  BAIL");
+        PERF_WARNING(*consumer, "operation scheduled before its operands");
         return false;
       }
     }
