@@ -61,8 +61,10 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
     if ((in_shape[0] == 16 && inEncoding.getOpIdx() == 1) ||
         (in_shape[1] == 16 &&
          inEncoding.getOpIdx() ==
-             0)) { // In the corner case where in_shape[0] == 16 and getOpIdx()
-                   // == 1, extra elements will be loaded. It is necessary to
+             0)) { // In the corner cases (1) where in_shape[0] == 16 and
+                   // getOpIdx()
+                   // == 1, and (2) where in_shape[1] == 16 and getOpIdx == 0,
+                   // extra elements will be loaded. It is necessary to
                    // discard these additional elements.
       for (unsigned i = 0; i < values.size(); i += 16) {
         ret.push_back(values[i + 0]);
