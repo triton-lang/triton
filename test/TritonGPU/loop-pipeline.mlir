@@ -57,6 +57,7 @@
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
 
 // AMD-LABEL:  tt.func @matmul_loop
+//   AMD-DAG:   %[[C0:.*]] = arith.constant 0 : index
 //       AMD:   %{{.*}}:6 = scf.for %[[ARG5:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}})
 //       AMD:       %[[LOCAL_LOAD_32:.*]] = triton_gpu.local_load %[[ARG10]]
 //       AMD:       %[[LOCAL_LOAD_33:.*]] = triton_gpu.local_load %[[ARG11]]
@@ -80,7 +81,7 @@
 //       AMD:   %[[ADDI_23:.*]] = arith.addi %[[ADDI_22]], %{{.*}}-1
 //       AMD:   %[[DIVUI_24:.*]] = arith.divui %[[ADDI_23]], %{{.*}}
 //       AMD:   %[[ADDI_25:.*]] = arith.addi %[[DIVUI_24]], %{{.*}}-1
-//       AMD:   %[[CMPI_26:.*]] = arith.cmpi sge, %[[ADDI_25]], %{{.*}}
+//       AMD:   %[[CMPI_26:.*]] = arith.cmpi sge, %[[ADDI_25]], %[[C0]]
 //       AMD:   %[[LOCAL_LOAD_27:.*]] = triton_gpu.local_load %{{.*}}#4
 //       AMD:   %[[LOCAL_LOAD_28:.*]] = triton_gpu.local_load %{{.*}}#5
 //       AMD:   %[[MULF_29:.*]] = arith.mulf %[[LOCAL_LOAD_28]], %{{.*}}

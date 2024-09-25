@@ -922,6 +922,8 @@ def _str_to_load_cache_modifier(cache_modifier):
             cache = ir.CACHE_MODIFIER.CA
         elif cache_modifier == ".cg":
             cache = ir.CACHE_MODIFIER.CG
+        elif cache_modifier == ".cv":
+            cache = ir.CACHE_MODIFIER.CV
         else:
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
