@@ -5,6 +5,7 @@ import pytest
 import torch
 from contextlib import contextmanager
 
+
 @contextmanager
 def enable_remark_context():
     try:
@@ -12,6 +13,7 @@ def enable_remark_context():
         yield
     finally:
         os.environ['MLIR_ENABLE_REMARK'] = '0'
+
 
 def is_perf_warning_enabled():
     return os.environ.get('MLIR_ENABLE_REMARK', '0') == '1'
@@ -82,10 +84,9 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
     with enable_remark_context():
         triton.compile(
             triton.compiler.ASTSource(fn=ldst_vec, signature={0: '*i64', 1: '*i64', 2: '*fp16', 3: '*fp32', 4: '*fp16'},
-                                    constants={"XBLOCK": XBLOCK}), options={"num_warps": 1})
+                                      constants={"XBLOCK": XBLOCK}), options={"num_warps": 1})
 
     _, err = capfd.readouterr()
-
 
     assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
 
@@ -105,7 +106,7 @@ def test_remark_swp_num_stages_greater_than_loop_iters(capfd, fresh_triton_cache
     with enable_remark_context():
         triton.compile(
             triton.compiler.ASTSource(fn=kernel_pipe_num_stages_gt_loop_iters, signature={0: '*fp32', 1: '*fp32'},
-                                    constants={}), options={"cluster_dims": (1, 1, 1)})
+                                      constants={}), options={"cluster_dims": (1, 1, 1)})
 
     _, err = capfd.readouterr()
     assert ("remark: Warning: fewer loop iterations than pipeline stages. The loop will be treated as a dynamic loop"
@@ -127,21 +128,21 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
             tl.store(out_ptrs, val)
             if tl.max(val) > 0:
                 k += 1
+
     with enable_remark_context():
-        triton.compile(triton.compiler.ASTSource(fn=kernel_pipe_error, signature={0: '*fp32', 1: '*fp32'}, constants={}),
-                    options={"cluster_dims": (1, 1, 1)})
+        triton.compile(
+            triton.compiler.ASTSource(fn=kernel_pipe_error, signature={0: '*fp32', 1: '*fp32'}, constants={}),
+            options={"cluster_dims": (1, 1, 1)})
 
     _, err = capfd.readouterr()
-    
+
     import re
     # first match `if tl.max(val) > 0:`, then match `val = tl.load(in_ptrs)``
-    pattern = (
-        r"remark: Warning: operation scheduled before its operands.*"
-        r"note: called from\s+"
-        r"if tl.max\(val\) > 0:.*"
-        r"remark: The following operation depends on the above operation, which fails the pipelining.\s+"
-        r"val = tl.load\(in_ptrs\)"
-    )
+    pattern = (r"operation scheduled before its operands.*"
+               r"note: called from\s+"
+               r"if tl.max\(val\) > 0:.*"
+               r"The following operation depends on the above operation, which fails the pipelining.\s+"
+               r"val = tl.load\(in_ptrs\)")
     # Use re.DOTALL to make '.' match any character including newline
     match = re.search(pattern, err, re.DOTALL)
     # Assert that the pattern is found in the correct order

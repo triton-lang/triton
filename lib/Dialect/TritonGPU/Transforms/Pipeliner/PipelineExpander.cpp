@@ -33,7 +33,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include <cstdint>
-#include <iostream>
 #include <optional>
 
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
@@ -271,8 +270,9 @@ bool LoopPipelinerInternal::verifySchedule() {
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCyclesPerIter * distance) {
         consumer->emitError("operation scheduled before its operands");
-        producer->emitError("The following operation depends on the operation in the "
-               "previous error, which fails the pipelining.\n");
+        producer->emitError(
+            "The following operation depends on the operation in the "
+            "previous error, which fails the pipelining.\n");
         LDBG("--operation scheduled before its operands: " << *consumer
                                                            << " ->  BAIL");
         return false;
