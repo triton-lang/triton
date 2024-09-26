@@ -258,31 +258,32 @@ static SetVector<Value> getNestedOperands(Operation *op) {
 /// scheduled after its operands (producers) while adjusting for the distance
 /// between producer and consumer.
 bool LoopPipelinerInternal::verifySchedule() {
-  int64_t numCylesPerIter = opOrder.size();
+  int64_t numCyclesPerIter = opOrder.size();
   // Pre-compute the unrolled cycle of each op.
-  DenseMap<Operation *, int64_t> unrolledCyles;
-  for (int64_t cycle = 0; cycle < numCylesPerIter; cycle++) {
+  DenseMap<Operation *, int64_t> unrolledCycles;
+  for (int64_t cycle = 0; cycle < numCyclesPerIter; cycle++) {
     Operation *def = opOrder[cycle];
     auto it = stages.find(def);
     assert(it != stages.end());
     int64_t stage = it->second;
-    unrolledCyles[def] = cycle + stage * numCylesPerIter;
+    unrolledCycles[def] = cycle + stage * numCyclesPerIter;
   }
   for (Operation *consumer : opOrder) {
-    int64_t consumerCycle = unrolledCyles[consumer];
+    int64_t consumerCycle = unrolledCycles[consumer];
     for (Value operand : getNestedOperands(consumer)) {
       auto [producer, distance] = getDefiningOpAndDistance(operand);
       if (!producer)
         continue;
-      auto it = unrolledCyles.find(producer);
+      auto it = unrolledCycles.find(producer);
       // Skip producer coming from outside the loop.
-      if (it == unrolledCyles.end())
+      if (it == unrolledCycles.end())
         continue;
       int64_t producerCycle = it->second;
-      if (consumerCycle < producerCycle - numCylesPerIter * distance) {
+      if (consumerCycle < producerCycle - numCyclesPerIter * distance) {
         LDBG("--operation scheduled before its operands: " << *consumer
                                                            << " ->  BAIL");
         PERF_WARNING(*consumer, "operation scheduled before its operands");
+        producer->emitRemark() << "The following operation depends on the operation in the previous remark, which fails the pipelining.\n";
         return false;
       }
     }
