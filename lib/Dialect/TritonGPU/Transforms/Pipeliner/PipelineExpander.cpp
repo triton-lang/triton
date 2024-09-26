@@ -283,7 +283,9 @@ bool LoopPipelinerInternal::verifySchedule() {
         LDBG("--operation scheduled before its operands: " << *consumer
                                                            << " ->  BAIL");
         PERF_WARNING(*consumer, "operation scheduled before its operands");
-        producer->emitRemark() << "The following operation depends on the operation in the previous remark, which fails the pipelining.\n";
+        producer->emitRemark()
+            << "The following operation depends on the operation in the "
+               "previous remark, which fails the pipelining.\n";
         return false;
       }
     }
