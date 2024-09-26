@@ -124,8 +124,18 @@ def _get_path_to_hip_runtime_dylib():
     raise RuntimeError(f"cannot locate {lib_name} after attempted paths {paths}")
 
 
+@functools.lru_cache()
+def extra_cache_key():
+    # we need platform info (x86_64, aarch64 etc) and also HIP runtime info
+    # to avoid incompatibility with the cached objects
+    from platform import machine, system, architecture
+    import torch
+
+    return ",".join([machine(), system(), *architecture()]) + f",rocm-{torch.version.hip}"
+
+
 def compile_module_from_src(src, name):
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256((src + extra_cache_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     cache_path = cache.get_file(f"{name}.so")
     if cache_path is None:
