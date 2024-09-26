@@ -141,7 +141,7 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
     pattern = (r"operation scheduled before its operands.*"
                r"note: called from\s+"
                r"if tl.max\(val\) > 0:.*"
-               r"The following operation depends on the above operation, which fails the pipelining.\s+"
+               r"The following operation depends on the operation in the previous error, which fails the pipelining.\s+"
                r"val = tl.load\(in_ptrs\)")
     # Use re.DOTALL to make '.' match any character including newline
     match = re.search(pattern, err, re.DOTALL)
