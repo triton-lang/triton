@@ -570,7 +570,7 @@ def bench(K, dtype, tiles_per_update, reps=10):
             matmul_tma_persistent(a, b)
             time.sleep(0.01)
         with proton.scope(
-                f"matmul_kernel_device_tma_persistent M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}"):
+                f"matmul_kernel_device_tma_persistent [M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}]"):
             for _ in range(reps):
                 matmul_device_tma_persistent(a, b, tiles_per_update)
                 time.sleep(0.01)
