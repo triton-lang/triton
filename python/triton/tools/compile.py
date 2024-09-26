@@ -123,7 +123,7 @@ if __name__ == "__main__":
             arg_types.append(signature[arg_name])
             arg_names_not_1.append(arg_name)
             arg_types_not_1.append(signature[arg_name])
-        elif i in attrs["tt.equal_to_1"]:
+        elif i in attrs.equal_to_1:
             arg_names.append(arg_name)
             arg_types.append(signature[arg_name])
 

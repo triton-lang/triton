@@ -54,11 +54,11 @@ class AttrsDescriptor:
         self.property_values = {}
         self.constant_properties = set()
 
-        self.add_common_properties(params, values)
-        self.add_additional_properties(params, values)
-        self.init_slots()
+        self._add_common_properties(params, values)
+        self._add_backend_properties(params, values)
+        self._init_slots()
 
-    def add_common_properties(self, params, values):
+    def _add_common_properties(self, params, values):
         """ Add common compile-time properties """
         self.property_values["tt.divisibility"] = 16
         self.property_values["tt.equal_to_1"] = 1
@@ -83,11 +83,11 @@ class AttrsDescriptor:
             if AttrsDescriptor.is_equal_to_1(arg) and not param.do_not_specialize
         ]
 
-    def add_additional_properties(self, params=None, values=None):
+    def _add_backend_properties(self, params=None, values=None):
         """ This method is for different subclasses to implement their own compile-time properties """
         pass
 
-    def init_slots(self):
+    def _init_slots(self):
         """ Initialize the slots of this class """
         for name, val in self.arg_properties.items():
             setattr(self, name.removeprefix('tt.'), val)
@@ -142,7 +142,7 @@ class AttrsDescriptor:
         attrsDescriptor = AttrsDescriptor()
         for prop_name, param_ids in data.items():
             attrsDescriptor.arg_properties[prop_name] = param_ids
-        attrsDescriptor.init_slots()
+        attrsDescriptor._init_slots()
         return attrsDescriptor
 
     @staticmethod
@@ -159,7 +159,7 @@ class AttrsDescriptor:
         attrsDescriptor = AttrsDescriptor()
         for prop_name, prop_val in attrsDescriptor.property_values.items():
             attrsDescriptor.arg_properties[prop_name] = [i for i, h in hints.items() if h == prop_val]
-        attrsDescriptor.init_slots()
+        attrsDescriptor._init_slots()
         return attrsDescriptor
 
     @staticmethod
