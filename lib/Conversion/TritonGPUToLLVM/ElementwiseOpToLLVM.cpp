@@ -58,43 +58,31 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
   }
   if (inBitWidth == 8 && ouBitWidth == 16) {
     SmallVector<Value> ret;
-    if ((in_shape[0] == 16 && inEncoding.getOpIdx() == 1) ||
-        (in_shape[1] == 16 &&
-         inEncoding.getOpIdx() ==
-             0)) { // In the corner cases (1) where in_shape[0] == 16 and
-                   // getOpIdx()
-                   // == 1, and (2) where in_shape[1] == 16 and getOpIdx == 0,
-                   // extra elements will be loaded. It is necessary to
-                   // discard these additional elements.
-      for (unsigned i = 0; i < values.size(); i += 16) {
-        ret.push_back(values[i + 0]);
-        ret.push_back(values[i + 1]);
-        ret.push_back(values[i + 2]);
-        ret.push_back(values[i + 3]);
-        ret.push_back(values[i + 8]);
-        ret.push_back(values[i + 9]);
-        ret.push_back(values[i + 10]);
-        ret.push_back(values[i + 11]);
-      }
-    } else {
-      for (unsigned i = 0; i < values.size(); i += 16) {
-        ret.push_back(values[i + 0]);
-        ret.push_back(values[i + 1]);
-        ret.push_back(values[i + 2]);
-        ret.push_back(values[i + 3]);
-        ret.push_back(values[i + 8]);
-        ret.push_back(values[i + 9]);
-        ret.push_back(values[i + 10]);
-        ret.push_back(values[i + 11]);
-        ret.push_back(values[i + 4]);
-        ret.push_back(values[i + 5]);
-        ret.push_back(values[i + 6]);
-        ret.push_back(values[i + 7]);
-        ret.push_back(values[i + 12]);
-        ret.push_back(values[i + 13]);
-        ret.push_back(values[i + 14]);
-        ret.push_back(values[i + 15]);
-      }
+    bool loadsExtraElements =
+        in_shape[1 - inEncoding.getOpIdx()] ==
+        16; // In the corner cases (1) where in_shape[0] == 16 and getOpIdx() ==
+            // 1, and (2) where in_shape[1] == 16 and getOpIdx == 0, extra
+            // elements will be loaded. It is necessary to discard these
+            // additional elements.
+    for (unsigned i = 0; i < values.size(); i += 16) {
+      ret.push_back(values[i + 0]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 8]);
+      ret.push_back(values[i + 9]);
+      ret.push_back(values[i + 10]);
+      ret.push_back(values[i + 11]);
+      if (loadsExtraElements)
+        continue; // Discard elements that aren't needed.
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+      ret.push_back(values[i + 12]);
+      ret.push_back(values[i + 13]);
+      ret.push_back(values[i + 14]);
+      ret.push_back(values[i + 15]);
     }
     return ret;
   }
