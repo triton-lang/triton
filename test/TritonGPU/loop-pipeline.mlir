@@ -84,7 +84,7 @@
 //       AMD:   %[[SUBI_23:.*]] = arith.subi %[[UB]], %[[LB]]
 //       AMD:   %[[ADDI_24:.*]] = arith.addi %[[SUBI_23]], %[[STEP]]
 //       AMD:   %[[ADDI_25:.*]] = arith.addi %[[ADDI_24]], %[[SELECT_22]]
-//       AMD:   %[[DIVUI_26:.*]] = arith.divui %[[ADDI_25]], %[[STEP]]
+//       AMD:   %[[DIVUI_26:.*]] = arith.divsi %[[ADDI_25]], %[[STEP]]
 //       AMD:   %[[ADDI_27:.*]] = arith.addi %[[DIVUI_26]], %[[CM1]]
 //       AMD:   %[[CMPI_28:.*]] = arith.cmpi sge, %[[ADDI_27]], %[[C0]]
 //       AMD:   %[[LOCAL_LOAD_27:.*]] = triton_gpu.local_load %[[FOR]]#4

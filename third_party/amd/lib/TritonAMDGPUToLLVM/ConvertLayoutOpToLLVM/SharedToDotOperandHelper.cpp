@@ -68,9 +68,10 @@ Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
                      const SharedMemoryObject &smemObj) {
   Value base = smemObj.base;
   Type type = base.getType();
+  Type elemType = smemObj.getBaseElemType();
   for (int i = 0; i < smemObj.strides.size(); ++i) {
     Value offset = sub(i32_val(0), mul(smemObj.offsets[i], smemObj.strides[i]));
-    base = gep(ptr_ty(rewriter.getContext(), 3), type, base, offset);
+    base = gep(type, elemType, base, offset);
   }
   return base;
 }

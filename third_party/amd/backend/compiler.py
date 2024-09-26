@@ -46,6 +46,13 @@ class HIPOptions:
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
 
+    # The following option provides hints to the AMDGPU backend regarding instruction scheduling
+    # for all `tt.dot` operations in a kernel. The "default" variant preserves the default
+    # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
+    # The option is experimental and may change at any time regarding its semantics and/or may
+    # be gone entirely anytime.
+    instruction_sched_variant: str = 'default'
+
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
@@ -162,7 +169,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "0") == "1"
+        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "1") == "1"
         if amd.has_matrix_core_feature(options.arch):
             if use_new_pipeliner:
                 # In the old pipeliner we only support num_stages = 0/1, which means something
@@ -174,6 +181,7 @@ class HIPBackend(BaseBackend):
                 if options.num_stages == 0:
                     amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
+        amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
@@ -221,6 +229,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
