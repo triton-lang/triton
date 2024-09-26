@@ -146,7 +146,6 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   if (!upperBoundCst || !lowerBoundCst || !stepCst) {
     if (!options.supportDynamicLoops) {
       LDBG("--dynamic loop not supported -> BAIL");
-      PERF_WARNING(forOp, "dynamic loop not supported");
       return false;
     }
   } else {
@@ -154,7 +153,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     int64_t lbImm = lowerBoundCst->getInt();
     int64_t stepImm = stepCst->getInt();
     int64_t numIteration = llvm::divideCeilSigned(ubImm - lbImm, stepImm);
-    if (numIteration > options.numStages) {
+    if (numIteration > options.numStages - 1) {
       dynamicLoop = false;
     } else {
       LDBG("--fewer loop iterations than pipeline stages");
@@ -171,14 +170,12 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   predicateFn = options.predicateFn;
   if ((!peelEpilogue || dynamicLoop) && predicateFn == nullptr) {
     LDBG("--no epilogue or predicate set -> BAIL");
-    PERF_WARNING(forOp, "no epilogue or predicate set");
     return false;
   }
   std::vector<std::pair<Operation *, unsigned>> schedule;
   options.getScheduleFn(forOp, schedule);
   if (schedule.empty()) {
     LDBG("--empty schedule -> BAIL");
-    PERF_WARNING(forOp, "empty schedule");
     return false;
   }
 
@@ -193,7 +190,6 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!stages.contains(&op)) {
       op.emitOpError("not assigned a pipeline stage");
-      LDBG("--op not assigned a pipeline stage: " << op << " -> BAIL");
       return false;
     }
   }
@@ -210,15 +206,11 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     (void)stageNum;
     if (op == forOp.getBody()->getTerminator()) {
       op->emitError("terminator should not be assigned a stage");
-      LDBG("--terminator should not be assigned stage: " << *op << " -> BAIL");
       return false;
     }
     if (op->getBlock() != forOp.getBody()) {
       op->emitOpError("the owning Block of all operations assigned a stage "
                       "should be the loop body block");
-      LDBG("--the owning Block of all operations assigned a stage "
-           "should be the loop body block: "
-           << *op << " -> BAIL");
       return false;
     }
   }
@@ -235,8 +227,6 @@ bool LoopPipelinerInternal::initializeLoopInfo(
                    })) {
     LDBG("--only support loop carried dependency with a distance of 1 or "
          "defined outside of the loop -> BAIL");
-    PERF_WARNING(forOp, "only support loop carried dependency with a distance "
-                        "of 1 or defined outside of the loop");
     return false;
   }
   annotateFn = options.annotateFn;
@@ -280,12 +270,11 @@ bool LoopPipelinerInternal::verifySchedule() {
         continue;
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCyclesPerIter * distance) {
+        consumer->emitError("operation scheduled before its operands");
+        producer->emitError("The following operation depends on the operation in the "
+               "previous error, which fails the pipelining.\n");
         LDBG("--operation scheduled before its operands: " << *consumer
                                                            << " ->  BAIL");
-        PERF_WARNING(*consumer, "operation scheduled before its operands");
-        producer->emitRemark()
-            << "The following operation depends on the operation in the "
-               "previous remark, which fails the pipelining.\n";
         return false;
       }
     }
@@ -363,8 +352,6 @@ LogicalResult LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
             predicateFn(rewriter, newOp, predicates[predicateIdx]);
         if (predicateOp == nullptr) {
           LDBG("--predicateFn returned nullptr -> BAIL");
-          PERF_WARNING(*newOp,
-                       "cannot create predicate operation for prologue");
           return failure();
         }
         newOp = predicateOp;
@@ -619,7 +606,6 @@ LogicalResult LoopPipelinerInternal::createKernel(
           predicateFn(rewriter, newOp, predicates[useStage]);
       if (!predicateOp) {
         LDBG("--predicateFn returned nullptr -> BAIL");
-        PERF_WARNING(*newOp, "cannot create predicate operation for kernel");
         return failure();
       }
       newOp = predicateOp;
@@ -762,8 +748,6 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
             predicateFn(rewriter, newOp, predicates[currentVersion]);
         if (!predicateOp) {
           LDBG("--predicateFn returned nullptr -> BAIL");
-          PERF_WARNING(*newOp,
-                       "cannot create predicate operation for epilogue");
           return failure();
         }
         newOp = predicateOp;
@@ -838,7 +822,6 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
   LoopPipelinerInternal pipeliner;
   if (!pipeliner.initializeLoopInfo(forOp, options)) {
     LDBG("--initializeLoopInfo failed -> BAIL");
-    PERF_WARNING(forOp, "failed to initialize loop pipeliner");
     return failure();
   }
 
@@ -848,7 +831,6 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
   // 1. Emit prologue.
   if (failed(pipeliner.emitPrologue(rewriter))) {
     LDBG("--emitPrologue failed -> BAIL");
-    PERF_WARNING(forOp, "failed to emit prologue");
     return failure();
   }
 
@@ -871,7 +853,6 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
   if (failed(pipeliner.createKernel(newForOp, crossStageValues, loopArgMap,
                                     rewriter))) {
     LDBG("--createKernel failed -> BAIL");
-    PERF_WARNING(forOp, "failed to create kernel");
     return failure();
   }
 
@@ -882,7 +863,6 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
     rewriter.setInsertionPointAfter(newForOp);
     if (failed(pipeliner.emitEpilogue(rewriter, returnValues))) {
       LDBG("--emitEpilogue failed -> BAIL");
-      PERF_WARNING(forOp, "failed to emit epilogue");
       return failure();
     }
   }
