@@ -7,17 +7,14 @@ The kernels support both FP16 and FP8 data types but the FP8 implementation is o
 
 Triton and cuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
 Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.
-After profiling is done, `proton-viewer` can be used to visualize the results:
 
 .. code-block:: bash
 
     # FP8
     python 09-persistent-matmul.py --prec fp8 --K_range 128 1024 --K_step 128
-    proton-viewer -m tflop8/s,time/s matmul.hatchet
 
     # FP16
     python 09-persistent-matmul.py --prec fp16 --K_range 128 1024 --K_step 128
-    proton-viewer -m tflop16/s,time/s matmul.hatchet
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
@@ -572,9 +569,11 @@ def bench(K, dtype, tiles_per_update, reps=10):
         for _ in range(reps):
             matmul_tma_persistent(a, b)
             time.sleep(0.01)
-        for _ in range(reps):
-            matmul_device_tma_persistent(a, b, tiles_per_update)
-            time.sleep(0.01)
+        with proton.scope(
+                f"matmul_kernel_device_tma_persistent M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}"):
+            for _ in range(reps):
+                matmul_device_tma_persistent(a, b, tiles_per_update)
+                time.sleep(0.01)
 
     proton.deactivate(0)
 
