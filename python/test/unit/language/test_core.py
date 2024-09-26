@@ -4382,13 +4382,8 @@ def test_unary_math(func_str, device):
         x = torch.max(x, torch.tensor(1e-6, dtype=torch.float32, device=device))
     y = torch.zeros(shape, dtype=torch.float32, device=device)
 
-    k = kernel[(1, )](x, y, BLOCK=shape[0])
+    kernel[(1, )](x, y, BLOCK=shape[0])
     torch.allclose(getattr(torch, func_str)(x), y, rtol=1e-3)
-
-    if func_str in ['log', 'log2'] and is_cuda():
-        assert 'lg2.approx.ftz.f32' in k.asm['ptx']
-    if func_str in ['exp', 'exp2'] and is_cuda():
-        assert 'ex2.approx.ftz.f32' in k.asm['ptx']
 
 
 # -----------------------
@@ -4935,6 +4930,7 @@ layouts = [
 
 intermediate_layouts = [
     None,
+    SharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
     SharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
     SharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
     SharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
@@ -5622,3 +5618,29 @@ def test_math_extern(dtype_str, device):
     kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+
+# -----------------------
+# test loop unrolling
+# -----------------------
+
+
+def test_unroll_attr(device):
+
+    @triton.jit
+    def _kernel(dst, unroll_factor: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        for i in tl.range(0, 10, loop_unroll_factor=unroll_factor):
+            tl.atomic_add(dst + pid, i + pid)
+
+    def check_loop_unroll_count(ir, opStr, loop_unroll_factor):
+        for line in ir.splitlines():
+            if opStr in line:
+                loop_unroll_factor = loop_unroll_factor - 1
+        # Sometimes we get a remainder loop
+        assert loop_unroll_factor <= 0
+
+    # Try for all different loop unroll factors:
+    for unroll_factor in [1, 2, 4, 5, 8]:
+        h = _kernel[(1, )](torch.empty(1, device=device), unroll_factor)
+        check_loop_unroll_count(h.asm["ttir"], 'tt.atomic_rmw', unroll_factor)

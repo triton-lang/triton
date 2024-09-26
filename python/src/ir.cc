@@ -1,4 +1,4 @@
-﻿#include <pybind11/functional.h>
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -133,11 +133,6 @@ void outputWarning(Location loc, const std::string &msg) {
 
   PyErr_WarnEx(PyExc_UserWarning, (locStr + ": " + msg).c_str(),
                /*stack_level=*/2);
-}
-
-template <typename OpTy> OpTy approxMath(OpTy op) {
-  op.setFastmath(arith::FastMathFlags::afn);
-  return op;
 }
 
 } // anonymous namespace
@@ -1453,27 +1448,27 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_exp",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::ExpOp>(val));
+             return self.create<math::ExpOp>(val);
            })
       .def("create_exp2",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::Exp2Op>(val));
+             return self.create<math::Exp2Op>(val);
            })
       .def("create_cos",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::CosOp>(val));
+             return self.create<math::CosOp>(val);
            })
       .def("create_sin",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::SinOp>(val));
+             return self.create<math::SinOp>(val);
            })
       .def("create_log",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::LogOp>(val));
+             return self.create<math::LogOp>(val);
            })
       .def("create_log2",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::Log2Op>(val));
+             return self.create<math::Log2Op>(val);
            })
       .def("create_erf",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1551,17 +1546,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
-              const std::string &message, const std::string &fileName,
-              const std::string &funcName, unsigned lineNo) -> void {
+              const std::string &message) -> void {
              auto messageAttr = StringAttr::get(self.getBuilder().getContext(),
                                                 llvm::StringRef(message));
-             auto fileNameAttr = StringAttr::get(self.getBuilder().getContext(),
-                                                 llvm::StringRef(fileName));
-             auto funcNameAttr = StringAttr::get(self.getBuilder().getContext(),
-                                                 llvm::StringRef(funcName));
-             auto lineNoAttr = self.getBuilder().getI32IntegerAttr(lineNo);
-             self.create<AssertOp>(condition, messageAttr, fileNameAttr,
-                                   funcNameAttr, lineNoAttr);
+             self.create<AssertOp>(condition, messageAttr);
            })
       .def("create_assume",
            [](TritonOpBuilder &self, Value &condition) {
