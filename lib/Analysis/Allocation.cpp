@@ -69,8 +69,11 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
   }
 
   if (shouldUseDistSmem(srcLayout, dstLayout)) {
-    // TODO: padding to avoid bank conflicts
-    return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
+    auto shape = convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
+    for (auto &dim : shape) {
+      dim += 1; // Add padding to avoid bank conflicts
+    }
+    return shape;
   }
 
   assert(srcLayout && dstLayout && "Unexpected layout in getRepShapeForCvt()");
