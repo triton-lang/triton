@@ -135,3 +135,4 @@ def test_remark_swp_op_before_operands(capfd):
     os.environ["MLIR_ENABLE_REMARK"] = "0"
     assert ("remark: Warning: operation scheduled before its operands"
             in err), "expect performance warning remark:" + err
+    assert ("The following operation depends on the above operation" in err), "expect performance warning remark:" + err
