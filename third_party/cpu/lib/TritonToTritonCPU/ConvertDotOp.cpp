@@ -110,8 +110,7 @@ struct ConvertDotOp : public triton::impl::ConvertDotOpBase<ConvertDotOp> {
     RewritePatternSet patterns(context);
     patterns.add<DotOpConversion>(typeConverter, context);
 
-    if (failed(applyPartialConversionNoBuildMaterializations(
-            mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };

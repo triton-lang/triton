@@ -168,8 +168,7 @@ struct ConvertControlFlowOps
       RewritePatternSet patterns(context);
       patterns.add<OpTypeConversion<scf::YieldOp>>(typeConverter, context);
       patterns.add<OpTypeConversion<scf::ConditionOp>>(typeConverter, context);
-      if (failed(applyPartialConversionNoBuildMaterializations(
-              mod, convTarget, std::move(patterns))))
+      if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
         return signalPassFailure();
     }
 
@@ -180,8 +179,7 @@ struct ConvertControlFlowOps
     {
       RewritePatternSet patterns(context);
       patterns.add<SCFIfPattern>(typeConverter, context);
-      if (failed(applyPartialConversionNoBuildMaterializations(
-              mod, convTarget, std::move(patterns))))
+      if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
         return signalPassFailure();
     }
 
@@ -197,8 +195,7 @@ struct ConvertControlFlowOps
       RewritePatternSet patterns(context);
       patterns.add<ForOpConversion>(typeConverter, context);
       patterns.add<WhileOpConversion>(typeConverter, context);
-      if (failed(applyPartialConversionNoBuildMaterializations(
-              mod, convTarget, std::move(patterns))))
+      if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
         return signalPassFailure();
     }
   }

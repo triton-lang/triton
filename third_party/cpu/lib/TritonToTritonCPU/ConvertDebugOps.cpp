@@ -109,8 +109,7 @@ struct ConvertDebugOps
     patterns.add<PrintOpConversion>(typeConverter, context);
     patterns.add<AssertOpConversion>(typeConverter, context);
 
-    if (failed(applyPartialConversionNoBuildMaterializations(
-            mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };

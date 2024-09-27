@@ -15,6 +15,19 @@ TritonToTritonCPUTypeConverter::TritonToTritonCPUTypeConverter() {
     return VectorType::get(tensorTy.getShape(), elemTy);
   });
 
+  addArgumentMaterialization([&](OpBuilder &builder, Type type,
+                                 ValueRange inputs,
+                                 Location loc) -> std::optional<Value> {
+    if (isa<TensorType>(type))
+      return builder.create<UnrealizedConversionCastOp>(loc, type, inputs)
+          .getResult(0);
+    llvm::errs() << "Inputs: ";
+    llvm::interleaveComma(inputs, llvm::errs());
+    llvm::errs() << "\n";
+    llvm::errs() << "Type: " << type << "\n";
+    llvm_unreachable("Unexpected argument materizalization");
+  });
+
   // Converted ops produce vectors instead of tensors. Provide conversion
   // here for users.
   addSourceMaterialization([&](OpBuilder &builder, Type type, ValueRange inputs,
@@ -29,6 +42,10 @@ TritonToTritonCPUTypeConverter::TritonToTritonCPUTypeConverter() {
     if (isa<VectorType>(type))
       return builder.create<UnrealizedConversionCastOp>(loc, type, inputs)
           .getResult(0);
+    llvm::errs() << "Inputs: ";
+    llvm::interleaveComma(inputs, llvm::errs());
+    llvm::errs() << "\n";
+    llvm::errs() << "Type: " << type << "\n";
     llvm_unreachable("Unexpected target materizalization");
   });
 }

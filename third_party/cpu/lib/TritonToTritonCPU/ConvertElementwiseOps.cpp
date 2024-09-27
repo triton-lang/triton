@@ -253,8 +253,7 @@ struct ConvertElementwiseOps
     patterns.add<ClampFOpConversion>(typeConverter, context);
     patterns.add<FpToFpOpConversion>(typeConverter, context);
 
-    if (failed(applyPartialConversionNoBuildMaterializations(
-            mod, convTarget, std::move(patterns))))
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
   }
 };
