@@ -216,11 +216,11 @@ static void createTMAAsyncCopy(
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are imcompatible shared
-// encodings set `incompatible` to true.
+// encodings, raise assertion, since incompatible shared encoding has been
+// handled in splitLoadsForIncompatible.
 static std::optional<ttg::SharedEncodingAttr>
-getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
+getSharedEncIfAllUsersAreDotEnc(Value val) {
   ttg::SharedEncodingAttr attr;
-  incompatible = false;
   for (Operation *user : val.getUsers()) {
     ttg::SharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
@@ -230,8 +230,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
-      if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0), incompatible)
-               .has_value())
+      if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0)).has_value())
         return std::nullopt;
     } else {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
@@ -249,10 +248,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
           bitWidth, /*needTrans=*/false);
     }
     // Check that the shared encodings needed by the users are compatible.
-    if (attr != nullptr && attr != tempAttr) {
-      incompatible = true;
-      return std::nullopt;
-    }
+    if (attr != nullptr)
+      assert(attr == tempAttr && "incompatible shared encoding");
     attr = tempAttr;
   }
   return attr;
@@ -442,13 +439,9 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         loadInfo.sharedEncoding =
             getSharedEncoding(op, /*loadIsMMAv3=*/true).value_or(nullptr);
       } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
-        bool incompatible = false;
         loadInfo.sharedEncoding =
-            getSharedEncIfAllUsersAreDotEnc(op->getResult(0), incompatible)
-                .value_or(nullptr);
-        // If we can't agree on a shared encoding skip pipelinig the load.
-        if (incompatible)
-          continue;
+            getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
+
         // HACK: Triton LLVM codegen has a bug where local_loads from #shared to
         // #mma layout can lead to invalid code if the loaded shape is smaller
         // than the mma tile (e.g. loading a 128x1 tensor for an MMAv2 dot with
@@ -514,9 +507,87 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
   return loadToInfo;
 }
 
+// Split users to groups, each group has the same shared encoding.
+// If not all users are Dot encoding, return empty vector.
+static DenseMap<ttg::SharedEncodingAttr, SmallVector<Operation *>>
+handleIncompatibleSharedEncoding(Operation *loadOp) {
+  DenseMap<ttg::SharedEncodingAttr, SmallVector<Operation *>> loadGroups;
+  // Go through transitive uses of the loadOp in the same block.
+  for (Operation *user : loadOp->getUsers()) {
+    if (user->getBlock() != loadOp->getBlock())
+      continue;
+    if (user->getNumResults() != 1)
+      return loadGroups;
+
+    ttg::SharedEncodingAttr tempAttr;
+    if (auto memDesc =
+            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
+      tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
+      loadGroups[tempAttr].push_back(user);
+    } else {
+      if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
+        return loadGroups;
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
+          cast<TensorOrMemDesc>(user->getResult(0).getType()).getEncoding());
+      if (!dotOpEnc)
+        return loadGroups;
+      auto srcTy = cast<TensorOrMemDesc>(loadOp->getResult(0).getType());
+      auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
+      auto order = ttg::getOrder(srcTy.getEncoding());
+      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+      tempAttr = ttg::SharedEncodingAttr::get(
+          loadOp->getContext(), dotOpEnc, srcTy.getShape(),
+          ttg::getOrder(srcTy.getEncoding()),
+          ttg::getCTALayout(srcTy.getEncoding()),
+          srcTy.getElementType().getIntOrFloatBitWidth(), /*needTrans=*/false);
+      loadGroups[tempAttr].push_back(user);
+    }
+  }
+  return loadGroups;
+}
+
+// Clone loads so each group of uses with same shared encoding will have a
+// corresponding Load.
+static void splitLoadsForIncompatible(
+    OpBuilder &builder, Operation *loadOp,
+    DenseMap<ttg::SharedEncodingAttr, SmallVector<Operation *>> &lGroups) {
+  // The first group will use the original load, create new loads for other
+  // groups.
+  unsigned idx = 0;
+  builder.setInsertionPointAfter(loadOp);
+  for (auto pair : lGroups) {
+    SmallVector<Operation *> &group = pair.second;
+    if (idx++ == 0)
+      continue;
+    Operation *newLoad = builder.clone(*loadOp);
+    for (auto *user : group) {
+      user->replaceUsesOfWith(loadOp->getResult(0), newLoad->getResult(0));
+    }
+  }
+}
+
+static void splitLoadsWithIncompatibleEncoding(scf::ForOp forOp) {
+  // Get the list of all loads.
+  SmallVector<Operation *> loads;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
+      loads.push_back(&op);
+    }
+  }
+  OpBuilder builder(forOp);
+  for (auto *loadOp : loads) {
+    auto lGroups = handleIncompatibleSharedEncoding(loadOp);
+    LDBG("groups with different encoding: " << lGroups.size() << " "
+                                            << *loadOp);
+    if (lGroups.size() > 1)
+      splitLoadsForIncompatible(builder, loadOp, lGroups);
+  }
+}
+
 static llvm::MapVector<Operation *, LoadInfo>
 scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
               DenseSet<Operation *> &rootUsers, int numStages) {
+
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
@@ -1054,6 +1125,8 @@ static void invalidateBarriers(OpBuilder &builder,
 
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
+  splitLoadsWithIncompatibleEncoding(forOp);
+
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
   // a scaffold for the final schedule.
   DenseSet<Operation *> rootUsers;
