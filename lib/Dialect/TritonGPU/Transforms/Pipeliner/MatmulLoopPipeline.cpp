@@ -392,17 +392,40 @@ static bool loadIsMMAv3(Operation *loadOp) {
   return oldOrder == newOrder;
 }
 
-static llvm::MapVector<Operation *, LoadInfo>
-assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+static bool hasSharedEncodingHelper(Operation *loadOp) {
+  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
+  // If the allocs don't all have the same encoding, bail.
+  if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
+        return isa<ttg::LocalAllocOp>(user);
+      })) {
+    ttg::SharedEncodingAttr localAllocEnc;
+    for (auto user : loadOp->getUsers()) {
+      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
+      if (!localAlloc)
+        continue;
+      auto enc = mlir::cast<ttg::SharedEncodingAttr>(
+          localAlloc.getType().getEncoding());
+      if (!localAllocEnc) {
+        localAllocEnc = enc;
+      }
+      if (enc != localAllocEnc)
+        return false;
+    }
+    return true;
+  }
+  return true;
+}
+
+// Check to see if loads can be pipelined.
+static llvm::DenseSet<Operation *>
+filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
                         &loadOpToIndLevelAndUse,
                     tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo;
-
-  for (auto &[op, dist, use] : loadOpToIndLevelAndUse) {
-    if (loadToInfo.count(op))
+  llvm::DenseSet<Operation *> loadsToPipeline;
+  for (auto &[op, dist_, use] : loadOpToIndLevelAndUse) {
+    if (loadsToPipeline.count(op))
       // TODO pawel: err, we'd need to verify that the distance is the same
       continue;
-    LoadInfo loadInfo;
 
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       assert(!isLoadFromTensorPtr(loadOp) &&
@@ -429,6 +452,62 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         continue;
     }
 
+    bool loadIsMMAV3 = false, hasSharedEncoding = false;
+    if (use->hasTrait<OpTrait::DotLike>()) {
+      if (loadIsMMAv3(op)) {
+        loadIsMMAV3 = true;
+        hasSharedEncoding = true;
+      } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
+        hasSharedEncoding = true;
+      } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
+        assert(false && "FIXME");
+      }
+    } else if (auto loadOp = dyn_cast<tt::LoadOp>(use)) {
+      // The use of this loadOp is another loadOp. If the use is not in the
+      // loadsToPipeline already, it means that the use is not valid for
+      // pipelining for some reason. We should skip this loadOp, too. Note that
+      // we have an assumption that distAndUse.second (i.e. the use of this
+      // loadOp) has already be processed in a previous loop iteration. This
+      // assumption is held by how loadOpsToIndirectionLevelAndUse recursively
+      // collects loadOpToIndLevelAndUse using DFS.
+      if (loadsToPipeline.count(loadOp) == 0) {
+        continue;
+      }
+    }
+
+    // If we still don't have a shared encoding, try a "generic" shared
+    // encoding.
+    if (!hasSharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
+      if (loadIsMMAV3)
+        hasSharedEncoding = true;
+      else
+        hasSharedEncoding = hasSharedEncodingHelper(op);
+    }
+
+    // If that still didn't work, bail on pipelining this load.
+    if (!hasSharedEncoding) {
+      continue;
+    }
+    loadsToPipeline.insert(op);
+  }
+  return loadsToPipeline;
+}
+
+static llvm::MapVector<Operation *, LoadInfo>
+assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+                        &loadOpToIndLevelAndUse,
+                    llvm::DenseSet<Operation *> &loadsToPipeline,
+                    tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  llvm::MapVector<Operation *, LoadInfo> loadToInfo;
+
+  for (auto &[op, dist, use] : loadOpToIndLevelAndUse) {
+    if (!loadsToPipeline.count(op))
+      continue;
+    if (loadToInfo.count(op))
+      // TODO pawel: err, we'd need to verify that the distance is the same
+      continue;
+    LoadInfo loadInfo;
+
     if (use->hasTrait<OpTrait::DotLike>()) {
       loadInfo.usedByDot = true;
       if (loadIsMMAv3(op)) {
@@ -441,17 +520,6 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
         loadInfo.sharedEncoding =
             getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
-      }
-    } else if (auto loadOp = dyn_cast<tt::LoadOp>(use)) {
-      // The use of this loadOp is another loadOp. If the use is not in the
-      // loadsToPipeline already, it means that the use is not valid for
-      // pipelining for some reason. We should skip this loadOp, too. Note that
-      // we have an assumption that distAndUse.second (i.e. the use of this
-      // loadOp) has already be processed in a previous loop iteration. This
-      // assumption is held by how loadOpsToIndirectionLevelAndUse recursively
-      // collects loadOpToIndLevelAndUse using DFS.
-      if (loadToInfo.count(loadOp) == 0) {
-        continue;
       }
     }
 
@@ -472,6 +540,10 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
     }
     loadToInfo[op] = loadInfo;
   }
+  // Make sure all loads in loadsToPipeline are in loadToInfo.
+  for (auto *load : loadsToPipeline)
+    assert(loadToInfo.count(load) &&
+           "pipelined loads should have sharedEncoding");
 
   return loadToInfo;
 }
@@ -553,27 +625,15 @@ static void splitLoadsWithIncompatibleEncoding(scf::ForOp forOp) {
   }
 }
 
-static llvm::MapVector<Operation *, LoadInfo>
-scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
-              DenseSet<Operation *> &rootUsers, int numStages) {
+static llvm::DenseSet<Operation *>
+scheduleLoads(scf::ForOp forOp,
+              llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+                  &loadOpToIndLevelAndUse,
+              tt::CoarseSchedule &schedule, DenseSet<Operation *> &rootUsers,
+              int numStages) {
 
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
-
-  // Get all loads that are (transitively) used by dot ops and their distance
-  // to the dot op.
-  llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
-      loadOpToIndLevelAndUse = loadOpsToIndirectionLevelAndUse(forOp);
-  LLVM_DEBUG({
-    LDBG("Found " << loadOpToIndLevelAndUse.size() << " loads to pipeline:");
-    for (const auto &[l, i, u] : loadOpToIndLevelAndUse) {
-      LDBG("  - load: " << *l);
-      LDBG("    at indirection level: " << i);
-      LDBG("    used by op: " << *u);
-    }
-  });
-  if (loadOpToIndLevelAndUse.empty())
-    return {};
 
   for (auto iter = loadOpToIndLevelAndUse.begin();
        iter != loadOpToIndLevelAndUse.end();) {
@@ -587,18 +647,16 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
     iter = iterNext;
   }
 
-  // Check which loads are good for pipelining, and assign them
-  // memory layouts.
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo =
-      assignMemoryLayouts(loadOpToIndLevelAndUse, axisInfoAnalysis);
-
-  if (loadToInfo.empty())
-    return {};
+  // Check which loads are good for pipelining.
+  llvm::DenseSet<Operation *> loadsToPipeline =
+      filterPipelinedLoad(loadOpToIndLevelAndUse, axisInfoAnalysis);
+  if (loadsToPipeline.empty())
+    return loadsToPipeline;
 
   // Calculate the stage distance between applicable loads.
   int maxIndirectionLevel = -1;
   for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse) {
-    if (loadToInfo.count(loadOp) == 0)
+    if (loadsToPipeline.count(loadOp) == 0)
       continue;
     maxIndirectionLevel = std::max(maxIndirectionLevel, dist);
   }
@@ -608,7 +666,7 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   tt::CoarseSchedule::Cluster rootUsersCluster = schedule.clusters.newAtFront();
   // Put the root uses of the loads in the last stage.
   for (auto &[loadOp, dist, use] : loadOpToIndLevelAndUse) {
-    if (loadToInfo.count(loadOp) == 0)
+    if (loadsToPipeline.count(loadOp) == 0)
       continue;
     // Non-LoadOp(s) are the root uses of all LoadOp(s) and should be
     // always present in the opInfo
@@ -624,20 +682,12 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   }
   // Assign stages to the loads.
   for (auto [loadOp, indLevel, _] : loadOpToIndLevelAndUse) {
-    if (loadToInfo.count(loadOp) == 0)
+    if (loadsToPipeline.count(loadOp) == 0)
       continue;
     int stage = (maxIndirectionLevel - indLevel) * stagesBetweenLoads;
     schedule.insert(loadOp, stage, loadsClusters[indLevel]);
   }
-
-  // Distance from the load to the use.
-  for (auto [loadOp, _, use] : loadOpToIndLevelAndUse) {
-    if (loadToInfo.count(loadOp) == 0)
-      continue;
-    loadToInfo[loadOp].distToUse = schedule[use].first - schedule[loadOp].first;
-  }
-
-  return loadToInfo;
+  return loadsToPipeline;
 }
 
 // Schedule the prologue and epilogue `if` ops in the loop, pushing them as
@@ -1112,9 +1162,25 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // a scaffold for the final schedule.
   DenseSet<Operation *> rootUsers;
   tt::CoarseSchedule coarseSchedule(numStages);
-  llvm::MapVector<Operation *, LoadInfo> loadToInfo =
-      scheduleLoads(forOp, coarseSchedule, rootUsers, numStages);
-  if (loadToInfo.empty())
+
+  // Get all loads that are (transitively) used by dot ops and their distance
+  // to the dot op.
+  llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+      loadOpToIndLevelAndUse = loadOpsToIndirectionLevelAndUse(forOp);
+  LLVM_DEBUG({
+    LDBG("Found " << loadOpToIndLevelAndUse.size() << " loads to pipeline:");
+    for (const auto &[l, i, u] : loadOpToIndLevelAndUse) {
+      LDBG("  - load: " << *l);
+      LDBG("    at indirection level: " << i);
+      LDBG("    used by op: " << *u);
+    }
+  });
+  if (loadOpToIndLevelAndUse.empty())
+    return false;
+
+  llvm::DenseSet<Operation *> loadsToPipeline = scheduleLoads(
+      forOp, loadOpToIndLevelAndUse, coarseSchedule, rootUsers, numStages);
+  if (coarseSchedule.opToStageAndCluster.size() == 0)
     return false;
 
   LLVM_DEBUG({
@@ -1128,6 +1194,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     LDBG("Coarse schedule with prologue and epilogue:");
     coarseSchedule.dump();
   });
+
+  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
+  tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+  llvm::MapVector<Operation *, LoadInfo> loadToInfo = assignMemoryLayouts(
+      loadOpToIndLevelAndUse, loadsToPipeline, axisInfoAnalysis);
+  if (loadToInfo.empty())
+    return false;
 
   SmallVector<Value> barriers;
   // Convert the loads into async loads and create the allocs.
