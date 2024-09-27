@@ -554,7 +554,7 @@ def bench(K, dtype, tiles_per_update, reps=10):
     if cublas is not None:
         for _ in range(reps):
             cublas_matmul(a, b)
-        time.sleep(0.01)
+            time.sleep(0.01)
     if dtype == torch.float16:
         for _ in range(reps):
             torch_matmul(a, b)
