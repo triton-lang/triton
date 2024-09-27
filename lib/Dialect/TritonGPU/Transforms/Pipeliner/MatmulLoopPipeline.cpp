@@ -1218,6 +1218,12 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
       loadOpToIndLevelAndUse, loadsToPipeline, axisInfoAnalysis);
   if (loadToInfo.empty())
     return false;
+  for (auto [loadOp, _, use] : loadOpToIndLevelAndUse) {
+    if (loadToInfo.count(loadOp) == 0)
+      continue;
+    loadToInfo[loadOp].distToUse =
+        coarseSchedule[use].first - coarseSchedule[loadOp].first;
+  }
 
   SmallVector<Value> barriers;
   // Convert the loads into async loads and create the allocs.
