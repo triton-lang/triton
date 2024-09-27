@@ -498,10 +498,7 @@ filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
     // If we still don't have a shared encoding, try a "generic" shared
     // encoding.
     if (!hasSharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
-      if (loadIsMMAV3)
-        hasSharedEncoding = true;
-      else
-        hasSharedEncoding = hasSharedEncodingHelper(op);
+      hasSharedEncoding = loadIsMMAV3 ? true : hasSharedEncodingHelper(op);
     }
 
     // If that still didn't work, bail on pipelining this load.
