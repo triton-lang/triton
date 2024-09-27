@@ -47,9 +47,10 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
     pm.addPass(mlir::triton::cpu::createConvertHistogramOp());
   });
   m.def("add_convert_reduction_op",
-        [](mlir::PassManager &pm, bool use_multidim_reduction_op) {
+        [](mlir::PassManager &pm, bool use_reduction_op,
+           bool use_multidim_reduction_op) {
           pm.addPass(mlir::triton::cpu::createConvertReductionOp(
-              use_multidim_reduction_op));
+              use_reduction_op, use_multidim_reduction_op));
         });
   m.def("add_convert_scan_op", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createConvertScanOp());

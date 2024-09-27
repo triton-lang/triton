@@ -44,9 +44,11 @@ public:
 struct ReduceOpConversion
     : public ReduceScanOpConversionBase<triton::ReduceOp,
                                         triton::ReduceReturnOp> {
-  ReduceOpConversion(bool useMultiDimReductionOp,
+  ReduceOpConversion(bool useReductionOp, bool useMultiDimReductionOp,
                      const TypeConverter &typeConverter, MLIRContext *context)
       : ReduceScanOpConversionBase(typeConverter, context) {
+
+    this->useReductionOp = useReductionOp;
     this->useMultiDimReductionOp = useMultiDimReductionOp;
   }
 
@@ -56,8 +58,8 @@ struct ReduceOpConversion
     // More simple cases with a single input and a single combine operation
     // can be mapped to a vector::MultiDimReductionOp. The resulting code
     // depends on a quality of LLVM backend and is not always perfect though.
-    if (useMultiDimReductionOp &&
-        succeeded(mapToMultiDimReductionOp(op, rewriter)))
+    if (succeeded(mapToReductionOp(op, rewriter, useReductionOp,
+                                   useMultiDimReductionOp)))
       return success();
 
     return ReduceScanOpConversionBase::matchAndRewrite(op, adaptor, rewriter);
@@ -116,9 +118,10 @@ struct ReduceOpConversion
     return res;
   }
 
-  LogicalResult
-  mapToMultiDimReductionOp(triton::ReduceOp op,
-                           ConversionPatternRewriter &rewriter) const {
+  LogicalResult mapToReductionOp(triton::ReduceOp op,
+                                 ConversionPatternRewriter &rewriter,
+                                 bool useReductionOp,
+                                 bool useMultiDimReductionOp) const {
     if (op.getNumOperands() != 1 || op.getNumResults() != 1)
       return failure();
 
@@ -156,9 +159,18 @@ struct ReduceOpConversion
     Type resTy = getTypeConverter()->convertType(op.getType(0));
     Value acc = buildInitValue(op.getLoc(), resTy, reductionKind, rewriter);
     int64_t axis = op.getAxis();
-    rewriter.replaceOpWithNewOp<vector::MultiDimReductionOp>(
-        op, resTy, reductionKind, src, acc, axis);
-    return success();
+
+    if (useReductionOp && srcTy.getShape().size() == 1) {
+      rewriter.replaceOpWithNewOp<vector::ReductionOp>(op, resTy, reductionKind,
+                                                       src, acc);
+      return success();
+    } else if (useMultiDimReductionOp) {
+      rewriter.replaceOpWithNewOp<vector::MultiDimReductionOp>(
+          op, resTy, reductionKind, src, acc, axis);
+      return success();
+    }
+
+    return failure();
   }
 
   LogicalResult detectReductionKind(Operation *op,
@@ -258,13 +270,15 @@ struct ReduceOpConversion
 
 private:
   bool useMultiDimReductionOp;
+  bool useReductionOp;
 };
 
 struct ConvertReductionOp
     : public triton::cpu::impl::ConvertReductionOpBase<ConvertReductionOp> {
   ConvertReductionOp() = default;
 
-  ConvertReductionOp(bool useMultiDimReductionOp) {
+  ConvertReductionOp(bool useReductionOp, bool useMultiDimReductionOp) {
+    this->useReductionOp = useReductionOp;
     this->useMultiDimReductionOp = useMultiDimReductionOp;
   }
 
@@ -275,8 +289,8 @@ struct ConvertReductionOp
     TritonToTritonCPUTypeConverter typeConverter;
     ReductionConversionTarget convTarget(*context, typeConverter);
     RewritePatternSet patterns(context);
-    patterns.add<ReduceOpConversion>(useMultiDimReductionOp, typeConverter,
-                                     context);
+    patterns.add<ReduceOpConversion>(useReductionOp, useMultiDimReductionOp,
+                                     typeConverter, context);
 
     if (failed(applyPartialConversionNoBuildMaterializations(
             mod, convTarget, std::move(patterns))))
@@ -295,8 +309,9 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertReductionOp() {
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertReductionOp(bool useMultiDimReductionOp) {
-  return std::make_unique<ConvertReductionOp>(useMultiDimReductionOp);
+createConvertReductionOp(bool useReductionOp, bool useMultiDimReductionOp) {
+  return std::make_unique<ConvertReductionOp>(useReductionOp,
+                                              useMultiDimReductionOp);
 }
 
 } // namespace cpu

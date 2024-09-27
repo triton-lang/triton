@@ -29,7 +29,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertControlFlowOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertHistogramOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertReductionOp();
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertReductionOp(bool useMultiDimReductionOp);
+createConvertReductionOp(bool useReductionOp, bool useMultiDimReductionOp);
 std::unique_ptr<OperationPass<ModuleOp>> createConvertScanOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertAtomicOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertDebugOps();

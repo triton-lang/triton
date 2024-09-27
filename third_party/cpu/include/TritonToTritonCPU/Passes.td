@@ -117,6 +117,10 @@ def ConvertReductionOp : Pass<"triton-cpu-convert-reduction", "mlir::ModuleOp"> 
         Option<"useMultiDimReductionOp", "use-multidim-reduction-op",
                "bool", /*default*/"false",
                "Use vector::MultiDimReductionOp and its default lowering when possible.">,
+
+        Option<"useReductionOp", "use-reduction-op",
+               "bool", /*default*/"false",
+                "Use vector::ReductionOp and its default lowering when possible.">,
     ];
 
     let dependentDialects = ["mlir::arith::ArithDialect",
