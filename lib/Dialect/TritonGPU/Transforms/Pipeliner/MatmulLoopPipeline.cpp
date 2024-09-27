@@ -213,6 +213,26 @@ static void createTMAAsyncCopy(
   loadOp.erase();
 }
 
+static bool allUsersAreDotEnc(Value val) {
+  for (Operation *user : val.getUsers()) {
+    if (user->getNumResults() != 1)
+      return false;
+    if (auto memDesc =
+            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
+      if (!allUsersAreDotEnc(user->getResult(0)))
+        return false;
+    } else {
+      if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
+        return false;
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
+          cast<TensorOrMemDesc>(user->getResult(0).getType()).getEncoding());
+      if (!dotOpEnc)
+        return false;
+    }
+  }
+  return true;
+}
+
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are imcompatible shared
@@ -460,7 +480,7 @@ filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
         hasSharedEncoding = true;
       } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
-        assert(false && "FIXME");
+        hasSharedEncoding = allUsersAreDotEnc(op->getResult(0));
       }
     } else if (auto loadOp = dyn_cast<tt::LoadOp>(use)) {
       // The use of this loadOp is another loadOp. If the use is not in the
