@@ -197,7 +197,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     // vectorized iteration through all the pointer/mask/other elements
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    const size_t valueElemNBytes = std::max<int>(1, valueElemNBits / 8);
     const int numVecs = numElems / vec;
+    int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
@@ -234,9 +236,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         falseVal = v;
       }
 
-      int64_t ptrAlignment = getPtrAlignment(ptr);
       Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
-                             ptrAlignment, cacheMod);
+                             ptrAlignmentBytes, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -299,9 +300,10 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    const size_t dtsize =
-        std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
-    const size_t valueElemNBits = dtsize * 8;
+    const size_t valueElemNBits =
+        std::max<int>(8, valueElemTy.getIntOrFloatBitWidth());
+    const size_t valueElemNBytes = valueElemNBits * 8;
+    int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
     auto cacheMod = op.getCache();
     const int numVecs = elemsPerThread / vec;
@@ -333,8 +335,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
             rewriter, loc, this->getTypeConverter()->getIndexType(), s);
         storeVal = insert_element(vecTy, storeVal, otherElem, indexVal);
       }
-      int64_t ptrAlignment = getPtrAlignment(ptr);
-      llStore(rewriter, loc, ptr, storeVal, pred, ptrAlignment, cacheMod);
+      llStore(rewriter, loc, ptr, storeVal, pred, ptrAlignmentBytes, cacheMod);
     } // end vec
     rewriter.eraseOp(op);
     return success();
