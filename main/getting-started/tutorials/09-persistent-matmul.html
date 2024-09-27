@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Persistent FP8 Matmul &mdash; Triton  documentation</title>
+  <title>Persistent Matmul &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
@@ -60,7 +60,7 @@
 <li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
 <li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
-<li class="toctree-l2 current"><a class="current reference internal" href="#">Persistent FP8 Matmul</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Persistent Matmul</a></li>
 </ul>
 </li>
 </ul>
@@ -97,7 +97,7 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="index.html">Tutorials</a></li>
-      <li class="breadcrumb-item active">Persistent FP8 Matmul</li>
+      <li class="breadcrumb-item active">Persistent Matmul</li>
       <li class="wy-breadcrumbs-aside">
             <a href="../../_sources/getting-started/tutorials/09-persistent-matmul.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -112,14 +112,32 @@
 <p><a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py"><span class="std std-ref">Go to the end</span></a>
 to download the full example code.</p>
 </div>
-<section class="sphx-glr-example-title" id="persistent-fp8-matmul">
-<span id="sphx-glr-getting-started-tutorials-09-persistent-matmul-py"></span><h1>Persistent FP8 Matmul<a class="headerlink" href="#persistent-fp8-matmul" title="Link to this heading">¶</a></h1>
+<section class="sphx-glr-example-title" id="persistent-matmul">
+<span id="sphx-glr-getting-started-tutorials-09-persistent-matmul-py"></span><h1>Persistent Matmul<a class="headerlink" href="#persistent-matmul" title="Link to this heading">¶</a></h1>
 <p>This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
-It includes various matmul methods, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches, and only supports GPUs with compute capability &gt;= 9.0.
-Triton and CuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
+Various matmul methods are included, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches.
+The kernels support both FP16 and FP8 data types but the FP8 implementation is only available on CUDA devices with compute capability &gt;= 9.0.</p>
+<p>Triton and cuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
 Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># FP8</span>
+python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<span class="w"> </span>--prec<span class="w"> </span>fp8<span class="w"> </span>--K_range<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span>--K_step<span class="w"> </span><span class="m">128</span>
+
+<span class="c1"># FP16</span>
+python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<span class="w"> </span>--prec<span class="w"> </span>fp16<span class="w"> </span>--K_range<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span>--K_step<span class="w"> </span><span class="m">128</span>
+</pre></div>
+</div>
+<p>Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅
 M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅
+203.092 13.535 ROOT
+├─ nan 0.049 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
+├─ nan 0.044 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
+├─ 213.866 3.213 cublas [M=8192, N=8192, K=512]
+│  └─ nan 3.213 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 195.184 3.521 matmul_kernel [M=8192, N=8192, K=512]
+├─ 196.408 3.499 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 214.116 3.209 torch [M=8192, N=8192, K=512]
+   └─ nan 3.209 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -154,12 +172,12 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">ret</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">],</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;N&quot;</span><span class="p">],</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;K&quot;</span><span class="p">]</span>
     <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">kernel</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> [M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">]&quot;</span>
-    <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;flops8&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span>
     <span class="k">if</span> <span class="s2">&quot;c_ptr&quot;</span> <span class="ow">in</span> <span class="n">args</span><span class="p">:</span>
         <span class="n">bytes_per_elem</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;c_ptr&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">bytes_per_elem</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;FP8_OUTPUT&quot;</span><span class="p">]</span> <span class="k">else</span> <span class="mi">2</span>
-    <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;bytes&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">bytes_per_elem</span> <span class="o">*</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">)</span>
+    <span class="n">ret</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;flops</span><span class="si">{</span><span class="n">bytes_per_elem</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">8</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span>
+    <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;bytes&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">bytes_per_elem</span> <span class="o">*</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">ret</span>
 
 
@@ -446,7 +464,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
     <span class="n">dtype</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">dtype</span>
 
-    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
     <span class="n">desc_a</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">tools</span><span class="o">.</span><span class="n">experimental_descriptor</span><span class="o">.</span><span class="n">create_2d_tma_descriptor</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">(),</span> <span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>
                                                                            <span class="n">configs</span><span class="p">[</span><span class="n">dtype</span><span class="p">][</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">],</span>
                                                                            <span class="n">configs</span><span class="p">[</span><span class="n">dtype</span><span class="p">][</span><span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">],</span>
@@ -599,7 +617,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
     <span class="n">dtype</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">dtype</span>
 
-    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
     <span class="n">NUM_SMS</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
     <span class="n">tma_size</span> <span class="o">=</span> <span class="mi">128</span>
     <span class="n">workspace</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">NUM_SMS</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">*</span> <span class="n">tma_size</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">uint8</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
@@ -629,9 +647,9 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">dtype</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">dtype</span>
     <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
     <span class="n">bytes_per_elem</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span>
-    <span class="n">flops_str</span> <span class="o">=</span> <span class="s2">&quot;flops8&quot;</span> <span class="k">if</span> <span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span> <span class="k">else</span> <span class="s2">&quot;flops&quot;</span>
-    <span class="k">with</span> <span class="n">proton</span><span class="o">.</span><span class="n">scope</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cublas M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-                      <span class="p">{</span><span class="s2">&quot;bytes&quot;</span><span class="p">:</span> <span class="n">bytes_per_elem</span> <span class="o">*</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">),</span> <span class="n">flops_str</span><span class="p">:</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">}):</span>
+    <span class="n">flops_str</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;flops</span><span class="si">{</span><span class="n">bytes_per_elem</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">8</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">with</span> <span class="n">proton</span><span class="o">.</span><span class="n">scope</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cublas [M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">]&quot;</span><span class="p">,</span>
+                      <span class="p">{</span><span class="s2">&quot;bytes&quot;</span><span class="p">:</span> <span class="n">bytes_per_elem</span> <span class="o">*</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span><span class="p">),</span> <span class="n">flops_str</span><span class="p">:</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">}):</span>
         <span class="n">cublas</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">c</span>
 
@@ -639,11 +657,10 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
 <span class="k">def</span> <span class="nf">torch_matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
     <span class="n">M</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span>
     <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span>
-    <span class="n">dtype</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">dtype</span>
     <span class="n">bytes_per_elem</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span>
-    <span class="n">flops_str</span> <span class="o">=</span> <span class="s2">&quot;flops8&quot;</span> <span class="k">if</span> <span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span> <span class="k">else</span> <span class="s2">&quot;flops&quot;</span>
-    <span class="k">with</span> <span class="n">proton</span><span class="o">.</span><span class="n">scope</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;torch M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-                      <span class="p">{</span><span class="s2">&quot;bytes&quot;</span><span class="p">:</span> <span class="n">bytes_per_elem</span> <span class="o">*</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">),</span> <span class="n">flops_str</span><span class="p">:</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">}):</span>
+    <span class="n">flops_str</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;flops</span><span class="si">{</span><span class="n">bytes_per_elem</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">8</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">with</span> <span class="n">proton</span><span class="o">.</span><span class="n">scope</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;torch [M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">]&quot;</span><span class="p">,</span>
+                      <span class="p">{</span><span class="s2">&quot;bytes&quot;</span><span class="p">:</span> <span class="n">bytes_per_elem</span> <span class="o">*</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span><span class="p">),</span> <span class="n">flops_str</span><span class="p">:</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">}):</span>
         <span class="n">c</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">c</span>
 
@@ -676,10 +693,8 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
         <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">reps</span><span class="p">):</span>
             <span class="n">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
             <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span>
-        <span class="n">flops_str</span> <span class="o">=</span> <span class="s2">&quot;flops8&quot;</span> <span class="k">if</span> <span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span> <span class="k">else</span> <span class="s2">&quot;flops&quot;</span>
         <span class="k">with</span> <span class="n">proton</span><span class="o">.</span><span class="n">scope</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;matmul_kernel_device_tma_persistent M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">, tiles_per_update=</span><span class="si">{</span><span class="n">tiles_per_update</span><span class="si">:</span><span class="s2">02</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-            <span class="p">{</span><span class="s2">&quot;bytes&quot;</span><span class="p">:</span> <span class="n">a</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="o">*</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">),</span> <span class="n">flops_str</span><span class="p">:</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span><span class="p">}):</span>
+                <span class="sa">f</span><span class="s2">&quot;matmul_kernel_device_tma_persistent [M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">, tiles_per_update=</span><span class="si">{</span><span class="n">tiles_per_update</span><span class="si">:</span><span class="s2">02</span><span class="si">}</span><span class="s2">]&quot;</span><span class="p">):</span>
             <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">reps</span><span class="p">):</span>
                 <span class="n">matmul_device_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">tiles_per_update</span><span class="p">)</span>
                 <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span>
@@ -726,6 +741,17 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="nb">print</span><span class="p">()</span>
 
 
+<span class="k">def</span> <span class="nf">show_profile</span><span class="p">(</span><span class="n">precision</span><span class="p">,</span> <span class="n">profile_name</span><span class="p">):</span>
+    <span class="kn">import</span> <span class="nn">triton.profiler.viewer</span> <span class="k">as</span> <span class="nn">proton_viewer</span>
+    <span class="n">metrics</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;time/ms&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">precision</span> <span class="o">==</span> <span class="s1">&#39;fp8&#39;</span><span class="p">:</span>
+        <span class="n">metrics</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;tflop8/s&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">metrics</span>
+    <span class="k">elif</span> <span class="n">precision</span> <span class="o">==</span> <span class="s1">&#39;fp16&#39;</span><span class="p">:</span>
+        <span class="n">metrics</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;tflop16/s&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">metrics</span>
+    <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">profile_name</span><span class="si">}</span><span class="s2">.hatchet&quot;</span>
+    <span class="n">proton_viewer</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">metrics</span><span class="p">,</span> <span class="n">file_name</span><span class="p">,</span> <span class="n">depth</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+
+
 <span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-K&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">512</span><span class="p">)</span>
@@ -760,9 +786,10 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_step</span><span class="p">):</span>
         <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">tiles_per_update</span><span class="p">)</span>
     <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
+    <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.858 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.926 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>

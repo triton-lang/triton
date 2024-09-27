@@ -1,10 +1,22 @@
 """
-Persistent FP8 Matmul
+Persistent Matmul
 =====================
 This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
-It includes various matmul methods, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches, and only supports GPUs with compute capability >= 9.0.
-Triton and CuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
+Various matmul methods are included, such as naive, persistent, and TMA (Tensor Memory Accelerator) based approaches.
+The kernels support both FP16 and FP8 data types but the FP8 implementation is only available on CUDA devices with compute capability >= 9.0.
+
+Triton and cuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
 Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.
+
+.. code-block:: bash
+
+    # FP8
+    python 09-persistent-matmul.py --prec fp8 --K_range 128 1024 --K_step 128
+
+    # FP16
+    python 09-persistent-matmul.py --prec fp16 --K_range 128 1024 --K_step 128
+
+Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
 
 import argparse
@@ -36,12 +48,12 @@ def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
     M, N, K = args["M"], args["N"], args["K"]
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
-    ret["flops8"] = 2. * M * N * K
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
     else:
         bytes_per_elem = 1 if args["FP8_OUTPUT"] else 2
-    ret["bytes"] = bytes_per_elem * (M * K + N * K)
+    ret[f"flops{bytes_per_elem * 8}"] = 2. * M * N * K
+    ret["bytes"] = bytes_per_elem * (M * K + N * K + M * N)
     return ret
 
 
@@ -328,7 +340,7 @@ def matmul_tma_persistent(a, b):
     N, K = b.shape
     dtype = a.dtype
 
-    c = torch.zeros((M, N), device=a.device, dtype=dtype)
+    c = torch.empty((M, N), device=a.device, dtype=dtype)
     desc_a = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K,
                                                                            configs[dtype]["BLOCK_SIZE_M"],
                                                                            configs[dtype]["BLOCK_SIZE_K"],
@@ -481,7 +493,7 @@ def matmul_device_tma_persistent(a, b, tiles_per_update):
     N, K = b.shape
     dtype = a.dtype
 
-    c = torch.zeros((M, N), device=a.device, dtype=dtype)
+    c = torch.empty((M, N), device=a.device, dtype=dtype)
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
     tma_size = 128
     workspace = torch.empty(NUM_SMS * 3 * tma_size, dtype=torch.uint8, device="cuda")
@@ -511,9 +523,9 @@ def cublas_matmul(a, b):
     dtype = a.dtype
     c = torch.empty((M, N), device=a.device, dtype=dtype)
     bytes_per_elem = a.element_size()
-    flops_str = "flops8" if dtype == torch.float8_e4m3fn else "flops"
-    with proton.scope(f"cublas M={M}, N={N}, K={K}",
-                      {"bytes": bytes_per_elem * (M * K + N * K), flops_str: 2. * M * N * K}):
+    flops_str = f"flops{bytes_per_elem * 8}"
+    with proton.scope(f"cublas [M={M}, N={N}, K={K}]",
+                      {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
         cublas.matmul(a, b, c)
     return c
 
@@ -521,11 +533,10 @@ def cublas_matmul(a, b):
 def torch_matmul(a, b):
     M, K = a.shape
     N, K = b.shape
-    dtype = a.dtype
     bytes_per_elem = a.element_size()
-    flops_str = "flops8" if dtype == torch.float8_e4m3fn else "flops"
-    with proton.scope(f"torch M={M}, N={N}, K={K}",
-                      {"bytes": bytes_per_elem * (M * K + N * K), flops_str: 2. * M * N * K}):
+    flops_str = f"flops{bytes_per_elem * 8}"
+    with proton.scope(f"torch [M={M}, N={N}, K={K}]",
+                      {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
         c = torch.matmul(a, b.T)
     return c
 
@@ -558,10 +569,8 @@ def bench(K, dtype, tiles_per_update, reps=10):
         for _ in range(reps):
             matmul_tma_persistent(a, b)
             time.sleep(0.01)
-        flops_str = "flops8" if dtype == torch.float8_e4m3fn else "flops"
         with proton.scope(
-                f"matmul_kernel_device_tma_persistent M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}",
-            {"bytes": a.element_size() * (M * K + N * K), flops_str: 2. * M * N * K}):
+                f"matmul_kernel_device_tma_persistent [M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}]"):
             for _ in range(reps):
                 matmul_device_tma_persistent(a, b, tiles_per_update)
                 time.sleep(0.01)
@@ -608,6 +617,17 @@ def validate(M, N, K, dtype, tiles_per_update):
     print()
 
 
+def show_profile(precision, profile_name):
+    import triton.profiler.viewer as proton_viewer
+    metrics = ["time/ms"]
+    if precision == 'fp8':
+        metrics = ["tflop8/s"] + metrics
+    elif precision == 'fp16':
+        metrics = ["tflop16/s"] + metrics
+    file_name = f"{profile_name}.hatchet"
+    proton_viewer.parse(metrics, file_name, depth=100)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-K", type=int, required=False, default=512)
@@ -642,3 +662,4 @@ if __name__ == "__main__":
     for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
         bench(K, dtype, args.tiles_per_update)
     proton.finalize()
+    show_profile(args.prec, "matmul")

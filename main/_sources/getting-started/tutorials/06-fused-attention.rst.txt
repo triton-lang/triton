@@ -22,13 +22,15 @@ Fused Attention
 ===============
 
 This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf)
+
 Credits: OpenAI kernel team
 
 Extra Credits:
-- Original flash attention paper (https://arxiv.org/abs/2205.14135)
-- Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-642
+* Original flash attention paper (https://arxiv.org/abs/2205.14135)
+* Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
+
+.. GENERATED FROM PYTHON SOURCE LINES 15-644
 
 
 
@@ -63,25 +65,25 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     113.614686     93.864018
-    1   2048.0     140.384240    110.634780
-    2   4096.0     153.653498    124.163442
-    3   8192.0     167.642930    131.754808
-    4  16384.0     171.991315    135.473678
+    0   1024.0     114.138010     94.039804
+    1   2048.0     141.592949    110.909421
+    2   4096.0     155.274703    124.070525
+    3   8192.0     167.345080    131.534715
+    4  16384.0     173.922873    135.384019
     fused-attention-batch4-head32-d64-fwd-causal=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     158.069450    128.891679
-    1   2048.0     176.803748    127.338275
-    2   4096.0     172.317371    128.268511
-    3   8192.0     172.319083    135.085942
-    4  16384.0     174.439711    134.094117
+    0   1024.0     158.817139    128.648287
+    1   2048.0     167.184399    127.014426
+    2   4096.0     172.583945    132.783984
+    3   8192.0     172.710602    135.140063
+    4  16384.0     174.365354    134.890073
     fused-attention-batch4-head32-d64-bwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      72.734916     71.709309
-    1   2048.0      96.158020     96.765361
-    2   4096.0     115.161392    114.795719
-    3   8192.0     125.066031    125.469362
-    4  16384.0     130.517556    132.232583
+    0   1024.0      72.830523     71.723120
+    1   2048.0      96.453197     97.057323
+    2   4096.0     116.394772    115.134232
+    3   8192.0     124.510575    126.144481
+    4  16384.0     130.582635    132.869107
 
 
 
@@ -725,7 +727,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 54.835 seconds)
+   **Total running time of the script:** (0 minutes 53.561 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:

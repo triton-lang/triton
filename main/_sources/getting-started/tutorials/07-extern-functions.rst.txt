@@ -22,17 +22,19 @@ Libdevice (`tl.extra.libdevice`) function
 ==============================
 Triton can invoke a custom function from an external library.
 In this example, we will use the `libdevice` library to apply `asin` on a tensor.
-Please refer to https://docs.nvidia.com/cuda/libdevice-users-guide/index.html (CUDA) and/or https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src (HIP) regarding the semantics of all available libdevice functions.
+
+Please refer to `CUDA libdevice-users-guide <https://docs.nvidia.com/cuda/libdevice-users-guide/index.html>`_ and/or `HIP device-lib source code <https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src>`_ regarding the semantics of all available libdevice functions.
+
 In `libdevice.py`, we try to aggregate functions with the same computation but different data types together.
 For example, both `__nv_asin` and `__nv_asinf` calculate the principal value of the arc sine of the input, but `__nv_asin` operates on `double` and `__nv_asinf` operates on `float`.
 Triton automatically selects the correct underlying device function to invoke based on input and output types.
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-15
+.. GENERATED FROM PYTHON SOURCE LINES 15-17
 
 asin Kernel
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-43
+.. GENERATED FROM PYTHON SOURCE LINES 17-45
 
 .. code-block:: Python
 
@@ -71,13 +73,13 @@ asin Kernel
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 44-47
+.. GENERATED FROM PYTHON SOURCE LINES 46-49
 
 Using the default libdevice library path
 -----------------------------------------
 We can use the default libdevice library path encoded in `triton/language/math.py`
 
-.. GENERATED FROM PYTHON SOURCE LINES 47-63
+.. GENERATED FROM PYTHON SOURCE LINES 49-65
 
 .. code-block:: Python
 
@@ -112,13 +114,13 @@ We can use the default libdevice library path encoded in `triton/language/math.p
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 64-67
+.. GENERATED FROM PYTHON SOURCE LINES 66-69
 
 Customize the libdevice library path
 -------------------------------------
 We can also customize the libdevice library path by passing the path to the `libdevice` library to the `asin` kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 67-96
+.. GENERATED FROM PYTHON SOURCE LINES 69-98
 
 .. code-block:: Python
 

@@ -107,7 +107,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf) Credits: OpenAI kernel team">
+    <div class="sphx-glr-thumbcontainer" tooltip="This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf)">
 
 .. only:: html
 
@@ -124,7 +124,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="Libdevice (`tl.extra.libdevice`) function">
+    <div class="sphx-glr-thumbcontainer" tooltip="Please refer to CUDA libdevice-users-guide and/or HIP device-lib source code regarding the semantics of all available libdevice functions.">
 
 .. only:: html
 
@@ -158,7 +158,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="Persistent FP8 Matmul">
+    <div class="sphx-glr-thumbcontainer" tooltip="Triton and cuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler. Users can pass command-line arguments to specify matrix dimensions and iteration steps flexibly.">
 
 .. only:: html
 
@@ -169,7 +169,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-      <div class="sphx-glr-thumbnail-title">Persistent FP8 Matmul</div>
+      <div class="sphx-glr-thumbnail-title">Persistent Matmul</div>
     </div>
 
 

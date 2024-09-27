@@ -65,7 +65,7 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
-<li class="toctree-l2"><a class="reference internal" href="09-persistent-matmul.html">Persistent FP8 Matmul</a></li>
+<li class="toctree-l2"><a class="reference internal" href="09-persistent-matmul.html">Persistent Matmul</a></li>
 </ul>
 </li>
 </ul>
@@ -120,9 +120,9 @@ to download the full example code.</p>
 <section class="sphx-glr-example-title" id="libdevice-tl-extra-libdevice-function">
 <span id="sphx-glr-getting-started-tutorials-07-extern-functions-py"></span><h1>Libdevice (<cite>tl.extra.libdevice</cite>) function<a class="headerlink" href="#libdevice-tl-extra-libdevice-function" title="Link to this heading">¶</a></h1>
 <p>Triton can invoke a custom function from an external library.
-In this example, we will use the <cite>libdevice</cite> library to apply <cite>asin</cite> on a tensor.
-Please refer to <a class="reference external" href="https://docs.nvidia.com/cuda/libdevice-users-guide/index.html">https://docs.nvidia.com/cuda/libdevice-users-guide/index.html</a> (CUDA) and/or <a class="reference external" href="https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src">https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src</a> (HIP) regarding the semantics of all available libdevice functions.
-In <cite>libdevice.py</cite>, we try to aggregate functions with the same computation but different data types together.
+In this example, we will use the <cite>libdevice</cite> library to apply <cite>asin</cite> on a tensor.</p>
+<p>Please refer to <a class="reference external" href="https://docs.nvidia.com/cuda/libdevice-users-guide/index.html">CUDA libdevice-users-guide</a> and/or <a class="reference external" href="https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src">HIP device-lib source code</a> regarding the semantics of all available libdevice functions.</p>
+<p>In <cite>libdevice.py</cite>, we try to aggregate functions with the same computation but different data types together.
 For example, both <cite>__nv_asin</cite> and <cite>__nv_asinf</cite> calculate the principal value of the arc sine of the input, but <cite>__nv_asin</cite> operates on <cite>double</cite> and <cite>__nv_asinf</cite> operates on <cite>float</cite>.
 Triton automatically selects the correct underlying device function to invoke based on input and output types.</p>
 <section id="asin-kernel">
