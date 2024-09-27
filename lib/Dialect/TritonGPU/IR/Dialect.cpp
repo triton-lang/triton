@@ -925,6 +925,20 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 SmallVector<unsigned>
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                           Type eltTy) const {
+
+  if (auto parent = mlir::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
+    assert(shape.size() == 2);
+    auto idx = getOpIdx();
+    auto kWidth = getKWidth();
+    auto rep = parent.getMFMARepForOperands(shape, kWidth, idx);
+
+    unsigned numRows = (idx == 0) ? rep[1] : rep[1] * kWidth;
+    unsigned numCols = (idx == 0) ? rep[2] * kWidth : rep[2];
+
+    assert(idx == 0 || idx == 1);
+    return {numRows, numCols};
+  }
+
   llvm_unreachable("getElemsPerThread is not supported for dot operand");
   return SmallVector<unsigned>();
 }
