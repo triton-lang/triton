@@ -180,7 +180,7 @@ WHERE p."name" =~ "{exclude}"
     return gf
 
 
-def parse(metrics, filename, include, exclude, threshold, depth, format):
+def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)
@@ -190,10 +190,10 @@ def parse(metrics, filename, include, exclude, threshold, depth, format):
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
-        emitWarnings(gf, metrics)
+        emit_warnings(gf, metrics)
 
 
-def emitWarnings(gf, metrics):
+def emit_warnings(gf, metrics):
     if "bytes (inc)" in metrics:
         byte_values = gf.dataframe["bytes (inc)"].values
         min_byte_value = np.nanmin(byte_values)
@@ -209,7 +209,6 @@ def show_metrics(file_name):
             for raw_metric in raw_metrics:
                 raw_metric_no_unit = raw_metric.split("(")[0].strip().lower()
                 print(f"- {raw_metric_no_unit}")
-        return
 
 
 def main():

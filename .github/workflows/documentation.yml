@@ -25,7 +25,7 @@ jobs:
 
       - name: Install dependent packages
         run: |
-          sudo pip3 install tabulate cmake sphinx matplotlib myst_parser sphinx-rtd-theme pandas pytest sphinx-gallery sphinx-multiversion
+          sudo pip3 install tabulate cmake sphinx matplotlib myst_parser sphinx-rtd-theme pandas pytest sphinx-gallery sphinx-multiversion llnl-hatchet
 
       #- name: Fetch dependent branches
       #  run: |
