@@ -606,6 +606,18 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   if (loadOpToIndLevelAndUse.empty())
     return {};
 
+  for (auto iter = loadOpToIndLevelAndUse.begin();
+       iter != loadOpToIndLevelAndUse.end();) {
+    auto iterNext = iter + 1;
+    if (std::get<1>(*iter) >= numStages - 1)
+      // We assume loads with different dist are assigned to different stages.
+      // If numStages is 2, we will have no stage available for indirect loads
+      // with dist >= 1. In general, when dist is equal to numStages - 1, we
+      // should not pipeline it.
+      loadOpToIndLevelAndUse.erase(iter);
+    iter = iterNext;
+  }
+
   // Check which loads are good for pipelining, and assign them
   // memory layouts.
   llvm::MapVector<Operation *, LoadInfo> loadToInfo =
