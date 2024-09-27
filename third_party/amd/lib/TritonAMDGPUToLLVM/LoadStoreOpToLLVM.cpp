@@ -119,6 +119,10 @@ struct LoadStoreConversionBase {
     return axisAnalysisPass.getMaskAlignment(mask);
   }
 
+  unsigned getPtrAlignment(Value ptr) const {
+    return axisAnalysisPass.getPtrAlignment(ptr);
+  }
+
 protected:
   const AMD::TargetInfo &targetInfo;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
@@ -230,8 +234,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         falseVal = v;
       }
 
-      auto loadVal =
-          llLoad(rewriter, loc, ptr, vecTy, pred, falseVal, cacheMod);
+      int64_t ptrAlignment = getPtrAlignment(ptr);
+      Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
+                             ptrAlignment, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -328,7 +333,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
             rewriter, loc, this->getTypeConverter()->getIndexType(), s);
         storeVal = insert_element(vecTy, storeVal, otherElem, indexVal);
       }
-      llStore(rewriter, loc, ptr, storeVal, pred, cacheMod);
+      int64_t ptrAlignment = getPtrAlignment(ptr);
+      llStore(rewriter, loc, ptr, storeVal, pred, ptrAlignment, cacheMod);
     } // end vec
     rewriter.eraseOp(op);
     return success();

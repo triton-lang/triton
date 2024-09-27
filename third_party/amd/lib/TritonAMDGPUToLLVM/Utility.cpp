@@ -189,7 +189,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, triton::CacheModifier cm) {
+             Value pred, Value falseVal, int64_t alignment,
+             triton::CacheModifier cm) {
 
   // Try to emit llvm.intr.masked.load if we can. In theory the backend should
   // be happier because we emit less branchy code to optimize. The backend will
@@ -203,7 +204,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
     Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
     bool nt = (cm == triton::CacheModifier::CG);
     Value vecData = rewriter.create<LLVM::MaskedLoadOp>(
-        loc, vecType, ptr, maskVal, falseVal, vecSize, nt);
+        loc, vecType, ptr, maskVal, falseVal, alignment, nt);
     // If it is not a vector, remember to bitcast back to a scalar
     vecData = bitcast(vecData, elemTy);
     return vecData;
@@ -237,7 +238,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, triton::CacheModifier cm) {
+             Value pred, int64_t alignment, triton::CacheModifier cm) {
   // Try to emit llvm.intr.masked.store if we can. In theory the backend should
   // be happier because we emit less branchy code to optimize. The backend will
   // lower it down however it wants at some point.
@@ -250,7 +251,7 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
     val = bitcast(val, vecType);
     Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
     auto op =
-        rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal, vecSize);
+        rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal, alignment);
     return;
   }
 
