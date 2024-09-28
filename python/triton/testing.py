@@ -426,7 +426,16 @@ def get_max_tensorcore_tflops(dtype, clock_rate, device=None):
             ops_per_sub_core = 256
         elif dtype in [torch.float16, torch.bfloat16, torch.int16]:
             ops_per_sub_core = 512
-        elif dtype in [torch.int8, tl.float8e4nv, tl.float8e4b15, tl.float8e5]:
+        elif dtype in [
+            torch.int8,
+            torch.float8_e4m3fn,
+            torch.float8_e4m3fnuz,
+            torch.float8_e5m2,
+            torch.float8_e5m2fnuz,
+            tl.float8e4nv,
+            tl.float8e4b15,
+            tl.float8e5,
+        ]:
             ops_per_sub_core = 1024
         else:
             raise RuntimeError("dtype not supported")
