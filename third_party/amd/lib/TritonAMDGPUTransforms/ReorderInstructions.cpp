@@ -221,6 +221,22 @@ public:
           dfgop->moveBefore(block, block->begin());
       }
     }
+
+    // Sink 2nd load after local_load inside the loop
+    m.walk([&](scf::ForOp forOp) -> void {
+      SetVector<Operation *> loadOps;
+      for (Operation &op : forOp) {
+        if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
+          loadOps.insert(loadOp);
+        }
+      }
+      for (Operation &op : forOp) {
+        if (auto dotOp = dyn_cast<triton::DotOp>(&op)) {
+          loadOps[1]->moveBefore(dotOp);
+          break;
+        }
+      }
+    });
   }
 };
 
