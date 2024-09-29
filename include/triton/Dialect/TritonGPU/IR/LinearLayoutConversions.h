@@ -211,8 +211,8 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 //
 // - Verification through Linear Layout
 //
-// We can verify the offsets with the following outputs, where each element is
-// 16 bits (2 bytes):
+// We can verify the offsets with the following outputs of the corresponding
+// linear layout, where each element is 16 bits (2 bytes):
 //
 //   - register=1 -> offset=1
 //     register=2 -> offset=2
