@@ -174,11 +174,11 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 //
 // Key parameters for swizzling:
 //
-// - `perPhase`: The number of rows over which to apply a XOR operation at each
-// phase.
-// - `maxPhase`: The total number of phases.
-// - `vectorWidth`: The number of elements per vector, which is 8 in this case
-// because `stmatrix` stores 8 contiguous elements per thread.
+//   - `perPhase`: The number of rows over which to apply a XOR operation at
+//   each phase.
+//   - `maxPhase`: The total number of phases.
+//   - `vectorWidth`: The number of elements per vector, which is 8 in this case
+//   because `stmatrix` stores 8 contiguous elements per thread.
 //
 // The offset of each element within a tile is calculated using the formula:
 //
