@@ -232,7 +232,7 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 //   Note: The output dimensions are `[offset (size 16384), iteration (size
 //   1)]`.
 //
-// For index `(row=1, col=0)`, which corresponds to `reg0` and `lane=1` in
+// For index `(row=1, col=0)`, which corresponds to `reg=0` and `lane=1` in
 // `warp=0`, the offset is calculated as 72 * 2 bytes = 144 bytes.  The result
 // matches our earlier calculation.
 //
