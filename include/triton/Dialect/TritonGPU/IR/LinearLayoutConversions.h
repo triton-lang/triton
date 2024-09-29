@@ -119,7 +119,7 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 //
 //   1. Chunks: The leading dimension (i.e., the column dimension) is divided
 //   into chunks, where each chunk's size is determined by `swizzleByteSize`.
-//   2. Swizzling within Chunks: Each chunk applies a swizzling pattern to its
+//   2. Swizzling within tiles: Each tile applies a swizzling pattern to its
 //   rows to optimize memory access.
 //
 // - Concept 1: Chunks
