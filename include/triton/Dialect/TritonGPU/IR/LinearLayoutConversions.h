@@ -214,23 +214,20 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 // We can verify the offsets with the following outputs, where each element is
 // 16 bits (2 bytes):
 //
-//   - register=1 -> offset=(1, 0)
-//     register=2 -> offset=(2, 0)
-//     register=4 -> offset=(4, 0)
-//     register=8 -> offset=(16, 0)
-//     register=16 -> offset=(32, 0)
-//     register=32 -> offset=(8192, 0)
-//   - lane=1 -> offset=(72, 0)
-//     lane=2 -> offset=(144, 0)
-//     lane=4 -> offset=(288, 0)
-//     lane=8 -> offset=(512, 0)
-//     lane=16 -> offset=(8, 0)
-//   - warp=1 -> offset=(1024, 0)
-//     warp=2 -> offset=(2048, 0)
-//     warp=4 -> offset=(4096, 0)
-//
-//   Note: The output dimensions are `[offset (size 16384), iteration (size
-//   1)]`.
+//   - register=1 -> offset=1
+//     register=2 -> offset=2
+//     register=4 -> offset=4
+//     register=8 -> offset=16
+//     register=16 -> offset=32
+//     register=32 -> offset=8192
+//   - lane=1 -> offset=72
+//     lane=2 -> offset=144
+//     lane=4 -> offset=288
+//     lane=8 -> offset=512
+//     lane=16 -> offset=8
+//   - warp=1 -> offset=1024
+//     warp=2 -> offset=2048
+//     warp=4 -> offset=4096
 //
 // For index `(row=1, col=0)`, which corresponds to `reg=0` and `lane=1` in
 // `warp=0`, the offset is calculated as 72 * 2 bytes = 144 bytes.  The result
