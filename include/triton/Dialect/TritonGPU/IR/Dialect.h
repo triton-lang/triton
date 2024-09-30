@@ -152,6 +152,12 @@ void dumpHWLayout(RankedTensorType tensorType);
 // Return a string representation of the layout of the tensor.
 std::string getLayoutStr(RankedTensorType tensorType, bool useHWPointOfView);
 
+// Helper functions for getLayoutStr
+std::string getSharedLayoutStr(RankedTensorType tensorType,
+                               bool useHWPointOfView);
+std::string getDistributedLayoutStr(RankedTensorType tensorType,
+                                    bool useHWPointOfView);
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
