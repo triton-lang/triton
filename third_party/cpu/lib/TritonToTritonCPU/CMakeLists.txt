@@ -6,6 +6,8 @@ add_triton_library(TritonToTritonCPU
     ConvertElementwiseOps.cpp
     ConvertElemManipOps.cpp
     ConvertHistogramOp.cpp
+    ScalarizeInterface.cpp
+    ScalarizeUsingForOps.cpp
     ConvertMemoryOps.cpp
     ConvertPtrOps.cpp
     ConvertReductionOp.cpp
@@ -14,6 +16,8 @@ add_triton_library(TritonToTritonCPU
 
     DEPENDS
     TritonToTritonCPUPassIncGen
+    MLIRScalarizeInterfaceIncGen
+    MLIRDialectUtils
 
     LINK_LIBS PUBLIC
     TritonCPUIR

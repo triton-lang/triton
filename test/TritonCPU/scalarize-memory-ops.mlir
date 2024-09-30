@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -triton-cpu-convert-memory-ops=use-scalar-loops=true -cse -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -triton-cpu-scalarize -cse -canonicalize | FileCheck %s
 
 // Convert strided masked load and store to loops. Pointer and mask should be scalarized.
 // TODO: There is an optimization opportunity to fuse loops.
@@ -18,9 +18,9 @@
 // CHECK-NEXT:      memref.store %{{.*}}, %[[ALLOCA1]][%[[IV1]]] : memref<128xf32>
 // CHECK-NEXT:    }
 // CHECK-NEXT:  }
-// CHECK-NEXT:  %[[VEC_VAL:.*]] = vector.transfer_read %[[ALLOCA1]][%c0], %{{.*}} {in_bounds = [true]} : memref<128xf32>, vector<128xf32>
+// CHECK-NEXT:  %[[TENSOR_VAL:.*]] = triton_cpu.load %[[ALLOCA1]] : memref<128xf32> -> tensor<128xf32>
 // CHECK-NEXT:  %[[ALLOCA2:.*]] = memref.alloca() {alignment = 64 : i64} : memref<128xf32>
-// CHECK-NEXT:  vector.transfer_write %[[VEC_VAL]], %[[ALLOCA2]][%c0] {in_bounds = [true]} : vector<128xf32>, memref<128xf32>
+// CHECK-NEXT:  triton_cpu.store %[[TENSOR_VAL]], %[[ALLOCA2]] : tensor<128xf32>, memref<128xf32>
 // CHECK-NEXT:  scf.for %[[IV2:.*]] = %c0 to %c128 step %c1 {
 // CHECK-NEXT:    %[[IV2_I32:.*]] = arith.index_castui %[[IV2]] : index to i32
 // CHECK-NEXT:    %[[IDX2:.*]] = arith.muli %[[IV2_I32]], %c3_i32 : i32
@@ -59,10 +59,10 @@ module {
 // CHECK-LABEL: @indirect_masked_load_store
 // CHECK:       %[[ALLOCA_VALS1:.*]] = memref.alloca() {alignment = 64 : i64} : memref<128xf32>
 // CHECK-NEXT:  %[[ALLOCA_PTRS1:.*]] = memref.alloca() {alignment = 64 : i64} : memref<128xi64>
-// CHECK-NEXT:  vector.transfer_write %{{.*}}, %[[ALLOCA_PTRS1]][%c0] {in_bounds = [true]} : vector<128xi64>, memref<128xi64>
-// CHECK-NEXT:  %[[EXT_MASK:.*]] = arith.extui %{{.*}} : vector<128xi1> to vector<128xi8>
+// CHECK-NEXT:  triton_cpu.store %{{.*}}, %[[ALLOCA_PTRS1]] : tensor<128x!tt.ptr<f32>>, memref<128xi64>
+// CHECK-NEXT:  %[[EXT_MASK:.*]] = arith.extui %{{.*}} : tensor<128xi1> to tensor<128xi8>
 // CHECK-NEXT:  %[[ALLOCA_MASK1:.*]] = memref.alloca() {alignment = 64 : i64} : memref<128xi8>
-// CHECK-NEXT:  vector.transfer_write %[[EXT_MASK]], %[[ALLOCA_MASK1]][%c0] {in_bounds = [true]} : vector<128xi8>, memref<128xi8>
+// CHECK-NEXT:  triton_cpu.store %[[EXT_MASK]], %[[ALLOCA_MASK1]] : tensor<128xi8>, memref<128xi8>
 // CHECK-NEXT:  scf.for %[[IV1:.*]] = %c0 to %c128 step %c1 {
 // CHECK-NEXT:    %[[PTR1_INT:.*]] = memref.load %[[ALLOCA_PTRS1]][%[[IV1]]] : memref<128xi64>
 // CHECK-NEXT:    %[[PTR1:.*]] = tt.int_to_ptr %[[PTR1_INT]] : i64 -> !tt.ptr<f32>
@@ -75,13 +75,13 @@ module {
 // CHECK-NEXT:      memref.store %{{.*}}, %[[ALLOCA_VALS1]][%[[IV1]]] : memref<128xf32>
 // CHECK-NEXT:    }
 // CHECK-NEXT:  }
-// CHECK-NEXT:  %[[VEC_VAL:.*]] = vector.transfer_read %[[ALLOCA_VALS1]][%c0], %{{.*}} {in_bounds = [true]} : memref<128xf32>, vector<128xf32>
+// CHECK-NEXT:  %[[TENSOR_VAL:.*]] = triton_cpu.load %[[ALLOCA_VALS1]] : memref<128xf32> -> tensor<128xf32>
 // CHECK:       %[[ALLOCA_PTRS2:.*]] = memref.alloca() {alignment = 64 : i64} : memref<128xi64>
-// CHECK-NEXT:  vector.transfer_write %{{.*}}, %[[ALLOCA_PTRS2]][%c0] {in_bounds = [true]} : vector<128xi64>, memref<128xi64>
+// CHECK-NEXT:  triton_cpu.store %{{.*}}, %[[ALLOCA_PTRS2]] : tensor<128x!tt.ptr<f32>>, memref<128xi64>
 // CHECK-NEXT:  %[[ALLOCA_MASK2:.*]] = memref.alloca() {alignment = 64 : i64} : memref<128xi8>
-// CHECK-NEXT:  vector.transfer_write %[[EXT_MASK]], %[[ALLOCA_MASK2]][%c0] {in_bounds = [true]} : vector<128xi8>, memref<128xi8>
+// CHECK-NEXT:  triton_cpu.store %[[EXT_MASK]], %[[ALLOCA_MASK2]] : tensor<128xi8>, memref<128xi8>
 // CHECK-NEXT:  %[[ALLOCA_VALS2:.*]] = memref.alloca() {alignment = 64 : i64} : memref<128xf32>
-// CHECK-NEXT:  vector.transfer_write %[[VEC_VAL]], %[[ALLOCA_VALS2]][%c0] {in_bounds = [true]} : vector<128xf32>, memref<128xf32>
+// CHECK-NEXT:  triton_cpu.store %[[TENSOR_VAL]], %[[ALLOCA_VALS2]] : tensor<128xf32>, memref<128xf32>
 // CHECK-NEXT:  scf.for %[[IV2:.*]] = %c0 to %c128 step %c1 {
 // CHECK-NEXT:    %[[PTR2_INT:.*]] = memref.load %[[ALLOCA_PTRS2]][%[[IV2]]] : memref<128xi64>
 // CHECK-NEXT:    %[[PTR2:.*]] = tt.int_to_ptr %[[PTR1_INT]] : i64 -> !tt.ptr<f32>

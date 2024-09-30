@@ -78,6 +78,41 @@ def TTC_PtrToMemRefOp : TTC_Op<"ptr_to_memref", [NoMemoryEffect]> {
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 
+
+def TTC_LoadOp : TTC_Op<"load", [
+  MemoryEffects<[MemRead<GlobalMemory>]>,
+]> {
+  let summary = "Load from a memref to triton tensor";
+
+  let description = [{
+    Operation to allow load from allocated temporary buffer to triton tensor.
+  }];
+
+  let arguments = (ins AnyMemRef:$src);
+
+  let results = (outs TT_Type:$result);
+
+  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+}
+
+def TTC_StoreOp : TTC_Op<"store", [
+  MemoryEffects<[MemWrite<GlobalMemory>]>,
+]> {
+  let summary = "Store triton tensor to memref";
+
+  let description = [{
+    Operation to allow store triton tensor to allocated temporary buffer.
+  }];
+
+  let arguments = (
+    ins
+    TT_Type:$src,
+    AnyMemRef:$dst
+  );
+
+  let assemblyFormat = "$src `,` $dst attr-dict `:` type($src) `,` type($dst)";
+}
+
 def TTC_PrintOp : TTC_Op<"print", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Print at most a single scalar or vector (converted from tensor) on each line";
 
@@ -100,7 +135,7 @@ def TTC_PrintOp : TTC_Op<"print", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let hasVerifier = 1;
 }
 
-def TT_AssertOp : TTC_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTC_AssertOp : TTC_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "For correctness checking";
   let description = [{
     Takes a condition tensor, a message string, a file string, a function string, and a line number.

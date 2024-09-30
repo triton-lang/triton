@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include "cpu/include/ScalarizePass/ScalarizeInterfaceImpl.h"
 #include "cpu/include/TritonCPUToLLVM/Passes.h"
 #include "cpu/include/TritonCPUTransforms/Passes.h"
 #include "cpu/include/TritonToTritonCPU/Passes.h"
@@ -76,6 +77,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::cpu::registerTritonToTritonCPUPasses();
   mlir::triton::cpu::registerTritonCPUTransformsPasses();
   mlir::triton::cpu::registerTritonCPUToLLVMPasses();
+  mlir::triton::cpu::registerTritonOpScalarizeExternalModels(registry);
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,

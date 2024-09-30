@@ -10,12 +10,6 @@ def ConvertMemoryOps : Pass<"triton-cpu-convert-memory-ops", "mlir::ModuleOp"> {
     }];
     let constructor = "mlir::triton::cpu::createConvertMemoryOps()";
 
-    let options = [
-        Option<"useScalarLoops", "use-scalar-loops",
-               "bool", /*default*/"true",
-               "Enable lowering of tensor loads and stores to scalar loops.">,
-    ];
-
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::memref::MemRefDialect",
                              "mlir::vector::VectorDialect",
@@ -170,5 +164,21 @@ def ConvertDebugOps : Pass<"triton-cpu-convert-debug-ops", "mlir::ModuleOp"> {
                              "mlir::triton::TritonDialect",
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
+
+def ScalarizeUsingForOp : Pass<"triton-cpu-scalarize", "mlir::ModuleOp"> {
+    let summary = "Insert Loops for ops, that are not vectorizable";
+    let description = [{
+        This pass is used to reduce compile time by generating loops for
+        operations that cannot be handled as vectors, and simply increases
+        the amount of IR without any further optimization.
+    }];
+
+    let constructor = "mlir::triton::cpu::createScalarizeUsingForOpPass()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 
 #endif

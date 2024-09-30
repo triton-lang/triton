@@ -1,3 +1,4 @@
+#include "ScalarizePass/ScalarizeInterfaceImpl.h"
 #include "TritonCPUToLLVM/Passes.h"
 #include "TritonCPUTransforms/Passes.h"
 #include "TritonToTritonCPU/Passes.h"
@@ -27,10 +28,12 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
       .value("libsleef", cpu::VecLib::Sleef)
       .value("libmvec", cpu::VecLib::Mvec);
 
-  m.def("add_convert_memory_ops",
-        [](mlir::PassManager &pm, bool useScalarLoops) {
-          pm.addPass(mlir::triton::cpu::createConvertMemoryOps(useScalarLoops));
-        });
+  m.def("add_scalarize", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createScalarizeUsingForOpPass());
+  });
+  m.def("add_convert_memory_ops", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::cpu::createConvertMemoryOps());
+  });
   m.def("add_convert_ptr_ops", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createConvertPtrOps());
   });
@@ -147,6 +150,7 @@ void init_triton_cpu(py::module &&m) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::cpu::TritonCPUDialect,
                     mlir::vector::VectorDialect>();
+    mlir::triton::cpu::registerTritonOpScalarizeExternalModels(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
