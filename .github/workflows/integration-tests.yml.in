@@ -439,7 +439,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache llvm@19.1.0 lld@19.1.0
+          brew install ccache llvm@19 lld@19
 
       - *compute-cache-keys-step
       - *cache-build-dependencies-step
