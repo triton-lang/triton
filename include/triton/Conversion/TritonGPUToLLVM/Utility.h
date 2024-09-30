@@ -372,8 +372,9 @@ inline Value getStackPointer(RewriterBase &rewriter,
 }
 
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
-                                 Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+                                 const TargetInfoBase &target, Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                          target.getSharedAddressSpace());
   FunctionOpInterface func =
       op->template getParentOfType<FunctionOpInterface>();
   assert(op->hasAttr("allocation.offset"));

@@ -581,4 +581,6 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   call(funcOp, operands);
 }
 
+int TargetInfo::getSharedAddressSpace() const { return 3; }
+
 } // namespace mlir::triton::NVIDIA

@@ -160,9 +160,9 @@ public:
         isa<MmaEncodingTrait, BlockedEncodingAttr, SliceEncodingAttr>(
             dstLayout)) {
       if (shouldUseDistSmem(srcLayout, dstLayout))
-        return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
+        return lowerDistToDistWithDistSmem(op, adaptor, rewriter, targetInfo);
       if (isLayoutMmaV1(srcLayout) || isLayoutMmaV1(dstLayout))
-        return lowerDistributedToDistributed(op, adaptor, rewriter);
+        return lowerDistributedToDistributed(op, adaptor, rewriter, targetInfo);
     }
     if (isa<NvidiaMmaEncodingAttr>(srcLayout) &&
         isa<DotOperandEncodingAttr>(dstLayout)) {
@@ -364,7 +364,8 @@ private:
   LogicalResult
   lowerDistToDistWithDistSmem(triton::gpu::ConvertLayoutOp op,
                               OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo) const {
     MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
@@ -381,7 +382,7 @@ private:
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     smemBase = bitcast(smemBase, elemPtrTy);
     auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
 
@@ -451,7 +452,8 @@ private:
   LogicalResult
   lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const {
+                                ConversionPatternRewriter &rewriter,
+                                const TargetInfoBase &targetInfo) const {
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
     RankedTensorType srcTy = op.getSrc().getType();
@@ -460,7 +462,7 @@ private:
     Attribute dstLayout = dstTy.getEncoding();
 
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
@@ -737,7 +739,7 @@ struct LocalAllocOpConversion
     if (!layout.has_value())
       return failure();
 
-    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
+    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
     auto smemPtrTy = ptr_ty(ctx, 3);
 
     auto kRegister = str_attr("register");

@@ -50,7 +50,7 @@ public:
     auto smemShape = helper.getScratchRepShape();
 
     SmallVector<Value> smemBases =
-        getSmemBases(op, product<unsigned>(smemShape), rewriter);
+        getSmemBases(op, product<unsigned>(smemShape), rewriter, targetInfo);
 
     storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
 

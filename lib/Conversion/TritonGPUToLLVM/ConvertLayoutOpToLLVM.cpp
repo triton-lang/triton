@@ -46,7 +46,7 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (isSupported(srcLayout, dstLayout)) {
-      return lowerDistributedToDistributed(op, adaptor, rewriter);
+      return lowerDistributedToDistributed(op, adaptor, rewriter, targetInfo);
     }
     return failure();
   }
@@ -149,7 +149,8 @@ private:
   // Data padding in shared memory to avoid bank conflict.
   LogicalResult
   lowerDistributedToDistributed(ConvertLayoutOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const {
+                                ConversionPatternRewriter &rewriter,
+                                const TargetInfoBase &targetInfo) const {
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
     RankedTensorType srcTy = op.getSrc().getType();
@@ -167,7 +168,7 @@ private:
     }
 
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
     SmallVector<unsigned> numReplicates(rank);
@@ -503,7 +504,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         collectRegsForIter(ctx, shmemLoadLayout);
 
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto sharedPtrTy = smemBase.getType();
     Type elemTy = inVals[0].getType();
     auto outSize = shmemLoadLayout.getInDimSize(kRegister);
