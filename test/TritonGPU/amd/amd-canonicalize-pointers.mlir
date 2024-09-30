@@ -566,9 +566,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
         %9 = tt.load %arg1: tensor<1024x!tt.ptr<f32>, #blocked>
         // CHECK: tt.addptr {{.*}}, {{.*}} {tt.divisibility = dense<16> : tensor<1xi32>}
         %11 = tt.addptr %arg1, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        %12 = tt.addptr %11, %3 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
         %10 = arith.addf %9, %arg2 : tensor<1024xf32, #blocked>
-        scf.yield %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
+        scf.yield %12, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
     } {"tt.divisibility_arg1"=dense<[16]> : tensor<1xi32>}
+    // CHECK: tt.divisibility_arg1
+    // CHECK-SAME: tt.divisibility_arg4
     %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
     %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %11 : tensor<1024xf32, #blocked>

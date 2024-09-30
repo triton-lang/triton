@@ -461,6 +461,7 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   auto newForOp =
       rewriter.create<scf::ForOp>(forOp.getLoc(), forOp.getLowerBound(), newUb,
                                   forOp.getStep(), newLoopArg);
+  newForOp->setAttrs(forOp->getAttrs());
   // When there are no iter args, the loop body terminator will be created.
   // Since we always create it below, remove the terminator if it was created.
   if (!newForOp.getBody()->empty())

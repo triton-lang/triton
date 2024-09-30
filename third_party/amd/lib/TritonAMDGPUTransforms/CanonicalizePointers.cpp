@@ -105,6 +105,10 @@ private:
     }
     // Attribute functions
     void setAttr(NamedAttribute attr) { attributes.push_back(attr); }
+    void setAttrs(ArrayRef<NamedAttribute> attrs) {
+      for (NamedAttribute attr : attrs)
+        attributes.push_back(attr);
+    }
   };
 
   // Rewrite any operation that needs a pointer
@@ -293,17 +297,23 @@ void PointerCanonicalizer::collectFatPointerAttributes(Operation *op,
     // where `argi` refers to the arg number of the given parameter.
     // So we need to iterate through the property, find the right one
     // and push the property onto the pointers attributes.
-    llvm::SmallString<8> nameSuffix;
+    llvm::SmallString<8> scratchStr;
     for (NamedAttribute namedAttr : op->getAttrs()) {
-      llvm::raw_svector_ostream sstream(nameSuffix);
+      scratchStr.clear();
+      llvm::raw_svector_ostream sstream(scratchStr);
       sstream << "_arg" << arg.getArgNumber();
       StringRef attrName = namedAttr.getName().getValue();
-      if (attrName.ends_with(nameSuffix)) {
-        StringRef newAttrName = attrName.drop_back(nameSuffix.size());
+      if (attrName.ends_with(scratchStr)) {
+        StringRef newAttrName = attrName.drop_back(scratchStr.size());
         namedAttr.setName(rewriter.getStringAttr(newAttrName));
         pointers[val].setAttr(namedAttr);
+        // Propagate the argument to the offset if it is also a block argument
+        if (auto offsetArg = dyn_cast<BlockArgument>(pointers[val].offset)) {
+          scratchStr.clear();
+          sstream << newAttrName << "_arg" << offsetArg.getArgNumber();
+          op->setAttr(scratchStr, namedAttr.getValue());
+        }
       }
-      nameSuffix.clear();
     }
   };
 
@@ -527,6 +537,9 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
     newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
                                                scalarConst);
     pointers[nextPtr] = fatPtr.copyWithOffset(newPtr);
+    // If we are updating the tensor pointer with a uniform value, we can
+    // propagate the attributes of the tensor pointer to the fat pointer.
+    pointers[nextPtr].setAttrs(fatPtr.attributes);
     opToDelete.insert(addPtrOp);
     return success();
   }
@@ -546,6 +559,7 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
   Value fatPtrOffset = fatPtr.offset;
   bool canNarrow = fatPtr.canNarrow;
   Value newOffset = fatPtrOffset;
+  bool propagateAtrs = true;
   if (!isZeroConst(nonUniformOffset)) {
     Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
     canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
@@ -557,9 +571,15 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
 
     newOffset =
         rewriter.create<arith::AddIOp>(curLoc, nonUniformOffset, fatPtrOffset);
+    propagateAtrs = false;
   }
   opToDelete.insert(addPtrOp);
   pointers[nextPtr] = FatPtr{newPtr, newOffset, canNarrow};
+
+  // If we are updating the tensor pointer with a uniform value, we can
+  // propagate the attributes of the tensor pointer to the fat pointer.
+  if (propagateAtrs)
+    pointers[nextPtr].setAttrs(fatPtr.attributes);
   return success();
 }
 
