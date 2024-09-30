@@ -197,7 +197,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     // vectorized iteration through all the pointer/mask/other elements
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
-    const size_t valueElemNBytes = std::max<int>(1, valueElemNBits / 8);
+    const size_t valueElemNBytes = valueElemNBits / 8;
     const int numVecs = numElems / vec;
     int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
@@ -302,7 +302,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
     const size_t valueElemNBits =
         std::max<int>(8, valueElemTy.getIntOrFloatBitWidth());
-    const size_t valueElemNBytes = valueElemNBits * 8;
+    const size_t valueElemNBytes = valueElemNBits / 8;
     int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
     auto cacheMod = op.getCache();
