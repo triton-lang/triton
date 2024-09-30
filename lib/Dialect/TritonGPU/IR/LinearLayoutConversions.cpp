@@ -540,6 +540,75 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 std::optional<LinearLayout>
+dotOperandMfmaToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
+                             ArrayRef<int64_t> shape) {
+
+  auto mfmaLayout =
+      llvm::dyn_cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
+  assert(mfmaLayout);
+
+  if (dotMfmaLayout.getOpIdx() == 0) {
+    return std::nullopt;
+  }
+  auto rank = shape.size();
+  bool hasBatchDim = rank == 3;
+  auto kWidth = dotMfmaLayout.getKWidth();
+  auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
+
+  if (kWidth != 8 || warpsPerCTA[0] != 1) {
+    return std::nullopt;
+  }
+
+  MLIRContext *ctx = dotMfmaLayout.getContext();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+
+  SmallVector<unsigned> order = triton::gpu::getOrder(dotMfmaLayout);
+  auto tileLayout = LinearLayout::empty();
+
+  if (mfmaLayout.getMDim() == 32) {
+    // Based on canonical MFMA linear layout, which handles 4 consecutive
+    // elements along the register dimension, kWidth=8 means we have 8
+    // consecutive elements, so we have an additional {4, 0} base vector here.
+    // For lane dim, since threadsPerWarp is {2, 32}, this means that mapping
+    // of first 5 base (up to thread 16) vectors will be an identity along N
+    // dim. Thread 32 will be mapped to element 8 in K dimension, because
+    // kWidth == 8.
+    tileLayout = LinearLayout(
+        {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}}},
+        {outDimNames[order[0]], outDimNames[order[1]]});
+  } else {
+    assert(mfmaLayout.getMDim() == 16);
+    // For lane dim, since threadsPerWarp is {4, 16}, this means that mapping
+    // of first 4 base (up to thread 16) vectors will be an identity along N
+    // dim. Thread 16 will be mapped to element 8 in K dimension, because
+    // kWidth == 8. Thread 32 is mapped to element 16 as that is 2*KWidth in K
+    // dim.
+    tileLayout = LinearLayout(
+        {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}, {16, 0}}}},
+        {outDimNames[order[0]], outDimNames[order[1]]});
+  }
+
+  if (hasBatchDim) {
+    assert(order[2] == 0);
+    // Extend the base vector with one value to accomodate for the batch
+    // dimension, which appears at the last.
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
+  }
+
+  LinearLayout warpLayout =
+      identityND(S("warp"), warpsPerCTA, order, outDimNames);
+  LinearLayout ctaLayout = tileLayout * warpLayout;
+
+  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+}
+
+std::optional<LinearLayout>
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int rank = shape.size();
   assert(rank == getWarpsPerCTA().size());
@@ -721,48 +790,7 @@ std::optional<LinearLayout>
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
-
-    if (getOpIdx() == 0) {
-      return std::nullopt;
-    }
-
-    int rank = shape.size();
-    assert(rank == getWarpsPerCTA().size());
-
-    auto kWidth = getKWidth();
-    auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-
-    if (kWidth != 8 || warpsPerCTA[0] != 1) {
-      return std::nullopt;
-    }
-
-    MLIRContext *ctx = getContext();
-    SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-    StringAttr kRegister = S("register");
-    StringAttr kLane = S("lane");
-
-    SmallVector<unsigned> order = triton::gpu::getOrder(*this);
-    auto tileLayout = LinearLayout::empty();
-
-    if (mfmaLayout.getMDim() == 32) {
-      tileLayout = LinearLayout(
-          {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}}},
-          {outDimNames[order[1]], outDimNames[order[0]]});
-    } else {
-      assert(mfmaLayout.getMDim() == 16);
-      tileLayout = LinearLayout(
-          {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}, {16, 0}}}},
-          {outDimNames[order[1]], outDimNames[order[0]]});
-    }
-    LinearLayout warpLayout =
-        identityND(S("warp"), warpsPerCTA, {order[1], order[0]},
-                   {outDimNames[order[1]], outDimNames[order[0]]});
-    LinearLayout ctaLayout = tileLayout * warpLayout;
-
-    return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
+    return dotOperandMfmaToLinearLayout(*this, shape);
   }
 
   return std::nullopt;

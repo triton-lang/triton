@@ -247,6 +247,23 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
   return order;
 }
 
+SmallVector<unsigned> getMFMADotOrder(unsigned opIdx, unsigned rank) {
+  SmallVector<unsigned> order(rank);
+  // The 'order' field typically represents a descending sorted array of
+  // dimensions based on contiguity. For instance, in axisInfo utilities that
+  // retrieve tensor contiguity, it's assumed that the user is referring to the
+  // dimension with the highest contiguity, which corresponds to order[0].
+  // Therefore, it's important to differentiate between order when opIdx == 0
+  // and opIdx == 1, as both have the highest contiguity in the K dimension. For
+  // opIdx == 0, the highest contiguity corresponds to dim 1, while for opIdx ==
+  // 1, it corresponds to dim 0 (in 2d case).
+  std::iota(order.rbegin(), order.rend(), 0);
+  if (opIdx == 1) {
+    std::swap(order[0], order[1]);
+  }
+  return order;
+}
+
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     return llvm::to_vector(blockedLayout.getOrder());
@@ -269,7 +286,11 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
     SmallVector<unsigned> order(rank);
-    std::iota(order.rbegin(), order.rend(), 0);
+    if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
+      return getMFMADotOrder(dotLayout.getOpIdx(), rank);
+    } else {
+      std::iota(order.rbegin(), order.rend(), 0);
+    }
     return order;
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -927,16 +948,23 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                           Type eltTy) const {
 
   if (auto parent = mlir::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
-    assert(shape.size() == 2);
+    auto rank = shape.size();
+    assert(rank == 2 || rank == 3);
+
     auto idx = getOpIdx();
+    assert(idx == 0 || idx == 1);
+
+    SmallVector<unsigned> elemsPerThread(rank);
+
     auto kWidth = getKWidth();
     auto rep = parent.getMFMARepForOperands(shape, kWidth, idx);
 
-    unsigned numRows = (idx == 0) ? rep[1] : rep[1] * kWidth;
-    unsigned numCols = (idx == 0) ? rep[2] * kWidth : rep[2];
+    if (rank == 3)
+      elemsPerThread[0] = rep[0];
+    elemsPerThread[rank - 2] = (idx == 0) ? rep[1] : rep[1] * kWidth;
+    elemsPerThread[rank - 1] = (idx == 0) ? rep[2] * kWidth : rep[2];
 
-    assert(idx == 0 || idx == 1);
-    return {numRows, numCols};
+    return elemsPerThread;
   }
 
   llvm_unreachable("getElemsPerThread is not supported for dot operand");
