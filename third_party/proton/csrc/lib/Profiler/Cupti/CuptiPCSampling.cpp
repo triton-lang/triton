@@ -136,16 +136,16 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
   size_t pcDataSize = sizeof(CUpti_PCSamplingPCData);
   // Check cupti api version < 12.4 but cupti header version >= 12.4
   // If so, we subtract 4 bytes from the size of CUpti_PCSamplingPCData
-  // because it introduces a new field at the end of the struct, which is not
-  // compatible with the previous versions.
+  // because it introduces a new field (i.e., correlationId) at the end of the
+  // struct, which is not compatible with the previous versions.
   if (libVersion < CUPTI_CUDA12_4_VERSION &&
       CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION)
     pcDataSize -= CUPTI_CUDA12_4_PC_DATA_PADDING_SIZE;
   CUpti_PCSamplingData pcSamplingData{
-      .size = sizeof(CUpti_PCSamplingData),
+      .size = pcDataSize,
       .collectNumPcs = collectNumPCs,
       .pPcData = static_cast<CUpti_PCSamplingPCData *>(
-          std::calloc(collectNumPCs, pcDataSize))};
+          std::calloc(collectNumPCs, sizeof(CUpti_PCSamplingPCData)))};
   for (size_t i = 0; i < collectNumPCs; ++i) {
     pcSamplingData.pPcData[i].stallReason =
         static_cast<CUpti_PCSamplingStallReason *>(std::calloc(
