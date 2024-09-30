@@ -115,10 +115,9 @@ private:
             shapePerCTA);
         Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
                                  paddedRepShape, outOrd);
-        auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+        auto elemPtrTy = smemBase.getType();
         Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
-        ptr = bitcast(ptr, ptr_ty(rewriter.getContext(), 3));
         if (stNotRd) {
           Value valVec = undef(vecTy);
           for (unsigned v = 0; v < vec; ++v) {
@@ -169,8 +168,6 @@ private:
 
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
     SmallVector<unsigned> numReplicates(rank);
@@ -447,8 +444,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
 
-    auto sharedPtrTy = ptr_ty(ctx, /*addressSpace=*/3);
-
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
@@ -509,6 +504,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+    auto sharedPtrTy = smemBase.getType();
     Type elemTy = inVals[0].getType();
     auto outSize = shmemLoadLayout.getInDimSize(kRegister);
     auto iterations = sharedLayout.getInDimSize(kIteration);

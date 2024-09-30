@@ -111,8 +111,8 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
     Value index = add(parallelLaneId, mul(warpId, i32_val(numParallelLane)));
     index = add(index, i32_val(chunkId * numParallelLane * axisNumWarps));
     for (unsigned i = 0; i < lastElement.size(); ++i) {
-      Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), smemTypes[i],
-                           smemBases[i], index);
+      Value writePtr =
+          gep(smemBases[i].getType(), smemTypes[i], smemBases[i], index);
       targetInfo.storeShared(rewriter, loc, writePtr, lastElement[i], mask);
     }
     chunkId++;
@@ -176,8 +176,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
       SmallVector<Value> partialReduce(helper.getNumOperands());
       for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
         auto elemTy = smemTypes[j];
-        Value ptr =
-            gep(ptr_ty(rewriter.getContext(), 3), elemTy, smemBases[j], index);
+        Value ptr = gep(smemBases[j].getType(), elemTy, smemBases[j], index);
         partialReduce[j] = load(elemTy, ptr);
       }
 

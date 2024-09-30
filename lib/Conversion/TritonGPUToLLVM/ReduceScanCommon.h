@@ -150,12 +150,12 @@ public:
     });
     // Assign base index to each operand in their order in indices
     std::map<unsigned, Value> indexToBase;
-    indexToBase[indices[0]] =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+    auto basePtr = LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+    indexToBase[indices[0]] = basePtr;
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      indexToBase[indices[i]] = gep(
-          ptr_ty(rewriter.getContext(), 3), getElementType(op, indices[i - 1]),
-          indexToBase[indices[i - 1]], i32_val(elems));
+      indexToBase[indices[i]] =
+          gep(basePtr.getType(), getElementType(op, indices[i - 1]),
+              indexToBase[indices[i - 1]], i32_val(elems));
     }
     // smemBases[k] is the base pointer for the k-th operand
     SmallVector<Value> smemBases(op.getNumOperands());
