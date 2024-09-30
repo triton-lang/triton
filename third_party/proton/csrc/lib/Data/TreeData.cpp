@@ -189,16 +189,17 @@ void TreeData::dumpHatchet(std::ostream &os) const {
     (*jsonNode)["metrics"] = json::object();
     for (auto [metricKind, metric] : treeNode.metrics) {
       if (metricKind == MetricKind::Kernel) {
-        auto kernelMetric = std::dynamic_pointer_cast<KernelMetric>(metric);
-        auto duration =
+        std::shared_ptr<KernelMetric> kernelMetric =
+            std::dynamic_pointer_cast<KernelMetric>(metric);
+        uint64_t duration =
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
-        auto invocations = std::get<uint64_t>(
+        uint64_t invocations = std::get<uint64_t>(
             kernelMetric->getValue(KernelMetric::Invocations));
-        auto deviceId =
+        uint64_t deviceId =
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
-        auto deviceType = std::get<uint64_t>(
+        uint64_t deviceType = std::get<uint64_t>(
             kernelMetric->getValue(KernelMetric::DeviceType));
-        auto deviceTypeName =
+        std::string deviceTypeName =
             getDeviceTypeString(static_cast<DeviceType>(deviceType));
         (*jsonNode)["metrics"]
                    [kernelMetric->getValueName(KernelMetric::Duration)] =

@@ -99,7 +99,7 @@ size_t matchStallReasonsToIndices(
   for (size_t i = 0; i < numStallReasons; i++) {
     bool notIssued = std::string(stallReasonNames[i]).find("not_issued") !=
                      std::string::npos;
-    auto cuptiStallName = std::string(stallReasonNames[i]);
+    std::string cuptiStallName = std::string(stallReasonNames[i]);
     for (size_t j = 0; j < PCSamplingMetric::PCSamplingMetricKind::Count; j++) {
       auto metricName = PCSamplingMetric().getValueName(j);
       if (cuptiStallName.find(metricName) != std::string::npos) {
@@ -127,20 +127,20 @@ size_t matchStallReasonsToIndices(
 }
 
 #define CUPTI_CUDA12_4_VERSION 22
-#define CUDA_CUDA12_4_VERSION 12040
+#define CUPTI_CUDA12_4_PC_DATA_PADDING_SIZE sizeof(uint32_t)
 
 CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
                                          size_t numValidStallReasons) {
   uint32_t libVersion = 0;
   cupti::getVersion<true>(&libVersion);
   size_t pcDataSize = sizeof(CUpti_PCSamplingPCData);
-  // Check cuda api version < 12.4 but header version >= 12.4
+  // Check cupti api version < 12.4 but cupti header version >= 12.4
   // If so, we subtract 4 bytes from the size of CUpti_PCSamplingPCData
   // because it introduces a new field at the end of the struct, which is not
   // compatible with the previous versions.
   if (libVersion < CUPTI_CUDA12_4_VERSION &&
-      CUPTI_API_VERSION >= CUDA_CUDA12_4_VERSION)
-    pcDataSize -= sizeof(uint32_t);
+      CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION)
+    pcDataSize -= CUPTI_CUDA12_4_PC_DATA_PADDING_SIZE;
   CUpti_PCSamplingData pcSamplingData{
       .size = sizeof(CUpti_PCSamplingData),
       .collectNumPcs = collectNumPCs,

@@ -205,7 +205,7 @@ def test_pcsampling():
         pytest.skip("HIP backend does not support pc sampling")
 
     import os
-    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "0":
+    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "1") == "0":
         pytest.skip("PC sampling test is disabled")
 
     @triton.jit
@@ -214,11 +214,12 @@ def test_pcsampling():
         for _ in range(1000):
             tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
-    y = torch.zeros_like(x)
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
         proton.start(f.name.split(".")[0], hook="triton", backend="cupti_pcsampling")
-        with proton.scope("test0"):
+        with proton.scope("init"):
+            x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+            y = torch.zeros_like(x)
+        with proton.scope("test"):
             foo[(1, )](x, y, x.size()[0], num_warps=4)
         proton.finalize()
         data = json.load(f)
