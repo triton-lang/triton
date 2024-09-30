@@ -9,6 +9,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getOrder;
+using ::mlir::triton::gpu::getThreadOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -271,7 +272,7 @@ private:
 
     auto threadsPerWarp =
         triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
-    auto order = getOrder(srcLayout);
+    auto order = getThreadOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
     Value laneIdAxis = multiDimLaneId[axis];

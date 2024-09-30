@@ -507,6 +507,13 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
         {{kRegister, {{0, 1}, {0, 2}, {0, 8}, /*gap*/ {0, 16}}},
          {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, /*gap*/ {0, 4}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
+    // For mfma.transposed layout, the element ownership among threads are
+    // "transposed" within each warp.
+    if (getIsTransposed())
+      tileLayout = LinearLayout(
+          {{kRegister, {{1, 0}, {2, 0}, {8, 0}, /*gap*/ {16, 0}}},
+           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, /*gap*/ {4, 0}}}},
+          {outDimNames[order[0]], outDimNames[order[1]]});
   } else {
     assert(getMDim() == 16);
     // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
@@ -521,6 +528,13 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
         {{kRegister, {{0, 1}, {0, 2}}},
          {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
+    // For mfma.transposed layout, the element ownership among threads are
+    // "transposed" within each warp.
+    if (getIsTransposed())
+      tileLayout = LinearLayout(
+          {{kRegister, {{1, 0}, {2, 0}}},
+           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0}}}},
+          {outDimNames[order[0]], outDimNames[order[1]]});
   }
   if (hasBatchDim) {
     assert(order[2] == 0);

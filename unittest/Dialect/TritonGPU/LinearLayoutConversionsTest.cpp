@@ -529,14 +529,14 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {0, 8}, {0, 16}}},
                  {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}},
-                 {S("warp"), {{32, 0}, {0, 0}, {0, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {32, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
   EXPECT_EQ(toLinearLayout({128, 128}, mfmaT),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {0, 8}, {0, 16}, {64, 0}}},
                  {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 4}}},
-                 {S("warp"), {{32, 0}, {0, 32}, {0, 64}}},
+                 {S("warp"), {{0, 32}, {0, 64}, {32, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 }
