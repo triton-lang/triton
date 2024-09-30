@@ -3103,6 +3103,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
     else:
+        if not is_hip() and (M < 16 or N < 16):
+            pytest.skip("small dots are aupported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
 
@@ -3286,9 +3288,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         return
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
-    is_fma = K < 16 or N < 16 or M < 16
-    if is_fma:
-        return
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
         # XXX: skip small sizes because they are not vectorized
         assert 'ld.global.v4' in ptx

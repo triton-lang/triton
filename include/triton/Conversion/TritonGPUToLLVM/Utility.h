@@ -329,6 +329,9 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
 
+size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
+                 ArrayRef<unsigned> order);
+
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
 
@@ -1473,13 +1476,27 @@ inline bool isLayoutMmaV1(Attribute layout) {
   return isMmaV1;
 }
 
+/// @brief Extend 2d shared object to 3d.
+/// Generalizing dot operand shared to distributing conversion.
+///
+/// If tensor has 3 dimensions, returns existing shared object.
+/// If tensor shape is [M, N], return shared object describing tensor of shape
+/// [1, M, N]
+///
+/// @param rewriter
+/// @param loc
+/// @param smemObj
+/// @param shape shape of a tensor represented by smemObj
+/// @returns shared object describing 3d tensor
 inline SharedMemoryObject
 getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
                               SharedMemoryObject smemObj,
                               ArrayRef<int64_t> shape) {
+  assert(shape.size() == 2 || shape.size() == 3);
   auto strides = smemObj.getStrides();
   auto offsets = smemObj.getOffsets();
   auto rank = strides.size();
+  assert(rank == shape.size());
   if (rank == 3)
     return smemObj;
   strides.insert(strides.begin(), i32_val(shape[0] * shape[1]));

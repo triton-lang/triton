@@ -131,9 +131,11 @@ std::string getLayoutStr(RankedTensorType tensorType, bool useHWPointOfView);
 
 template <typename T>
 llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s) {
-  llvm::SmallVector<T> expanded(3 - s.size(), 1);
-  expanded.append(s.begin(), s.end());
-  return expanded;
+  auto rank = s.size();
+  assert(rank == 2 || rank == 3);
+  if (rank == 3)
+    return llvm::SmallVector<T>(s);
+  return {1, s[0], s[1]};
 }
 
 llvm::SmallVector<unsigned>

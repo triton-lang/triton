@@ -636,6 +636,14 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
   return linear;
 }
 
+size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
+                 ArrayRef<unsigned> order) {
+  size_t linear = 0;
+  for (unsigned dim : llvm::reverse(order))
+    linear = linear * shape[dim] + multiDim[dim];
+  return linear;
+}
+
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
