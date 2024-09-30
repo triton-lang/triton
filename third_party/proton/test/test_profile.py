@@ -223,8 +223,15 @@ def test_pcsampling():
             foo[(1, )](x, y, x.size()[0], num_warps=4)
         proton.finalize()
         data = json.load(f)
-        assert "foo" in data[0]["children"][0]["children"][0]["frame"]["name"]
-        assert data[0]["children"][0]["children"][0]["metrics"]["num_samples"] > 0
+        init_frame = data[0]["children"][0]
+        test_frame = data[0]["children"][1]
+        # With line mapping
+        assert "foo" in test_frame["children"][0]["frame"]["name"]
+        assert test_frame["children"][0]["children"][0]["metrics"]["num_samples"] > 0
+        assert "@" in test_frame["children"][0]["children"][0]["frame"]["name"]
+        # Without line mapping
+        assert "elementwise" in init_frame["children"][0]["frame"]["name"]
+        assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
 def test_deactivate():
