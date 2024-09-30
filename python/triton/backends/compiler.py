@@ -37,7 +37,7 @@ class AttrsDescriptor:
     `constant_properties`: a set containing the properties that can be used to determine if a parameter is constant
 
     """
-    __slots__ = ('divisibility', 'equal_to_1', 'arg_properties', 'property_values', 'constant_properties')
+    __slots__ = ('divisibility_16', 'equal_to_1', 'arg_properties', 'property_values', 'constant_properties')
 
     def __init__(self, params=None, values=None):
         """
@@ -61,8 +61,8 @@ class AttrsDescriptor:
     def _add_common_properties(self, params, values):
         """ Add common compile-time properties """
         self.property_values["tt.divisibility"] = 16
-        self.property_values["tt.equal_to_1"] = 1
-        self.constant_properties.add("tt.equal_to_1")
+        self.property_values["tt.equal_to"] = 1
+        self.constant_properties.add("tt.equal_to")
 
         if (params is None) or (values is None):
             return
@@ -77,7 +77,7 @@ class AttrsDescriptor:
         ]
 
         # Equal to 1 property
-        self.arg_properties["tt.equal_to_1"] = [
+        self.arg_properties["tt.equal_to"] = [
             param.num
             for param, arg in zip(params, values)
             if AttrsDescriptor.is_equal_to_1(arg) and not param.do_not_specialize
@@ -90,7 +90,7 @@ class AttrsDescriptor:
     def _init_slots(self):
         """ Initialize the slots of this class """
         for name, val in self.arg_properties.items():
-            setattr(self, name.removeprefix('tt.'), val)
+            setattr(self, name.removeprefix('tt.') + '_' + str(self.property_values[name]), val)
 
     def get_fn_attrs(self) -> Dict:
         """
