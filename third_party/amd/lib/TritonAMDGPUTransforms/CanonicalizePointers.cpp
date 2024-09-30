@@ -290,11 +290,11 @@ void PointerCanonicalizer::collectFatPointerAttributes(Operation *op,
   auto addBlockArgumentAttr = [&](BlockArgument arg) {
     // If the value is a block parameter, the operation can specify
     // an attribute for the given parameter by using `tt.property_argi`
-    // where `argi` referrs to the arg number of the given parameter.
-    // So we need to iterato through the property, find the right one
+    // where `argi` refers to the arg number of the given parameter.
+    // So we need to iterate through the property, find the right one
     // and push the property onto the pointers attributes.
+    llvm::SmallString<8> nameSuffix;
     for (NamedAttribute namedAttr : op->getAttrs()) {
-      llvm::SmallString<8> nameSuffix;
       llvm::raw_svector_ostream sstream(nameSuffix);
       sstream << "_arg" << arg.getArgNumber();
       StringRef attrName = namedAttr.getName().getValue();
@@ -303,6 +303,7 @@ void PointerCanonicalizer::collectFatPointerAttributes(Operation *op,
         namedAttr.setName(rewriter.getStringAttr(newAttrName));
         pointers[val].setAttr(namedAttr);
       }
+      nameSuffix.clear();
     }
   };
 
@@ -439,8 +440,7 @@ Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   auto addPtrOp =
       rewriter.create<triton::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
 
-  for (NamedAttribute attr : fatPtr.attributes)
-    addPtrOp->setAttr(attr.getName(), attr.getValue());
+  addPtrOp->setAttrs(fatPtr.attributes);
 
   return addPtrOp.getResult();
 }
@@ -590,7 +590,7 @@ LogicalResult PointerCanonicalizer::rewriteForOp(scf::ForOp forOp,
   pointers[arg] = fatPtr.copy(newForOp.getRegionIterArg(numIterArgs - 2),
                               newForOp.getRegionIterArg(numIterArgs - 1));
 
-  // Collect attributes before continuiing the visit
+  // Collect attributes before continuing the visit
   collectFatPointerAttributes(newForOp, arg);
 
   for (OpOperand &use : arg.getUses())
