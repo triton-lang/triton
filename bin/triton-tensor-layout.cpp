@@ -1,8 +1,11 @@
+#include "RegisterTritonDialects.h"
+
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/AsmParser/AsmParserState.h"
 #include "mlir/IR/MLIRContext.h"
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
@@ -114,7 +117,7 @@ LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
     return failure();
   }
 
-  auto printLambda = [&](StringRef name, Attribute attr) {
+  auto printLambda = [&](StringRef name, mlir::Attribute attr) {
     ss << "Print layout attribute: #" << name << " = " << attr << "\n";
 
     auto rankedTensorTy = RankedTensorType::get(
@@ -155,7 +158,7 @@ LogicalResult printLayoutFromString(MLIRContext *context,
   if (layoutAttrStr.empty())
     return success();
 
-  Attribute layout = parseAttribute(layoutAttrStr, context);
+  mlir::Attribute layout = parseAttribute(layoutAttrStr, context);
   if (!layout) {
     llvm::errs() << "Invalid layout attribute: " << layoutAttrStr << "\n";
     return failure();
@@ -178,8 +181,7 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, "tensor layout printer\n");
 
   DialectRegistry registry;
-  // Register all dialects that can print tensor layout.
-  registry.insert<triton::gpu::TritonGPUDialect>();
+  registerTritonDialects(registry);
 
   MLIRContext ctx(registry);
   ctx.loadAllAvailableDialects();
@@ -189,7 +191,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  Type parsedTy = parseType(TensorStr, &ctx);
+  mlir::Type parsedTy = parseType(TensorStr, &ctx);
   if (!parsedTy) {
     llvm::errs() << "Fail to parse the tensor type argument: " << TensorStr
                  << "\n";
