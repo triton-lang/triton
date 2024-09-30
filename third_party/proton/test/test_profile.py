@@ -205,7 +205,7 @@ def test_pcsampling():
         pytest.skip("HIP backend does not support pc sampling")
 
     import os
-    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "1") == "0":
+    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
         pytest.skip("PC sampling test is disabled")
 
     @triton.jit
