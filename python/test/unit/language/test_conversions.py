@@ -281,15 +281,13 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e5b16', 'float16'),
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
-
-    if src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (9, 0):
-        pytest.skip("float8e4nv upcast tests only supported on NVGPU with compute capability 9.0+")
-
-    if src_dtype in ('float8e4nv', 'float8e4b15') and is_hip():
-        pytest.skip(f"{src_dtype} upcast tests not supported on ROCm")
-
-    if src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()):
-        pytest.skip("{src_dtype} upcast tests only supported on AMDGPU MI300")
+    if ((src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (8, 9))
+       or (src_dtype in ('float8e4nv', 'float8e4b15') and is_hip())
+       or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()))):
+        # If the dtype should error out in the given device, we assert that and return
+        with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
+            launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
+        return
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {

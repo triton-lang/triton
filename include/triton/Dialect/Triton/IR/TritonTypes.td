@@ -15,7 +15,7 @@ class TritonTypeDef<string name, string _mnemonic, list<Trait> traits = []>
 }
 
 // Floating-point Type
-def TT_Float : AnyTypeOf<[F8E4M3FNUZ, F8E5M2, F8E5M2FNUZ, F16, BF16, F32, F64], "floating-point">;
+def TT_Float : AnyTypeOf<[F8E4M3FN, F8E4M3FNUZ, F8E5M2, F8E5M2FNUZ, F16, BF16, F32, F64], "floating-point">;
 def TT_FloatTensor : RankedTensorOf<[TT_Float]>;
 def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
 

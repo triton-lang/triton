@@ -365,12 +365,12 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.ret([])
             ret_ty = language.void
         elif isinstance(ret_value, tuple):
-            ret_values = [language.core._to_tensor(v, self.builder) for v in ret_value]
+            ret_values = [language.semantic.to_tensor(v, self.builder) for v in ret_value]
             ret_types = [v.type for v in ret_values]
             self.builder.ret([v.handle for v in ret_values])
             ret_ty = tuple(ret_types)
         else:
-            ret = language.core._to_tensor(ret_value, self.builder)
+            ret = language.semantic.to_tensor(ret_value, self.builder)
             self.builder.ret([ret.handle])
             ret_ty = ret.type
         # self.builder.create_branch(post_ret_block)
@@ -503,7 +503,7 @@ class CodeGenerator(ast.NodeVisitor):
             if value is not None and \
                not _is_triton_tensor(value) and \
                not isinstance(value, native_nontensor_types):
-                value = language.core._to_tensor(value, self.builder)
+                value = language.semantic.to_tensor(value, self.builder)
             self.set_value(name, value)
 
     def visit_AugAssign(self, node):
@@ -603,13 +603,13 @@ class CodeGenerator(ast.NodeVisitor):
                 then_defs[name] = liveins[name]
         # variables that are both in then and else but not in liveins
         # TODO: could probably be cleaned up
-        for name in then_defs.keys() & else_defs.keys():
+        for name in sorted(then_defs.keys() & else_defs.keys()):
             if name in names:
                 continue
             then_ty = then_defs[name].type
             else_ty = else_defs[name].type
             assert then_ty == else_ty, \
-                f'mismatched type for {name} between then block ({then_ty}) '\
+                f'Mismatched type for {name} between then block ({then_ty}) '\
                 f'and else block ({else_ty})'
             names.append(name)
             ret_types.append(then_ty)
@@ -718,20 +718,20 @@ class CodeGenerator(ast.NodeVisitor):
 
                 then_block = self.builder.create_block()
                 self.builder.set_insertion_point_to_start(then_block)
-                then_val = language.core._to_tensor(self.visit(node.body), self.builder)
+                then_val = language.semantic.to_tensor(self.visit(node.body), self.builder)
                 then_block = self.builder.get_insertion_block()
 
                 else_block = self.builder.create_block()
                 self.builder.set_insertion_point_to_start(else_block)
                 # do not need to reset lscope since
                 # ternary expressions cannot define new variables
-                else_val = language.core._to_tensor(self.visit(node.orelse), self.builder)
+                else_val = language.semantic.to_tensor(self.visit(node.orelse), self.builder)
                 else_block = self.builder.get_insertion_block()
 
                 self._set_insertion_point_and_loc(ip, last_loc)
 
                 assert then_val.type == else_val.type, \
-                    f'ternary expression with dynamic condition has inconsistent types {then_val.type} and {else_val.type}'
+                    f'Ternary expression with dynamic condition has inconsistent types {then_val.type} and {else_val.type}'
                 ret_type = then_val.type
 
                 ret_type_ir = [ret_type.to_ir(self.builder)] if ret_type != language.void else []
@@ -904,6 +904,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ast.NodeVisitor.generic_visit(self, stmt)
             return
         num_stages = None
+        loop_unroll_factor = None
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -913,6 +914,7 @@ class CodeGenerator(ast.NodeVisitor):
             ub = iterator.end
             step = iterator.step
             num_stages = iterator.num_stages
+            loop_unroll_factor = iterator.loop_unroll_factor
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -928,9 +930,9 @@ class CodeGenerator(ast.NodeVisitor):
             step = constexpr(-step.value)
             negative_step = True
             lb, ub = ub, lb
-        lb = language.core._to_tensor(lb, self.builder)
-        ub = language.core._to_tensor(ub, self.builder)
-        step = language.core._to_tensor(step, self.builder)
+        lb = language.semantic.to_tensor(lb, self.builder)
+        ub = language.semantic.to_tensor(ub, self.builder)
+        step = language.semantic.to_tensor(step, self.builder)
         # induction variable type
         if not lb.dtype.is_int() or not ub.dtype.is_int() or not step.dtype.is_int():
             raise TypeError(f"For loop bounds and step must all be ints, are ({lb.dtype}, {ub.dtype}, {step.dtype})")
@@ -978,14 +980,16 @@ class CodeGenerator(ast.NodeVisitor):
                         f'Please make sure that the type stays consistent.'
 
                     names.append(name)
-                    init_args.append(language.core._to_tensor(liveins[name], self.builder))
-                    yields.append(language.core._to_tensor(self.local_defs[name], self.builder))
+                    init_args.append(language.semantic.to_tensor(liveins[name], self.builder))
+                    yields.append(language.semantic.to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
             if num_stages is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
+            if loop_unroll_factor is not None:
+                for_op.set_attr("tt.loop_unroll_factor", self.builder.get_int32_attr(loop_unroll_factor))
 
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
@@ -999,7 +1003,7 @@ class CodeGenerator(ast.NodeVisitor):
             yields = []
             for name in self.local_defs:
                 if name in liveins:
-                    yields.append(language.core._to_tensor(self.local_defs[name], self.builder))
+                    yields.append(language.semantic.to_tensor(self.local_defs[name], self.builder))
 
             # create YieldOp
             if len(yields) > 0:

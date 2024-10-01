@@ -484,6 +484,10 @@ class HIPDriver(GPUDriver):
         self.utils = HIPUtils()
         self.launcher_cls = HIPLauncher
 
+    def get_device_interface(self):
+        import torch
+        return torch.cuda
+
     @staticmethod
     def is_active():
         import torch

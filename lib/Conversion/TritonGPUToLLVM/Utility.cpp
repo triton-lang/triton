@@ -350,7 +350,7 @@ bool emitTransferBetweenRegistersAndShared(
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
-  auto ptrTy = ptr_ty(ctx, /*addressSpace=*/3);
+  auto ptrTy = shmemBase.getType();
   Value zero = i32_val(0);
   SmallVector<Value> ret;
   for (int i = 0; i < numElems / vecElems; i++) {
@@ -814,8 +814,6 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
       emitMfmaOffsetForCTA(mfmaLayout, offsets, 0, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
     } else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout)) {
-      // TODO: support 2nd gen of WMMA
-      assert(wmmaLayout.getVersion() == 1);
       emitWmmaOffsetForCTA(wmmaLayout, offsets, 0, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
     }

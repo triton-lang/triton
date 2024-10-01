@@ -92,11 +92,15 @@ if __name__ == "__main__":
 
     hints = {i: constexpr(s.split(":")[1]) for i, s in enumerate(signature) if ":" in s}
     hints = {k: v for k, v in hints.items() if v is not None}
-    constants = {i: constexpr(s) for i, s in enumerate(signature)}
+    constants = {kernel.arg_names[i]: constexpr(s) for i, s in enumerate(signature)}
     constants = {k: v for k, v in constants.items() if v is not None}
-    signature = {i: s.split(":")[0] for i, s in enumerate(signature) if i not in constants}
+    signature = {
+        kernel.arg_names[i]: s.split(":")[0]
+        for i, s in enumerate(signature)
+        if kernel.arg_names[i] not in constants
+    }
     const_sig = 'x'.join([str(v) for v in constants.values()])
-    doc_string = [f"{kernel.arg_names[i]}={constants[i]}" for i in constants.keys()]
+    doc_string = [f"{k}={v}" for k, v in constants.items()]
     doc_string += [f"num_warps={args.num_warps}", f"num_stages={args.num_stages}"]
 
     # compile ast into cubin
@@ -106,16 +110,23 @@ if __name__ == "__main__":
     equal_to_1 = [i for i, h in hints.items() if h == 1]
     attrs = triton.compiler.AttrsDescriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
     for i in equal_to_1:
-        constants.update({i: 1})
+        constants.update({kernel.arg_names[i]: 1})
     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     ccinfo = triton.compile(src, options=opts)
     arg_names = []
     arg_types = []
-    for i in signature.keys():
-        if i not in equal_to_1:
-            arg_names += [kernel.arg_names[i]]
-            arg_types += [signature[i]]
+    arg_names_not_1 = []
+    arg_types_not_1 = []
+    for i, arg_name in enumerate(kernel.arg_names):
+        if arg_name not in constants:
+            arg_names.append(arg_name)
+            arg_types.append(signature[arg_name])
+            arg_names_not_1.append(arg_name)
+            arg_types_not_1.append(signature[arg_name])
+        elif i in equal_to_1:
+            arg_names.append(arg_name)
+            arg_types.append(signature[arg_name])
 
     # dump C stub code
     suffix = kernel_suffix(signature.values(), attrs)
@@ -126,10 +137,10 @@ if __name__ == "__main__":
         "triton_kernel_name": args.kernel_name,
         "bin_size": len(hex_),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "full_signature": ", ".join([f"{ty_to_cpp(signature[i])} {kernel.arg_names[i]}" for i in signature.keys()]),
-        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names]),
-        "num_args": len(arg_names),
+        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
+        "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
+        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1]),
+        "num_args": len(arg_names_not_1),
         "kernel_docstring": doc_string,
         "shared": ccinfo.metadata.shared,
         "num_warps": args.num_warps,

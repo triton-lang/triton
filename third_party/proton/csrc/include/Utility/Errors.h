@@ -1,3 +1,6 @@
+#ifndef PROTON_UTILITY_ERRORS_H_
+#define PROTON_UTILITY_ERRORS_H_
+
 #include <stdexcept>
 
 namespace proton {
@@ -8,3 +11,5 @@ public:
 };
 
 } // namespace proton
+
+#endif // PROTON_UTILITY_ERRORS_H_

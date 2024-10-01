@@ -1,3 +1,4 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -43,6 +44,13 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(createConvertBuiltinFuncToLLVMPass());
   });
+  m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm) {
+    pm.addPass(createInsertInstructionSchedHintsPass());
+  });
+  m.def("lower_instruction_sched_hints",
+        [](mlir::PassManager &pm, std::string variant) {
+          pm.addPass(createLowerInstructionSchedHintsPass(variant));
+        });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
                                                     const std::string &arch) {
     pm.addPass(
@@ -56,6 +64,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      const std::string, int, int);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
+  ADD_PASS_WRAPPER_0("add_canonicalize_pointers",
+                     mlir::createTritonAMDGPUCanonicalizePointersPass);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
   ADD_PASS_WRAPPER_0("add_stream_pipeline",
@@ -94,6 +104,7 @@ void init_triton_amd(py::module &&m) {
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
+    registry.insert<mlir::triton::amdgpu::TritonAMDGPUDialect>();
     // registry.insert<mlir::ROCDL::ROCDLDialect>();
     mlir::registerROCDLDialectTranslation(registry);
     context.appendDialectRegistry(registry);
@@ -193,11 +204,9 @@ void init_triton_amd(py::module &&m) {
             target->createMCCodeEmitter(*mcii, ctx));
         std::unique_ptr<llvm::MCAsmBackend> mab(
             target->createMCAsmBackend(*sti, *mri, mcOptions));
+        std::unique_ptr<llvm::MCObjectWriter> ow(mab->createObjectWriter(svos));
         mcStreamer.reset(target->createMCObjectStreamer(
-            triple, ctx, std::move(mab), mab->createObjectWriter(svos),
-            std::move(ce), *sti, mcOptions.MCRelaxAll,
-            mcOptions.MCIncrementalLinkerCompatible,
-            /*DWARFMustBeAtTheEnd=*/false));
+            triple, ctx, std::move(mab), std::move(ow), std::move(ce), *sti));
 
         std::unique_ptr<llvm::MCAsmParser> parser(
             createMCAsmParser(srcMgr, ctx, *mcStreamer, *mai));

@@ -87,6 +87,11 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
+void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr, Value val) const {
+  llvm::report_fatal_error("AMDGPU does not support stmatrix");
+}
+
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type elemTy,
                               Value pred) const {
@@ -128,23 +133,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
-  return false;
-}
-
-bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
-                                ArrayRef<unsigned> paddedRepShape,
-                                ArrayRef<unsigned> outOrd,
-                                unsigned accumNumReplicates,
-                                int swizzleByteWidth) const {
-  return false;
-}
-
-bool TargetInfo::processReplicaUsingStMatrix(
-    RewriterBase &rewriter, Location loc, Value smemBase,
-    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzleByteWidth) const {
   return false;
 }
 
@@ -257,5 +245,7 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
 }
+
+int TargetInfo::getSharedAddressSpace() const { return 3; }
 
 } // namespace mlir::triton::AMD

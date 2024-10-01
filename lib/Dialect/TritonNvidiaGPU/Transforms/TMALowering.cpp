@@ -1,7 +1,10 @@
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -39,7 +42,7 @@ public:
     MemDescType memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, sharedMemorySpace, /*mutableMemory=*/true);
-    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, Value());
+    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType);
     auto barrierCTALayout = CTALayoutAttr::get(
         /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
         /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
@@ -48,8 +51,7 @@ public:
     MemDescType barrierMemDescType =
         MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
                          sharedMemorySpace, /*mutableMemory=*/true);
-    Value barrierAlloc =
-        rewriter.create<LocalAllocOp>(loc, barrierMemDescType, Value());
+    Value barrierAlloc = rewriter.create<LocalAllocOp>(loc, barrierMemDescType);
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
     int sizeInBytes = product(tensorType.getShape()) *
                       tensorType.getElementType().getIntOrFloatBitWidth() / 8;

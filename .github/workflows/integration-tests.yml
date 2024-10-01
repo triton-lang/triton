@@ -25,6 +25,7 @@ env:
   TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
+  PROTON_SKIP_PC_SAMPLING_TEST: 1
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
@@ -52,6 +53,7 @@ jobs:
         with:
           files: |
             cmake/*.txt
+            cmake/*.json
       - name: Detect if enough time has passed since last post-submit run
         id: detect-time
         if: github.event_name == 'push'
@@ -127,7 +129,7 @@ jobs:
       - name: Compute hash of pre-commit config
         id: cache-key
         run: |
-          echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml)" >> $GITHUB_OUTPUT
+          echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache pre-commit's cache dir
         uses: actions/cache@v4
@@ -165,10 +167,20 @@ jobs:
       - name: Compute cache keys
         id: cache-key
         run: |
-          echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
-          echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          # Check if files exist before proceeding
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          # Process the files if they exist
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
@@ -179,9 +191,8 @@ jobs:
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
-            ~/.triton/pybind11
             ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
         # spent compiling.  Triton won't (well, should not) use these cached files
         # if something internal to Triton changes, because Triton's internal
@@ -308,10 +319,20 @@ jobs:
       - name: Compute cache keys
         id: cache-key
         run: |
-          echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
-          echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          # Check if files exist before proceeding
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          # Process the files if they exist
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
@@ -322,9 +343,8 @@ jobs:
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
-            ~/.triton/pybind11
             ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
         # spent compiling.  Triton won't (well, should not) use these cached files
         # if something internal to Triton changes, because Triton's internal
@@ -360,11 +380,16 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install lit
       - name: Install Triton
+        id: amd-install-triton
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton
           cd python
           pip install -v -e '.[tests]'
+      - name: Clean up after an unsuccessful build
+        if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
+        run: |
+          rm -rf ~/.triton
       - name: Run lit tests
         run: |
           cd python
@@ -419,8 +444,7 @@ jobs:
           du -sh ~/.cache/ccache
       - name: Clean up caches
         run: |
-          rm -rf ~/.triton
-          rm -rf ~/.cache
+          rm -rf ~/.triton/cache
   Build-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
@@ -437,14 +461,24 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache llvm
+          brew install ccache llvm@19 lld
       - name: Compute cache keys
         id: cache-key
         run: |
-          echo "llvm=$(cat cmake/llvm-hash.txt | cut -c 1-8)" >> $GITHUB_OUTPUT
-          echo "pybind11=$(cat cmake/pybind11-version.txt)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(cat cmake/nvidia-toolchain-version.txt)" >> $GITHUB_OUTPUT
-          echo "json=$(cat cmake/json-version.txt)" >> $GITHUB_OUTPUT
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          # Check if files exist before proceeding
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          # Process the files if they exist
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
@@ -455,9 +489,8 @@ jobs:
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
-            ~/.triton/pybind11
             ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-pybind11-${{ steps.cache-key.outputs.pybind11 }}-json-${{ steps.cache-key.outputs.json }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
       - # Cache ~/.triton/cache because the vast majority of unit test time is
         # spent compiling.  Triton won't (well, should not) use these cached files
         # if something internal to Triton changes, because Triton's internal
@@ -494,7 +527,7 @@ jobs:
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit pybind11
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_CCACHE: "true"

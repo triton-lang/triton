@@ -844,11 +844,11 @@ def TT_PrintOp : TT_Op<"print", [SameVariadicOperandSize, MemoryEffects<[MemWrit
 def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Device-side assert, as in CUDA for correctness checking";
   let description = [{
-    `tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.
+    `tt.assert` takes a condition tensor and a message string.
     If the condition is false, the message is printed, and the program is aborted.
   }];
-  let arguments = (ins TT_Tensor:$condition, StrAttr:$message, StrAttr:$file, StrAttr:$func, I32Attr:$line);
-  let assemblyFormat = "$condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)";
+  let arguments = (ins TT_Tensor:$condition, StrAttr:$message);
+  let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 
 //
@@ -1133,7 +1133,7 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [
 }
 
 def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
-  MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
     let summary = "store value based on descriptor";
     let description = [{
       This operation will be lowered to Nvidia TMA store operation on targets supporting it.
@@ -1155,5 +1155,55 @@ def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
       attr-dict `:` qualified(type($desc_ptr)) `,` type($src)
     }];
 }
+
+def TT_ExperimentalTensormapCreateOp: TT_Op<
+  "experimental_tensormap_create",
+  [
+    MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
+    AttrSizedOperandSegments,
+  ]
+> {
+    let summary = "Create a new TMA descriptor on device";
+    let arguments = (
+        ins
+        TT_PtrType:$desc_ptr,
+        TT_PtrType:$global_address,
+        Variadic<I32>:$box_dim,
+        Variadic<I32>:$global_dim,
+        Variadic<I64>:$global_stride,
+        Variadic<I32>:$element_stride,
+        ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<12>]>:$elem_type,
+        ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<2>]>:$interleave_layout,
+        ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<3>]>:$swizzle_mode,
+        ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<1>]>:$fill_mode
+    );
+    let extraClassDeclaration = [{
+        int32_t getRank() {
+            return getBoxDim().size();
+        }
+    }];
+    let assemblyFormat = [{
+      $desc_ptr `,` $global_address `,`
+      `[` $box_dim `]` `,`
+      `[` $global_dim `]` `,`
+      `[` $global_stride `]` `,`
+      `[` $element_stride `]`
+      attr-dict `:` functional-type(operands, results)
+    }];
+
+    let hasVerifier = 1;
+}
+
+def TT_ExperimentalTensormapFenceproxyAcquireOp: TT_Op<
+  "experimental_tensormap_fenceproxy_acquire",
+  [MemoryEffects<[MemWrite<GlobalMemory>]>]
+> {
+    let summary = "Acquire fence on a tensormap object";
+    let arguments = (ins TT_PtrType:$desc_ptr);
+    let assemblyFormat = [{
+      $desc_ptr attr-dict `:` qualified(type($desc_ptr))
+    }];
+}
+
 
 #endif // Triton_OPS
