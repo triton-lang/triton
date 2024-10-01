@@ -21,6 +21,7 @@ Currently only the forward kernel is supported, and contains these features:
 """
 
 import argparse
+import subprocess
 import pytest
 import sys
 import torch
@@ -299,8 +300,39 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
     return acc, l_i, m_i
 
 
-@triton.autotune(
-    configs=[
+def get_gfx_version():
+    try:
+        # Run the rocminfo command
+        result = subprocess.run(['rocminfo'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        output = result.stdout
+
+        # Parse the output to find the gfx version
+        for line in output.splitlines():
+            line = line.strip()
+            if line.startswith("Name: gfx"):
+                gfx_version = line.split("Name:")[1].strip()
+                return gfx_version
+    except Exception as e:
+        print(f"Error: {e}")
+    return None
+
+
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+def is_cdna():
+    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942',
+                                                                                   'gfx90a', 'gfx908')
+
+
+def is_rdna():
+    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ("gfx1030", "gfx1100", "gfx1101",
+                                                                                   "gfx1102", "gfx1200", "gfx1201")
+
+
+def get_cdna_autotune_configs():
+    return [
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
@@ -314,8 +346,44 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
         # Fall-back config.
         triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
-    ],
-    key=['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK'],
+    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
+
+
+def get_rdna_autotune_configs():
+    return [
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=2),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=2),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=2),
+        # Fall-back config.
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
+                      num_warps=2),
+    ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
+
+
+def get_autotune_configs():
+    if is_rdna():
+        return get_rdna_autotune_configs()
+    elif is_cdna():
+        return get_cdna_autotune_configs()
+    else:
+        raise ValueError("Unknown Device Type")
+
+
+autotune_configs, autotune_keys = get_autotune_configs()
+
+
+@triton.autotune(
+    configs=autotune_configs,
+    key=autotune_keys,
     use_cuda_graph=True,
 )
 @triton.jit
@@ -821,9 +889,6 @@ def _attn_bwd(Q, K, V, sm_scale, alibi_slopes, DO, DQ, DK, DV, M, D,
                                      offsets=(start_m, 0), block_shape=(BLOCK_M2, BLOCK_DMODEL), order=(1, 0))
     dq *= LN2
     tl.store(DQ_block_ptr, dq.to(q.dtype))
-
-
-empty = torch.empty(128, device="cuda")
 
 
 def get_shape_from_layout(q, k, metadata):
