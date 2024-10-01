@@ -133,6 +133,11 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) /
                                                time_factor_dict.factor[metric_time_unit])
             derived_metrics.append(f"{metric} (inc)")
+
+            kernel_time = get_time_seconds(gf.dataframe)
+            total_time = get_time_seconds(gf.dataframe).iloc[0]
+            gf.dataframe["pct (inc)"] = (kernel_time / total_time) * 100.0
+            derived_metrics.append("pct (inc)")
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['Count'] /
