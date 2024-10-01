@@ -71,7 +71,7 @@ class LoopPipeliner {
   /// shared mem and a next buffer stored in regs.
   int numStages = 2;
 
-  /// Arg indicies
+  /// Arg indicies in in pplForOp
   size_t depArgsBeginIdx;
   DenseMap<BlockArgument, size_t> depArgsIdx;
 
@@ -164,6 +164,9 @@ public:
 
   /// Collect loads to pipeline. Return success if we can pipeline this loop
   LogicalResult initialize();
+
+  // Update mapping from old forOp results to new pplForOp results
+  void setResultMapping(DenseMap<Value, Value> &newResults);
 
   /// Emit pipelined loads (before loop body)
   void emitPrologue();
@@ -548,6 +551,45 @@ void LoopPipeliner::emitPrologue() {
   } // for (Operation *op : orderedDeps)
 }
 
+void LoopPipeliner::setResultMapping(DenseMap<Value, Value> &newResults) {
+  // After pipelining, some of the depArgs have beem mapped to new args.
+  // We need to remap these.
+  //
+  // For example, if we have
+  //
+  //   ptr = ...
+  //   c = [zeros]
+  //   ret = scf.for iter_args(a_ptr=ptr, c=c)
+  //     a = load(a_ptr)
+  //     c += dot(a, ...)
+  //     a_ptr_new = a_ptr + N
+  //     scf.yield %a_ptr_new, %c
+  //
+  // then the ptr arg should be mapped to a new arg in the for loop.
+  //
+  //   ptr = ...
+  //   c = [zeros]
+  //   load_pre = load(ptr)
+  //   ptr_new = ptr + N
+  //   ret = scf.for iter_args(a_ptr=ptr, c=c, ld=load_pre, A_ptr_1=ptr_new)
+  //     a_next = load(A_ptr_1)
+  //     c += dot(ld, ...)
+  //     A_ptr_new = A_ptr_1 + N
+  //     scf.yield a_ptr, c, a_next, A_ptr_new
+  //
+  // After this, if there are downstream users of a_ptr, they should reference
+  // ret#3 instead of ret#0
+  for (const auto &origArg : llvm::enumerate(forOp.getRegionIterArgs())) {
+    if (depArgs.contains(origArg.value())) {
+      auto oldIdx = origArg.index();
+      auto newIdx = depArgsIdx[origArg.value()];
+      auto oldResult = forOp->getResult(oldIdx);
+      auto newResult = pplForOp->getResult(newIdx);
+      newResults[oldResult] = newResult;
+    }
+  }
+}
+
 void LoopPipeliner::emitEpilogue(DenseMap<Value, Value> &newResults) {
   if (!peelLastIter)
     return;
@@ -846,6 +888,7 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
       DenseMap<Value, Value> newResults;
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)
         newResults[forOp->getResult(i)] = pplForOp->getResult(i);
+      pipeliner.setResultMapping(newResults);
       pipeliner.emitEpilogue(newResults);
 
       // Replace the original loop
