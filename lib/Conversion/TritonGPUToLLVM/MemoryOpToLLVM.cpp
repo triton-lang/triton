@@ -116,7 +116,6 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    // TODO: do we need to check if src is shared ?
     if (isa<SharedEncodingAttr>(srcLayout) &&
         isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
             dstLayout)) {
