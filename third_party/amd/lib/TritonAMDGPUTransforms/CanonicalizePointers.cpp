@@ -106,8 +106,7 @@ private:
     // Attribute functions
     void setAttr(NamedAttribute attr) { attributes.push_back(attr); }
     void setAttrs(ArrayRef<NamedAttribute> attrs) {
-      for (NamedAttribute attr : attrs)
-        attributes.push_back(attr);
+      llvm::append_range(attributes, attrs);
     }
   };
 
