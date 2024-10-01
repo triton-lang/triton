@@ -85,13 +85,14 @@ argparser = argparse.ArgumentParser()
 argparser.add_argument("--profile", action="store_true")
 argparser.add_argument("--mode", default="torch", choices=["torch", "torchinductor"])
 argparser.add_argument("--context", default="shadow", choices=["shadow", "python"])
+argparser.add_argument("--backend", default=None, choices=["cupti", "roctracer", "cupti_pcsampling"])
 
 args = argparser.parse_args()
 
 mode = args.mode
 
 if args.profile:
-    func = proton.profile(run, name="dynamic_net", context=args.context)
+    func = proton.profile(run, name="dynamic_net", context=args.context, backend=args.backend)
 else:
     func = run
 

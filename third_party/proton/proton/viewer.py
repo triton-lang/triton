@@ -43,7 +43,7 @@ def get_min_time_flops(df, device_info):
             num_sms = device_info[device_type][device_index]["num_sms"]
             clock_rate = device_info[device_type][device_index]["clock_rate"]
             for width in TritonHook.flops_width:
-                idx = df["DeviceId"] == device_index
+                idx = df["device_id"] == device_index
                 device_frames = df[idx]
                 if f"flops{width}" not in device_frames.columns:
                     continue
@@ -72,7 +72,7 @@ def get_min_time_bytes(df, device_info):
     min_time_bytes = pd.DataFrame(0.0, index=df.index, columns=["min_time"])
     for device_type in device_info:
         for device_index in device_info[device_type]:
-            idx = df["DeviceId"] == device_index
+            idx = df["device_id"] == device_index
             device_frames = df[idx]
             memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]  # in khz
             bus_width = device_info[device_type][device_index]["bus_width"]  # in bits
@@ -105,7 +105,7 @@ for width in TritonHook.flops_width:
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
-    internal_frame_indices = gf.dataframe["DeviceId"].isna()
+    internal_frame_indices = gf.dataframe["device_id"].isna()
 
     def get_time_seconds(df):
         time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
@@ -135,7 +135,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             derived_metrics.append(f"{metric} (inc)")
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
-            gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['Count'] /
+            gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['count'] /
                                                avg_time_factor_dict.factor[metric_time_unit])
             gf.dataframe.loc[internal_frame_indices, f"{metric} (inc)"] = np.nan
             derived_metrics.append(f"{metric} (inc)")
