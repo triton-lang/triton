@@ -182,7 +182,7 @@ public:
     // generate the right layout. Currently the warp level histogram generates
     // data in the default blocked layout.
     Value baseSharedMemPtr =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto dstType = op.getType();
     Attribute dstEncoding = dstType.getEncoding();
     auto indices = emitIndices(op.getLoc(), rewriter, targetInfo, dstEncoding,

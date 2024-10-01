@@ -246,4 +246,6 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   rewriter.create<LLVM::Trap>(loc);
 }
 
+int TargetInfo::getSharedAddressSpace() const { return 3; }
+
 } // namespace mlir::triton::AMD

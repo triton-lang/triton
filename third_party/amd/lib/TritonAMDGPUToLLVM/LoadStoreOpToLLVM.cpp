@@ -464,7 +464,8 @@ struct AtomicCASOpConversion
         if (atomicNeedsSharedMemory(op.getResult())) {
           // Extract the new_loaded value from the pair.
           Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr =
+              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
           store(newLoaded, atomPtr);
         }
 
@@ -482,7 +483,8 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        Value atomPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
@@ -632,7 +634,8 @@ struct AtomicRMWOpConversion
       }
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr =
+              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
           store(atom, atomPtr);
         }
       }
@@ -651,7 +654,8 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        Value atomPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         barrier();
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});

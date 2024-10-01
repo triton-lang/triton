@@ -111,8 +111,8 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
     Value index = add(parallelLaneId, mul(warpId, i32_val(numParallelLane)));
     index = add(index, i32_val(chunkId * numParallelLane * axisNumWarps));
     for (unsigned i = 0; i < lastElement.size(); ++i) {
-      Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), smemTypes[i],
-                           smemBases[i], index);
+      Value writePtr =
+          gep(smemBases[i].getType(), smemTypes[i], smemBases[i], index);
       targetInfo.storeShared(rewriter, loc, writePtr, lastElement[i], mask);
     }
     chunkId++;
@@ -176,8 +176,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
       SmallVector<Value> partialReduce(helper.getNumOperands());
       for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
         auto elemTy = smemTypes[j];
-        Value ptr =
-            gep(ptr_ty(rewriter.getContext(), 3), elemTy, smemBases[j], index);
+        Value ptr = gep(smemBases[j].getType(), elemTy, smemBases[j], index);
         partialReduce[j] = load(elemTy, ptr);
       }
 
@@ -328,7 +327,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (succeeded(emitFastScan(op, adaptor, rewriter)))
+    if (succeeded(emitFastScan(op, adaptor, rewriter, targetInfo)))
       return success();
     return failure();
   }
@@ -346,7 +345,8 @@ private:
                      ScanLoweringHelper &helper, Value laneId,
                      Value warpId) const;
   LogicalResult emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
-                             ConversionPatternRewriter &rewriter) const;
+                             ConversionPatternRewriter &rewriter,
+                             const TargetInfoBase &targetInfo) const;
 };
 
 SmallVector<Value>
@@ -456,7 +456,8 @@ flipSrcValues(Location loc, triton::ScanOp op,
 // Lowering using warp shuffle operations to do warp level scan.
 LogicalResult
 ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
-                               ConversionPatternRewriter &rewriter) const {
+                               ConversionPatternRewriter &rewriter,
+                               const TargetInfoBase &targetInfo) const {
   ScanLoweringHelper helper(op);
   auto loc = helper.getLoc();
   if (!helper.isSupported())
@@ -499,7 +500,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // Slow path for the case where there are multiple warps with unique data on
     // the axis.
     auto elems = helper.getScratchSizeInElems();
-    SmallVector<Value> smemBases = getSmemBases(op, elems, rewriter);
+    SmallVector<Value> smemBases =
+        getSmemBases(op, elems, rewriter, targetInfo);
     SmallVector<Type> smemTypes(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       smemTypes[i] = getElementType(op, i);

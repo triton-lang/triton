@@ -80,6 +80,8 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
+  virtual int getSharedAddressSpace() const = 0;
+
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton
