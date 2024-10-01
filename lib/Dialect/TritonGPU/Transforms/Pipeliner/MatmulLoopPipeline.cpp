@@ -472,10 +472,9 @@ filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         continue;
     }
 
-    bool loadIsMMAV3 = false, hasSharedEncoding = false;
+    bool hasSharedEncoding = false;
     if (use->hasTrait<OpTrait::DotLike>()) {
       if (loadIsMMAv3(op)) {
-        loadIsMMAV3 = true;
         hasSharedEncoding = true;
       } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
         hasSharedEncoding = true;
@@ -497,9 +496,8 @@ filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
     // If we still don't have a shared encoding, try a "generic" shared
     // encoding.
-    if (!hasSharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
-      hasSharedEncoding = loadIsMMAV3 ? true : hasSharedEncodingHelper(op);
-    }
+    if (!hasSharedEncoding && !isa<ttng::WarpGroupDotOp>(use))
+      hasSharedEncoding = hasSharedEncodingHelper(op);
 
     // If that still didn't work, bail on pipelining this load.
     if (!hasSharedEncoding) {
