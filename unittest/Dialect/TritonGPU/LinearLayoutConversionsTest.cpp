@@ -761,7 +761,6 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_rhs_kwidth8) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-
   auto parentMfma_1_8 = mfma(/*warps=*/{1, 8}, /*mDim=*/16, /*nDim=*/16,
                              /*isTransposed=*/false);
   auto amdDot_1_8 = amdDot(parentMfma_1_8, /*opIdx=*/1, /*kWidth=*/8);
@@ -776,7 +775,7 @@ TEST_F(LinearLayoutConversionsTest, warp1onK_mfma16_rhs_kwidth8) {
           {S("dim0"), S("dim1")}));
 
   auto parentMfma_1_8_1 = mfma(/*warps=*/{1, 1, 8}, /*mDim=*/16, /*nDim=*/16,
-                             /*isTransposed=*/false);
+                               /*isTransposed=*/false);
   auto amdDot_1_8_1 = amdDot(parentMfma_1_8_1, /*opIdx=*/1, /*kWidth=*/8);
 
   EXPECT_EQ(toLinearLayout({1, 256, 256}, amdDot_1_8_1),

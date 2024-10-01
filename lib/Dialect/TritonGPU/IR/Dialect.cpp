@@ -247,16 +247,23 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
   return order;
 }
 
-SmallVector<unsigned> getMFMADotOrder(unsigned opIdx, unsigned rank) {
+SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
   SmallVector<unsigned> order(rank);
   // The 'order' field typically represents a descending sorted array of
   // dimensions based on contiguity. For instance, in axisInfo utilities that
-  // retrieve tensor contiguity, it's assumed that the user is referring to the
-  // dimension with the highest contiguity, which corresponds to order[0].
-  // Therefore, it's important to differentiate between order when opIdx == 0
-  // and opIdx == 1, as both have the highest contiguity in the K dimension. For
-  // opIdx == 0, the highest contiguity corresponds to dim 1, while for opIdx ==
-  // 1, it corresponds to dim 0 (in 2d case).
+  // retrieve tensor contiguity, it's assumed that the dimension with the
+  // highest contiguity corresponds to order[0].
+  //
+  // The relation between contiguity and order is only relevant if the layout
+  // interfaces with HBM, as is the case when we load tensor from HBM to
+  // registers in the dot layout to bypass LDS. When bypassing LDS, we make the
+  // following assumptions about tensor layouts:
+  // - Tensor A (opIdx == 0) is considered to be row-major.
+  // - Tensor B (opIdx == 1) is considered to be column-major.
+  //
+  // Based on these assumptions, we define the following orders:
+  // - For opIdx == 0, we assume an order of [1, 0].
+  // - For opIdx == 1, we assume an order of [0, 1].
   std::iota(order.rbegin(), order.rend(), 0);
   if (opIdx == 1) {
     std::swap(order[0], order[1]);
@@ -287,7 +294,7 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
     SmallVector<unsigned> order(rank);
     if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
-      return getMFMADotOrder(dotLayout.getOpIdx(), rank);
+      return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
     } else {
       std::iota(order.rbegin(), order.rend(), 0);
     }
