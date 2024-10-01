@@ -480,11 +480,13 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
                                    Value ptr, Value val) const {
-  auto vecTy = cast<VectorType>(val.getType());
-  Type elemTy = vecTy.getElementType();
   auto vals = unpackLLVector(loc, val, rewriter);
   SmallVector<Value> inputs;
-  // Pack the input into 2xf16
+  // Ensure input consists of 4 vectors, each holding 2 elements of 16 bits
+  assert(vals[0].getType().getIntOrFloatBitWidth() == 16 &&
+         "stmatrix requires elements to be 16-bit integers or floats");
+  assert(vals.size() == 8 &&
+         "stmatrix requires exactly 8 elements in the input vector");
   Type packedTy = vec_ty(vals[0].getType(), 2);
   for (int i = 0; i < 4; i++) {
     Value input = undef(packedTy);

@@ -859,7 +859,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
     llvm::report_fatal_error("Illegal swizzleByteSize");
   }
 
-  // stmatrix only support 16-bit elements, and each vector has 8 elements.
+  // stmatrix only supports 16-bit elements, and each vector has 8 elements
   int elemBitWidth = 16;
   int vecSize = 8;
   int numRows = 16;
