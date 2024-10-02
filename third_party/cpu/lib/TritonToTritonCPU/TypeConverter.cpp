@@ -16,8 +16,7 @@ TritonToTritonCPUTypeConverter::TritonToTritonCPUTypeConverter() {
   });
 
   addArgumentMaterialization([&](OpBuilder &builder, Type type,
-                                 ValueRange inputs,
-                                 Location loc) -> std::optional<Value> {
+                                 ValueRange inputs, Location loc) -> Value {
     if (isa<TensorType>(type))
       return builder.create<UnrealizedConversionCastOp>(loc, type, inputs)
           .getResult(0);
@@ -31,14 +30,14 @@ TritonToTritonCPUTypeConverter::TritonToTritonCPUTypeConverter() {
   // Converted ops produce vectors instead of tensors. Provide conversion
   // here for users.
   addSourceMaterialization([&](OpBuilder &builder, Type type, ValueRange inputs,
-                               Location loc) -> std::optional<Value> {
+                               Location loc) -> Value {
     return builder.create<UnrealizedConversionCastOp>(loc, type, inputs)
         .getResult(0);
   });
 
   // Provide conversion for vector users.
   addTargetMaterialization([&](OpBuilder &builder, Type type, ValueRange inputs,
-                               Location loc) -> std::optional<Value> {
+                               Location loc) -> Value {
     if (isa<VectorType>(type))
       return builder.create<UnrealizedConversionCastOp>(loc, type, inputs)
           .getResult(0);
