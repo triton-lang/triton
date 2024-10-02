@@ -367,7 +367,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // The following tasks must be completed before we can remove the layoutIsOK
     // check:
     // 1. Support for AMD's MFMA and WMMA
-    // 2. Handling NVIDIA's MMA layout when CTA per CGA > 1
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
         if (useLegacyMMAConversion) {
@@ -416,10 +415,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    auto srcLayoutWithinCTA = getLayoutWithinCTA(srcLayout);
-    auto dstLayoutWithinBlock = getLayoutWithinCTA(dstLayout);
+    auto srcLayoutWithinBlock = getLayoutWithinBlock(srcLayout);
+    auto dstLayoutWithinBlock = getLayoutWithinBlock(dstLayout);
     SmallVector<Value> outVals =
-        transferWithinBlock(inVals, op, srcLayoutWithinCTA,
+        transferWithinBlock(inVals, op, srcLayoutWithinBlock,
                             dstLayoutWithinBlock, adaptor, rewriter);
 
     // Unmunge output values

@@ -775,7 +775,7 @@ bool isCrossCTAConversion(const LinearLayout &layout) {
          !layout.sublayoutIsIdentity({kBlock}, {kBlock});
 }
 
-LinearLayout getLayoutWithinCTA(const LinearLayout &layout) {
+LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(!layout.getInDimNames().empty());
   MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
 
