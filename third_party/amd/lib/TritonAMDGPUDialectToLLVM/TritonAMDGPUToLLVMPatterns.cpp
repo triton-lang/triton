@@ -5,7 +5,6 @@ namespace mlir::triton::AMD {
 void populateTritonAMDGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit) {
-  populateViewSliceOpTritonAMDGPUToLLVMPatterns(typeConverter, patterns,
-                                                benefit);
+  populateViewSliceOpToLLVMPatterns(typeConverter, patterns, benefit);
 }
 } // namespace mlir::triton::AMD

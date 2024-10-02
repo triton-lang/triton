@@ -60,18 +60,23 @@ namespace mlir::triton::amdgpu {
 LogicalResult ViewSliceOp::verify() {
   auto srcTy = getSource().getType();
   auto srcLayout = srcTy.getEncoding();
-  auto srcElementType = dyn_cast<RankedTensorType>(srcTy).getElementType();
+  auto srcElementType = getElementTypeOrSelf(srcTy);
   auto resultTy = getResult().getType();
   auto resultLayout = resultTy.getEncoding();
-  auto resultElementType =
-      dyn_cast<RankedTensorType>(resultTy).getElementType();
+  auto resultElementType = getElementTypeOrSelf(resultTy);
 
   if (srcElementType != resultElementType) {
-    return emitError("result type must match source type");
+    return emitError("result element type must match source element type");
   }
-
-  if (srcLayout != resultLayout)
+  if (srcLayout != resultLayout) {
     return emitError("result layout must match source layout");
+  }
+  if (srcTy.getRank() != resultTy.getRank()) {
+    return emitError("result rank must be equal to source rank");
+  }
+  if (srcTy.getRank() != 2) {
+    return emitError("currently only 2D tensors are supported");
+  }
 
   auto srcShape = srcTy.getShape();
   auto shapePerCTA = mlir::triton::gpu::getShapePerCTATile(srcLayout, srcShape);
@@ -86,15 +91,20 @@ LogicalResult ViewSliceOp::verify() {
   // original tensor.
 
   if (offsets[0] % shapePerCTA[0] != 0 || offsets[1] % shapePerCTA[1] != 0) {
-    return emitError("incorrect static offset");
+    return emitError() << "offset [" << offsets
+                       << "] must be a multiple of shapePerCTA [" << shapePerCTA
+                       << "]";
   }
 
   if (sizes[0] % shapePerCTA[0] != 0 || sizes[1] % shapePerCTA[1] != 0) {
-    return emitError("incorrect static size");
+    return emitError() << "sizes [" << sizes
+                       << "] must be a multiple of shapePerCTA [" << shapePerCTA
+                       << "]";
   }
 
   if (!hasUnitStride()) {
-    return emitError("unsupported stride");
+    return emitError("expected unit strides but found unsupported stride [")
+           << getStrides() << "]";
   }
 
   return success();
