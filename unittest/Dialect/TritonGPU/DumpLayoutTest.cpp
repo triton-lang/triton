@@ -167,12 +167,11 @@ Warp1:
   assertSameStr(refHWRep, layoutHW);
 }
 
-
 TEST_F(DumpLayoutTest, Simple1DShared) {
   std::string refStr =
-    "[( 0),( 1),( 2),( 3),( 4),( 5),( 6),( 7),( 8),( 9),(10),(11),(12),(13),"
-    "(14),(15),(16),(17),(18),(19),(20),(21),(22),(23),(24),(25),(26),(27),(28),(29),(30),(31)]\n";
-
+      "[( 0),( 1),( 2),( 3),( 4),( 5),( 6),( 7),( 8),( 9),(10),(11),(12),(13),"
+      "(14),(15),(16),(17),(18),(19),(20),(21),(22),(23),(24),(25),(26),(27),("
+      "28),(29),(30),(31)]\n";
 
   auto sharedLayout = shared(/* vec */ 1, /* perPhase */ 1, /* maxPhase */ 4,
                              /* hasLeadingOffset */ false,
@@ -242,7 +241,7 @@ TEST_F(DumpLayoutTest, Larger2DShared) {
   assertSameStr(refStr, layout);
 
   std::string refHWRep =
-    R"(Block: 0:
+      R"(Block: 0:
 Offset: 0 -> (0, 0)
 Offset: 1 -> (0, 1)
 Offset: 2 -> (0, 2)
@@ -501,12 +500,12 @@ Offset: 254 -> (7,16)
 Offset: 255 -> (7,17)
 )";
   auto sharedLayoutHW = shared(/* vec */ 2, /* perPhase */ 1, /* maxPhase */ 32,
-                             /* hasLeadingOffset */ false,
-                             /* CTALayout, single CTA layout */
-                             {1, 1},  /* cpg */
-                             {1, 1},  /* csplit */
-                             {1, 0},  /* ord, row-major */
-                             {1, 0}); /* cOrd */
+                               /* hasLeadingOffset */ false,
+                               /* CTALayout, single CTA layout */
+                               {1, 1},  /* cpg */
+                               {1, 1},  /* csplit */
+                               {1, 0},  /* ord, row-major */
+                               {1, 0}); /* cOrd */
 
   auto elemTyHW = FloatType::getF16(sharedLayoutHW.getContext());
   auto tensorTypeHW = RankedTensorType::get({8, 32}, elemTyHW, sharedLayoutHW);

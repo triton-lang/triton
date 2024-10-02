@@ -3107,7 +3107,8 @@ std::string mlir::triton::gpu::getSharedLayoutStr(RankedTensorType tensorType,
   // Shared layouts are a mapping of (block, offset) --> (...)
 
   // We can just use a single int to index into elementMapping because
-  // the 'swizzle' operation rearranges the indicies---and we want to keep it that way
+  // the 'swizzle' operation rearranges the indicies---and we want to keep it
+  // that way
   int32_t idx = 0;
   // Enumerate all the offsets for each block
   for (int32_t block = 0; block < numBlocks; block++) {
@@ -3128,8 +3129,8 @@ std::string mlir::triton::gpu::getSharedLayoutStr(RankedTensorType tensorType,
       value += "(";
       // We can build up both strings (for hw/non-hw layouts) concurrently
       for (int i = 0; i < outputs.size(); i++) {
-        // Based on the formatting from LinearLayout::toString, the format for the hw layout is slightly different.
-        // HW layouts use "," vs ":".
+        // Based on the formatting from LinearLayout::toString, the format for
+        // the hw layout is slightly different. HW layouts use "," vs ":".
         if (i > 0) {
           sharedInfo += ",";
           value += ":";
