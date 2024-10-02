@@ -426,24 +426,18 @@ def test_jit_warmup_cache(device) -> None:
 
 def test_jit_debug(device) -> None:
 
-    @triton.jit
-    def kernel_add(a, b, o, N: tl.constexpr):
-        idx = tl.arange(0, N)
-        tl.device_assert(idx < 32, "idx < 32")
-        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
+    def kernel(tmp):
+        tl.device_assert(tl.load(tmp) == 1, "tmp == 1")
 
     device = getattr(torch, device).current_device()
-    assert len(kernel_add.cache[device]) == 0
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
-    assert len(kernel_add.cache[device]) == 1
-    kernel_add.debug = False
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
-    assert len(kernel_add.cache[device]) == 2
-    kernel_add.debug = True
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
-    assert len(kernel_add.cache[device]) == 3
-    bins = list(kernel_add.cache[device].values())
-    assert bins[2].asm['ttir'] != bins[1].asm['ttir']
+    tmp = torch.tensor([1], dtype=torch.int32, device="cuda")
+    assert len(kernel.cache[device]) == 0
+    kernel[(1, )](tmp, debug=False)
+    assert len(kernel.cache[device]) == 1
+    kernel[(1, )](tmp, debug=True)
+    assert len(kernel.cache[device]) == 2
+    bins = list(kernel.cache[device].values())
+    assert bins[0].asm['ttir'] != bins[1].asm['ttir']
 
 
 @triton.jit
