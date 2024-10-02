@@ -185,7 +185,7 @@ WHERE p."name" =~ "{exclude}"
     return gf
 
 
-def parse(metrics, filename, include, exclude, threshold, depth, format, sorted):
+def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None):    
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)
