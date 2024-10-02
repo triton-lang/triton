@@ -537,7 +537,7 @@ assignMemoryLayouts(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
   llvm::MapVector<Operation *, LoadInfo> loadToInfo;
 
   // Go through all loads in the loop, check to see if they are pipelined.
-  llvm::SmallVector<Operation *> loadsToPipeline;
+  llvm::DenseSet<Operation *> loadsToPipeline;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (!isa<tt::LoadOp>(op) && !isa<tt::ExperimentalDescriptorLoadOp>(op))
       continue;
@@ -564,6 +564,7 @@ assignMemoryLayouts(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
     if (!isPipelined)
       continue;
 
+    loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
       if (use->hasTrait<OpTrait::DotLike>()) {
