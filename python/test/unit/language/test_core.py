@@ -5839,6 +5839,7 @@ def test_math_extern(dtype_str, device):
     kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+<<<<<<< HEAD
 
 
 # -----------------------
@@ -5996,4 +5997,3 @@ def test_view_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile
     test_result = torch.eq(x[M_tile_offset:M_tile_size + M_tile_offset, N_tile_offset:N_tile_offset + N_tile_size],
                            view).all()
     assert test_result
->>>>>>> 1b17054b (Adds pytest)

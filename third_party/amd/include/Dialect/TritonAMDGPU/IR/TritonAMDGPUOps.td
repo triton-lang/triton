@@ -21,7 +21,6 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
 #ifndef TRITON_AMDGPU_OPS
 #define TRITON_AMDGPU_OPS
 
@@ -31,11 +30,16 @@ include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
+<<<<<<< HEAD
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
+=======
+>>>>>>> a1aaf2f1 (Addresses review comments)
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ViewLikeInterface.td" // OffsetSizeAndStrideOpInterface
+include "TritonAMDGPUDialect.td"
+include "TritonAMDGPUAttrDefs.td"
 
 
 class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
@@ -46,36 +50,54 @@ class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def TritonAMDGPU_ViewSliceOp : TritonAMDGPU_Op<"view_slice",
-                                [AttrSizedOperandSegments,
-                                 Pure,
-                                 OffsetSizeAndStrideOpInterface
-                                 ]> {
+
+//===----------------------------------------------------------------------===//
+// ViewSliceOp
+//===----------------------------------------------------------------------===//
+
+def TritonAMDGPU_ViewSliceOp
+    : TritonAMDGPU_Op<"view_slice", [AttrSizedOperandSegments,
+                                     OffsetSizeAndStrideOpInterface, Pure]> {
   let summary = "view slice operation";
   let description = [{
-    Represents view of the slice of the tensor in registers. However, unlike 'memdesc_subview' which provides a view in shared memory,
-    'view_slice' specifically slices within registers.
-    Slice of the tensor is required to have the same layout as the original tensor.
+    The "view_slice" operation enables "viewing" a slice of a tensor in
+    registers without data exchange.
+
+    The "view_slice" operation supports the following arguments:
+
+    * source: the base tensor on which to create a "view" tensor
+    * offsets: offsets into the base tensor at which to create the "view"
+    * size: size of the result "view" tensor
+    * strides: the number of strides for each dimension
+
+    Currently only 2D tensors are supported.
+
+    Example 1:
+
+    ```mlir
+    %1 = triton_gpu.convert_layout %0 : tensor<128x128x!tt.ptr<f16>, #blocked>
+        -> tensor<128x128x!tt.ptr<f16>, #blocked2>
+    // create a slice of base tensor %1 with
+    // static offsets and sizes for each dimension
+    %2 = amdgpu.view_slice %0[0, 0] [128, 8] [1, 1] :
+      tensor<128x128x!tt.ptr<f16>, #blocked2> to
+      tensor<128x8x!tt.ptr<f16>, #blocked2>
+    ```
     }];
 
-  let arguments = (ins
-    AnyRankedTensor:$source,
-    Variadic<I32>:$offsets,
-    Variadic<I32>:$sizes,
-    Variadic<I32>:$strides,
-    DenseI64ArrayAttr:$static_offsets,
-    DenseI64ArrayAttr:$static_sizes,
-    DenseI64ArrayAttr:$static_strides
-  );
+  let arguments = (ins AnyRankedTensor:$source, Variadic<I32>:$offsets,
+      Variadic<I32>:$sizes, Variadic<I32>:$strides,
+      DenseI64ArrayAttr:$static_offsets, DenseI64ArrayAttr:$static_sizes,
+      DenseI64ArrayAttr:$static_strides);
   let results = (outs AnyRankedTensor:$result);
 
   let builders = [
-    // Build a ViewSliceOp with mixed static and dynamic entries and the same
-    // result type
-    OpBuilder<(ins "RankedTensorType":$resultType, "Value":$source,
-      "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
-      "ArrayRef<OpFoldResult>":$strides,
-      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
+      // Build a ViewSliceOp with mixed static and dynamic entries and the same
+      // result type
+      OpBuilder<(ins "RankedTensorType":$resultType, "Value":$source,
+          "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
+          "ArrayRef<OpFoldResult>":$strides,
+          CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
   ];
 
   let extraClassDeclaration = [{
