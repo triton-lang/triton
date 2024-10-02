@@ -1613,7 +1613,7 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
 
     This loads a tensor of data based on the descriptor and offsets.
     """
-    type = block_type(dtype, shape)
+    type = block_type(_constexpr_to_value(dtype), shape)
     return semantic.descriptor_load(desc_pointer, offsets, "", "", type, _builder)
 
 
@@ -2308,25 +2308,7 @@ def device_assert(cond, msg="", _builder=None):
     :param msg: the message to print if the assertion fails. This is required to be a string literal.
     '''
     msg = _constexpr_to_value(msg)
-    import inspect
-    frame = inspect.currentframe()
-    module = inspect.getmodule(frame)
-    # The triton function module doesn't have the name attribute.
-    # We use this trick to find the caller.
-    while hasattr(module, "__name__"):
-        frame = frame.f_back
-        module = inspect.getmodule(frame)
-    lineno = 0
-    func_name = 'unknown'
-    file_name = 'unknown'
-    if frame is not None and frame.f_back is not None:
-        func_name = frame.f_code.co_name
-        file_name = frame.f_back.f_code.co_filename
-        # TODO: The line number currently indicates the line
-        # where the triton function is called but not where the
-        # device_assert is called. Need to enhance this.
-        lineno = frame.f_back.f_lineno
-    return semantic.device_assert(semantic.to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
+    return semantic.device_assert(semantic.to_tensor(cond, _builder), msg, _builder)
 
 
 @builtin
@@ -2528,9 +2510,12 @@ class range:
         kernel argument.  The kernel argument only pipelines loads that feed
         into :code:`dot` operations, while this attribute tries to pipeline most
         (though not all) loads in this loop.
+    :param loop_unroll_factor: Tells the Triton IR level loop unroller how many
+        times to unroll a for loop that this range is used with. Less than 2 for
+        this value implies no unrolling.
     """
 
-    def __init__(self, arg1, arg2=None, step=None, num_stages=None):
+    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2542,6 +2527,7 @@ class range:
             self.start = arg1
             self.end = arg2
         self.num_stages = num_stages
+        self.loop_unroll_factor = loop_unroll_factor
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

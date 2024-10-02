@@ -4,12 +4,11 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -195,11 +194,19 @@ struct ExperimentalTensormapFenceproxyAcquireOpConversion
     auto *sizeOpr = ptxBuilder.newConstantOperand(TMA_SIZE_BYTES);
 
     // Define the instruction opcode
+    constexpr int kWarpSize = 32;
+    Value threadId = getThreadId(rewriter, loc);
+    Value pred = icmp_slt(threadId, i32_val(kWarpSize));
     auto &fence =
         *ptxBuilder.create<>("fence.proxy.tensormap::generic.acquire.gpu");
-    fence(descAddrOpr, sizeOpr);
+    fence(descAddrOpr, sizeOpr).predicate(pred);
 
     ptxBuilder.launch(rewriter, loc, getVoidType());
+
+    // We run the fence on a single warp, then use a barrier to synchronize the
+    // rest. This ends up being faster than running the fence on each warp.
+    // TODO: Ideally we only emit one barrier after all fences are issued
+    rewriter.create<NVVM::Barrier0Op>(loc);
 
     rewriter.eraseOp(op);
     return success();
@@ -241,7 +248,7 @@ struct ExperimentalTensormapCreateOpConversion
     Location loc = op->getLoc();
     auto ctx = getContext();
 
-    auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
+    auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
     zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
     tensormap_replace_global_address(loc, ctx, rewriter, smemBase,

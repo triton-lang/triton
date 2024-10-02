@@ -329,7 +329,7 @@ def test_global_access_in_fn_default_arg():
         pass
 
     # No error.
-    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={0: "i32"}, constants={}))
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': "i32"}, constants={}))
 
 
 def test_defaults_assign_no_err():
@@ -341,7 +341,7 @@ def test_defaults_assign_no_err():
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
 
 
-def test_where_warning():
+def test_where_warning(fresh_triton_cache):
 
     @triton.jit
     def kernel():
