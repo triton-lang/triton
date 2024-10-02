@@ -200,8 +200,8 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
             sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
             for row in range(len(sorted_df)):
                 if row == 0:
-                        continue
-                if(len(sorted_df.iloc[row]['name']) > 100):
+                    continue
+                if (len(sorted_df.iloc[row]['name']) > 100):
                     kernel_name = sorted_df.iloc[row]['name'][:100] + "..."
                 else:
                     kernel_name = sorted_df.iloc[row]['name']
@@ -305,7 +305,7 @@ proton-viewer -e ".*test.*" path/to/file.json
 - file_function: include the file name and function name.
 """)
     argparser.add_argument(
-        "--print_sorted", 
+        "--print_sorted",
         action='store_true',
         default=False,
         help="Sort output by metric value instead of chronologically",
@@ -328,7 +328,6 @@ proton-viewer -e ".*test.*" path/to/file.json
         show_metrics(file_name)
     elif metrics:
         parse(metrics, file_name, include, exclude, threshold, depth, format, print_sorted)
-
 
 
 if __name__ == "__main__":

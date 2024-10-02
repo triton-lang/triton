@@ -12,7 +12,7 @@
           "device_id": "1",
           "device_type": "HIP",
           "time (ns)": 204800,
-  	  "pct": 50.0,
+          "pct": 50.0,
           "flops8": 1e11,
           "bytes": 1e8
         }
@@ -28,7 +28,7 @@
           "device_id": "0",
           "device_type": "HIP",
           "time (ns)": 204800,
-	  "pct": 50.0,	  
+          "pct": 50.0,
           "flops8": 1e10,
           "bytes": 1e7
         }
