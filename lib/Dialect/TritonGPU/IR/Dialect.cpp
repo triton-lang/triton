@@ -248,6 +248,30 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
   return order;
 }
 
+SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
+  SmallVector<unsigned> order(rank);
+  // The 'order' field typically represents a descending sorted array of
+  // dimensions based on contiguity. For instance, in axisInfo utilities that
+  // retrieve tensor contiguity, it's assumed that the dimension with the
+  // highest contiguity corresponds to order[0].
+  //
+  // The relation between contiguity and order is only relevant if the layout
+  // interfaces with HBM, as is the case when we load tensor from HBM to
+  // registers in the dot layout to bypass LDS. When bypassing LDS, we make the
+  // following assumptions about tensor layouts:
+  // - Tensor A (opIdx == 0) is considered to be row-major.
+  // - Tensor B (opIdx == 1) is considered to be column-major.
+  //
+  // Based on these assumptions, we define the following orders:
+  // - For opIdx == 0, we assume an order of [1, 0].
+  // - For opIdx == 1, we assume an order of [0, 1].
+  std::iota(order.rbegin(), order.rend(), 0);
+  if (opIdx == 1) {
+    std::swap(order[0], order[1]);
+  }
+  return order;
+}
+
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     return llvm::to_vector(blockedLayout.getOrder());
@@ -262,7 +286,11 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
     SmallVector<unsigned> order(rank);
-    std::iota(order.rbegin(), order.rend(), 0);
+    if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
+      return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
+    } else {
+      std::iota(order.rbegin(), order.rend(), 0);
+    }
     return order;
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -926,6 +954,27 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 SmallVector<unsigned>
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                           Type eltTy) const {
+
+  if (auto parent = mlir::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
+    auto rank = shape.size();
+    assert(rank == 2 || rank == 3);
+
+    auto idx = getOpIdx();
+    assert(idx == 0 || idx == 1);
+
+    SmallVector<unsigned> elemsPerThread(rank);
+
+    auto kWidth = getKWidth();
+    auto rep = parent.getMFMARepForOperands(shape, kWidth, idx);
+
+    if (rank == 3)
+      elemsPerThread[0] = rep[0];
+    elemsPerThread[rank - 2] = (idx == 0) ? rep[1] : rep[1] * kWidth;
+    elemsPerThread[rank - 1] = (idx == 0) ? rep[2] * kWidth : rep[2];
+
+    return elemsPerThread;
+  }
+
   llvm_unreachable("getElemsPerThread is not supported for dot operand");
   return SmallVector<unsigned>();
 }
