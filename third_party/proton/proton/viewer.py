@@ -185,7 +185,7 @@ WHERE p."name" =~ "{exclude}"
     return gf
 
 
-def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None):
+def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None, print_sorted=False):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)
@@ -206,8 +206,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
                 else:
                     kernel_name = sorted_df.iloc[row]['name']
                 print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row]['pct (inc)']))
-        emitWarnings(gf, metrics)
-
+        emit_warnings(gf, metrics)
 
 def emit_warnings(gf, metrics):
     if "bytes (inc)" in metrics:
