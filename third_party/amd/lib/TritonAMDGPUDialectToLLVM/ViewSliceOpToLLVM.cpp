@@ -9,8 +9,6 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using namespace mlir::triton::gpu;
-namespace tta = mlir::triton::amdgpu;
 
 // clang-format off
 /***
@@ -51,24 +49,27 @@ namespace tta = mlir::triton::amdgpu;
 // clang-format on
 
 namespace {
-struct ViewSliceOpConversion : public ConvertOpToLLVMPattern<tta::ViewSliceOp> {
+struct ViewSliceOpConversion
+    : public ConvertOpToLLVMPattern<amdgpu::ViewSliceOp> {
   explicit ViewSliceOpConversion(LLVMTypeConverter &typeConverter,
                                  PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<tta::ViewSliceOp>(typeConverter, benefit) {}
+      : ConvertOpToLLVMPattern<amdgpu::ViewSliceOp>(typeConverter, benefit) {}
 
-  LogicalResult processLayout(tta::ViewSliceOp op, OpAdaptor adaptor,
+  LogicalResult processLayout(amdgpu::ViewSliceOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
-    auto srcTy = dyn_cast<RankedTensorType>(op.getSource().getType());
+    auto srcTy = cast<RankedTensorType>(op.getSource().getType());
     auto srcLayout = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
-    auto elemsPerThread = mlir::triton::gpu::getElemsPerThread(srcTy);
-    auto sizePerThread = getSizePerThread(srcLayout);
+    auto elemsPerThread = triton::gpu::getElemsPerThread(srcTy);
+    auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto totalSizePerThread = sizePerThread[0] * sizePerThread[1];
-    auto order = getOrder(srcLayout);
-    auto shapePerCTA = getShapePerCTATile(srcLayout, srcShape);
+    auto order = triton::gpu::getOrder(srcLayout);
+
+    // Calculate valid total number of workers in each dimension
+    auto shapePerCTA = triton::gpu::getShapePerCTATile(srcLayout, srcShape);
     shapePerCTA[0] =
         std::min(static_cast<unsigned>(srcShape[0]), shapePerCTA[0]);
     shapePerCTA[1] =
@@ -78,12 +79,12 @@ struct ViewSliceOpConversion : public ConvertOpToLLVMPattern<tta::ViewSliceOp> {
     auto sizes = op.getStaticSizes();
 
     // Calculate offsets and sizes in terms of CTA units.
-    std::vector<long int> CTAOffsets{offsets[0] / shapePerCTA[0],
-                                     offsets[1] / shapePerCTA[1]};
-    std::vector<long int> CTASizes{sizes[0] / shapePerCTA[0],
-                                   sizes[1] / shapePerCTA[1]};
-    std::vector<long int> CTAPerShape{srcShape[0] / shapePerCTA[0],
-                                      srcShape[1] / shapePerCTA[1]};
+    std::vector<int64_t> CTAOffsets{offsets[0] / shapePerCTA[0],
+                                    offsets[1] / shapePerCTA[1]};
+    std::vector<int64_t> CTASizes{sizes[0] / shapePerCTA[0],
+                                  sizes[1] / shapePerCTA[1]};
+    std::vector<int64_t> CTAPerShape{srcShape[0] / shapePerCTA[0],
+                                     srcShape[1] / shapePerCTA[1]};
 
     // The diagram above illustrates the graphical representation of the
     // skipElems, tensorStride, and lastIdx variables.
@@ -114,25 +115,23 @@ struct ViewSliceOpConversion : public ConvertOpToLLVMPattern<tta::ViewSliceOp> {
   }
 
   LogicalResult
-  matchAndRewrite(tta::ViewSliceOp op, OpAdaptor adaptor,
+  matchAndRewrite(amdgpu::ViewSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSource().getType();
     if (isa<BlockedEncodingAttr>(op.getSource().getType().getEncoding()) ||
         isa<AMDMfmaEncodingAttr>(op.getSource().getType().getEncoding())) {
       return processLayout(op, adaptor, rewriter);
-    } else {
-      assert(false && "Unsupported layout in viewSlice.");
-      return failure();
     }
+    return failure();
   }
 };
 } // namespace
 
 namespace mlir::triton::AMD {
 
-void populateViewSliceOpTritonAMDGPUToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
+void populateViewSliceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       RewritePatternSet &patterns,
+                                       PatternBenefit benefit) {
   patterns.add<ViewSliceOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD
