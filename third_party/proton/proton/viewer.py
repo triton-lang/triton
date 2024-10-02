@@ -185,7 +185,7 @@ WHERE p."name" =~ "{exclude}"
     return gf
 
 
-def parse(metrics, filename, include, exclude, threshold, depth, format):
+def parse(metrics, filename, include, exclude, threshold, depth, format, sorted):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)
@@ -195,6 +195,17 @@ def parse(metrics, filename, include, exclude, threshold, depth, format):
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
+        if sorted:
+            print("Sorted kernels by first metric percentage")
+            sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
+            for row in range(len(sorted_df)):
+                if row == 0:
+                        continue
+                if(len(sorted_df.iloc[row]['name']) > 100):
+                    kernel_name = sorted_df.iloc[row]['name'][:100] + "..."
+                else:
+                    kernel_name = sorted_df.iloc[row]['name']
+                print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row]['pct (inc)']))
         emitWarnings(gf, metrics)
 
 
@@ -294,6 +305,13 @@ proton-viewer -e ".*test.*" path/to/file.json
 - function_line: include the function name and line number.
 - file_function: include the file name and function name.
 """)
+    argparser.add_argument(
+        "-s",
+        "--sorted", 
+        action='store_true',
+        default=False,
+        help="Sort output by metric value instead of chronologically",
+    )
 
     args, target_args = argparser.parse_known_args()
     assert len(target_args) == 1, "Must specify a file to read"
@@ -305,12 +323,13 @@ proton-viewer -e ".*test.*" path/to/file.json
     threshold = args.threshold
     depth = args.depth
     format = args.format
+    sorted = args.sorted
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        parse(metrics, file_name, include, exclude, threshold, depth, format)
+        parse(metrics, file_name, include, exclude, threshold, depth, format, sorted)
 
 
 if __name__ == "__main__":
