@@ -196,7 +196,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
         if print_sorted:
-            print("Sorted kernels by first metric percentage")
+            print("Sorted kernels by time metric percentage")
             sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
             for row in range(len(sorted_df)):
                 if row == 0:
@@ -207,6 +207,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
                     kernel_name = sorted_df.iloc[row]['name']
                 print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row]['pct (inc)']))
         emit_warnings(gf, metrics)
+
 
 def emit_warnings(gf, metrics):
     if "bytes (inc)" in metrics:
