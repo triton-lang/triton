@@ -546,3 +546,34 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @forOpWithHints
+  tt.func @forOpWithHints(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
+    %c0 = arith.constant 0: index
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128: index
+    %0 = tt.get_program_id x : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.splat %0 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %6, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
+        %9 = tt.load %arg1: tensor<1024x!tt.ptr<f32>, #blocked>
+        // CHECK: tt.addptr {{.*}}, {{.*}} {tt.divisibility = dense<16> : tensor<1xi32>}
+        %11 = tt.addptr %arg1, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        %12 = tt.addptr %11, %3 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        %10 = arith.addf %9, %arg2 : tensor<1024xf32, #blocked>
+        scf.yield %12, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
+    } {"tt.divisibility_arg1"=dense<[16]> : tensor<1xi32>}
+    // CHECK: tt.divisibility_arg1
+    // CHECK-SAME: tt.divisibility_arg4
+    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %11 : tensor<1024xf32, #blocked>
+  }
+}

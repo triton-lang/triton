@@ -1,11 +1,14 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
@@ -15,6 +18,8 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
@@ -85,6 +90,8 @@ private:
     Value offset;
     // Flag to express if we can narrow the uses of the offset down to 32 bits
     bool canNarrow = false;
+    // Collection of attributes that need to be applied to the pointer
+    SmallVector<NamedAttribute> attributes;
 
     // Utility copy functions
     FatPtr copy(Value newBasePtr, Value newOffset) {
@@ -96,6 +103,11 @@ private:
     FatPtr copyWithOffset(Value newBase) {
       return FatPtr{newBase, offset, canNarrow};
     }
+    // Attribute functions
+    void setAttr(NamedAttribute attr) { attributes.push_back(attr); }
+    void setAttrs(ArrayRef<NamedAttribute> attrs) {
+      llvm::append_range(attributes, attrs);
+    }
   };
 
   // Rewrite any operation that needs a pointer
@@ -104,7 +116,14 @@ private:
   // Start from an argument of a function and propagate its fat pointers
   LogicalResult rewritePointer(Value argPtr);
 
+  // Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
+  // obtained by splatting the `fatPtr.basePtr` using the `fatPtr.offset` shape
+  // and adding the offset to it.
   Value createTensorPointer(FatPtr fatPtr, Location loc);
+
+  // Push the attributes of the given operation `op` to the fat pointer
+  // corresponding to `val`
+  void collectFatPointerAttributes(Operation *op, Value val);
 
   // Rewrite a given function, canonicalizing the different pointer arguments of
   // the region
@@ -269,6 +288,46 @@ Value createTensorZero(IRRewriter &rw, Location loc, RankedTensorType type) {
 
 } // namespace
 
+void PointerCanonicalizer::collectFatPointerAttributes(Operation *op,
+                                                       Value val) {
+  auto addBlockArgumentAttr = [&](BlockArgument arg) {
+    // If the value is a block parameter, the operation can specify
+    // an attribute for the given parameter by using `tt.property_argi`
+    // where `argi` refers to the arg number of the given parameter.
+    // So we need to iterate through the property, find the right one
+    // and push the property onto the pointers attributes.
+    llvm::SmallString<8> scratchStr;
+    for (NamedAttribute namedAttr : op->getAttrs()) {
+      scratchStr.clear();
+      llvm::raw_svector_ostream sstream(scratchStr);
+      sstream << "_arg" << arg.getArgNumber();
+      StringRef attrName = namedAttr.getName().getValue();
+      if (attrName.ends_with(scratchStr)) {
+        StringRef newAttrName = attrName.drop_back(scratchStr.size());
+        namedAttr.setName(rewriter.getStringAttr(newAttrName));
+        pointers[val].setAttr(namedAttr);
+        // Propagate the argument to the offset if it is also a block argument
+        if (auto offsetArg = dyn_cast<BlockArgument>(pointers[val].offset)) {
+          scratchStr.clear();
+          sstream << newAttrName << "_arg" << offsetArg.getArgNumber();
+          op->setAttr(scratchStr, namedAttr.getValue());
+        }
+      }
+    }
+  };
+
+  // If it is the i-th block argument, then look if the operation defined some
+  // _argi attribute and add it to the fat pointer attributes
+  if (auto arg = dyn_cast<BlockArgument>(val)) {
+    addBlockArgumentAttr(arg);
+    return;
+  }
+
+  // Otherwise add the attributes of the operation to the fat pointer
+  for (NamedAttribute attr : op->getAttrs())
+    pointers[val].setAttr(attr);
+}
+
 // Offset extraction logic for an addition op:
 // decompose(A+B) = {U(A)+U(B), NU(A)+NU(B)}
 std::pair<Value, Value>
@@ -372,9 +431,6 @@ PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
   return offsets;
 }
 
-// Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
-// obtained by splatting the `fatPtr.basePtr` using the `fatPtr.offset` shape
-// and adding the offset to it.
 Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   Value basePtr = fatPtr.basePtr;
   Value offset = fatPtr.offset;
@@ -390,9 +446,12 @@ Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   Value tensorPtr =
       rewriter.create<triton::SplatOp>(loc, tensorPtrType, basePtr);
 
-  tensorPtr =
+  auto addPtrOp =
       rewriter.create<triton::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
-  return tensorPtr;
+
+  addPtrOp->setAttrs(fatPtr.attributes);
+
+  return addPtrOp.getResult();
 }
 
 // Rewrite a memory operation
@@ -477,6 +536,9 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
     newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
                                                scalarConst);
     pointers[nextPtr] = fatPtr.copyWithOffset(newPtr);
+    // If we are updating the tensor pointer with a uniform value, we can
+    // propagate the attributes of the tensor pointer to the fat pointer.
+    pointers[nextPtr].setAttrs(fatPtr.attributes);
     opToDelete.insert(addPtrOp);
     return success();
   }
@@ -496,6 +558,7 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
   Value fatPtrOffset = fatPtr.offset;
   bool canNarrow = fatPtr.canNarrow;
   Value newOffset = fatPtrOffset;
+  bool propagateAtrs = true;
   if (!isZeroConst(nonUniformOffset)) {
     Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
     canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
@@ -507,9 +570,15 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
 
     newOffset =
         rewriter.create<arith::AddIOp>(curLoc, nonUniformOffset, fatPtrOffset);
+    propagateAtrs = false;
   }
   opToDelete.insert(addPtrOp);
   pointers[nextPtr] = FatPtr{newPtr, newOffset, canNarrow};
+
+  // If we are updating the tensor pointer with a uniform value, we can
+  // propagate the attributes of the tensor pointer to the fat pointer.
+  if (propagateAtrs)
+    pointers[nextPtr].setAttrs(fatPtr.attributes);
   return success();
 }
 
@@ -537,9 +606,12 @@ LogicalResult PointerCanonicalizer::rewriteForOp(scf::ForOp forOp,
   // This is making sure we visit the uses within the forOp region
   Value arg = newForOp.getTiedLoopRegionIterArg(forOperand);
   size_t numIterArgs = newForOp.getNumRegionIterArgs();
-  pointers[arg] =
-      FatPtr{newForOp.getRegionIterArg(numIterArgs - 2),
-             newForOp.getRegionIterArg(numIterArgs - 1), fatPtr.canNarrow};
+  pointers[arg] = fatPtr.copy(newForOp.getRegionIterArg(numIterArgs - 2),
+                              newForOp.getRegionIterArg(numIterArgs - 1));
+
+  // Collect attributes before continuing the visit
+  collectFatPointerAttributes(newForOp, arg);
+
   for (OpOperand &use : arg.getUses())
     queue.push_back(&use);
 
@@ -548,7 +620,6 @@ LogicalResult PointerCanonicalizer::rewriteForOp(scf::ForOp forOp,
   size_t numResults = newForOp->getNumResults();
   pointers[nextPtr] = fatPtr.copy(newForOp->getResult(numResults - 2),
                                   newForOp.getResult(numResults - 1));
-
   opToDelete.insert(forOp);
   return success();
 }
@@ -864,11 +935,13 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
           res = materializeFatPointer(op, curLoc, curOperand->get());
         });
 
-    // Keep propagating the fat pointer down the IR
-    if (nextPtr)
+    // Collect the attributes and Keep propagating the fat pointer down the IR
+    if (nextPtr) {
+      collectFatPointerAttributes(curOp, nextPtr);
       for (OpOperand &use : nextPtr.getUses())
         if (!opToDelete.contains(use.getOwner()))
           queue.push_back(&use);
+    }
   }
   return success();
 }

@@ -32,4 +32,24 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
 
+class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
+    Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])> {
+}
+
+def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
+  let summary = "A placeholder op for instruction scheduling hints within a basic block";
+  let description = [{
+    A placeholder op for instruction scheduling hints applied to instructions within
+    a basic block where the placeholder op is located. This op is primarily intended
+    to be used to adjust instruction scheduling inside the resulting main loop
+    of a `tt.dot` operation. It's easier to identify dot ops at a high level and, thus,
+    to mark intended scheduling regions. The hint ops are eventually lowered
+    into LLVM AMDGPU instruction scheduling primitives, which are meant to control
+    how different kinds of instructions (valu/mfma, global/shared memory, etc.) should
+    interleave for better instruction level parallelism.
+  }];
+
+  let assemblyFormat = [{attr-dict}];
+}
+
 #endif

@@ -51,7 +51,7 @@ struct LocalAllocOpConversion
       return failure();
     Location loc = op->getLoc();
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
@@ -116,7 +116,6 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    // TODO: do we need to check if src is shared ?
     if (isa<SharedEncodingAttr>(srcLayout) &&
         isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
             dstLayout)) {

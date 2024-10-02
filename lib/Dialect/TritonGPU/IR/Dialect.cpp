@@ -256,14 +256,6 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     auto rank = distributedLayout.getWarpsPerCTA().size();
     SmallVector<unsigned> order(rank);
     std::iota(order.rbegin(), order.rend(), 0);
-    auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout);
-    if (!mfmaLayout)
-      return order;
-    // For transposed MFMA layouts, we swap M and N dimensions, which is
-    // always the first two in order; as we can have an optional batch
-    // dimension following them.
-    if (mfmaLayout.getIsTransposed())
-      std::swap(order[0], order[1]);
     return order;
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
@@ -287,6 +279,14 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   }
 
   llvm::report_fatal_error("Unimplemented usage of getOrder");
+  return {};
+};
+
+SmallVector<unsigned> getThreadOrder(Attribute layout) {
+  if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
+    return distributedLayout.getThreadOrder();
+  else
+    llvm::report_fatal_error("Unimplemented usage of getThreadOrder");
   return {};
 };
 
@@ -1536,7 +1536,10 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpOrder() const {
   return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadOrder() const {
-  return ::getOrder(*this);
+  auto order = ::getOrder(*this);
+  if (getIsTransposed())
+    std::swap(order[0], order[1]);
+  return order;
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadsPerWarp() const {
   unsigned rows, cols;

@@ -30,12 +30,12 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal,
+             Value pred, Value falseVal, int64_t alignmentBytes = 0,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 
 // Stores to shared or global memory with predication.
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred,
+             Value pred, int64_t alignmentBytes = 0,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 } // namespace mlir::LLVM::AMD
 

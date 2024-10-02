@@ -8,10 +8,10 @@
           "type": "function"
         },
         "metrics": {
-          "Count": 1,
-          "DeviceId": "1",
-          "DeviceType": "HIP",
-          "Time (ns)": 204800,
+          "count": 1,
+          "device_id": "1",
+          "device_type": "HIP",
+          "time (ns)": 204800,
           "flops8": 1e11,
           "bytes": 1e8
         }
@@ -23,10 +23,10 @@
           "type": "function"
         },
         "metrics": {
-          "Count": 1,
-          "DeviceId": "0",
-          "DeviceType": "HIP",
-          "Time (ns)": 204800,
+          "count": 1,
+          "device_id": "0",
+          "device_type": "HIP",
+          "time (ns)": 204800,
           "flops8": 1e10,
           "bytes": 1e7
         }
@@ -37,8 +37,8 @@
       "type": "function"
     },
     "metrics": {
-      "Count": 0,
-      "Time (ns)": 0,
+      "count": 0,
+      "time (ns)": 0,
       "flops8": 0,
       "bytes": 0
     }

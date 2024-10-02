@@ -7,7 +7,7 @@
 
 namespace proton {
 
-enum class MetricKind { Flexible, Kernel, Count };
+enum class MetricKind { Flexible, Kernel, PCSampling, Count };
 
 using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
 
@@ -143,8 +143,78 @@ private:
   const static inline bool AGGREGABLE[kernelMetricKind::Count] = {
       false, false, true, true, false, false};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
-      "StartTime (ns)", "EndTime (ns)", "Count",
-      "Time (ns)",      "DeviceId",     "DeviceType",
+      "start_time (ns)", "end_time (ns)", "count",
+      "time (ns)",       "device_id",     "device_type",
+  };
+};
+
+class PCSamplingMetric : public Metric {
+public:
+  enum PCSamplingMetricKind : int {
+    NumSamples,
+    NumStalledSamples,
+    StalledBranchResolving,
+    StalledNoInstruction,
+    StalledShortScoreboard,
+    StalledWait,
+    StalledLongScoreboard,
+    StalledTexThrottle,
+    StalledBarrier,
+    StalledMembar,
+    StalledIMCMiss,
+    StalledMIOThrottle,
+    StalledMathPipeThrottle,
+    StalledDrain,
+    StalledLGThrottle,
+    StalledNotSelected,
+    StalledMisc,
+    StalledDispatchStall,
+    StalledSleeping,
+    StalledSelected,
+    Count,
+  };
+
+  PCSamplingMetric()
+      : Metric(MetricKind::PCSampling, PCSamplingMetricKind::Count) {}
+
+  PCSamplingMetric(PCSamplingMetricKind kind, uint64_t samples,
+                   uint64_t stalledSamples)
+      : PCSamplingMetric() {
+    this->values[kind] = stalledSamples;
+    this->values[PCSamplingMetricKind::NumSamples] = samples;
+    this->values[PCSamplingMetricKind::NumStalledSamples] = stalledSamples;
+  }
+
+  virtual const std::string getName() const { return "PCSamplingMetric"; }
+
+  virtual const std::string getValueName(int valueId) const {
+    return VALUE_NAMES[valueId];
+  }
+
+  virtual bool isAggregable(int valueId) const { return true; }
+
+private:
+  const static inline std::string VALUE_NAMES[PCSamplingMetricKind::Count] = {
+      "num_samples",
+      "num_stalled_samples",
+      "stalled_branch_resolving",
+      "stalled_no_instruction",
+      "stalled_short_scoreboard",
+      "stalled_wait",
+      "stalled_long_scoreboard",
+      "stalled_tex_throttle",
+      "stalled_barrier",
+      "stalled_membar",
+      "stalled_imc_miss",
+      "stalled_mio_throttle",
+      "stalled_math_pipe_throttle",
+      "stalled_drain",
+      "stalled_lg_throttle",
+      "stalled_not_Selected",
+      "stalled_misc",
+      "stalled_dispatch_stall",
+      "stalled_sleeping",
+      "stalled_selected",
   };
 };
 

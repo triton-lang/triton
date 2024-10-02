@@ -4930,6 +4930,7 @@ layouts = [
 
 intermediate_layouts = [
     None,
+    SharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
     SharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
     SharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
     SharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
@@ -5265,11 +5266,13 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
+    num_stages = 3
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
+        num_stages = 2
         if in_type_str != 'float8e5':
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
@@ -5283,7 +5286,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
-                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps)
+                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps,
+                            num_pipeline_stages=num_stages)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
@@ -5640,3 +5644,52 @@ def test_unroll_attr(device):
     for unroll_factor in [1, 2, 4, 5, 8]:
         h = _kernel[(1, )](torch.empty(1, device=device), unroll_factor)
         check_loop_unroll_count(h.asm["ttir"], 'tt.atomic_rmw', unroll_factor)
+
+
+@triton.jit
+def sanitize_add(a, b):
+    a64 = a.to(tl.int64)
+    b64 = b.to(tl.int64)
+    r64 = a64 + b64
+    tl.device_assert((r64 >= -2**31) & (r64 <= 2**31 - 1))
+    return a + b
+
+
+def test_side_effectful_reduction(device):
+    if device != "cuda":
+        pytest.skip()
+
+    @triton.jit(debug=True)
+    def sanitize_sum_kernel(Z, X, BLOCK: tl.constexpr):
+        vals = tl.load(X + tl.arange(0, BLOCK))
+        z = tl.reduce(vals, 0, sanitize_add)
+        tl.store(Z, z)
+
+    BLOCK = 512
+    torch.manual_seed(42)
+    X = torch.randint(0, 10, [BLOCK], device="cuda", dtype=torch.int32)
+    X[:300] = 32
+    X[300:] = 0
+    Z = torch.zeros((), device="cuda", dtype=torch.int32)
+    sanitize_sum_kernel[(1, )](Z, X, BLOCK=BLOCK)
+    torch.testing.assert_close(Z, X.sum().to(torch.int32))
+
+
+def test_side_effectful_scan(device):
+    if device != "cuda":
+        pytest.skip()
+
+    @triton.jit(debug=True)
+    def sanitize_cumsum_kernel(Z, X, BLOCK: tl.constexpr):
+        vals = tl.load(X + tl.arange(0, BLOCK))
+        z = tl.associative_scan(vals, 0, sanitize_add)
+        tl.store(Z + tl.arange(0, BLOCK), z)
+
+    BLOCK = 512
+    torch.manual_seed(42)
+    X = torch.randint(0, 10, [BLOCK], device="cuda", dtype=torch.int32)
+    X[:300] = 32
+    X[300:] = 0
+    Z = torch.zeros_like(X)
+    sanitize_cumsum_kernel[(1, )](Z, X, BLOCK=BLOCK)
+    torch.testing.assert_close(Z, X.cumsum(0).to(torch.int32))

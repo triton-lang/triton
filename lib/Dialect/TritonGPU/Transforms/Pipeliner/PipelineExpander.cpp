@@ -461,6 +461,7 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   auto newForOp =
       rewriter.create<scf::ForOp>(forOp.getLoc(), forOp.getLowerBound(), newUb,
                                   forOp.getStep(), newLoopArg);
+  newForOp->setAttrs(forOp->getAttrs());
   // When there are no iter args, the loop body terminator will be created.
   // Since we always create it below, remove the terminator if it was created.
   if (!newForOp.getBody()->empty())
@@ -657,18 +658,25 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   // Emit different versions of the induction variable. They will be
   // removed by dead code if not used.
 
-  // bounds_range = ub - lb
-  // total_iterations = (bounds_range + step - 1) / step
+  // range_diff = ub - lb
+  // total_iterations = (range_diff + step + (step < 0 ? 1 : -1)) / step
   Type t = lb.getType();
-  Value minus1 =
-      rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -1));
-  Value boundsRange = rewriter.create<arith::SubIOp>(loc, ub, lb);
-  Value rangeIncr = rewriter.create<arith::AddIOp>(loc, boundsRange, step);
-  Value rangeDecr = rewriter.create<arith::AddIOp>(loc, rangeIncr, minus1);
-  Value totalIterations = rewriter.create<arith::DivUIOp>(loc, rangeDecr, step);
-
   Value zero =
       rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, 0));
+  Value one =
+      rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, 1));
+  Value minusOne =
+      rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -1));
+  Value stepLessZero = rewriter.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::slt, step, zero);
+  Value stepDecr =
+      rewriter.create<arith::SelectOp>(loc, stepLessZero, one, minusOne);
+
+  Value rangeDiff = rewriter.create<arith::SubIOp>(loc, ub, lb);
+  Value rangeIncrStep = rewriter.create<arith::AddIOp>(loc, rangeDiff, step);
+  Value rangeDecr =
+      rewriter.create<arith::AddIOp>(loc, rangeIncrStep, stepDecr);
+  Value totalIterations = rewriter.create<arith::DivSIOp>(loc, rangeDecr, step);
 
   // Capture predicates for dynamic loops.
   SmallVector<Value> predicates(maxStage + 1);
@@ -679,7 +687,7 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
     Value minusI =
         rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -i));
     Value iterI = rewriter.create<arith::AddIOp>(
-        loc, rewriter.create<arith::AddIOp>(loc, totalIterations, minus1),
+        loc, rewriter.create<arith::AddIOp>(loc, totalIterations, minusOne),
         minusI);
     // newLastIter = lb + step * iterI
     Value newlastIter = rewriter.create<arith::AddIOp>(
