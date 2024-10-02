@@ -195,7 +195,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
-        if sorted:
+        if print_sorted:
             print("Sorted kernels by first metric percentage")
             sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
             for row in range(len(sorted_df)):
@@ -306,8 +306,7 @@ proton-viewer -e ".*test.*" path/to/file.json
 - file_function: include the file name and function name.
 """)
     argparser.add_argument(
-        "-s",
-        "--sorted", 
+        "--print_sorted", 
         action='store_true',
         default=False,
         help="Sort output by metric value instead of chronologically",
@@ -323,13 +322,14 @@ proton-viewer -e ".*test.*" path/to/file.json
     threshold = args.threshold
     depth = args.depth
     format = args.format
-    sorted = args.sorted
+    print_sorted = args.print_sorted
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        parse(metrics, file_name, include, exclude, threshold, depth, format, sorted)
+        parse(metrics, file_name, include, exclude, threshold, depth, format, print_sorted)
+
 
 
 if __name__ == "__main__":
