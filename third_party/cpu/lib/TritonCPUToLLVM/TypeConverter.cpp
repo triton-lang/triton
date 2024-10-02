@@ -1,5 +1,7 @@
 #include "TypeConverter.h"
 
+#include "mlir/Dialect/AMX/AMXDialect.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -12,6 +14,9 @@ TritonCPUToLLVMTypeConverter::TritonCPUToLLVMTypeConverter(
   });
   addConversion([this](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type);
+  });
+  addConversion([&](amx::TileType type) {
+    return LLVM::LLVMX86AMXType::get(type.getContext());
   });
 }
 

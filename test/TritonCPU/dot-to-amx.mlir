@@ -6,16 +6,13 @@
 // CHECK:       %[[RHS_BUF:.+]] = memref.alloca() {alignment = 64 : i64} : memref<16x32xbf16>
 // CHECK:       %[[OUT_MEMREF:.+]] = triton_cpu.extract_memref %2 : <tensor<16x16xf32>> -> memref<16x16xf32, strided<[16, 1]>>
 // CHECK-NEXT:  %[[OUT_INDICES:.+]]:2 = triton_cpu.extract_indices %2 : <tensor<16x16xf32>> -> index, index
-// CHECK:       %[[ACC:.+]] = amx.tile_zero : vector<16x16xf32>
+// CHECK:       %[[ACC:.+]] = amx.tile_zero : !amx.tile<16x16xf32>
 // CHECK-NEXT:  %[[LHS:.+]] = amx.tile_load %3[%4#0, %4#1]
 // CHECK-NEXT:  %[[RHS:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c0{{.*}}]
-// CHECK-NEXT:  %[[RES:.+]] = amx.tile_mulf %[[LHS]], %[[RHS]], %[[ACC]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:  amx.tile_store %[[OUT_MEMREF]][%[[OUT_INDICES]]#0, %[[OUT_INDICES]]#1], %[[RES]] : memref<16x16xf32, strided<[16, 1]>>, vector<16x16xf32>
+// CHECK-NEXT:  %[[RES:.+]] = amx.tile_mulf %[[LHS]], %[[RHS]], %[[ACC]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:  amx.tile_store %[[OUT_MEMREF]][%[[OUT_INDICES]]#0, %[[OUT_INDICES]]#1], %[[RES]] : memref<16x16xf32, strided<[16, 1]>>, !amx.tile<16x16xf32>
 
 #loc = loc(unknown)
-#map = affine_map<(d0, d1, d2) -> (d0, d2)>
-#map1 = affine_map<(d0, d1, d2) -> (d2, d1)>
-#map2 = affine_map<(d0, d1, d2) -> (d0, d1)>
 module {
   tt.func public @test_single_mulf(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32} loc(unknown), %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32} loc(unknown), %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : bf16 loc(#loc)
@@ -49,20 +46,17 @@ module {
 // CHECK:       %[[RHS_BUF:.+]] = memref.alloca() {alignment = 64 : i64} : memref<32x64xi8>
 // CHECK:       %[[OUT_MEMREF:.+]] = triton_cpu.extract_memref %2 : <tensor<16x16xi32>> -> memref<16x16xi32, strided<[16, 1]>>
 // CHECK-NEXT:  %[[OUT_INDICES:.+]]:2 = triton_cpu.extract_indices %2 : <tensor<16x16xi32>> -> index, index
-// CHECK:       %[[ACC:.+]] = amx.tile_zero : vector<16x16xi32>
+// CHECK:       %[[ACC:.+]] = amx.tile_zero : !amx.tile<16x16xi32>
 // CHECK-NEXT:  %[[LHS1:.+]] = amx.tile_load %3[%4#0, %4#1]
 // CHECK-NEXT:  %[[RHS1:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c0{{.*}}]
-// CHECK-NEXT:  %[[RES1:.+]] = amx.tile_muli %[[LHS1]], %[[RHS1]], %[[ACC]] : vector<16x64xi8>, vector<16x64xi8>, vector<16x16xi32>
+// CHECK-NEXT:  %[[RES1:.+]] = amx.tile_muli %[[LHS1]], %[[RHS1]], %[[ACC]] : !amx.tile<16x64xi8>, !amx.tile<16x64xi8>, !amx.tile<16x16xi32>
 // CHECK-NEXT:  %[[IDX1:.+]] = arith.addi %4#1, %c64{{.*}} : index
-// CHECK-NEXT:  %[[LHS2:.+]] = amx.tile_load %3[%4#0, %[[IDX1]]] : memref<16x128xi8, strided<[128, 1]>> into vector<16x64xi8>
-// CHECK-NEXT:  %[[RHS2:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<32x64xi8> into vector<16x64xi8>
-// CHECK-NEXT:  %[[RES2:.+]] = amx.tile_muli %[[LHS2]], %[[RHS2]], %[[RES1]] : vector<16x64xi8>, vector<16x64xi8>, vector<16x16xi32>
-// CHECK-NEXT:  amx.tile_store %[[OUT_MEMREF]][%[[OUT_INDICES]]#0, %[[OUT_INDICES]]#1], %[[RES2]] : memref<16x16xi32, strided<[16, 1]>>, vector<16x16xi32>
+// CHECK-NEXT:  %[[LHS2:.+]] = amx.tile_load %3[%4#0, %[[IDX1]]] : memref<16x128xi8, strided<[128, 1]>> into !amx.tile<16x64xi8>
+// CHECK-NEXT:  %[[RHS2:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<32x64xi8> into !amx.tile<16x64xi8>
+// CHECK-NEXT:  %[[RES2:.+]] = amx.tile_muli %[[LHS2]], %[[RHS2]], %[[RES1]] : !amx.tile<16x64xi8>, !amx.tile<16x64xi8>, !amx.tile<16x16xi32>
+// CHECK-NEXT:  amx.tile_store %[[OUT_MEMREF]][%[[OUT_INDICES]]#0, %[[OUT_INDICES]]#1], %[[RES2]] : memref<16x16xi32, strided<[16, 1]>>, !amx.tile<16x16xi32>
 
 #loc = loc(unknown)
-#map = affine_map<(d0, d1, d2) -> (d0, d2)>
-#map1 = affine_map<(d0, d1, d2) -> (d2, d1)>
-#map2 = affine_map<(d0, d1, d2) -> (d0, d1)>
 module {
   tt.func public @test_single_tile_two_muli(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32} loc(unknown), %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32} loc(unknown), %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
     %c0_i8 = arith.constant 0 : i8 loc(#loc)
@@ -97,27 +91,24 @@ module {
 // CHECK:       %[[RHS_BUF:.+]] = memref.alloca() {alignment = 64 : i64} : memref<32x64xbf16>
 // CHECK:       %[[OUT_MEMREF:.+]] = triton_cpu.extract_memref %2 : <tensor<16x32xf32>> -> memref<16x32xf32, strided<[32, 1]>>
 // CHECK-NEXT:  %[[OUT_INDICES:.+]]:2 = triton_cpu.extract_indices %2 : <tensor<16x32xf32>> -> index, index
-// CHECK:       %[[ACC1:.+]] = amx.tile_zero : vector<16x16xf32>
-// CHECK-NEXT:  %[[ACC2:.+]] = amx.tile_zero : vector<16x16xf32>
-// CHECK-NEXT:  %[[LHS1:.+]] = amx.tile_load %3[%4#0, %4#1] : memref<16x64xbf16, strided<[64, 1]>> into vector<16x32xbf16>
-// CHECK-NEXT:  %[[RHS1:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:  %[[RES1:.+]] = amx.tile_mulf %[[LHS1]], %[[RHS1]], %[[ACC1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK:       %[[RHS2:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:  %[[RES2:.+]] = amx.tile_mulf %[[LHS1]], %[[RHS2]], %[[ACC2]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
+// CHECK:       %[[ACC1:.+]] = amx.tile_zero : !amx.tile<16x16xf32>
+// CHECK-NEXT:  %[[ACC2:.+]] = amx.tile_zero : !amx.tile<16x16xf32>
+// CHECK-NEXT:  %[[LHS1:.+]] = amx.tile_load %3[%4#0, %4#1] : memref<16x64xbf16, strided<[64, 1]>> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:  %[[RHS1:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:  %[[RES1:.+]] = amx.tile_mulf %[[LHS1]], %[[RHS1]], %[[ACC1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK:       %[[RHS2:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:  %[[RES2:.+]] = amx.tile_mulf %[[LHS1]], %[[RHS2]], %[[ACC2]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
 // CHECK:       %[[IDX1:.+]] = arith.addi %4#1, %c32{{.*}} : index
-// CHECK-NEXT:  %[[LHS2:.+]] = amx.tile_load %3[%4#0, %[[IDX1]]] : memref<16x64xbf16, strided<[64, 1]>> into vector<16x32xbf16>
-// CHECK:       %[[RHS3:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:  %[[RES3:.+]] = amx.tile_mulf %[[LHS2]], %[[RHS3]], %[[RES1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:  amx.tile_store %[[OUT_MEMREF]][%[[OUT_INDICES]]#0, %[[OUT_INDICES]]#1], %[[RES3]] : memref<16x32xf32, strided<[32, 1]>>, vector<16x16xf32>
-// CHECK:       %[[RHS4:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:  %[[RES4:.+]] = amx.tile_mulf %[[LHS2]], %[[RHS4]], %[[RES2]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
+// CHECK-NEXT:  %[[LHS2:.+]] = amx.tile_load %3[%4#0, %[[IDX1]]] : memref<16x64xbf16, strided<[64, 1]>> into !amx.tile<16x32xbf16>
+// CHECK:       %[[RHS3:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:  %[[RES3:.+]] = amx.tile_mulf %[[LHS2]], %[[RHS3]], %[[RES1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:  amx.tile_store %[[OUT_MEMREF]][%[[OUT_INDICES]]#0, %[[OUT_INDICES]]#1], %[[RES3]] : memref<16x32xf32, strided<[32, 1]>>, !amx.tile<16x16xf32>
+// CHECK:       %[[RHS4:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:  %[[RES4:.+]] = amx.tile_mulf %[[LHS2]], %[[RHS4]], %[[RES2]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
 // CHECK:       %[[IDX2:.+]] = arith.addi %[[OUT_INDICES]]#1, %c16{{.*}} : index
-// CHECK-NEXT:  amx.tile_store %[[OUT_MEMREF]][%[[OUT_INDICES]]#0, %[[IDX2]]], %[[RES4]] : memref<16x32xf32, strided<[32, 1]>>, vector<16x16xf32>
+// CHECK-NEXT:  amx.tile_store %[[OUT_MEMREF]][%[[OUT_INDICES]]#0, %[[IDX2]]], %[[RES4]] : memref<16x32xf32, strided<[32, 1]>>, !amx.tile<16x16xf32>
 
 #loc = loc(unknown)
-#map = affine_map<(d0, d1, d2) -> (d0, d2)>
-#map1 = affine_map<(d0, d1, d2) -> (d2, d1)>
-#map2 = affine_map<(d0, d1, d2) -> (d0, d1)>
 module {
   tt.func public @test_two_tiles_four_mulf(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32} loc(unknown), %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32} loc(unknown), %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : bf16 loc(#loc)
@@ -161,60 +152,57 @@ module {
 // CHECK-NEXT:    vector.transfer_write %[[LHS1]], %[[LHS_BUF]][%c0{{.*}}, %c0{{.*}}] {in_bounds = [true, true]} : vector<64x64xbf16>, memref<64x64xbf16>
 // CHECK-NEXT:    %[[RHS1:.+]] = arith.extf %[[RHS]] : vector<64x32xf8E5M2> to vector<64x32xbf16>
 // CHECK-COUNT-32: vector.store %{{.+}}, %[[RHS_BUF]][%{{.+}}, %{{.+}}] : memref<32x64xbf16>, vector<64xbf16>
-// CHECK-NEXT:    %[[ACC_0_0:.+]] = amx.tile_load %[[ACC_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<64x32xf32> into vector<16x16xf32>
-// CHECK-NEXT:    %[[ACC_0_1:.+]] = amx.tile_load %[[ACC_BUF]][%c0{{.*}}, %c16{{.*}}] : memref<64x32xf32> into vector<16x16xf32>
-// CHECK-NEXT:    %[[ACC_1_0:.+]] = amx.tile_load %[[ACC_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<64x32xf32> into vector<16x16xf32>
-// CHECK-NEXT:    %[[ACC_1_1:.+]] = amx.tile_load %[[ACC_BUF]][%c16{{.*}}, %c16{{.*}}] : memref<64x32xf32> into vector<16x16xf32>
-// CHECK-NEXT:    %[[LHS_0_0:.+]] = amx.tile_load %[[LHS_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<64x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[LHS_1_0:.+]] = amx.tile_load %[[LHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<64x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[RHS_0_0:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[TMP_0_0:.+]] = amx.tile_mulf %[[LHS_0_0]], %[[RHS_0_0]], %[[ACC_0_0]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    %[[TMP_1_0:.+]] = amx.tile_mulf %[[LHS_1_0]], %[[RHS_0_0]], %[[ACC_1_0]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    %[[RHS_0_1:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[TMP_0_1:.+]] = amx.tile_mulf %[[LHS_0_0]], %[[RHS_0_1]], %[[ACC_0_1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    %[[TMP_1_1:.+]] = amx.tile_mulf %[[LHS_1_0]], %[[RHS_0_1]], %[[ACC_1_1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    %[[LHS_0_1:.+]] = amx.tile_load %[[LHS_BUF]][%c0{{.*}}, %c32{{.*}}] : memref<64x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[LHS_1_1:.+]] = amx.tile_load %[[LHS_BUF]][%c16{{.*}}, %c32{{.*}}] : memref<64x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[RHS_1_0:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[RES_0_0:.+]] = amx.tile_mulf %[[LHS_0_1]], %[[RHS_1_0]], %[[TMP_0_0]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c0{{.*}}, %c0{{.*}}], %[[RES_0_0]] : memref<64x32xf32>, vector<16x16xf32>
-// CHECK-NEXT:    %[[RES_1_0:.+]] = amx.tile_mulf %[[LHS_1_1]], %[[RHS_1_0]], %[[TMP_1_0]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c16{{.*}}, %c0{{.*}}], %[[RES_1_0]] : memref<64x32xf32>, vector<16x16xf32>
-// CHECK-NEXT:    %[[RHS_1_1:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[RES_0_1:.+]] = amx.tile_mulf %[[LHS_0_1]], %[[RHS_1_1]], %[[TMP_0_1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c0{{.*}}, %c16{{.*}}], %[[RES_0_1]] : memref<64x32xf32>, vector<16x16xf32>
-// CHECK-NEXT:    %[[RES_1_1:.+]] = amx.tile_mulf %[[LHS_1_1]], %[[RHS_1_1]], %[[TMP_1_1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c16{{.*}}, %c16{{.*}}], %[[RES_1_1]] : memref<64x32xf32>, vector<16x16xf32>
-// CHECK-NEXT:    %[[ACC_2_0:.+]] = amx.tile_load %[[ACC_BUF]][%c32{{.*}}, %c0{{.*}}] : memref<64x32xf32> into vector<16x16xf32>
-// CHECK-NEXT:    %[[ACC_2_1:.+]] = amx.tile_load %[[ACC_BUF]][%c32{{.*}}, %c16{{.*}}] : memref<64x32xf32> into vector<16x16xf32>
-// CHECK-NEXT:    %[[ACC_3_0:.+]] = amx.tile_load %[[ACC_BUF]][%c48{{.*}}, %c0{{.*}}] : memref<64x32xf32> into vector<16x16xf32>
-// CHECK-NEXT:    %[[ACC_3_1:.+]] = amx.tile_load %[[ACC_BUF]][%c48{{.*}}, %c16{{.*}}] : memref<64x32xf32> into vector<16x16xf32>
-// CHECK-NEXT:    %[[LHS_2_0:.+]] = amx.tile_load %[[LHS_BUF]][%c32{{.*}}, %c0{{.*}}] : memref<64x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[LHS_3_0:.+]] = amx.tile_load %[[LHS_BUF]][%c48{{.*}}, %c0{{.*}}] : memref<64x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[RHS_0_0:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[TMP_2_0:.+]] = amx.tile_mulf %[[LHS_2_0]], %[[RHS_0_0]], %[[ACC_2_0]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    %[[TMP_3_0:.+]] = amx.tile_mulf %[[LHS_3_0]], %[[RHS_0_0]], %[[ACC_3_0]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    %[[RHS_0_1:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[TMP_2_1:.+]] = amx.tile_mulf %[[LHS_2_0]], %[[RHS_0_1]], %[[ACC_2_1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    %[[TMP_3_1:.+]] = amx.tile_mulf %[[LHS_3_0]], %[[RHS_0_1]], %[[ACC_3_1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    %[[LHS_2_1:.+]] = amx.tile_load %[[LHS_BUF]][%c32{{.*}}, %c32{{.*}}] : memref<64x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[LHS_3_1:.+]] = amx.tile_load %[[LHS_BUF]][%c48{{.*}}, %c32{{.*}}] : memref<64x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[RHS_1_0:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[RES_2_0:.+]] = amx.tile_mulf %[[LHS_2_1]], %[[RHS_1_0]], %[[TMP_2_0]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c32{{.*}}, %c0{{.*}}], %[[RES_2_0]] : memref<64x32xf32>, vector<16x16xf32>
-// CHECK-NEXT:    %[[RES_3_0:.+]] = amx.tile_mulf %[[LHS_3_1]], %[[RHS_1_0]], %[[TMP_3_0]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c48{{.*}}, %c0{{.*}}], %[[RES_3_0]] : memref<64x32xf32>, vector<16x16xf32>
-// CHECK-NEXT:    %[[RHS_1_1:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into vector<16x32xbf16>
-// CHECK-NEXT:    %[[RES_2_1:.+]] = amx.tile_mulf %[[LHS_2_1]], %[[RHS_1_1]], %[[TMP_2_1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c32{{.*}}, %c16{{.*}}], %[[RES_2_1]] : memref<64x32xf32>, vector<16x16xf32>
-// CHECK-NEXT:    %[[RES_3_1:.+]] = amx.tile_mulf %[[LHS_3_1]], %[[RHS_1_1]], %[[TMP_3_1]] : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
-// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c48{{.*}}, %c16{{.*}}], %[[RES_3_1]] : memref<64x32xf32>, vector<16x16xf32>
+// CHECK-NEXT:    %[[ACC_0_0:.+]] = amx.tile_load %[[ACC_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<64x32xf32> into !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[ACC_0_1:.+]] = amx.tile_load %[[ACC_BUF]][%c0{{.*}}, %c16{{.*}}] : memref<64x32xf32> into !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[ACC_1_0:.+]] = amx.tile_load %[[ACC_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<64x32xf32> into !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[ACC_1_1:.+]] = amx.tile_load %[[ACC_BUF]][%c16{{.*}}, %c16{{.*}}] : memref<64x32xf32> into !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[LHS_0_0:.+]] = amx.tile_load %[[LHS_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<64x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[LHS_1_0:.+]] = amx.tile_load %[[LHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<64x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[RHS_0_0:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[TMP_0_0:.+]] = amx.tile_mulf %[[LHS_0_0]], %[[RHS_0_0]], %[[ACC_0_0]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[TMP_1_0:.+]] = amx.tile_mulf %[[LHS_1_0]], %[[RHS_0_0]], %[[ACC_1_0]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[RHS_0_1:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[TMP_0_1:.+]] = amx.tile_mulf %[[LHS_0_0]], %[[RHS_0_1]], %[[ACC_0_1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[TMP_1_1:.+]] = amx.tile_mulf %[[LHS_1_0]], %[[RHS_0_1]], %[[ACC_1_1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[LHS_0_1:.+]] = amx.tile_load %[[LHS_BUF]][%c0{{.*}}, %c32{{.*}}] : memref<64x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[LHS_1_1:.+]] = amx.tile_load %[[LHS_BUF]][%c16{{.*}}, %c32{{.*}}] : memref<64x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[RHS_1_0:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[RES_0_0:.+]] = amx.tile_mulf %[[LHS_0_1]], %[[RHS_1_0]], %[[TMP_0_0]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c0{{.*}}, %c0{{.*}}], %[[RES_0_0]] : memref<64x32xf32>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[RES_1_0:.+]] = amx.tile_mulf %[[LHS_1_1]], %[[RHS_1_0]], %[[TMP_1_0]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c16{{.*}}, %c0{{.*}}], %[[RES_1_0]] : memref<64x32xf32>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[RHS_1_1:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[RES_0_1:.+]] = amx.tile_mulf %[[LHS_0_1]], %[[RHS_1_1]], %[[TMP_0_1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c0{{.*}}, %c16{{.*}}], %[[RES_0_1]] : memref<64x32xf32>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[RES_1_1:.+]] = amx.tile_mulf %[[LHS_1_1]], %[[RHS_1_1]], %[[TMP_1_1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c16{{.*}}, %c16{{.*}}], %[[RES_1_1]] : memref<64x32xf32>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[ACC_2_0:.+]] = amx.tile_load %[[ACC_BUF]][%c32{{.*}}, %c0{{.*}}] : memref<64x32xf32> into !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[ACC_2_1:.+]] = amx.tile_load %[[ACC_BUF]][%c32{{.*}}, %c16{{.*}}] : memref<64x32xf32> into !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[ACC_3_0:.+]] = amx.tile_load %[[ACC_BUF]][%c48{{.*}}, %c0{{.*}}] : memref<64x32xf32> into !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[ACC_3_1:.+]] = amx.tile_load %[[ACC_BUF]][%c48{{.*}}, %c16{{.*}}] : memref<64x32xf32> into !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[LHS_2_0:.+]] = amx.tile_load %[[LHS_BUF]][%c32{{.*}}, %c0{{.*}}] : memref<64x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[LHS_3_0:.+]] = amx.tile_load %[[LHS_BUF]][%c48{{.*}}, %c0{{.*}}] : memref<64x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[RHS_0_0:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[TMP_2_0:.+]] = amx.tile_mulf %[[LHS_2_0]], %[[RHS_0_0]], %[[ACC_2_0]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[TMP_3_0:.+]] = amx.tile_mulf %[[LHS_3_0]], %[[RHS_0_0]], %[[ACC_3_0]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[RHS_0_1:.+]] = amx.tile_load %[[RHS_BUF]][%c0{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[TMP_2_1:.+]] = amx.tile_mulf %[[LHS_2_0]], %[[RHS_0_1]], %[[ACC_2_1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[TMP_3_1:.+]] = amx.tile_mulf %[[LHS_3_0]], %[[RHS_0_1]], %[[ACC_3_1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[LHS_2_1:.+]] = amx.tile_load %[[LHS_BUF]][%c32{{.*}}, %c32{{.*}}] : memref<64x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[LHS_3_1:.+]] = amx.tile_load %[[LHS_BUF]][%c48{{.*}}, %c32{{.*}}] : memref<64x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[RHS_1_0:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c0{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[RES_2_0:.+]] = amx.tile_mulf %[[LHS_2_1]], %[[RHS_1_0]], %[[TMP_2_0]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c32{{.*}}, %c0{{.*}}], %[[RES_2_0]] : memref<64x32xf32>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[RES_3_0:.+]] = amx.tile_mulf %[[LHS_3_1]], %[[RHS_1_0]], %[[TMP_3_0]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c48{{.*}}, %c0{{.*}}], %[[RES_3_0]] : memref<64x32xf32>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[RHS_1_1:.+]] = amx.tile_load %[[RHS_BUF]][%c16{{.*}}, %c32{{.*}}] : memref<32x64xbf16> into !amx.tile<16x32xbf16>
+// CHECK-NEXT:    %[[RES_2_1:.+]] = amx.tile_mulf %[[LHS_2_1]], %[[RHS_1_1]], %[[TMP_2_1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c32{{.*}}, %c16{{.*}}], %[[RES_2_1]] : memref<64x32xf32>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    %[[RES_3_1:.+]] = amx.tile_mulf %[[LHS_3_1]], %[[RHS_1_1]], %[[TMP_3_1]] : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
+// CHECK-NEXT:    amx.tile_store %[[ACC_BUF]][%c48{{.*}}, %c16{{.*}}], %[[RES_3_1]] : memref<64x32xf32>, !amx.tile<16x16xf32>
 // CHECK:       %[[RES:.+]] = vector.transfer_read %[[ACC_BUF]][%c0{{.*}}, %c0{{.*}}], %{{.*}} {in_bounds = [true, true]} : memref<64x32xf32>, vector<64x32xf32>
 
 #loc = loc(unknown)
-#map = affine_map<(d0, d1, d2) -> (d0, d2)>
-#map1 = affine_map<(d0, d1, d2) -> (d2, d1)>
-#map2 = affine_map<(d0, d1, d2) -> (d0, d1)>
 module {
   tt.func public @test_loop_acc_two_blocks(%arg0: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32} loc(unknown), %arg1: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32} loc(unknown), %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f8E5M2 loc(#loc)
