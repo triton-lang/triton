@@ -3132,7 +3132,7 @@ static std::string paddedString(int value, int max) {
   return str;
 }
 
-std::string mlir::triton::gpu::getSharedLayoutStr(RankedTensorType tensorType,
+std::string getSharedLayoutStr(RankedTensorType tensorType,
                                                   bool useHWPointOfView) {
   auto layout = tensorType.getEncoding();
   if (!layout)
@@ -3248,8 +3248,7 @@ std::string mlir::triton::gpu::getSharedLayoutStr(RankedTensorType tensorType,
   return layoutStr;
 }
 
-std::string
-mlir::triton::gpu::getDistributedLayoutStr(RankedTensorType tensorType,
+std::string getDistributedLayoutStr(RankedTensorType tensorType,
                                            bool useHWPointOfView) {
   auto layout = tensorType.getEncoding();
   if (!layout)
