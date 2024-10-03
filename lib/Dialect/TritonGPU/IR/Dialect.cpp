@@ -3256,10 +3256,13 @@ std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
 
 llvm::SmallVector<unsigned>
 mlir::triton::gpu::expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o) {
-  int oldRank = o.size();
+  int rank = o.size();
+  assert(rank == 2 || rank == 3);
+  if (rank == 3)
+    return llvm::SmallVector<unsigned>(o);
   llvm::SmallVector<unsigned> expanded(3, 0);
-  for (int i = 0; i < oldRank; ++i)
-    expanded[i] += o[i] + 3 - oldRank;
+  for (int i = 0; i < rank; ++i)
+    expanded[i] += o[i] + 1;
   return expanded;
 }
 

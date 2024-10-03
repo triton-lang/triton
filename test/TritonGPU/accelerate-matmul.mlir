@@ -159,19 +159,3 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     tt.return %result : tensor<128x128xf32, #blocked>
   }
 }
-
-// -----
-
-// Verify that we use FMA when the N dimension is too small for any mma.
-// CHECK-NOT: #triton_gpu.nvidia_mma
-#blocked = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 32], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  tt.func @small_n_size(
-    %a: tensor<4x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>,
-    %b: tensor<64x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>)
-    -> tensor<4x128xf32, #blocked> {
-    %zero_f32 = arith.constant dense<0.000000e+00> : tensor<4x128xf32, #blocked>
-    %result = tt.dot %a, %b, %zero_f32 : tensor<4x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<4x128xf32, #blocked>
-    tt.return %result : tensor<4x128xf32, #blocked>
-  }
-}

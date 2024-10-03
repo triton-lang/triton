@@ -1480,9 +1480,8 @@ inline bool isLayoutMmaV1(Attribute layout) {
 /// @brief Extend 2d shared object to 3d.
 /// Generalizing dot operand shared to distributing conversion.
 ///
-/// If tensor has 3 dimensions, returns existing shared object.
-/// If tensor shape is [M, N], return shared object describing tensor of shape
-/// [1, M, N]
+/// If tensor has 3 dimensions, returns original shared object.
+/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
 ///
 /// @param rewriter
 /// @param loc
