@@ -552,19 +552,30 @@ bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   int nonKDim = dotOperandLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
   auto ctaLayout = blockedLayout.getCTALayout();
 
-  // Layout of blocked dot operand matches with parent blocked layout except K
-  // dim: while vector of elements across k dim is stored by one thread.
+  // The following logic checks that a source blocked layout matches a
+  // destination dot operand layout. This means that given tensor in source
+  // layout could be converted into destination layout without any data movement
+  // between registers or threads.
+  //
+  // It is considered a match if
+  // 1) Each thread in source layout holds a whole copy of all elements along
+  //    the K dimension of a tensor
+  // 2) Distribution of data along all other non-K dimensions(Batch/M/N)
+  //    matches between source and destination parent layouts.
+  //
+  // First condition comes from the property of dot operand layout with Blocked
+  // parent: size per threads along K dimension equals size of the tensor along
+  // K. Second condition comes from other property: dot operand layout
+  // inherits non-K dimensions from it's parent layout.
+  //
   // clang-format off
   //
-  // i.e. tensor<64x32xf16, #dot_op<{opIdx=0, parent=#blocked}>> will have sizePerThread = [<depends on #blocked>, 32]
-  // and  tensor<64x32xf16, #dot_op<{opIdx=1, parent=#blocked}>> will have sizePerThread = [64, <depends on #blocked>]
-  //
-  // For example tensor<64x32xf16, #dot_op<{opIdx=0, parent=#blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1]}>>>
-  // could be converted to tensor<128x64xf16,               #blocked<{sizePerThread = [2, 32], threadsPerWarp = [32, 1]}>>
+  // For example, following conversion is a no op:
+  //   tensor<128x32xf16,                          #blocked<{sizePerThread = [2, 32], threadsPerWarp = [32, 1]}>>
+  //     ->
+  //   tensor<128x32xf16, #dot_op<{opIdx=0, parent=#blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1]}>>>
   //
   // clang-format on
-  // Following conditions verifies that src layout holds all elements across K
-  // per thread, and the rest of src and dst layout matches.
   bool ctaLayoutCompatible =
       ctaLayout.getCTASplitNum()[kDim] == 1 &&
       blockedLayout.getCTALayout() == parentLayout.getCTALayout();
