@@ -1,5 +1,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+#include <cstdint>
 #include <numeric>
 
 #include "mlir/IR/DialectImplementation.h"
@@ -3128,8 +3129,124 @@ static std::string paddedString(int value, int max) {
   return str;
 }
 
-std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
-                                            bool useHWPointOfView) {
+std::string getSharedLayoutStr(RankedTensorType tensorType,
+                               bool useHWPointOfView) {
+  auto layout = tensorType.getEncoding();
+  if (!layout)
+    return "";
+
+  std::optional<LinearLayout> ll =
+      triton::gpu::toLinearLayout(tensorType.getShape(), layout);
+  if (!ll.has_value())
+    llvm::report_fatal_error("Failed to convert layout to linear layout");
+
+  StringAttr kOffset = StringAttr::get(tensorType.getContext(), "offset");
+  StringAttr kBlock = StringAttr::get(tensorType.getContext(), "block");
+  int64_t tensorSize = product(tensorType.getShape());
+  unsigned numBlocks = getNumCTAs(layout);
+  int32_t blockSize = tensorSize / numBlocks;
+
+  // elementMapping is for the non-hw layout, offsetMapping for hw-layout
+  std::vector<std::string> elementMapping(tensorSize);
+  std::vector<std::string> offsetMapping;
+
+  // Shared layouts are a mapping of (block, offset) --> (...)
+
+  // We can just use a single int to index into elementMapping because
+  // the 'swizzle' operation rearranges the indicies---and we want to keep it
+  // that way
+  int32_t idx = 0;
+  // Enumerate all the offsets for each block
+  for (int32_t block = 0; block < numBlocks; block++) {
+    for (int32_t offset = 0; offset < blockSize; offset++) {
+      SmallVector<std::pair<StringAttr, int32_t>> inputs = {
+          {kBlock, block},
+          {kOffset, offset},
+      };
+
+      SmallVector<std::pair<StringAttr, int32_t>> outputs = ll->apply(inputs);
+
+      std::string sharedInfo = "(";
+      std::string &value = elementMapping[idx];
+
+      if (!value.empty())
+        value += "|";
+
+      value += "(";
+      // We can build up both strings (for hw/non-hw layouts) concurrently
+      for (int i = 0; i < outputs.size(); i++) {
+        // Based on the formatting from LinearLayout::toString, the format for
+        // the hw layout is slightly different. HW layouts use "," vs ":".
+        if (i > 0) {
+          sharedInfo += ",";
+          value += ":";
+        }
+        auto index = paddedString(outputs[i].second, tensorType.getDimSize(i));
+        sharedInfo += index;
+        value += index;
+      }
+      value += ")";
+      sharedInfo += ")";
+
+      offsetMapping.push_back(sharedInfo);
+
+      idx++;
+    }
+  }
+
+  std::string layoutStr;
+
+  if (!useHWPointOfView) {
+    int rank = tensorType.getRank();
+    bool newLine = true;
+    for (int i = 0; i < tensorSize; i++) {
+      auto indices = delinearizeIndex(i, tensorType.getShape());
+      int numOpenBracket = 0;
+      for (int j = rank - 1; j >= 0; j--) {
+        if (indices[j] % tensorType.getDimSize(j) != 0)
+          break;
+        layoutStr += "[";
+        numOpenBracket++;
+      }
+      if (newLine) {
+        for (int j = 0; j < rank - numOpenBracket; j++)
+          layoutStr += " ";
+        newLine = false;
+      }
+
+      layoutStr += elementMapping[i];
+      auto nextIndices = delinearizeIndex(i + 1, tensorType.getShape());
+      for (int j = rank - 1; j >= 0; j--) {
+        if (nextIndices[j] % tensorType.getDimSize(j) != 0)
+          break;
+        layoutStr += "]";
+      }
+      if (nextIndices.back() % tensorType.getShape().back() == 0) {
+        layoutStr += "\n";
+        newLine = true;
+      } else {
+        layoutStr += ",";
+      }
+    }
+  } else {
+    // For the HW view here, print the (block, offset) --> (r,c) mapping
+    uint32_t idx = 0;
+    for (int32_t block = 0; block < numBlocks; block++) {
+      layoutStr += "Block: " + std::to_string(block) + ":\n";
+      for (int32_t offset = 0; offset < (tensorSize / numBlocks); offset++) {
+        layoutStr += "Offset: " + std::to_string(offset) + " -> ";
+        layoutStr += offsetMapping[idx];
+        layoutStr += "\n";
+        idx++;
+      }
+    }
+  }
+
+  return layoutStr;
+}
+
+std::string getDistributedLayoutStr(RankedTensorType tensorType,
+                                    bool useHWPointOfView) {
   auto layout = tensorType.getEncoding();
   if (!layout)
     return "";
@@ -3196,7 +3313,7 @@ std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
   }
   std::string layoutStr;
   if (!useHWPointOfView) {
-    // Printing the threads containning each elements of the tensor.
+    // Printing the threads containing each elements of the tensor.
     int rank = tensorType.getRank();
     bool newLine = true;
     for (int i = 0; i < tensorSize; i++) {
@@ -3264,6 +3381,24 @@ mlir::triton::gpu::expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o) {
   for (int i = 0; i < rank; ++i)
     expanded[i] += o[i] + 1;
   return expanded;
+}
+
+std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
+                                            bool useHWPointOfView) {
+  auto layout = tensorType.getEncoding();
+
+  // tensorType is needed later on (e.g., getDimSize(j)), so we still have to
+  // pass it as a param
+  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+    return getSharedLayoutStr(tensorType, useHWPointOfView);
+  } else if (auto distributedLayout =
+                 mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
+    return getDistributedLayoutStr(tensorType, useHWPointOfView);
+  }
+
+  // else unimplemented, return error
+  llvm::report_fatal_error("Unimplemented usage of getLayoutStr");
+  return "";
 }
 
 void mlir::triton::gpu::dumpLayout(RankedTensorType tensorType) {
