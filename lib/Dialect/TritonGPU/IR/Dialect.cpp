@@ -3133,7 +3133,7 @@ static std::string paddedString(int value, int max) {
 }
 
 std::string getSharedLayoutStr(RankedTensorType tensorType,
-                                                  bool useHWPointOfView) {
+                               bool useHWPointOfView) {
   auto layout = tensorType.getEncoding();
   if (!layout)
     return "";
@@ -3249,7 +3249,7 @@ std::string getSharedLayoutStr(RankedTensorType tensorType,
 }
 
 std::string getDistributedLayoutStr(RankedTensorType tensorType,
-                                           bool useHWPointOfView) {
+                                    bool useHWPointOfView) {
   auto layout = tensorType.getEncoding();
   if (!layout)
     return "";

@@ -169,17 +169,18 @@ Warp1:
 
 TEST_F(DumpLayoutTest, Simple1DShared) {
   std::string refStr =
-      "[( 0),( 1),( 2),( 3),( 4),( 5),( 6),( 7),( 8),( 9),(10),(11),(12),(13),"
-      "(14),(15),(16),(17),(18),(19),(20),(21),(22),(23),(24),(25),(26),(27),("
-      "28),(29),(30),(31)]\n";
+      "[( 0),( 1),( 2),( 3),( 4),( 5),( 6),( 7),( 8),( "
+      "9),(10),(11),(12),(13),(14),(15),(16),(17),(18),(19),(20),(21),(22),(23)"
+      ",(24),(25),(26),(27),(28),(29),(30),(31)]";
 
-  auto sharedLayout = shared(/* vec */ 1, /* perPhase */ 1, /* maxPhase */ 4,
-                             /* hasLeadingOffset */ false,
-                             /* CTALayout, single CTA layout */
-                             {1},  /* cpg */
-                             {1},  /* csplit */
-                             {1},  /* ord, row-major */
-                             {1}); /* cOrd */
+  auto sharedLayout = shared(1,     /* vec */
+                             1,     /* perPhase */
+                             4,     /* maxPhase */
+                             false, /* hasLeadingOffset */
+                             {1},   /* cpg */
+                             {1},   /* csplit */
+                             {1},   /* ord, row-major */
+                             {1});  /* cOrd */
 
   auto elemTy = FloatType::getF16(sharedLayout.getContext());
   auto tensorType = RankedTensorType::get({32}, elemTy, sharedLayout);
@@ -225,11 +226,12 @@ TEST_F(DumpLayoutTest, Larger2DShared) {
       "(7:24),(7:25),(7:26),(7:27),(7:28),(7:29),(7:30),(7:31),(7:16),(7:17),("
       "7:18),(7:19),(7:20),(7:21),(7:22),(7:23),(7: 8),(7: "
       "9),(7:10),(7:11),(7:12),(7:13),(7:14),(7:15),(7: 0),(7: 1),(7: 2),(7: "
-      "3),(7: 4),(7: 5),(7: 6),(7: 7)]]\n";
+      "3),(7: 4),(7: 5),(7: 6),(7: 7)]]";
 
-  auto sharedLayout = shared(/* vec */ 8, /* perPhase */ 2, /* maxPhase */ 8,
-                             /* hasLeadingOffset */ false,
-                             /* CTALayout, single CTA layout */
+  auto sharedLayout = shared(8,       /* vec */
+                             2,       /* perPhase */
+                             8,       /* maxPhase */
+                             false,   /* hasLeadingOffset */
                              {1, 1},  /* cpg */
                              {1, 1},  /* csplit */
                              {1, 0},  /* ord, row-major */
@@ -497,11 +499,11 @@ Offset: 251 -> (7,21)
 Offset: 252 -> (7,18)
 Offset: 253 -> (7,19)
 Offset: 254 -> (7,16)
-Offset: 255 -> (7,17)
-)";
-  auto sharedLayoutHW = shared(/* vec */ 2, /* perPhase */ 1, /* maxPhase */ 32,
-                               /* hasLeadingOffset */ false,
-                               /* CTALayout, single CTA layout */
+Offset: 255 -> (7,17))";
+  auto sharedLayoutHW = shared(2,       /* vec */
+                               1,       /* perPhase */
+                               32,      /* maxPhase */
+                               false,   /* hasLeadingOffset */
                                {1, 1},  /* cpg */
                                {1, 1},  /* csplit */
                                {1, 0},  /* ord, row-major */
