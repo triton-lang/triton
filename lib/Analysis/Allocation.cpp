@@ -115,7 +115,12 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   assert(!isMfmaToDotShortcut(srcTy, dstTy));
 
-  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
+  // FIXME This is NOT entirely correct
+  // This should be getElemOrder, but we don't have such a method
+  // TODO Implement getElemOrder and make sure it's consistent with
+  // getContigPerThread
+  auto inOrd = gpu::getThreadOrder(srcLayout);
+  auto outOrd = gpu::getThreadOrder(dstLayout);
   scratchConfig.order = outOrd;
 
   unsigned srcContigPerThread =
