@@ -146,3 +146,16 @@ def test_scope_properties():
                 assert child["metrics"]["a"] == 1.0
             elif child["frame"]["name"] == "test0":
                 assert child["metrics"]["a"] == "1"
+
+
+def test_throw():
+    # Catch an exception thrown by c++
+    session_id = 100
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+        session_id = proton.start(f.name.split(".")[0])
+        try:
+            proton.activate(session_id + 1)
+        except Exception as e:
+            assert "Session has not been initialized: " + str(session_id + 1) in str(e)
+        finally:
+            proton.finalize()
