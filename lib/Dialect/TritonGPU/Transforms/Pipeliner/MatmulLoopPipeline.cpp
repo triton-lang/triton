@@ -1234,7 +1234,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   tt::CoarseSchedule coarseSchedule(numStages);
 
   scheduleLoads(forOp, coarseSchedule, rootUsers, numStages);
-  if (coarseSchedule.opToStageAndCluster.size() == 0)
+  if (coarseSchedule.empty())
     return false;
 
   LLVM_DEBUG({
