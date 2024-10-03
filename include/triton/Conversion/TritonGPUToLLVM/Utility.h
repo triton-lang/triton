@@ -228,6 +228,10 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value);
 
+LLVM::CallIntrinsicOp createLLVMIntrinsicCall(OpBuilder &builder, Location loc,
+                                              StringRef intrinsic,
+                                              TypeRange types, ValueRange args);
+
 // Is v an integer or floating-point scalar constant equal to 0?
 bool isConstantZero(Value v);
 

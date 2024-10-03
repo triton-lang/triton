@@ -69,14 +69,9 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");
-  SmallVector<Value> operands = {cmp};
-  LLVM::FastmathFlagsAttr defaultFlags{};
-  auto callOp = rewriter.create<LLVM::CallIntrinsicOp>(
-      loc, type, stringAttr, operands, defaultFlags,
-      /*op_bundle_operands=*/ArrayRef<ValueRange>{},
-      /*op_bundle_tags=*/ArrayRef<std::string>{});
-  return callOp->getResult(0);
+  return LLVM::createLLVMIntrinsicCall(rewriter, loc, "llvm.amdgcn.ballot",
+                                       type, cmp)
+      ->getResult(0);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,

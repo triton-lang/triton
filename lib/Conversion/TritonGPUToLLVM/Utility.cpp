@@ -518,6 +518,22 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                           builder.getIntegerAttr(ty, value));
 }
 
+LLVM::CallIntrinsicOp createLLVMIntrinsicCall(OpBuilder &builder, Location loc,
+                                              StringRef intrinsic,
+                                              TypeRange types,
+                                              ValueRange args) {
+  llvm::SmallVector<mlir::NamedAttribute, 4> attrs;
+  attrs.push_back(
+      builder.getNamedAttr("intrin", builder.getStringAttr(intrinsic)));
+  attrs.push_back(builder.getNamedAttr("op_bundle_sizes",
+                                       builder.getDenseI32ArrayAttr({})));
+  attrs.push_back(builder.getNamedAttr(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({static_cast<int>(args.size()), 0})));
+
+  return builder.create<LLVM::CallIntrinsicOp>(loc, types, args, attrs);
+}
+
 bool isConstantZero(Value v) {
   if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
     if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
