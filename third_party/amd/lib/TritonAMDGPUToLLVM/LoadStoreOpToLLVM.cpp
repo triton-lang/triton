@@ -119,6 +119,10 @@ struct LoadStoreConversionBase {
     return axisAnalysisPass.getMaskAlignment(mask);
   }
 
+  unsigned getPtrAlignment(Value ptr) const {
+    return axisAnalysisPass.getPtrAlignment(ptr);
+  }
+
 protected:
   const AMD::TargetInfo &targetInfo;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
@@ -193,7 +197,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     // vectorized iteration through all the pointer/mask/other elements
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    const size_t valueElemNBytes = valueElemNBits / 8;
     const int numVecs = numElems / vec;
+    int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
@@ -230,8 +236,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         falseVal = v;
       }
 
-      auto loadVal =
-          llLoad(rewriter, loc, ptr, vecTy, pred, falseVal, cacheMod);
+      Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
+                             ptrAlignmentBytes, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -294,9 +300,10 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    const size_t dtsize =
-        std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
-    const size_t valueElemNBits = dtsize * 8;
+    const size_t valueElemNBits =
+        std::max<int>(8, valueElemTy.getIntOrFloatBitWidth());
+    const size_t valueElemNBytes = valueElemNBits / 8;
+    int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
     auto cacheMod = op.getCache();
     const int numVecs = elemsPerThread / vec;
@@ -328,7 +335,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
             rewriter, loc, this->getTypeConverter()->getIndexType(), s);
         storeVal = insert_element(vecTy, storeVal, otherElem, indexVal);
       }
-      llStore(rewriter, loc, ptr, storeVal, pred, cacheMod);
+      llStore(rewriter, loc, ptr, storeVal, pred, ptrAlignmentBytes, cacheMod);
     } // end vec
     rewriter.eraseOp(op);
     return success();
@@ -457,7 +464,8 @@ struct AtomicCASOpConversion
         if (atomicNeedsSharedMemory(op.getResult())) {
           // Extract the new_loaded value from the pair.
           Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr =
+              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
           store(newLoaded, atomPtr);
         }
 
@@ -475,7 +483,8 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        Value atomPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
@@ -625,7 +634,8 @@ struct AtomicRMWOpConversion
       }
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr =
+              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
           store(atom, atomPtr);
         }
       }
@@ -644,7 +654,8 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        Value atomPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         barrier();
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});

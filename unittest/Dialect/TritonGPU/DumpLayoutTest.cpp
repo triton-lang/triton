@@ -21,6 +21,15 @@ public:
         &ctx, spt, tpw, wpb, ord, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
+  SharedEncodingAttr shared(unsigned vec, unsigned perPhase, unsigned maxPhase,
+                            bool hasLeadingOffset, ArrayRef<unsigned> cpg,
+                            ArrayRef<unsigned> cSplit, ArrayRef<unsigned> ord,
+                            ArrayRef<unsigned> cOrd) {
+    return SharedEncodingAttr::get(&ctx, vec, perPhase, maxPhase, ord,
+                                   CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd),
+                                   hasLeadingOffset);
+  }
+
   void assertSameStr(const std::string &refStr, const std::string &output) {
     if (refStr != output) {
       llvm::outs() << "RefStr =\n"
@@ -155,6 +164,356 @@ Warp1:
 (5,0,11), (5,0,15), (5,1,11), (5,1,15), (7,0,11), (7,0,15), (7,1,11), (7,1,15)
 )";
   std::string layoutHW = getLayoutStr(tensorType, /*useHWPointOfView=*/true);
+  assertSameStr(refHWRep, layoutHW);
+}
+
+TEST_F(DumpLayoutTest, Simple1DShared) {
+  std::string refStr =
+      "[( 0),( 1),( 2),( 3),( 4),( 5),( 6),( 7),( 8),( "
+      "9),(10),(11),(12),(13),(14),(15),(16),(17),(18),(19),(20),(21),(22),(23)"
+      ",(24),(25),(26),(27),(28),(29),(30),(31)]\n";
+
+  auto sharedLayout = shared(1,     /* vec */
+                             1,     /* perPhase */
+                             4,     /* maxPhase */
+                             false, /* hasLeadingOffset */
+                             {1},   /* cpg */
+                             {1},   /* csplit */
+                             {1},   /* ord, row-major */
+                             {1});  /* cOrd */
+
+  auto elemTy = FloatType::getF16(sharedLayout.getContext());
+  auto tensorType = RankedTensorType::get({32}, elemTy, sharedLayout);
+  std::string layout = getLayoutStr(tensorType, /*useHWPointOfView=*/false);
+  assertSameStr(refStr, layout);
+}
+
+TEST_F(DumpLayoutTest, Larger2DShared) {
+
+  std::string refStr =
+      "[[(0: 0),(0: 1),(0: 2),(0: 3),(0: 4),(0: 5),(0: 6),(0: 7),(0: 8),(0: "
+      "9),(0:10),(0:11),(0:12),(0:13),(0:14),(0:15),(0:16),(0:17),(0:18),(0:19)"
+      ",(0:20),(0:21),(0:22),(0:23),(0:24),(0:25),(0:26),(0:27),(0:28),(0:29),("
+      "0:30),(0:31)]\n"
+      "[ (1: 0),(1: 1),(1: 2),(1: 3),(1: 4),(1: 5),(1: 6),(1: 7),(1: 8),(1: "
+      "9),(1:10),(1:11),(1:12),(1:13),(1:14),(1:15),(1:16),(1:17),(1:18),(1:19)"
+      ",(1:20),(1:21),(1:22),(1:23),(1:24),(1:25),(1:26),(1:27),(1:28),(1:29),("
+      "1:30),(1:31)]\n"
+      "[ (2: 8),(2: 9),(2:10),(2:11),(2:12),(2:13),(2:14),(2:15),(2: 0),(2: "
+      "1),(2: 2),(2: 3),(2: 4),(2: 5),(2: 6),(2: "
+      "7),(2:24),(2:25),(2:26),(2:27),(2:28),(2:29),(2:30),(2:31),(2:16),(2:17)"
+      ",(2:18),(2:19),(2:20),(2:21),(2:22),(2:23)]\n"
+      "[ (3: 8),(3: 9),(3:10),(3:11),(3:12),(3:13),(3:14),(3:15),(3: 0),(3: "
+      "1),(3: 2),(3: 3),(3: 4),(3: 5),(3: 6),(3: "
+      "7),(3:24),(3:25),(3:26),(3:27),(3:28),(3:29),(3:30),(3:31),(3:16),(3:17)"
+      ",(3:18),(3:19),(3:20),(3:21),(3:22),(3:23)]\n"
+      "[ "
+      "(4:16),(4:17),(4:18),(4:19),(4:20),(4:21),(4:22),(4:23),(4:24),(4:25),("
+      "4:26),(4:27),(4:28),(4:29),(4:30),(4:31),(4: 0),(4: 1),(4: 2),(4: "
+      "3),(4: 4),(4: 5),(4: 6),(4: 7),(4: 8),(4: "
+      "9),(4:10),(4:11),(4:12),(4:13),(4:14),(4:15)]\n"
+      "[ "
+      "(5:16),(5:17),(5:18),(5:19),(5:20),(5:21),(5:22),(5:23),(5:24),(5:25),("
+      "5:26),(5:27),(5:28),(5:29),(5:30),(5:31),(5: 0),(5: 1),(5: 2),(5: "
+      "3),(5: 4),(5: 5),(5: 6),(5: 7),(5: 8),(5: "
+      "9),(5:10),(5:11),(5:12),(5:13),(5:14),(5:15)]\n"
+      "[ "
+      "(6:24),(6:25),(6:26),(6:27),(6:28),(6:29),(6:30),(6:31),(6:16),(6:17),("
+      "6:18),(6:19),(6:20),(6:21),(6:22),(6:23),(6: 8),(6: "
+      "9),(6:10),(6:11),(6:12),(6:13),(6:14),(6:15),(6: 0),(6: 1),(6: 2),(6: "
+      "3),(6: 4),(6: 5),(6: 6),(6: 7)]\n"
+      "[ "
+      "(7:24),(7:25),(7:26),(7:27),(7:28),(7:29),(7:30),(7:31),(7:16),(7:17),("
+      "7:18),(7:19),(7:20),(7:21),(7:22),(7:23),(7: 8),(7: "
+      "9),(7:10),(7:11),(7:12),(7:13),(7:14),(7:15),(7: 0),(7: 1),(7: 2),(7: "
+      "3),(7: 4),(7: 5),(7: 6),(7: 7)]]\n";
+
+  auto sharedLayout = shared(8,       /* vec */
+                             2,       /* perPhase */
+                             8,       /* maxPhase */
+                             false,   /* hasLeadingOffset */
+                             {1, 1},  /* cpg */
+                             {1, 1},  /* csplit */
+                             {1, 0},  /* ord, row-major */
+                             {1, 0}); /* cOrd */
+
+  auto elemTy = FloatType::getF16(sharedLayout.getContext());
+  auto tensorType = RankedTensorType::get({8, 32}, elemTy, sharedLayout);
+  std::string layout = getLayoutStr(tensorType, /*useHWPointOfView=*/false);
+  assertSameStr(refStr, layout);
+
+  std::string refHWRep =
+      R"(Block: 0:
+Offset: 0 -> (0, 0)
+Offset: 1 -> (0, 1)
+Offset: 2 -> (0, 2)
+Offset: 3 -> (0, 3)
+Offset: 4 -> (0, 4)
+Offset: 5 -> (0, 5)
+Offset: 6 -> (0, 6)
+Offset: 7 -> (0, 7)
+Offset: 8 -> (0, 8)
+Offset: 9 -> (0, 9)
+Offset: 10 -> (0,10)
+Offset: 11 -> (0,11)
+Offset: 12 -> (0,12)
+Offset: 13 -> (0,13)
+Offset: 14 -> (0,14)
+Offset: 15 -> (0,15)
+Offset: 16 -> (0,16)
+Offset: 17 -> (0,17)
+Offset: 18 -> (0,18)
+Offset: 19 -> (0,19)
+Offset: 20 -> (0,20)
+Offset: 21 -> (0,21)
+Offset: 22 -> (0,22)
+Offset: 23 -> (0,23)
+Offset: 24 -> (0,24)
+Offset: 25 -> (0,25)
+Offset: 26 -> (0,26)
+Offset: 27 -> (0,27)
+Offset: 28 -> (0,28)
+Offset: 29 -> (0,29)
+Offset: 30 -> (0,30)
+Offset: 31 -> (0,31)
+Offset: 32 -> (1, 2)
+Offset: 33 -> (1, 3)
+Offset: 34 -> (1, 0)
+Offset: 35 -> (1, 1)
+Offset: 36 -> (1, 6)
+Offset: 37 -> (1, 7)
+Offset: 38 -> (1, 4)
+Offset: 39 -> (1, 5)
+Offset: 40 -> (1,10)
+Offset: 41 -> (1,11)
+Offset: 42 -> (1, 8)
+Offset: 43 -> (1, 9)
+Offset: 44 -> (1,14)
+Offset: 45 -> (1,15)
+Offset: 46 -> (1,12)
+Offset: 47 -> (1,13)
+Offset: 48 -> (1,18)
+Offset: 49 -> (1,19)
+Offset: 50 -> (1,16)
+Offset: 51 -> (1,17)
+Offset: 52 -> (1,22)
+Offset: 53 -> (1,23)
+Offset: 54 -> (1,20)
+Offset: 55 -> (1,21)
+Offset: 56 -> (1,26)
+Offset: 57 -> (1,27)
+Offset: 58 -> (1,24)
+Offset: 59 -> (1,25)
+Offset: 60 -> (1,30)
+Offset: 61 -> (1,31)
+Offset: 62 -> (1,28)
+Offset: 63 -> (1,29)
+Offset: 64 -> (2, 4)
+Offset: 65 -> (2, 5)
+Offset: 66 -> (2, 6)
+Offset: 67 -> (2, 7)
+Offset: 68 -> (2, 0)
+Offset: 69 -> (2, 1)
+Offset: 70 -> (2, 2)
+Offset: 71 -> (2, 3)
+Offset: 72 -> (2,12)
+Offset: 73 -> (2,13)
+Offset: 74 -> (2,14)
+Offset: 75 -> (2,15)
+Offset: 76 -> (2, 8)
+Offset: 77 -> (2, 9)
+Offset: 78 -> (2,10)
+Offset: 79 -> (2,11)
+Offset: 80 -> (2,20)
+Offset: 81 -> (2,21)
+Offset: 82 -> (2,22)
+Offset: 83 -> (2,23)
+Offset: 84 -> (2,16)
+Offset: 85 -> (2,17)
+Offset: 86 -> (2,18)
+Offset: 87 -> (2,19)
+Offset: 88 -> (2,28)
+Offset: 89 -> (2,29)
+Offset: 90 -> (2,30)
+Offset: 91 -> (2,31)
+Offset: 92 -> (2,24)
+Offset: 93 -> (2,25)
+Offset: 94 -> (2,26)
+Offset: 95 -> (2,27)
+Offset: 96 -> (3, 6)
+Offset: 97 -> (3, 7)
+Offset: 98 -> (3, 4)
+Offset: 99 -> (3, 5)
+Offset: 100 -> (3, 2)
+Offset: 101 -> (3, 3)
+Offset: 102 -> (3, 0)
+Offset: 103 -> (3, 1)
+Offset: 104 -> (3,14)
+Offset: 105 -> (3,15)
+Offset: 106 -> (3,12)
+Offset: 107 -> (3,13)
+Offset: 108 -> (3,10)
+Offset: 109 -> (3,11)
+Offset: 110 -> (3, 8)
+Offset: 111 -> (3, 9)
+Offset: 112 -> (3,22)
+Offset: 113 -> (3,23)
+Offset: 114 -> (3,20)
+Offset: 115 -> (3,21)
+Offset: 116 -> (3,18)
+Offset: 117 -> (3,19)
+Offset: 118 -> (3,16)
+Offset: 119 -> (3,17)
+Offset: 120 -> (3,30)
+Offset: 121 -> (3,31)
+Offset: 122 -> (3,28)
+Offset: 123 -> (3,29)
+Offset: 124 -> (3,26)
+Offset: 125 -> (3,27)
+Offset: 126 -> (3,24)
+Offset: 127 -> (3,25)
+Offset: 128 -> (4, 8)
+Offset: 129 -> (4, 9)
+Offset: 130 -> (4,10)
+Offset: 131 -> (4,11)
+Offset: 132 -> (4,12)
+Offset: 133 -> (4,13)
+Offset: 134 -> (4,14)
+Offset: 135 -> (4,15)
+Offset: 136 -> (4, 0)
+Offset: 137 -> (4, 1)
+Offset: 138 -> (4, 2)
+Offset: 139 -> (4, 3)
+Offset: 140 -> (4, 4)
+Offset: 141 -> (4, 5)
+Offset: 142 -> (4, 6)
+Offset: 143 -> (4, 7)
+Offset: 144 -> (4,24)
+Offset: 145 -> (4,25)
+Offset: 146 -> (4,26)
+Offset: 147 -> (4,27)
+Offset: 148 -> (4,28)
+Offset: 149 -> (4,29)
+Offset: 150 -> (4,30)
+Offset: 151 -> (4,31)
+Offset: 152 -> (4,16)
+Offset: 153 -> (4,17)
+Offset: 154 -> (4,18)
+Offset: 155 -> (4,19)
+Offset: 156 -> (4,20)
+Offset: 157 -> (4,21)
+Offset: 158 -> (4,22)
+Offset: 159 -> (4,23)
+Offset: 160 -> (5,10)
+Offset: 161 -> (5,11)
+Offset: 162 -> (5, 8)
+Offset: 163 -> (5, 9)
+Offset: 164 -> (5,14)
+Offset: 165 -> (5,15)
+Offset: 166 -> (5,12)
+Offset: 167 -> (5,13)
+Offset: 168 -> (5, 2)
+Offset: 169 -> (5, 3)
+Offset: 170 -> (5, 0)
+Offset: 171 -> (5, 1)
+Offset: 172 -> (5, 6)
+Offset: 173 -> (5, 7)
+Offset: 174 -> (5, 4)
+Offset: 175 -> (5, 5)
+Offset: 176 -> (5,26)
+Offset: 177 -> (5,27)
+Offset: 178 -> (5,24)
+Offset: 179 -> (5,25)
+Offset: 180 -> (5,30)
+Offset: 181 -> (5,31)
+Offset: 182 -> (5,28)
+Offset: 183 -> (5,29)
+Offset: 184 -> (5,18)
+Offset: 185 -> (5,19)
+Offset: 186 -> (5,16)
+Offset: 187 -> (5,17)
+Offset: 188 -> (5,22)
+Offset: 189 -> (5,23)
+Offset: 190 -> (5,20)
+Offset: 191 -> (5,21)
+Offset: 192 -> (6,12)
+Offset: 193 -> (6,13)
+Offset: 194 -> (6,14)
+Offset: 195 -> (6,15)
+Offset: 196 -> (6, 8)
+Offset: 197 -> (6, 9)
+Offset: 198 -> (6,10)
+Offset: 199 -> (6,11)
+Offset: 200 -> (6, 4)
+Offset: 201 -> (6, 5)
+Offset: 202 -> (6, 6)
+Offset: 203 -> (6, 7)
+Offset: 204 -> (6, 0)
+Offset: 205 -> (6, 1)
+Offset: 206 -> (6, 2)
+Offset: 207 -> (6, 3)
+Offset: 208 -> (6,28)
+Offset: 209 -> (6,29)
+Offset: 210 -> (6,30)
+Offset: 211 -> (6,31)
+Offset: 212 -> (6,24)
+Offset: 213 -> (6,25)
+Offset: 214 -> (6,26)
+Offset: 215 -> (6,27)
+Offset: 216 -> (6,20)
+Offset: 217 -> (6,21)
+Offset: 218 -> (6,22)
+Offset: 219 -> (6,23)
+Offset: 220 -> (6,16)
+Offset: 221 -> (6,17)
+Offset: 222 -> (6,18)
+Offset: 223 -> (6,19)
+Offset: 224 -> (7,14)
+Offset: 225 -> (7,15)
+Offset: 226 -> (7,12)
+Offset: 227 -> (7,13)
+Offset: 228 -> (7,10)
+Offset: 229 -> (7,11)
+Offset: 230 -> (7, 8)
+Offset: 231 -> (7, 9)
+Offset: 232 -> (7, 6)
+Offset: 233 -> (7, 7)
+Offset: 234 -> (7, 4)
+Offset: 235 -> (7, 5)
+Offset: 236 -> (7, 2)
+Offset: 237 -> (7, 3)
+Offset: 238 -> (7, 0)
+Offset: 239 -> (7, 1)
+Offset: 240 -> (7,30)
+Offset: 241 -> (7,31)
+Offset: 242 -> (7,28)
+Offset: 243 -> (7,29)
+Offset: 244 -> (7,26)
+Offset: 245 -> (7,27)
+Offset: 246 -> (7,24)
+Offset: 247 -> (7,25)
+Offset: 248 -> (7,22)
+Offset: 249 -> (7,23)
+Offset: 250 -> (7,20)
+Offset: 251 -> (7,21)
+Offset: 252 -> (7,18)
+Offset: 253 -> (7,19)
+Offset: 254 -> (7,16)
+Offset: 255 -> (7,17)
+)";
+  auto sharedLayoutHW = shared(2,       /* vec */
+                               1,       /* perPhase */
+                               32,      /* maxPhase */
+                               false,   /* hasLeadingOffset */
+                               {1, 1},  /* cpg */
+                               {1, 1},  /* csplit */
+                               {1, 0},  /* ord, row-major */
+                               {1, 0}); /* cOrd */
+
+  auto elemTyHW = FloatType::getF16(sharedLayoutHW.getContext());
+  auto tensorTypeHW = RankedTensorType::get({8, 32}, elemTyHW, sharedLayoutHW);
+
+  std::string layoutHW = getLayoutStr(tensorTypeHW, /*useHWPointOfView=*/true);
   assertSameStr(refHWRep, layoutHW);
 }
 

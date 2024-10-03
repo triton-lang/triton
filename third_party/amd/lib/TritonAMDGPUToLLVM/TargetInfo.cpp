@@ -136,15 +136,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return false;
 }
 
-bool TargetInfo::processReplicaUsingStMatrix(
-    RewriterBase &rewriter, Location loc, Value smemBase,
-    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzleByteWidth) const {
-  return false;
-}
-
 void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
                             ValueRange args, RewriterBase &rewriter,
                             bool useStdErr) const {
@@ -254,5 +245,7 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
 }
+
+int TargetInfo::getSharedAddressSpace() const { return 3; }
 
 } // namespace mlir::triton::AMD

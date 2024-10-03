@@ -212,7 +212,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       // TODO rework this when shared -> dotOp conversions support arbitrary
       // shared memory ordering
       if (rank == 3) {
-        // add all elements except the element that is zero
+        // Move the batch dimension (dim #0) to be the last so that it will be
+        // the slowest varying dimension.
         for (unsigned i = 0; i < rank; ++i)
           if (order[i] != 0)
             sharedOrder.emplace_back(order[i]);
@@ -221,9 +222,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
         sharedOrder = order;
       }
       tempAttr = ttg::SharedEncodingAttr::get(
-          val.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-          ttg::getCTALayout(srcTy.getEncoding()),
-          srcTy.getElementType().getIntOrFloatBitWidth(), /*needTrans=*/false);
+          val.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder, CTALayout,
+          bitWidth, /*needTrans=*/false);
     }
     // Check that the shared encodings needed by the users are compatible.
     if (!tempAttr || (attr != nullptr && attr != tempAttr))

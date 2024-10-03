@@ -36,7 +36,7 @@ SmallVector<unsigned> getParentOrder(Attribute layout) {
   if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return getParentOrder(sliceEncoding.getParent());
   }
-  return getOrder(layout);
+  return getThreadOrder(layout);
 }
 
 } // namespace
@@ -75,7 +75,7 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
     threadOffset = threadsPerWarp[sliceLayout.getDim()];
   } else {
     auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-    auto order = getOrder(srcLayout);
+    auto order = getThreadOrder(srcLayout);
     for (unsigned i = 0; i < order.size(); i++) {
       if (order[i] == axis)
         break;
@@ -565,6 +565,7 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
       srcTy.getShape(), srcTy.getElementType(), dotOperandLayout.getParent());
   auto ans = mmaLayout.getVersionMajor() == 3 &&
              dotOperandLayout.getOpIdx() == 0 &&
+             mmaLayout.getWarpsPerCTA()[1] == 1 &&
              !cvtNeedsSharedMemory(parentTy, srcTy) &&
              (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
