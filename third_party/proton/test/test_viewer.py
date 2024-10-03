@@ -122,7 +122,7 @@ def test_time_derivation():
             'time/ms (inc)': [0.4096, 0.2048, 0.2048],
             'time/us (inc)': [409.6, 204.8, 204.8],
             'time/ns (inc)': [409600.0, 204800.0, 204800.0],
-            'pct (inc)': [100.0, 50.0, 50.0],
+            'time/% (inc)': [100.0, 50.0, 50.0],
         }, sample_file=cuda_example_file)
 
 

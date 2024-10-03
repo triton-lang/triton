@@ -105,6 +105,7 @@ for width in TritonHook.flops_width:
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
+    exclusive_metrics = ["util"] + list(derivable_metrics.keys()) + list(avg_time_factor_dict.factor.keys())
     internal_frame_indices = gf.dataframe["device_id"].isna()
 
     def get_time_seconds(df):
@@ -133,11 +134,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) /
                                                time_factor_dict.factor[metric_time_unit])
             derived_metrics.append(f"{metric} (inc)")
-
-            kernel_time = get_time_seconds(gf.dataframe)
-            total_time = get_time_seconds(gf.dataframe).iloc[0]
-            gf.dataframe["pct (inc)"] = (kernel_time / total_time) * 100.0
-            derived_metrics.append("pct (inc)")
+            metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['count'] /
@@ -146,7 +143,12 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)
-
+        if metric not in exclusive_metrics:
+             kernel = gf.dataframe[metric_name]
+             total = gf.dataframe[metric_name].iloc[0]
+             metric =  metric.split("/")[0]
+             gf.dataframe[f"{metric}/% (inc)"] = (kernel / total) * 100.0
+             derived_metrics.append(f"{metric}/% (inc)") 
     if original_metrics:
         original_metrics = match_available_metrics(original_metrics, raw_metrics)
     return derived_metrics + original_metrics
