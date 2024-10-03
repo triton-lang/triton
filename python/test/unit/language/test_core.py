@@ -3319,7 +3319,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     (M, N, K, col_a, col_b, type_a, type_b, 4)
     for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
     for col_a, col_b in itertools.product([True, False], repeat=2)
-    # We don't test e5m2 as it seems to overflow more easily
+    # We don't test e5m2 as its range + the uniform sampling overflows easily
     # Tested locally and it works fine other than for ~10 entries out of 10_000
     # which are of the size of 10**30
     for type_a in ["e4m3"]

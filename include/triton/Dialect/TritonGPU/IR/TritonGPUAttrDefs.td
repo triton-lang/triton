@@ -1,6 +1,7 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
+
 include "mlir/IR/AttrTypeBase.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
@@ -783,20 +784,21 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "SmallVector<unsigned>",
                     "getShapePerCTATileForDotOperands",
                     (ins "ArrayRef<int64_t>":$tensorShape,
-                         "unsigned":$opIdx)>,
+                         "int":$kWidth,
+                         "int":$opIdx)>,
 
     InterfaceMethod<"Return total element size per thread for dot operands.",
                     "unsigned",
                     "getTotalElemsPerThreadForOperands",
                     (ins "ArrayRef<int64_t>":$tensorShape,
                          "Type":$eltTy,
-                         "unsigned":$kWidth,
-                         "unsigned":$opIdx)>,
+                         "int":$kWidth,
+                         "int":$opIdx)>,
 
     InterfaceMethod<"Return size per thread for dot operands.",
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperands",
-                    (ins "unsigned":$opIdx)>,
+                    (ins "unsigned":$opIdx, "unsigned":$kWidth)>,
   ];
 }
 
@@ -914,8 +916,8 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     bool supportReduction() const {
       return true;
     }
-    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx, unsigned kWidth) const;
+    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getMFMAInstrShapeForOperands(int kWidth, int opIdx) const;
     SmallVector<int64_t> getMFMARepForOperands(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
@@ -1021,8 +1023,8 @@ Row |       warp 0                warp 2
     bool supportReduction() const {
       return true;
     }
-    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx, unsigned kWidth=2) const;
+    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperands(ArrayRef<int64_t> operandShape,
@@ -1223,7 +1225,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     SmallVector<int> getMMAv1ShapePerWarp(int opIdx) const;
     int getMMAv1Vec(int opIdx) const;
     SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
-                                     int bitwidth, int opIdx) const;
+                                     int bitwidth, int kWidth, int opIdx) const;
 
     bool supportReduction() const {
       if (isAmpere() || isHopper()) {
@@ -1231,8 +1233,8 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       }
       return false;
     };
-    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx, unsigned kWidth) const;
+    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
@@ -1343,8 +1345,20 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
   let genVerifyDecl = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
+    SmallVector<unsigned> getNumSubtiles() {
+      auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent());
+      assert(parentAttr && parentAttr.isAmpere() && "NYI");
+      return getOpIdx() == 0 ? SmallVector<unsigned>({2, 2}) : SmallVector<unsigned>({2, 1});
+    };
+
     SmallVector<unsigned> getContigPerThread() {
-      return getSizePerThread();
+      auto size = getSizePerThread();
+      auto subtiles = getNumSubtiles();
+      assert(size.size() == subtiles.size());
+      for (int i = 0; i < size.size(); ++i) {
+          size[i] /= subtiles[i];
+      }
+      return size;
     };
   }];
 }
