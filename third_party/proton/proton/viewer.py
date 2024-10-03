@@ -144,10 +144,10 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
         else:
             original_metrics.append(metric)
         if metric not in exclusive_metrics:
-            kernel = gf.dataframe[metric_name]
+            single = gf.dataframe[metric_name]
             total = gf.dataframe[metric_name].iloc[0]
             metric = metric.split("/")[0]
-            gf.dataframe[f"{metric}/% (inc)"] = (kernel / total) * 100.0
+            gf.dataframe[f"{metric}/% (inc)"] = (single / total) * 100.0
             derived_metrics.append(f"{metric}/% (inc)")
     if original_metrics:
         original_metrics = match_available_metrics(original_metrics, raw_metrics)
