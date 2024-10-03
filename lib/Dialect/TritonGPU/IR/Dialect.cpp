@@ -1634,11 +1634,12 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
 }
 
 SmallVector<unsigned>
-AMDMfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+AMDMfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx,
+                                                 unsigned kWidth) const {
   if (opIdx == 0) {
-    return {4, 1};
+    return {2 * kWidth, 1};
   } else if (opIdx == 1) {
-    return {1, 4};
+    return {1, 2 * kWidth};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
     return {};
@@ -1717,7 +1718,8 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getSizePerThread() const {
   return sizePerThread;
 }
 SmallVector<unsigned>
-AMDWmmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+AMDWmmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx,
+                                                 unsigned) const {
   auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> sizePerThread(rank, 1);
   auto numReplicated = getVersion() == 1 ? 2 : 1;
@@ -2079,12 +2081,13 @@ NvidiaMmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
   }
 }
 SmallVector<unsigned>
-NvidiaMmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+NvidiaMmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx,
+                                                   unsigned kWidth) const {
   assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
   if (opIdx == 0) {
-    return {2, 4};
+    return {2, 2 * kWidth};
   } else if (opIdx == 1) {
-    return {4, 1};
+    return {2 * kWidth, 1};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
     return {};
@@ -2102,7 +2105,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   auto parentLayout = getParent();
   assert(parentLayout && "DotOperandEncodingAttr must have a parent");
   if (auto parentMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(parentLayout)) {
-    return parentMmaLayout.getSizePerThreadForOperands(getOpIdx());
+    return parentMmaLayout.getSizePerThreadForOperands(getOpIdx(), getKWidth());
   } else {
     llvm::report_fatal_error(
         "DotOperandEncodingAttr non-NvidiaMmaEncodingAttr parent not "
