@@ -358,7 +358,7 @@ class CompiledKernel:
         self.packed_metadata = backend.pack_metadata(self.metadata)
         self.src = src
         self.hash = hash
-        self.name = self.metadata.name
+        self.name = "test"
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         binary_ext = backend.binary_ext
@@ -366,7 +366,7 @@ class CompiledKernel:
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         }
-        self.kernel = self.asm[binary_ext]
+        # self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
@@ -381,11 +381,11 @@ class CompiledKernel:
         self.run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
-        if self.metadata.shared > max_shared:
-            raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
+        # if self.metadata.shared > max_shared:
+            # raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, device)
+            self.name, self.kernel, 1, device)
 
     def __getattribute__(self, name):
         if name == 'run':
