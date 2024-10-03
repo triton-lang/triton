@@ -400,19 +400,18 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              bool useBufferOps) {
 
   bool noCacheModifiers = (cm == triton::CacheModifier::NONE);
-  bool nonTemporal = (cm == triton::CacheModifier::CG);
   // Use a predicated buffer load intrinsic if we can. This should be optimal,
   // since we don't have to emit any branch. Also, in this way the hardware
   // is automatically doing the pointer arithmetic, so we should save in VALU
   // arithmetic and registers.
-  if (useBufferOps && (noCacheModifiers || nonTemporal)) {
+  if (useBufferOps && noCacheModifiers) {
     auto maybeBaseAndOffset = getBaseAndOffset(ptr);
     if (!failed(maybeBaseAndOffset)) {
       BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
       Value basePtr = maybeBaseAndOffset->first;
       Value offset = maybeBaseAndOffset->second;
       Value vecData = bufferEmitter.emitMaskedBufferLoad(
-          elemTy, basePtr, offset, pred, falseVal, nonTemporal);
+          elemTy, basePtr, offset, pred, falseVal);
       vecData = bitcast(vecData, elemTy);
       return vecData;
     }
@@ -421,6 +420,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
   // Alternatively, try to emit llvm.intr.masked.load if we can. In theory the
   // backend should be happier because we emit less branchy code to optimize.
   // The backend will lower it down however it wants at some point.
+  bool nonTemporal = (cm == triton::CacheModifier::CG);
   if (alignmentBytes && (noCacheModifiers || nonTemporal)) {
     // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we
     // need to bitcast to `vector<1xelemTy>` (and back)

@@ -281,8 +281,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getTotalElemsPerThread(ptr.getType());
-    bool useBufferOps =
-        tools::getBoolEnv("AMDGCN_USE_BUFFER_OPS") && canUseBufferOps(ptr);
+    bool useBufferOps = enableBufferIntrinsics && canUseBufferOps(ptr);
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
@@ -401,8 +400,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
     auto loc = op->getLoc();
     MLIRContext *ctx = rewriter.getContext();
-    bool useBufferOps =
-        tools::getBoolEnv("AMDGCN_USE_BUFFER_OPS") && canUseBufferOps(ptr);
+    bool useBufferOps = enableBufferIntrinsics && canUseBufferOps(ptr);
 
     auto valueTy = value.getType();
     Type valueElemTy =

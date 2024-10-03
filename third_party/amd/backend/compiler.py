@@ -92,7 +92,7 @@ class HIPAttrsDescriptor(AttrsDescriptor):
     @staticmethod
     def is_within2gb(arg):
         if hasattr(arg, "ptr_range"):
-            return arg.ptr_range() < 2**31 - 1
+            return arg.ptr_range() <= 2**31 - 1
         if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
             # Please note that 2**31-1 is the max int32 positive limit
             return sys.getsizeof(arg.untyped_storage()) <= 2**31 - 1
