@@ -159,7 +159,7 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
                             ArrayRef<int64_t> opTensorShape,
                             ArrayRef<Value> strides) {
   Value offset = i32_val(0);
-  // Compute unswizzled multi dim indices
+  // Compute unswizzled multi dim coordinates in shared memmory object
   SmallVector<Value> elemMultiDimIndices(3);
   elemMultiDimIndices[dim.batch] =
       add(bTileOffset, i32_val(i.bTile * shapePerCTABTile + i.b));
@@ -167,20 +167,22 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
       add(nonKTileOffset, i32_val(i.nonKTile * shapePerCTANonKTile + i.nonK));
   elemMultiDimIndices[dim.k] = i32_val(i.k);
 
+  // Apply swizzling pattern to fastest dimension
   SmallVector<Value> swizzledIndices =
       swizzleIndices(rewriter, loc, elemMultiDimIndices, sharedLayout);
 
-  for (int dim = 0; dim < 3; ++dim) {
-    auto wrappedDimIndex =
-        urem(swizzledIndices[dim], i32_val(opTensorShape[dim]));
-    auto dimOffset = mul(wrappedDimIndex, strides[dim]);
+  // Linearize shared mem object dimensions into flat offset
+  for (int d = 0; d < 3; ++d) {
+    // wrap index if it is larger than tensor
+    auto wrappedDimIndex = urem(swizzledIndices[d], i32_val(opTensorShape[d]));
+    auto dimOffset = mul(wrappedDimIndex, strides[d]);
     offset = add(offset, dimOffset);
   }
   return offset;
 }
 
-/// @brief computes linear memory offset of a given element relative to the
-/// first element
+/// @brief computes memory offset of a given element relative to the
+/// first element loaded by a thread
 Value computeNonSwizzledOffset(ConversionPatternRewriter &rewriter,
                                Location loc, const Indexes &i,
                                const DimNumbers &dim,
@@ -188,7 +190,6 @@ Value computeNonSwizzledOffset(ConversionPatternRewriter &rewriter,
                                unsigned shapePerCTABTile,
                                unsigned shapePerCTANonKTile,
                                ArrayRef<Value> strides) {
-  Value offset = i32_val(0);
   SmallVector<Value> offsetIndices(3);
   offsetIndices[dim.batch] =
       i32_val((i.bTile * shapePerCTABTile + i.b) % tensorShape[dim.batch]);
@@ -196,8 +197,9 @@ Value computeNonSwizzledOffset(ConversionPatternRewriter &rewriter,
       (i.nonKTile * shapePerCTANonKTile + i.nonK) % tensorShape[dim.nonK]);
   offsetIndices[dim.k] = i32_val(i.k);
 
-  for (int dim = 0; dim < 3; ++dim)
-    offset = add(offset, mul(offsetIndices[dim], strides[dim]));
+  Value offset = i32_val(0);
+  for (int d = 0; d < 3; ++d)
+    offset = add(offset, mul(offsetIndices[d], strides[d]));
   return offset;
 }
 
@@ -303,11 +305,11 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
   }
 
   // This loop nest iterates over all values loaded in one thread across batch,
-  // k and nonK dimensions. Blocked layout allocates data in tiles of size
-  // <sizePerThread>*<threadsPerWarp>*<numberWarps> for batch and nonK
+  // k and nonK dimensions. Blocked dot operand layout allocates data in tiles
+  // of size <sizePerThread>*<threadsPerWarp>*<numberWarps> for batch and nonK
   // dimensions, if tensor shape is larger than tile, pattern repeats. To take
   // these repeats into account iterations for batch and nonK are split into
-  // "intra tile" + "inter tile" indexes, i.e.
+  // "intra tile" + "inter tile" indexes: b + bTile, nonK + nonKTile
   for (unsigned bTile = 0; bTile < numBTiles; ++bTile)
     for (unsigned b = 0; b < sizeBPerThread; b += dimStep[dim.batch])
       for (unsigned k = 0; k < K; k += dimStep[dim.k])
