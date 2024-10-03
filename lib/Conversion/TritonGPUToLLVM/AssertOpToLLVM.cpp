@@ -52,6 +52,9 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     int line = 0;
     int col = 0;
 
+    while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
+      loc = callLoc.getCallee();
+
     if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
       file = fileLineColLoc.getFilename();
       line = fileLineColLoc.getLine();
