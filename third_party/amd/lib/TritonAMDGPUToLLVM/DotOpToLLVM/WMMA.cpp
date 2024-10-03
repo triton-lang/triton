@@ -221,7 +221,8 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   }
   auto wmmaIntrinsic = rewriter.create<mlir::LLVM::CallIntrinsicOp>(
       loc, TypeRange{valC.getType()}, StringAttr::get(loc.getContext(), name),
-      operands, defaultFlags);
+      operands, defaultFlags, /*op_bundle_operands=*/ArrayRef<ValueRange>{},
+      /*op_bundle_tags=*/ArrayRef<std::string>{});
 
   return wmmaIntrinsic.getResult(0);
 }
