@@ -869,6 +869,17 @@ bool isCrossCTAConversion(const LinearLayout &layout) {
          !layout.sublayoutIsIdentity({kBlock}, {kBlock});
 }
 
+LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
+  assert(!layout.getInDimNames().empty());
+  MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
+
+  StringAttr kBlock = S("block");
+  assert(layout.hasInDim(kBlock));
+  auto bases = layout.getBases();
+  bases[kBlock] = {};
+  return LinearLayout(bases, llvm::to_vector<4>(layout.getOutDimNames()));
+}
+
 LinearLayout chooseShemLayoutForRegToRegConversion(
     MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order) {
@@ -925,11 +936,11 @@ bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
   if (order[0] != 1)
     return false;
 
-  auto tensorShape = tensorTy.getShape();
-  if (tensorShape.size() != 2)
+  auto tensorShapePerCTA = getShapePerCTA(mmaLayout, tensorTy.getShape());
+  if (tensorShapePerCTA.size() != 2)
     return false;
-  auto numIterations = ceil<unsigned>(tensorShape[1], repShape[1]) *
-                       ceil<unsigned>(tensorShape[0], repShape[0]);
+  auto numIterations = ceil<unsigned>(tensorShapePerCTA[1], repShape[1]) *
+                       ceil<unsigned>(tensorShapePerCTA[0], repShape[0]);
   if (numIterations > 1)
     return false;
   if (paddedRepShape[1] % 8 != 0)
@@ -1020,6 +1031,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
   StringAttr kWarp = S("warp");
   StringAttr kCol = S("dim1");
   StringAttr kRow = S("dim0");
+  StringAttr kBlock = S("block");
 
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane = {
@@ -1039,9 +1051,16 @@ std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
           .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
+  auto tensorShapePerCTA = getShapePerCTA(mma, tensorTy.getShape());
+  llvm::SmallDenseMap<StringAttr, int64_t> namedTensorShape;
+  namedTensorShape[kRow] = tensorShapePerCTA[0];
+  namedTensorShape[kCol] = tensorShapePerCTA[1];
+  ret = ensureLayoutNotSmallerThan(ret, namedTensorShape);
+  ret = ensureLayoutNotLargerThan(ret, namedTensorShape);
   return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
-      .reshapeOuts(
-          {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+             .reshapeOuts({{S("offset"), ret.getTotalOutDimSize()},
+                           {S("iteration"), 1}}) *
+         identityND(kBlock, {1, 1}, {0, 1}, {S("offset"), S("iteration")});
 }
 
 } // anonymous namespace
