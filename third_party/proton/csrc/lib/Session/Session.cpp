@@ -40,6 +40,16 @@ makeContextSource(const std::string &contextSourceName) {
   }
   throw std::runtime_error("Unknown context source: " + contextSourceName);
 }
+
+void throwIfSessionNotInitialized(
+    const std::map<size_t, std::unique_ptr<Session>> &sessions,
+    size_t sessionId) {
+  if (!sessions.count(sessionId)) {
+    throw std::runtime_error("Session has not been initialized: " +
+                             std::to_string(sessionId));
+  }
+}
+
 } // namespace
 
 void Session::activate() {
@@ -80,6 +90,7 @@ void SessionManager::deactivateSession(size_t sessionId) {
 }
 
 void SessionManager::activateSessionImpl(size_t sessionId) {
+  throwIfSessionNotInitialized(sessions, sessionId);
   if (activeSessions[sessionId])
     return;
   activeSessions[sessionId] = true;
@@ -89,6 +100,7 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
 }
 
 void SessionManager::deActivateSessionImpl(size_t sessionId) {
+  throwIfSessionNotInitialized(sessions, sessionId);
   if (!activeSessions[sessionId]) {
     return;
   }
