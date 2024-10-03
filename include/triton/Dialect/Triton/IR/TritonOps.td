@@ -844,11 +844,11 @@ def TT_PrintOp : TT_Op<"print", [SameVariadicOperandSize, MemoryEffects<[MemWrit
 def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Device-side assert, as in CUDA for correctness checking";
   let description = [{
-    `tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.
+    `tt.assert` takes a condition tensor and a message string.
     If the condition is false, the message is printed, and the program is aborted.
   }];
-  let arguments = (ins TT_Tensor:$condition, StrAttr:$message, StrAttr:$file, StrAttr:$func, I32Attr:$line);
-  let assemblyFormat = "$condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)";
+  let arguments = (ins TT_Tensor:$condition, StrAttr:$message);
+  let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 
 //

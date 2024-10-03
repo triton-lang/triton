@@ -640,7 +640,7 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 }
 
 std::optional<LinearLayout>
-LinearLayout::divideRight(const LinearLayout &divisor) {
+LinearLayout::divideRight(const LinearLayout &divisor) const {
   assertCommonDimsSameOrder(getOutDimNames(), divisor.getOutDimNames());
   assertCommonDimsSameOrder(getInDimNames(), divisor.getInDimNames());
 

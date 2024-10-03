@@ -375,8 +375,9 @@ inline Value getStackPointer(RewriterBase &rewriter,
 }
 
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
-                                 Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+                                 const TargetInfoBase &target, Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                          target.getSharedAddressSpace());
   FunctionOpInterface func =
       op->template getParentOfType<FunctionOpInterface>();
   assert(op->hasAttr("allocation.offset"));
@@ -1225,7 +1226,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   // then (x + y) XOR z = 0byyyyxxxx XOR 0b00000zzzz = (x XOR z) + y
   // This means that we can use some immediate offsets for shared memory
   // operations.
-  auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
+  auto dstPtrTy = smemObj.base.getType();
   auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
   Value dstPtrBase = gep(dstPtrTy, resElemTy, smemObj.base, dstOffset);
 

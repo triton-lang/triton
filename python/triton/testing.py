@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
+from . import runtime
 
 
 def nvsmi(attrs):
@@ -114,7 +115,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     assert return_mode in ["min", "max", "mean", "median", "all"]
     import torch
 
-    di = torch._dynamo.device_interface.get_interface_for_device(device_type)
+    di = runtime.driver.active.get_device_interface()
 
     fn()
     di.synchronize()
