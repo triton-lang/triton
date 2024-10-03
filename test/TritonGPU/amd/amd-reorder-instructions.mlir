@@ -830,3 +830,23 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// -----
+
+//   CHECK-LABEL: anchor_barrier
+//         CHECK: gpu.barrier
+//         CHECK: tt.load %arg0 : tensor<32x32x!tt.ptr<f16>, #blocked>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @anchor_barrier(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked>) attributes {noinline = false} {
+    %0 = triton_gpu.local_alloc : () -> !tt.memdesc<4x128x64xf16, #shared, mutable>
+    gpu.barrier
+    %2 = tt.load %arg0 : tensor<32x32x!tt.ptr<f16>, #blocked>
+    %1 = triton_gpu.local_alloc %2 : (tensor<32x32xf16, #blocked>) -> !tt.memdesc<4x128x64xf16, #shared, mutable>
+    triton_gpu.local_dealloc %0 : !tt.memdesc<4x128x64xf16, #shared, mutable>
+    triton_gpu.local_dealloc %1 : !tt.memdesc<4x128x64xf16, #shared, mutable>
+    tt.return
+  }
+}

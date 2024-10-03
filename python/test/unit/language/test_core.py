@@ -3330,7 +3330,8 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
-        if "gfx11" in triton.runtime.driver.active.get_current_target().arch:
+        arch = triton.runtime.driver.active.get_current_target().arch
+        if "gfx11" in arch or "gfx12" in arch:
             if in_dtype_str == "float32":
                 pytest.skip(f"{in_dtype_str} is not supported in WMMA dot, FMA does not support dot3d")
             if out_dtype_str == "float16":
@@ -3782,7 +3783,7 @@ def test_masked_load_shared_memory(dtype, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
+@pytest.mark.parametrize("cache", ["", ".ca", ".cg", ".cv"])
 def test_load_cache_modifier(cache, device):
     src = torch.empty(128, device=device)
     dst = torch.empty(128, device=device)
@@ -3802,11 +3803,15 @@ def test_load_cache_modifier(cache, device):
             return
         amdgcn = pgm.asm['amdgcn']
         cg_cache_modifier_str = 'nt'
+        cv_cache_modifier_str = 'sc0 sc1'
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
+        flat_load_line = [line for line in amdgcn.splitlines() if "flat_load" in line]
         if cache == '' or cache == '.ca':
             assert cg_cache_modifier_str not in global_load_line[0]
         if cache == '.cg':
             assert cg_cache_modifier_str in global_load_line[0]
+        if cache == '.cv':
+            assert cv_cache_modifier_str in flat_load_line[0]
 
     if is_cuda():
         ptx = pgm.asm['ptx']
@@ -3924,6 +3929,8 @@ def test_store_cache_modifier(cache, device):
         cs_cache_modifier_str = 'nt'
         wt_cache_modifier_str = 'sc0 sc1'
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
+        if not global_store_line:
+            return
         if cache == '' or cache == '.cg':
             assert cs_cache_modifier_str not in global_store_line[0]
             assert wt_cache_modifier_str not in global_store_line[0]
@@ -4924,6 +4931,7 @@ layouts = [
 
 intermediate_layouts = [
     None,
+    SharedLayout(1, 1, 1, [0, 1], [1, 1], [1, 1], [0, 1]),
     SharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
     SharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
     SharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
@@ -5259,11 +5267,13 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
+    num_stages = 3
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
+        num_stages = 2
         if in_type_str != 'float8e5':
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
@@ -5277,7 +5287,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
-                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps)
+                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps,
+                            num_pipeline_stages=num_stages)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
@@ -5608,3 +5619,78 @@ def test_math_extern(dtype_str, device):
     kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+
+# -----------------------
+# test loop unrolling
+# -----------------------
+
+
+def test_unroll_attr(device):
+
+    @triton.jit
+    def _kernel(dst, unroll_factor: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        for i in tl.range(0, 10, loop_unroll_factor=unroll_factor):
+            tl.atomic_add(dst + pid, i + pid)
+
+    def check_loop_unroll_count(ir, opStr, loop_unroll_factor):
+        for line in ir.splitlines():
+            if opStr in line:
+                loop_unroll_factor = loop_unroll_factor - 1
+        # Sometimes we get a remainder loop
+        assert loop_unroll_factor <= 0
+
+    # Try for all different loop unroll factors:
+    for unroll_factor in [1, 2, 4, 5, 8]:
+        h = _kernel[(1, )](torch.empty(1, device=device), unroll_factor)
+        check_loop_unroll_count(h.asm["ttir"], 'tt.atomic_rmw', unroll_factor)
+
+
+@triton.jit
+def sanitize_add(a, b):
+    a64 = a.to(tl.int64)
+    b64 = b.to(tl.int64)
+    r64 = a64 + b64
+    tl.device_assert((r64 >= -2**31) & (r64 <= 2**31 - 1))
+    return a + b
+
+
+def test_side_effectful_reduction(device):
+    if device != "cuda":
+        pytest.skip()
+
+    @triton.jit(debug=True)
+    def sanitize_sum_kernel(Z, X, BLOCK: tl.constexpr):
+        vals = tl.load(X + tl.arange(0, BLOCK))
+        z = tl.reduce(vals, 0, sanitize_add)
+        tl.store(Z, z)
+
+    BLOCK = 512
+    torch.manual_seed(42)
+    X = torch.randint(0, 10, [BLOCK], device="cuda", dtype=torch.int32)
+    X[:300] = 32
+    X[300:] = 0
+    Z = torch.zeros((), device="cuda", dtype=torch.int32)
+    sanitize_sum_kernel[(1, )](Z, X, BLOCK=BLOCK)
+    torch.testing.assert_close(Z, X.sum().to(torch.int32))
+
+
+def test_side_effectful_scan(device):
+    if device != "cuda":
+        pytest.skip()
+
+    @triton.jit(debug=True)
+    def sanitize_cumsum_kernel(Z, X, BLOCK: tl.constexpr):
+        vals = tl.load(X + tl.arange(0, BLOCK))
+        z = tl.associative_scan(vals, 0, sanitize_add)
+        tl.store(Z + tl.arange(0, BLOCK), z)
+
+    BLOCK = 512
+    torch.manual_seed(42)
+    X = torch.randint(0, 10, [BLOCK], device="cuda", dtype=torch.int32)
+    X[:300] = 32
+    X[300:] = 0
+    Z = torch.zeros_like(X)
+    sanitize_cumsum_kernel[(1, )](Z, X, BLOCK=BLOCK)
+    torch.testing.assert_close(Z, X.cumsum(0).to(torch.int32))

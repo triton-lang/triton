@@ -904,6 +904,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ast.NodeVisitor.generic_visit(self, stmt)
             return
         num_stages = None
+        loop_unroll_factor = None
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -913,6 +914,7 @@ class CodeGenerator(ast.NodeVisitor):
             ub = iterator.end
             step = iterator.step
             num_stages = iterator.num_stages
+            loop_unroll_factor = iterator.loop_unroll_factor
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -986,6 +988,8 @@ class CodeGenerator(ast.NodeVisitor):
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
             if num_stages is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
+            if loop_unroll_factor is not None:
+                for_op.set_attr("tt.loop_unroll_factor", self.builder.get_int32_attr(loop_unroll_factor))
 
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
@@ -1266,7 +1270,7 @@ def kernel_suffix(signature, specialization):
         suffix += str(i)
         if i in specialization.equal_to_1:
             suffix += 'c'
-        if i in specialization.divisible_by_16:
+        if i in specialization.divisibility_16:
             suffix += 'd'
     return suffix
 
@@ -1280,9 +1284,13 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     gscope = fn.__globals__.copy()
     function_name = fn.repr(specialization)
     tys = list(specialization.signature.values())
-    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs.equal_to_1}
-    new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
+    new_constants = attrs.get_constants()
+    for k in new_constants:
+        if k in tys and tys[k] == "i1" and new_constants[k] == 1:
+            new_constants[k] = True
 
+    new_attrs = attrs.filter_out_constants()
+    fn_attrs = new_attrs.get_fn_attrs()
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
@@ -1290,7 +1298,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,
-                              jit_fn=fn, attributes=new_attrs, is_kernel=True, file_name=file_name,
+                              jit_fn=fn, attributes=fn_attrs, is_kernel=True, file_name=file_name,
                               begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())
 

@@ -350,7 +350,7 @@ bool emitTransferBetweenRegistersAndShared(
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
-  auto ptrTy = ptr_ty(ctx, /*addressSpace=*/3);
+  auto ptrTy = shmemBase.getType();
   Value zero = i32_val(0);
   SmallVector<Value> ret;
   for (int i = 0; i < numElems / vecElems; i++) {

@@ -92,7 +92,6 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       // in the memory write at the warp level, resulting in worse performance.
       // For loads, we can expect that the gaps won't matter due to the L1
       // cache.
-      unsigned elemNumBits = getElementBitWidth(refTensorType);
       perThread = std::min<int>(
           perThread, getNumElementsPerThread(op, order, axisInfoAnalysis));
     }

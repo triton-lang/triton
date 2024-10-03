@@ -162,6 +162,8 @@ std::string getTypeStr(Type ty) {
     scalarName = "bf16";
   } else if (ty.isInteger(32)) {
     scalarName = "i32";
+  } else if (ty.isInteger(16)) {
+    scalarName = "i16";
   } else if (ty.isInteger(8)) {
     scalarName = "iu8";
   } else if (ty.isInteger(4)) {

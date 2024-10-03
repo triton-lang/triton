@@ -1,3 +1,4 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -43,6 +44,13 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm) {
     pm.addPass(createConvertBuiltinFuncToLLVMPass());
   });
+  m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm) {
+    pm.addPass(createInsertInstructionSchedHintsPass());
+  });
+  m.def("lower_instruction_sched_hints",
+        [](mlir::PassManager &pm, std::string variant) {
+          pm.addPass(createLowerInstructionSchedHintsPass(variant));
+        });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
                                                     const std::string &arch) {
     pm.addPass(
@@ -96,6 +104,7 @@ void init_triton_amd(py::module &&m) {
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
+    registry.insert<mlir::triton::amdgpu::TritonAMDGPUDialect>();
     // registry.insert<mlir::ROCDL::ROCDLDialect>();
     mlir::registerROCDLDialectTranslation(registry);
     context.appendDialectRegistry(registry);
