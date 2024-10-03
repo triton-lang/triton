@@ -367,12 +367,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // The following tasks must be completed before we can remove the layoutIsOK
     // check:
     // 1. Support for AMD's MFMA and WMMA
-    // 2. Handling NVIDIA's MMA layout when CTA per CGA > 1
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-        if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
-          return false;
-        }
         if (useLegacyMMAConversion) {
           return false;
         }
@@ -419,8 +415,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    SmallVector<Value> outVals = transferWithinBlockOrGroupImpl(
-        inVals, conversion, op, srcLayout, dstLayout, adaptor, rewriter);
+    auto srcLayoutWithinBlock = getLayoutWithinBlock(srcLayout);
+    auto dstLayoutWithinBlock = getLayoutWithinBlock(dstLayout);
+    SmallVector<Value> outVals =
+        transferWithinBlock(inVals, op, srcLayoutWithinBlock,
+                            dstLayoutWithinBlock, adaptor, rewriter);
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
@@ -437,11 +436,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  SmallVector<Value> transferWithinBlockOrGroupImpl(
-      ArrayRef<Value> inVals, const LinearLayout &conversion,
-      ConvertLayoutOp op, const LinearLayout &srcLayout,
-      const LinearLayout &dstLayout, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const {
+  SmallVector<Value>
+  transferWithinBlock(ArrayRef<Value> inVals, ConvertLayoutOp op,
+                      const LinearLayout &srcLayout,
+                      const LinearLayout &dstLayout, OpAdaptor adaptor,
+                      ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
 
@@ -459,11 +458,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto scratchConfig =
         getScratchConfigForCvt(op.getSrc().getType(), op.getType());
-    auto tensorShape = convertType<unsigned, int64_t>(op.getType().getShape());
+    auto tensorShapePerCTA = convertType<unsigned, int64_t>(getShapePerCTA(
+        op.getSrc().getType().getEncoding(), op.getType().getShape()));
     // Input dims: [offset, iteration, block]
     // Output dims: dimN-1, dimN-2, ..., dim0, where N is obtained from repShape
     LinearLayout sharedLayout = chooseShemLayoutForRegToRegConversion(
-        ctx, tensorShape, scratchConfig.repShape, scratchConfig.order);
+        ctx, tensorShapePerCTA, scratchConfig.repShape, scratchConfig.order);
 
     // Layout for the store from registers to shared memory.
     //
