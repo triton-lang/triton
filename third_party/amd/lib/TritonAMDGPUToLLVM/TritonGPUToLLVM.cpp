@@ -9,6 +9,7 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -23,6 +24,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
 namespace triton {
@@ -86,6 +88,11 @@ struct ConvertTritonAMDGPUToLLVM
       return signalPassFailure();
     }
 
+    // Given how young is the buffer intrinsic support in Triton, we shield it
+    // behind this variable. Once we smooth all the edges, we should get rid of
+    // this
+    bool enableBufferIntrinsics = tools::getBoolEnv("AMDGCN_USE_BUFFER_OPS");
+
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 
@@ -110,10 +117,7 @@ struct ConvertTritonAMDGPUToLLVM
 
     // Collect all the assumed expressions
     DenseSet<Value> assumptions;
-    mod.walk([&](Operation *op) {
-      if (op->getName().getStringRef() == "llvm.intr.assume")
-        assumptions.insert(op->getOperand(0));
-    });
+    mod.walk([&](LLVM::AssumeOp op) { assumptions.insert(op->getOperand(0)); });
 
     // Lower functions
     {
@@ -189,9 +193,9 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
-    AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           numWarps, axisInfoAnalysis,
-                                           assumptions, AMDBenefit);
+    AMD::populateLoadStoreOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, numWarps, axisInfoAnalysis,
+        assumptions, enableBufferIntrinsics, AMDBenefit);
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
                       commonBenefit);
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns,

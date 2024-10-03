@@ -14,7 +14,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
@@ -107,9 +106,11 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const AMD::TargetInfo &targetInfo,
                                    ModuleAxisInfoAnalysis &axisAnalysisPass,
-                                   const DenseSet<Value> &assumptions)
+                                   const DenseSet<Value> &assumptions,
+                                   bool enableBufferIntrinsics)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass),
-        assumptions(assumptions) {}
+        assumptions(assumptions),
+        enableBufferIntrinsics(enableBufferIntrinsics) {}
 
   unsigned getContiguity(Value ptr) const {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
@@ -132,7 +133,7 @@ struct LoadStoreConversionBase {
   // assumed positive
   bool verifyNonNegativeByAssumption(Value expr) const {
     for (Value assume : assumptions) {
-      if (auto cmpOp = dyn_cast<arith::CmpIOp>(assume.getDefiningOp())) {
+      if (auto cmpOp = assume.getDefiningOp<arith::CmpIOp>()) {
         bool isGreaterThan =
             (cmpOp.getPredicate() == arith::CmpIPredicate::sge ||
              cmpOp.getPredicate() == arith::CmpIPredicate::sgt);
@@ -146,30 +147,10 @@ struct LoadStoreConversionBase {
     return false;
   }
 
-  // Look if the expression is a block argument with a "tt.non_negative"
-  // property
-  bool verifyNonNegativeByFunctionProperty(Value expr) const {
-    if (!expr.getDefiningOp()) {
-      BlockArgument blockArg = dyn_cast<BlockArgument>(expr);
-      if (blockArg && blockArg.getOwner()->isEntryBlock()) {
-        Operation *op = blockArg.getOwner()->getParentOp();
-        if (auto fun = dyn_cast<FunctionOpInterface>(op))
-          if (fun.getArgAttr(blockArg.getArgNumber(), "tt.non_negative"))
-            return true;
-      }
-    }
-    return false;
-  }
-
   bool verifyNonNegativeExpr(Value expr) const {
 
     // Base case 1: check if the expression is contained in any assumption
     if (verifyNonNegativeByAssumption(expr))
-      return true;
-
-    // Base case 2: check if the expression is a BlockArgument and if there
-    // is a property that states its non-negativity
-    if (verifyNonNegativeByFunctionProperty(expr))
       return true;
 
     // Recurse if the operation is defined
@@ -230,47 +211,21 @@ struct LoadStoreConversionBase {
   // Quick analysis on the Triton IR to decide if we can safely use
   // buffer operations
   bool canUseBufferOps(Value ptr) const {
-    // 1. Check if the pointer is uniform: i.e., if it comes from a scalar
+    // 1. Check if the pointer is uniform: i.e., if it comes from a uniform
     // pointer(splatted) and non-uniform offset addition
-    DenseSet<triton::AddPtrOp> nonUniformUpdates;
-    SmallVector<Operation *> queue{ptr.getDefiningOp()};
-    while (!queue.empty()) {
-      Operation *curOp = queue.pop_back_val();
-      if (!curOp)
-        continue;
-      if (auto addPtrOp = dyn_cast<triton::AddPtrOp>(curOp))
-        if (isa<RankedTensorType>(addPtrOp.getPtr().getType()))
-          nonUniformUpdates.insert(addPtrOp);
-      for (Value operand : curOp->getOperands())
-        queue.push_back(operand.getDefiningOp());
-    }
+    auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
+    bool useBufferOps =
+        addPtrOp && isa<triton::SplatOp>(addPtrOp.getPtr().getDefiningOp());
 
-    // 2. Check the that pointer is not a block argument. We cannot
-    // be sure if the block argument has been already non-uniformly
-    // updated by the caller
-    bool useBufferOps = (nonUniformUpdates.size() == 1);
+    // 2. Check if the offset is a 32-bit tensor
+    Value offset = addPtrOp.getOffset();
+    useBufferOps =
+        useBufferOps &&
+        (cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth() ==
+         32);
 
-    if (useBufferOps) {
-      triton::AddPtrOp addPtrOp = (*nonUniformUpdates.begin());
-      // 2. Check that the tensor pointer is not coming from a function
-      // argument. We have no way to know if that pointer has been
-      // already updated by the caller
-      Value basePtr = addPtrOp.getPtr();
-      auto maybeBufferArg = dyn_cast<BlockArgument>(basePtr);
-      useBufferOps =
-          !maybeBufferArg ||
-          !isa<FunctionOpInterface>(maybeBufferArg.getOwner()->getParentOp());
-
-      // 3. Check if the offset can be expressed ad 32-bits
-      Value offset = addPtrOp.getOffset();
-      useBufferOps =
-          useBufferOps &&
-          (cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth() ==
-           32);
-
-      // 4. Check if the offset is non-negative
-      useBufferOps = useBufferOps && verifyNonNegativeExpr(offset);
-    }
+    // 3. Check if the offset is non-negative
+    useBufferOps = useBufferOps && verifyNonNegativeExpr(offset);
     return useBufferOps;
   }
 
@@ -286,6 +241,7 @@ protected:
   const AMD::TargetInfo &targetInfo;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   DenseSet<Value> assumptions;
+  bool enableBufferIntrinsics;
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
@@ -295,9 +251,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   LoadOpConversion(LLVMTypeConverter &converter,
                    const AMD::TargetInfo &targetInfo,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
-                   const DenseSet<Value> &assumptions, PatternBenefit benefit)
+                   const DenseSet<Value> &assumptions,
+                   bool enableBufferIntrinsics, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, assumptions) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, assumptions,
+                                enableBufferIntrinsics) {}
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
@@ -424,9 +382,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   StoreOpConversion(LLVMTypeConverter &converter,
                     const AMD::TargetInfo &targetInfo,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
-                    const DenseSet<Value> &assumptions, PatternBenefit benefit)
+                    const DenseSet<Value> &assumptions,
+                    bool enableBufferIntrinsics, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, assumptions) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, assumptions,
+                                enableBufferIntrinsics) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -532,9 +492,10 @@ struct AtomicCASOpConversion
                         const AMD::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         const DenseSet<Value> &assumptions,
-                        PatternBenefit benefit)
+                        bool enableBufferIntrinsics, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicCASOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, assumptions) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, assumptions,
+                                enableBufferIntrinsics) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -677,9 +638,10 @@ struct AtomicRMWOpConversion
                         const AMD::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         const DenseSet<Value> &assumptions,
-                        PatternBenefit benefit)
+                        bool enableBufferIntrinsics, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, assumptions) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass, assumptions,
+                                enableBufferIntrinsics) {}
 
   /// Try to match the mlir::triton::RMWOp to LLVM::AtomicBinOp.
   static std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
@@ -847,9 +809,10 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        const DenseSet<Value> &assumptions,
+                                       bool enableBufferIntrinsics,
                                        PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion>(typeConverter, targetInfo, axisInfoAnalysis,
-                                  assumptions, benefit);
+                                  assumptions, enableBufferIntrinsics, benefit);
 }
 } // namespace mlir::triton::AMD

@@ -17,7 +17,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -73,6 +72,17 @@ using namespace mlir;
 //    `%t_ptr = tt.splat(%fatPointers[%ptr].basePtr)
 //    `%fat_ptr = tt.addptr(%t_ptr, %fatPointers[ptr].offset)`
 //    `%data = tt.load(%fat_ptr)`
+//
+// Please note that `%offset` might be a 32bit or 64bit integer. If
+// we can, we would like to use 32 bit integers. This can happen under
+// certain conditions:
+//
+// a) We can determine that the offset cannot overflow. In this case, we can
+//    downcast the pointer just before emitting the load
+// b) We know that the underlying memory size can be expressed as a 32 bit
+//    value. In this case we can simply start with a 32bit offset and downcast
+//    if we ever meet 64 bit operations (because we know that the offset can be
+//    contained in 32 bits)
 //
 class PointerCanonicalizer {
 public:
@@ -577,7 +587,7 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
     Type fatPtrOffsetType = getElementTypeOrSelf(fatPtrOffset);
     canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
 
-    // If we the incoming offset is 32 bits, then we have to cast to 64
+    // Upcast or downcast the offset accordingly
     if (addPtrOffsetType.isInteger(32) && fatPtrOffsetType.isInteger(64))
       nonUniformOffset =
           extend32bitOffsetTo64Bits(rewriter, curLoc, nonUniformOffset);

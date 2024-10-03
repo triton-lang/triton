@@ -75,7 +75,6 @@ struct BufferEmitter {
   // `VectorType`
   Value emitMaskedBufferLoad(Type type, Value basePtr, Value offset, Value pred,
                              Value falseVal, bool nt = false) {
-    // VectorType vecTy = cast<VectorType>(type);
     SmallVector<Value, 6> args;
     fillBufferArgs(type, basePtr, offset, pred, nt, args);
     Type bufferType = getBufferOpType(type);
@@ -163,8 +162,11 @@ private:
     // bit 24: Reserved to 1 (RDNA) or 0 (CDNA)
     // bits 25-26: Reserved (0)
     // bit 27: Buffer is non-volatile (CDNA only)
-    // bits 28-29: Out of bounds select (0 = structured, 1 = check index, 2 =
-    //  none, 3 = either swizzles or testing against offset field) RDNA only
+    // bits 28-29: Out of bounds select (RDNA only)
+    //             (0 = structured,
+    //              1 = check index,
+    //              2 = none,
+    //              3 = either swizzles or testing against offset field)
     // bits 30-31: Type (must be 0)
     uint32_t flags = (7 << 12) | (4 << 15);
     if (targetInfo.getISAFamily() == AMD::ISAFamily::RDNA2 ||
@@ -393,26 +395,24 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal,
-             std::optional<triton::AMD::TargetInfo> targetInfo,
+             Value pred, Value falseVal, triton::AMD::TargetInfo targetInfo,
              int64_t alignmentBytes, triton::CacheModifier cm,
              bool useBufferOps) {
 
   bool noCacheModifiers = (cm == triton::CacheModifier::NONE);
-  bool nt = (cm == triton::CacheModifier::CG);
+  bool nonTemporal = (cm == triton::CacheModifier::CG);
   // Use a predicated buffer load intrinsic if we can. This should be optimal,
   // since we don't have to emit any branch. Also, in this way the hardware
   // is automatically doing the pointer arithmetic, so we should save in VALU
   // arithmetic and registers.
-  if (useBufferOps && targetInfo && (noCacheModifiers || nt)) {
+  if (useBufferOps && (noCacheModifiers || nonTemporal)) {
     auto maybeBaseAndOffset = getBaseAndOffset(ptr);
     if (!failed(maybeBaseAndOffset)) {
-      BufferEmitter bufferEmitter(rewriter, loc, targetInfo.value());
+      BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
       Value basePtr = maybeBaseAndOffset->first;
       Value offset = maybeBaseAndOffset->second;
-      bool nt = (cm == triton::CacheModifier::CG);
       Value vecData = bufferEmitter.emitMaskedBufferLoad(
-          elemTy, basePtr, offset, pred, falseVal, nt);
+          elemTy, basePtr, offset, pred, falseVal, nonTemporal);
       vecData = bitcast(vecData, elemTy);
       return vecData;
     }
@@ -421,7 +421,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
   // Alternatively, try to emit llvm.intr.masked.load if we can. In theory the
   // backend should be happier because we emit less branchy code to optimize.
   // The backend will lower it down however it wants at some point.
-  if (alignmentBytes && (noCacheModifiers || nt)) {
+  if (alignmentBytes && (noCacheModifiers || nonTemporal)) {
     // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we
     // need to bitcast to `vector<1xelemTy>` (and back)
     int64_t vecSize = getNumElements(elemTy);
@@ -430,7 +430,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
     Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
     bool nt = (cm == triton::CacheModifier::CG);
     Value vecData = rewriter.create<LLVM::MaskedLoadOp>(
-        loc, vecType, ptr, maskVal, falseVal, alignmentBytes, nt);
+        loc, vecType, ptr, maskVal, falseVal, alignmentBytes, nonTemporal);
     // If it is not a vector, remember to bitcast back to a scalar
     vecData = bitcast(vecData, elemTy);
     return vecData;
@@ -463,15 +463,15 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, std::optional<triton::AMD::TargetInfo> targetInfo,
+             Value pred, triton::AMD::TargetInfo targetInfo,
              int64_t alignmentBytes, triton::CacheModifier cm,
              bool useBufferOps) {
   // Use a predicated buffer store intrinsic if we can. This should be optimal,
   // since we don't have to emit any branch, ever.
-  if (useBufferOps && targetInfo && cm == triton::CacheModifier::NONE) {
+  if (useBufferOps && cm == triton::CacheModifier::NONE) {
     auto maybeBaseAndOffset = getBaseAndOffset(ptr);
     if (!failed(maybeBaseAndOffset)) {
-      BufferEmitter bufferEmitter(rewriter, loc, targetInfo.value());
+      BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
       Type elemTy = val.getType();
       int64_t vecSize = getNumElements(elemTy);
       Type vecType = castToVectorType(elemTy);

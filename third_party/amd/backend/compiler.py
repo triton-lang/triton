@@ -74,26 +74,29 @@ class HIPOptions:
 
 
 class HIPAttrsDescriptor(AttrsDescriptor):
+    # tt.pointer_range: this property asserts if the underlying
+    # storage area of a given pointer can be resepresented as a
+    # 32 bit integer
     __slots__ = ("pointer_range_32")
+
+    def _add_backend_properties(self, params=None, values=None):
+        self.property_values["tt.pointer_range"] = 32
+        if params is None or values is None:
+            return
+
+        self.arg_properties["tt.pointer_range"] = [
+            param.num for param, arg in zip(params, values) if HIPAttrsDescriptor.is_within2gb(arg)
+            and not param.do_not_specialize and not param.do_not_specialize_on_alignment
+        ]
 
     @staticmethod
     def is_within2gb(arg):
         if hasattr(arg, "ptr_range"):
             return arg.ptr_range() < 2**31 - 1
         if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
-            return sys.getsizeof(arg.untyped_storage()) < 2**31 - 1
+            # Please note that 2**31-1 is the max int32 positive limit
+            return sys.getsizeof(arg.untyped_storage()) <= 2**31 - 1
         return False
-
-    def _add_backend_properties(self, params=None, values=None):
-        self.property_values["tt.pointer_range"] = 32
-        if (params is None or values is None):
-            return
-
-        # tt.pointer_range: does the pointer space fit in 2GB
-        self.arg_properties["tt.pointer_range"] = [
-            param.num for param, arg in zip(params, values) if HIPAttrsDescriptor.is_within2gb(arg)
-            and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-        ]
 
     @staticmethod
     def get_property_key(val, align):
@@ -271,11 +274,6 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
-        # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
-        # count caused by predicated loads/stores. In certain kernels, the addition of these blocks can cause the MLIR
-        # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
-        # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
-        # for conditional branching around memory accesses.
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm)
         pm.run(mod)
 
