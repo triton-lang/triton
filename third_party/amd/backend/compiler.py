@@ -29,7 +29,7 @@ def min_dot_size(target: GPUTarget):
 class HIPOptions:
     num_warps: int = 4
     waves_per_eu: int = 1
-    num_stages: int = 0
+    num_stages: int = 2
     num_ctas: int = 1
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
@@ -171,8 +171,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if amd.has_matrix_core_feature(options.arch):
-            num_stages = options.num_stages if options.num_stages != 0 else 2
-            amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages)
+            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
