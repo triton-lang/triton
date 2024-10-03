@@ -170,24 +170,15 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "1") == "1"
         if amd.has_matrix_core_feature(options.arch):
-            if use_new_pipeliner:
-                # In the old pipeliner we only support num_stages = 0/1, which means something
-                # different than the NVIDIA side. In the new pipeliner we unify the num_stages
-                # interpretation. Default to use 2 stages if not explicitly set.
-                num_stages = options.num_stages if options.num_stages != 0 else 2
-                amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages)
-            else:
-                if options.num_stages == 0:
-                    amd.passes.ttgpuir.add_stream_pipeline(pm)
+            num_stages = options.num_stages if options.num_stages != 0 else 2
+            amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        if use_new_pipeliner or options.num_stages != 0:
-            amd.passes.ttgpuir.add_reorder_instructions(pm)
+        amd.passes.ttgpuir.add_reorder_instructions(pm)
         amd.passes.ttgpuir.add_canonicalize_pointers(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
