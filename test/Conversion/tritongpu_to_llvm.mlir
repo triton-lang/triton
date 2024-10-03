@@ -1693,3 +1693,21 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-DAG: llvm.mlir.global internal constant @assertFunc_0("unknown\00") {addr_space = 0 : i32}
+// CHECK-DAG: llvm.mlir.global internal constant @assertFile_0("inner_call\00") {addr_space = 0 : i32}
+// CHECK-DAG: llvm.mlir.global internal constant @assertMessage_0("assert text\00") {addr_space = 0 : i32}
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @add_kernel(%arg0: tensor<1xi1, #blocked>) {
+    tt.assert %arg0, "assert text" : tensor<1xi1, #blocked> loc(#loc5)
+    tt.return
+  }
+}
+#loc1 = loc("outer_call":33:8)
+#loc2 = loc("top_func":47:8)
+#loc3 = loc("inner_call":29:28)
+#loc4 = loc(callsite(#loc3 at #loc1))
+#loc5 = loc(callsite(#loc4 at #loc2))
