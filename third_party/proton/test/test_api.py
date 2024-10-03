@@ -152,10 +152,22 @@ def test_throw():
     # Catch an exception thrown by c++
     session_id = 100
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
-        session_id = proton.start(f.name.split(".")[0])
+        activate_error = ""
         try:
+            session_id = proton.start(f.name.split(".")[0])
             proton.activate(session_id + 1)
         except Exception as e:
-            assert "Session has not been initialized: " + str(session_id + 1) in str(e)
+            activate_error = str(e)
         finally:
             proton.finalize()
+        assert "Session has not been initialized: " + str(session_id + 1) in activate_error
+
+        deactivate_error = ""
+        try:
+            session_id = proton.start(f.name.split(".")[0])
+            proton.deactivate(session_id + 1)
+        except Exception as e:
+            deactivate_error = str(e)
+        finally:
+            proton.finalize()
+        assert "Session has not been initialized: " + str(session_id + 1) in deactivate_error
