@@ -434,12 +434,24 @@ PointerCanonicalizer::decomposeOffsetFromExpr(Location loc, Value expr,
 Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   Value basePtr = fatPtr.basePtr;
   Value offset = fatPtr.offset;
-  // Get the offset shape
-  auto offsetType = cast<RankedTensorType>(offset.getType());
-  ArrayRef<int64_t> offsetShape = offsetType.getShape();
-  // Splat the scalar pointer
+  auto tensorType = dyn_cast<RankedTensorType>(offset.getType());
+
+  // Scalar case: we only need to `tt.addptr %basePtr, %offset`
+  if (!tensorType) {
+    auto addPtrOp = rewriter.create<triton::AddPtrOp>(loc, basePtr.getType(),
+                                                      basePtr, offset);
+    addPtrOp->setAttrs(fatPtr.attributes);
+    return addPtrOp.getResult();
+  }
+
+  // Tensor case: splat the scalar pointer and add the (tensor) offset:
+  // ```
+  //    %tensorBasePtr = tt.splat %basePtr
+  //    %tensorPtr = tt.addptr %tensorBasePtr, %offset
+  // ```
+  ArrayRef<int64_t> offsetShape = tensorType.getShape();
   auto tensorPtrType = RankedTensorType::get(offsetShape, basePtr.getType(),
-                                             offsetType.getEncoding());
+                                             tensorType.getEncoding());
   if (fatPtr.canNarrow)
     offset = narrow64bitOffsetTo32bits(rewriter, loc, offset);
 
@@ -450,7 +462,6 @@ Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
       rewriter.create<triton::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
 
   addPtrOp->setAttrs(fatPtr.attributes);
-
   return addPtrOp.getResult();
 }
 
@@ -526,6 +537,7 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
   Value newPtr = fatPtr.basePtr;
   // If it is a scalar pointer update, simply bump the base pointer
   if (!isa<RankedTensorType>(addPtrOp.getPtr().getType())) {
+    addPtrOp->setOperand(0, newPtr);
     pointers[nextPtr] = fatPtr.copyWithOffset(nextPtr);
     return success();
   }
@@ -548,11 +560,9 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
   auto [uniformOffset, nonUniformOffset] =
       decomposeOffsetFromExpr(curLoc, offset, bitness);
 
-  // Scalar pointer update (if any): bump the scalar pointer
-  if (!matchPattern(uniformOffset, m_Zero())) {
-    newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
-                                               uniformOffset);
-  }
+  // Scalar pointer update: bump the scalar pointer
+  newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
+                                             uniformOffset);
 
   // Vector offset update (if any): bump the tensor offset
   Value fatPtrOffset = fatPtr.offset;
