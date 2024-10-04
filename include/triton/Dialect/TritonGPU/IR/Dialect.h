@@ -75,9 +75,32 @@ getThreadsPerWarpWithUniqueData(Attribute layout,
 SmallVector<unsigned>
 getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 
+// Returns the dimensions of the tensor from minor (fast-varying) to
+// major (slow-varying). For blocked, mma, and dotOperand layouts,
+// though the elements are in registers, the order refers to memory
+// layout of the original tensor in global memory.
+// For shared Layout, the order refers to which dimension of the original tensor
+// is contiguous in shared memory.
+SmallVector<unsigned> getOrder(Attribute layout);
+
+// Returns the dimensions along which warpId's are distributed.
+// warpsPerCTA only tells the warp layout in the CTA, e.g. warpsPerCTA = [2, 4]
+// tells there are 2 warps along dim0 and 4 warps along dim1.
+// warpOrder tells the specific order when distributing warp IDs.
+// E.g. warpOrder = [0, 1] means the warp IDs are distributed as follows
+// [warp0  warp2  warp4 warp6]
+// [warp1  warp3  warp5 warp7]
+// Note that in most cases, getWarpOrder and getOrder return the same results.
+// But this is not guaranteed.
 SmallVector<unsigned> getWarpOrder(Attribute layout);
 
-SmallVector<unsigned> getOrder(Attribute layout);
+// Returns the dimensions along which threadId's are distributed.
+// Similar to warpOrder, threadOrder is necessary to tell the specific thread
+// distribution in the warp.
+// Note that, in most cases, getThreadOrder and getOrder return the same
+// results. But this is not guaranteed. One exception is mfma.transposed layout,
+// in which getOrder returns [1, 0] but getThreadOrder returns [0, 1].
+SmallVector<unsigned> getThreadOrder(Attribute layout);
 
 CTALayoutAttr getCTALayout(Attribute layout);
 

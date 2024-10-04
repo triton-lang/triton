@@ -559,7 +559,7 @@ TEST_F(AMDMfmaLayoutTest, mfma32) {
 
   auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
   ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
-  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(0u, 1u));
+  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
 
   auto mfma3d = createMFMA(32, 32, {2, 4, 1});
   ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
@@ -567,7 +567,7 @@ TEST_F(AMDMfmaLayoutTest, mfma32) {
 
   auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
   ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
-  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(1u, 2u, 0u));
+  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
 }
 
 TEST_F(AMDMfmaLayoutTest, mfma16) {
@@ -577,7 +577,7 @@ TEST_F(AMDMfmaLayoutTest, mfma16) {
 
   auto tmfma2d = createTransposedMFMA(16, 16, {2, 4});
   ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
-  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(0u, 1u));
+  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
 
   auto mfma3d = createMFMA(16, 16, {2, 4, 1});
   ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
@@ -585,7 +585,7 @@ TEST_F(AMDMfmaLayoutTest, mfma16) {
 
   auto tmfma3d = createTransposedMFMA(16, 16, {2, 4, 1});
   ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
-  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(1u, 2u, 0u));
+  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
 }
 
 } // anonymous namespace

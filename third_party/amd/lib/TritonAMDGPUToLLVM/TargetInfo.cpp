@@ -69,12 +69,9 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");
-  SmallVector<Value> operands = {cmp};
-  Value asmResult =
-      rewriter.create<LLVM::CallIntrinsicOp>(loc, type, stringAttr, operands)
-          ->getResult(0);
-  return asmResult;
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.ballot",
+                                         type, cmp)
+      ->getResult(0);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -144,15 +141,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
-  return false;
-}
-
-bool TargetInfo::processReplicaUsingStMatrix(
-    RewriterBase &rewriter, Location loc, Value smemBase,
-    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzleByteWidth) const {
   return false;
 }
 
@@ -265,5 +253,7 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
 }
+
+int TargetInfo::getSharedAddressSpace() const { return 3; }
 
 } // namespace mlir::triton::AMD

@@ -1,6 +1,11 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/Transforms/DialectConversion.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -86,6 +91,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   }
   return mask;
 }
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const AMD::TargetInfo &targetInfo,
@@ -111,6 +117,10 @@ struct LoadStoreConversionBase {
 
   unsigned getMaskAlignment(Value mask) const {
     return axisAnalysisPass.getMaskAlignment(mask);
+  }
+
+  unsigned getPtrAlignment(Value ptr) const {
+    return axisAnalysisPass.getPtrAlignment(ptr);
   }
 
 protected:
@@ -187,12 +197,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     // vectorized iteration through all the pointer/mask/other elements
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    const size_t valueElemNBytes = valueElemNBits / 8;
     const int numVecs = numElems / vec;
+    int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
@@ -218,15 +229,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         Value v = undef(vecTy);
         for (size_t s = 0; s < vec; ++s) {
           Value otherElem = otherElems[vecStart + s];
-          Value indexVal = createIndexAttrConstant(
-              rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+          Value indexVal = LLVM::createIndexConstant(
+              rewriter, loc, this->getTypeConverter(), s);
           v = insert_element(vecTy, v, otherElem, indexVal);
         }
         falseVal = v;
       }
 
-      auto loadVal =
-          llLoad(rewriter, loc, ptr, vecTy, pred, falseVal, cacheMod);
+      Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
+                             ptrAlignmentBytes, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -259,6 +270,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value ptr = op.getPtr();
     Value value = op.getValue();
+    Value mask = op.getMask();
 
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
@@ -281,7 +293,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     // Determine the vectorization size
     SmallVector<Value> maskElems;
     if (llMask) {
-      Value mask = op.getMask();
       maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(valueElems.size() == maskElems.size());
 
@@ -289,16 +300,18 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
-    const size_t dtsize =
-        std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
-    const size_t valueElemNBits = dtsize * 8;
+    const size_t valueElemNBits =
+        std::max<int>(8, valueElemTy.getIntOrFloatBitWidth());
+    const size_t valueElemNBytes = valueElemNBits / 8;
+    int64_t ptrAlignmentBytes = getPtrAlignment(ptr) * valueElemNBytes;
 
     auto cacheMod = op.getCache();
     const int numVecs = elemsPerThread / vec;
+    Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
+      Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
+      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -307,33 +320,23 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
 
-      // TODO(Superjomn) Add cache policy fields to StoreOp.
-      // TODO(Superjomn) Deal with cache policy here.
-
       Type valArgTy = IntegerType::get(ctx, width);
       auto wordTy = vec_ty(valueElemTy, wordNElems);
 
       SmallVector<std::pair<Value, std::string>> asmArgs;
-      for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        // llWord is a width-len composition
-        Value llWord = undef(wordTy);
-        // Insert each value element to the composition
-        for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
-          const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
-          assert(elemOffset < valueElems.size());
-          Value elem = valueElems[elemOffset];
-          if (elem.getType().isInteger(1))
-            elem = sext(i8_ty, elem);
-          elem = bitcast(elem, valueElemTy);
+      Value elem = valueElems[vecStart];
+      Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
 
-          llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
-        }
-        llWord = bitcast(llWord, valArgTy);
-        Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
-        auto address = ptrElems[vecStart + wordIdx * wordNElems];
-        llStore(rewriter, loc, address, llWord, maskVal, cacheMod);
+      // Create the store val
+      Value storeVal = undef(vecTy);
+      for (size_t s = 0; s < vec; ++s) {
+        Value otherElem = valueElems[vecStart + s];
+        Value indexVal = createIndexAttrConstant(
+            rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+        storeVal = insert_element(vecTy, storeVal, otherElem, indexVal);
       }
-    }
+      llStore(rewriter, loc, ptr, storeVal, pred, ptrAlignmentBytes, cacheMod);
+    } // end vec
     rewriter.eraseOp(op);
     return success();
   }
@@ -461,7 +464,8 @@ struct AtomicCASOpConversion
         if (atomicNeedsSharedMemory(op.getResult())) {
           // Extract the new_loaded value from the pair.
           Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr =
+              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
           store(newLoaded, atomPtr);
         }
 
@@ -479,7 +483,8 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         barrier();
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        Value atomPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
@@ -629,7 +634,8 @@ struct AtomicRMWOpConversion
       }
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr =
+              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
           store(atom, atomPtr);
         }
       }
@@ -648,7 +654,8 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+        Value atomPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         barrier();
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});

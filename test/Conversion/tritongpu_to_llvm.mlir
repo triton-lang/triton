@@ -709,39 +709,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: convert_layout_blocked_blocked
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK: llvm.inline_asm
-    // CHECK: st.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: st.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: st.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: st.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: st.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: st.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: st.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: st.shared
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
+    // CHECK-COUNT-8: llvm.inline_asm {{.*}} st.shared
+    // CHECK-: nvvm.barrier0
+    // CHECK-COUNT-8: llvm.load
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -761,10 +731,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK: llvm.inline_asm
     // CHECK: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
+    // CHECK: llvm.load
+    // CHECK: llvm.load
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -782,18 +750,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK: llvm.inline_asm
     // CHECK: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
+    // CHECK: llvm.load
+    // CHECK: llvm.load
     // CHECK: nvvm.barrier0
     // CHECK: llvm.inline_asm
     // CHECK: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
-    // CHECK: llvm.inline_asm
-    // CHECK: ld.shared
+    // CHECK: llvm.load
+    // CHECK: llvm.load
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -851,7 +815,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: llvm.inline_asm
     // CHECK-SAME: st.shared
     // CHECK: nvvm.barrier0
-    // CHECK: ld.shared
+    // CHECK: llvm.load
     %0 = triton_gpu.convert_layout %arg0 : tensor<32x16xf32, #mma> -> tensor<32x16xf32, #blocked0>
     tt.return
   }
@@ -891,7 +855,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   tt.func @convert_layout_mmav3_transpose(%arg0: tensor<128x256xf8E5M2, #mma>) {
     // CHECK-COUNT-128: st.shared.b8
     // CHECK: nvvm.barrier0
-    // CHECK-COUNT-8: ld.shared.v4.b32
+    // CHECK-COUNT-8: llvm.load {{.*}} -> vector<4xi32>
     %0 = triton_gpu.convert_layout %arg0 : tensor<128x256xf8E5M2, #mma> -> tensor<128x256xf8E5M2, #blocked>
     tt.return
   }
@@ -920,7 +884,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice0
   tt.func @convert_blocked1d_to_slice0(%src:tensor<32xi32, #blocked0>) {
-    // CHECK: inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@${{.*}} ld.shared.v4.b32
+    // CHECK: llvm.load {{.*}} -> vector<4xi32>
     %cvt = triton_gpu.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
     tt.return
   }
@@ -933,7 +897,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice1
   tt.func @convert_blocked1d_to_slice1(%src:tensor<32xi32, #blocked0>) {
-    // CHECK-COUNT-8: inline_asm{{.*}}ld.shared.b32
+    // CHECK-COUNT-8: llvm.load {{.*}} -> i32
     %cvt = triton_gpu.convert_layout %src : tensor<32xi32, #blocked0> -> tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
     tt.return
   }
@@ -1787,9 +1751,7 @@ module attributes {"triton_gpu.num-warps" = 16 : i32, "triton_gpu.proton-slots" 
     // CHECK: llvm.mlir.constant(3 : i32) : i32
     // CHECK: llvm.br ^[[BB2:.*]](%[[ARG66]] : i32)
     // CHECK: ^bb2(%[[ARG69:.*]]: i32):
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$2 ld.shared.b32 $0, [ $1 + 0 ];", "=r,r,b" {{.*}}
     // CHECK: llvm.store
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$2 ld.shared.b32 $0, [ $1 + 0 ];", "=r,r,b" {{.*}}
     // CHECK: llvm.store
     // CHECK: %[[ARG95:.*]] = llvm.mlir.constant(126 : i32) : i32
     // CHECK: %[[ARG96:.*]] = llvm.icmp "slt" %{{.*}}, %[[ARG95]] : i32
@@ -1801,3 +1763,21 @@ module attributes {"triton_gpu.num-warps" = 16 : i32, "triton_gpu.proton-slots" 
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-DAG: llvm.mlir.global internal constant @assertFunc_0("unknown\00") {addr_space = 0 : i32}
+// CHECK-DAG: llvm.mlir.global internal constant @assertFile_0("inner_call\00") {addr_space = 0 : i32}
+// CHECK-DAG: llvm.mlir.global internal constant @assertMessage_0("assert text\00") {addr_space = 0 : i32}
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @add_kernel(%arg0: tensor<1xi1, #blocked>) {
+    tt.assert %arg0, "assert text" : tensor<1xi1, #blocked> loc(#loc5)
+    tt.return
+  }
+}
+#loc1 = loc("outer_call":33:8)
+#loc2 = loc("top_func":47:8)
+#loc3 = loc("inner_call":29:28)
+#loc4 = loc(callsite(#loc3 at #loc1))
+#loc5 = loc(callsite(#loc4 at #loc2))

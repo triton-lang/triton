@@ -17,16 +17,16 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
-    const DataLayoutAnalysis *analysis)
+    const TargetInfoBase &targetInfo, const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, option, analysis) {
   addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
   });
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
-    return convertTritonTensorType(type);
+    return convertTritonTensorType(type, targetInfo);
   });
   addConversion([&](MemDescType type) -> std::optional<Type> {
-    return convertMemDescType(type);
+    return convertMemDescType(type, targetInfo);
   });
   addConversion([&](triton::gpu::AsyncTokenType type) -> std::optional<Type> {
     return convertAsyncToken(type);
@@ -88,7 +88,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
 }
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
-    RankedTensorType type) {
+    RankedTensorType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
   SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
@@ -97,7 +97,8 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   if (auto shared_layout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
     SmallVector<Type, 4> types;
     // base ptr
-    auto ptrType = LLVM::LLVMPointerType::get(ctx, 3);
+    auto ptrType =
+        LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
     types.push_back(ptrType);
     // shape dims
     auto rank = type.getRank();
@@ -113,13 +114,15 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
 
-Type TritonGPUToLLVMTypeConverter::convertMemDescType(MemDescType type) {
+Type TritonGPUToLLVMTypeConverter::convertMemDescType(
+    MemDescType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
   SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
   SmallVector<Type, 4> types;
   // base ptr
-  auto ptrType = LLVM::LLVMPointerType::get(ctx, 3);
+  auto ptrType =
+      LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
   types.push_back(ptrType);
   // shape dims
   auto rank = type.getShape().size();

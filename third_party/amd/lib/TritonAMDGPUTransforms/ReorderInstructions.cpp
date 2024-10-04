@@ -50,6 +50,9 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
       // Atomics used for global synchronization.
       if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
         ipnt = bi;
+      // Break at barrier
+      if (isa<gpu::BarrierOp>(wop))
+        ipnt = bi;
       // Break at loops.
       if (isa<scf::ForOp, scf::WhileOp>(wop))
         ipnt = bi;
@@ -174,7 +177,7 @@ public:
     // Best perf on GEMM when these precede global loads.
     m.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
 
-    for (auto op : moveOps) {
+    for (auto op : llvm::reverse(moveOps)) {
       // Gather use-def chain in block.
       Block *block = op->getBlock();
       bool leadsToLoad = false;

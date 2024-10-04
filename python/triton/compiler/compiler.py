@@ -3,43 +3,18 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget
+from ..backends.compiler import GPUTarget, AttrsDescriptor
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
+from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
-from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
 import re
 import functools
 import os
-
-
-@dataclass
-class AttrsDescriptor:
-    divisible_by_16: set = None
-    equal_to_1: set = None
-
-    def __post_init__(self):
-        if self.divisible_by_16 is None:
-            self.divisible_by_16 = set()
-        if self.equal_to_1 is None:
-            self.equal_to_1 = set()
-
-    def to_dict(self):
-        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
-
-    @staticmethod
-    def from_dict(data):
-        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
-                               equal_to_1=set(data.get('equal_to_1', [])))
-
-    def hash(self):
-        key = str([sorted(x) for x in self.__dict__.values()])
-        return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -361,6 +336,19 @@ class LazyDict:
         self.extras.append((func, args))
 
 
+class AsmDict(dict):
+
+    def __missing__(self, key):
+
+        if key == "sass":
+            value = get_sass(self["cubin"])
+        else:
+            raise KeyError("Unknown key: '%s'" % key)
+
+        self[key] = value
+        return value
+
+
 class CompiledKernel:
 
     # Hooks for external tools to monitor the execution of triton kernels
@@ -386,10 +374,10 @@ class CompiledKernel:
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         binary_ext = backend.binary_ext
-        self.asm = {
+        self.asm = AsmDict({
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
-        }
+        })
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
