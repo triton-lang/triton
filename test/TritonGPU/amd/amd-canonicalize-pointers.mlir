@@ -576,4 +576,29 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %11 : tensor<1024xf32, #blocked>
   }
+
+  module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "hip:gfx942", "triton_gpu.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: scalar_pointers
+  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.get_program_id x : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %c10_i64 = arith.constant 10 : i64
+    %c100_i32 = arith.constant 100 : i32
+    %5 = tt.addptr %arg0, %c1_i32 : !tt.ptr<i64>, i32
+    // CHECK: arith.constant 0 : i64
+    // CHECK: arith.constant 0 : i64
+    // CHECK: %[[offset0:.*]] = arith.constant 0 : i64
+    // CHECK: %[[ptr0:.*]] = tt.addptr %arg0, %c1_i32 : !tt.ptr<i64>, i32
+    // CHECK: scf.for {{.*}} iter_args({{.*}}, %[[ptr1:.*]] = %[[ptr0]], %[[offset1:.*]] = %[[offset0]])
+    %10:1 = scf.for %arg3 = %c1_i32 to %c100_i32 step %c1_i32 iter_args(%arg4 = %5) -> (!tt.ptr<i64>)  : i32 {
+        // CHECK: tt.store %[[ptr1]]
+        tt.store %arg4, %c0_i64 : !tt.ptr<i64>
+        // CHECK: tt.addptr %[[ptr1]]
+        %11 = tt.addptr %arg4, %c1_i32 : !tt.ptr<i64>, i32
+        scf.yield %11 : !tt.ptr<i64>
+    }
+    tt.return
+  }
+}
 }
