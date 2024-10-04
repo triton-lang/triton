@@ -118,8 +118,11 @@ def test_util():
 def test_time_derivation():
     derivation_metrics_test(
         metrics=["time/s", "time/ms", "time/us", "time/ns"], expected_data={
-            'time/s (inc)': [0.0004096, 0.0002048, 0.0002048], 'time/ms (inc)': [0.4096, 0.2048, 0.2048],
-            'time/us (inc)': [409.6, 204.8, 204.8], 'time/ns (inc)': [409600.0, 204800.0, 204800.0]
+            'time/s (inc)': [0.0004096, 0.0002048, 0.0002048],
+            'time/ms (inc)': [0.4096, 0.2048, 0.2048],
+            'time/us (inc)': [409.6, 204.8, 204.8],
+            'time/ns (inc)': [409600.0, 204800.0, 204800.0],
+            'time/% (inc)': [100.0, 50.0, 50.0],
         }, sample_file=cuda_example_file)
 
 
