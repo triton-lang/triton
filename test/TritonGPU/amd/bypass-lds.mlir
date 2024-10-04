@@ -1,5 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-bypass-lds-for-dot-layout_pass | FileCheck %s
-
+// RUN: triton-opt %s -tritonamdgpu-bypass-lds-for-dot-operand -tritonamdgpu-stream-pipeline-v2=num_stages=2 -tritongpu-remove-layout-conversions | FileCheck %s
 
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -7,6 +6,11 @@
 #mfma = #triton_gpu.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [1, 8], instrShape = [16, 16], isTransposed = true}>
 #dot_layout_0 = #triton_gpu.dot_op<{opIdx = 0, parent = #mfma, kWidth = 8}>
 #dot_layout_1 = #triton_gpu.dot_op<{opIdx = 1, parent = #mfma, kWidth = 8}>
+
+// CHECK: %[[DOT_LOAD_1:.+]] = tt.load %{{.*}} : tensor<64x256x!tt.ptr<f16>, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+// CHECK: %{{.*}} = scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %[[DOT_LOAD_1]], %{{.*}} = %{{.*}}) -> (tensor<256x256xf32, #mma>, tensor<256x64x!tt.ptr<f16>, #blocked>, i32, !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable>, tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x256x!tt.ptr<f16>, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>)
+// CHECK: %[[DOT_LOAD_2:.+]] = tt.load %{{.*}} : tensor<64x256x!tt.ptr<f16>, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+// CHECK: scf.yield %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[DOT_LOAD_2:.+]], %{{.*}} : tensor<256x256xf32, #mma>, tensor<256x64x!tt.ptr<f16>, #blocked>, i32, !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable>, tensor<64x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x256x!tt.ptr<f16>, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, triton_gpu.target = "hip:gfx942", "triton_gpu.threads-per-warp" = 64 : i32} {
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
