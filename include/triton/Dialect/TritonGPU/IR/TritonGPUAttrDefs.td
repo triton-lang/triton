@@ -1,6 +1,7 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
+
 include "mlir/IR/AttrTypeBase.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
@@ -1343,8 +1344,20 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
   let genVerifyDecl = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
+    SmallVector<unsigned> getNumSubtiles() {
+      auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent());
+      assert(parentAttr && parentAttr.isAmpere() && "NYI");
+      return getOpIdx() == 0 ? SmallVector<unsigned>({2, 2}) : SmallVector<unsigned>({2, 1});
+    };
+
     SmallVector<unsigned> getContigPerThread() {
-      return getSizePerThread();
+      auto size = getSizePerThread();
+      auto subtiles = getNumSubtiles();
+      assert(size.size() == subtiles.size());
+      for (int i = 0; i < size.size(); ++i) {
+          size[i] /= subtiles[i];
+      }
+      return size;
     };
   }];
 }

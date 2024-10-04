@@ -1637,9 +1637,9 @@ SmallVector<unsigned>
 AMDMfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx,
                                                  unsigned kWidth) const {
   if (opIdx == 0) {
-    return {2 * kWidth, 1};
+    return {1, kWidth};
   } else if (opIdx == 1) {
-    return {1, 2 * kWidth};
+    return {kWidth, 1};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
     return {};
