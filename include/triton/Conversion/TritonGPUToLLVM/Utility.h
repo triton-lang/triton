@@ -1477,17 +1477,19 @@ inline bool isLayoutMmaV1(Attribute layout) {
   return isMmaV1;
 }
 
-/// @brief Extend 2d shared object to 3d.
-/// Generalizing dot operand shared to distributing conversion.
+/// Extend 2d shared object to 3d.
 ///
 /// If tensor has 3 dimensions, returns original shared object.
 /// If tensor shape is [M, N], return shared object describing shape [1, M, N]
 ///
-/// @param rewriter
-/// @param loc
-/// @param smemObj
-/// @param shape shape of a tensor represented by smemObj
-/// @returns shared object describing 3d tensor
+/// This Function is used to simplify processing of 2d and 3d dot operands,
+/// particularly in the conversion of local_load operation.
+///
+/// \param rewriter
+/// \param loc
+/// \param smemObj
+/// \param shape shape of a tensor represented by smemObj
+/// \returns shared object describing 3d tensor
 inline SharedMemoryObject
 getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
                               SharedMemoryObject smemObj,

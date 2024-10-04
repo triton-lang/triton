@@ -209,8 +209,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
-      // TODO rework this when shared -> dotOp conversions support arbitrary
-      // shared memory ordering
+      // TODO rework this when shared -> dotOperand conversions support
+      // arbitrary shared memory ordering
       if (rank == 3) {
         // Move the batch dimension (dim #0) to be the last so that it will be
         // the slowest varying dimension.

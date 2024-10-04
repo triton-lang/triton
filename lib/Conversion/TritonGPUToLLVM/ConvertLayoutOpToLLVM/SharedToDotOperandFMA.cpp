@@ -73,7 +73,7 @@ struct DimNumbers {
   unsigned nonK;
 };
 
-/// @brief put elements from Value vec to appropriate indexes in opValues array
+/// Put elements from Value vec to appropriate indexes in opValues array.
 ///
 /// This function maps elements of 3d sub-tensor in linear array.
 /// Axes are arranged in following order from fastest to slowest: [nonKdim,
@@ -108,14 +108,14 @@ void verifyCTALayout(CTALayoutAttr ctaLayout) {
   }
 }
 
-/// @brief get a linear offset of first element loaded by thread
+/// Get a linear offset of first element loaded by thread.
 ///
 /// In unswizzled case offset of any element computed with formula:
 /// smem.base + first_element_offset + constant_offset.
 ///
 /// first_element_offset depends on lane Id and warp Id
 /// constant_offset depends on value number, which is same for all threads.
-/// @returns first_element_offset
+/// \returns first_element_offset
 Value getUnswizzledFirstElemOffset(ConversionPatternRewriter &rewriter,
                                    Location loc, unsigned B, unsigned NonK,
                                    Value bTileOffset, Value nonKTileOffset,
@@ -126,7 +126,7 @@ Value getUnswizzledFirstElemOffset(ConversionPatternRewriter &rewriter,
   return threadIdDependantOffset;
 }
 
-/// @returns number of elements stored by one thread across each dimension
+/// \returns number of elements stored by one thread across each dimension
 SmallVector<unsigned> getElemsPerThreadInOp(ArrayRef<int64_t> opTensorShape,
                                             ArrayRef<unsigned> shapePerCTATile,
                                             ArrayRef<unsigned> sizePerThread) {
@@ -148,8 +148,8 @@ struct Indexes {
   unsigned nonK;
 };
 
-/// @brief computes linear memory offset of a given element relative to
-/// beginning of shared memory object
+/// Computes a linear memory offset of a given element relative to
+/// beginning of shared memory object.
 Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
                             const Indexes &i, const DimNumbers &dim,
                             Value bTileOffset, Value nonKTileOffset,
@@ -181,8 +181,8 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
   return offset;
 }
 
-/// @brief computes memory offset of a given element relative to the
-/// first element loaded by a thread
+/// Computes memory offset of a given element relative to the
+/// first element loaded by a thread.
 Value computeNonSwizzledOffset(ConversionPatternRewriter &rewriter,
                                Location loc, const Indexes &i,
                                const DimNumbers &dim,
@@ -288,7 +288,7 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
   bool swizzlePath = isSwizzled(sharedLayout);
 
   // In swizzled memory case basePtr stores pointer to the beginning of shared
-  // memmory object
+  // memmory object.
   //
   // If memory is not swizzled, algorithm breaks element offset pointer into
   // constant and non-constant part. Non-constant (depends on thread id) part is
