@@ -618,7 +618,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %c10_i64 = arith.constant 10 : i64
     %c100_i32 = arith.constant 100 : i32
     %5 = tt.addptr %arg0, %c1_i32 : !tt.ptr<f32>, i32
-    // CHECK: %[[ptr0]] = tt.addptr %arg0, %{{.*}}
+    // CHECK: %[[ptr0:.*]] = tt.addptr %arg0, %{{.*}}
     // CHECK: scf.if {{.*}} -> ({{.*}}, !tt.ptr<f32>, i64)
     %6 = scf.if %cond -> (!tt.ptr<f32>){
         %true = tt.addptr %5, %c1_i32 : !tt.ptr<f32>, i32
