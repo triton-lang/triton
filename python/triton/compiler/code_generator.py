@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor, str_to_ty
-from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type
+from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, _value
 from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
@@ -45,6 +45,10 @@ def mangle_fn(name, arg_tys, constants):
     mangled_constants = mangled_constants.replace('[', '_').replace(']', '_')
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
+
+
+def _is_triton_value(o: Any) -> bool:
+    return isinstance(o, _value)
 
 
 def _is_triton_tensor(o: Any) -> bool:
@@ -501,7 +505,7 @@ class CodeGenerator(ast.NodeVisitor):
             # by default, constexpr are assigned into python variable
             value = _unwrap_if_constexpr(value)
             if value is not None and \
-               not _is_triton_tensor(value) and \
+               not _is_triton_value(value) and \
                not isinstance(value, native_nontensor_types):
                 value = language.semantic.to_tensor(value, self.builder)
             self.set_value(name, value)
@@ -802,6 +806,15 @@ class CodeGenerator(ast.NodeVisitor):
         ast.USub: '__neg__', ast.UAdd: '__pos__', ast.Not: '__not__', ast.Invert: '__invert__'
     }
 
+    def _verify_loop_carried_variable(self, name, loop_val, live_val):
+        assert _is_triton_value(loop_val), f'cannot reassign constxpr {name} in the loop'
+        assert _is_triton_value(live_val), f'cannot reasign constexpr {name} in the loop'
+        assert type(loop_val) == type(live_val), f'Loop carried variable {name} changed type'
+        assert not _is_triton_tensor(loop_val) or loop_val.type == live_val.type, \
+            f'Loop-carried variable {name} has initial type {live_val.type} '\
+            f'but is re-assigned to {loop_val.type} in loop! '\
+            f'Please make sure that the type stays consistent.'
+
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -824,17 +837,14 @@ class CodeGenerator(ast.NodeVisitor):
             for name in loop_defs:
                 if name in liveins:
                     # We should not def new constexpr
-                    assert _is_triton_tensor(loop_defs[name]), f'cannot reassign constxpr {name} in the loop'
-                    assert _is_triton_tensor(liveins[name]), f'cannot reasign constexpr {name} in the loop'
-                    assert loop_defs[name].type == liveins[name].type, \
-                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
-                        f'but is re-assigned to {loop_defs[name].type} in loop! '\
-                        f'Please make sure that the type stays consistent.'
+                    loop_val = loop_defs[name]
+                    live_val = liveins[name]
+                    self._verify_loop_carried_variable(name, loop_val, live_val)
 
                     # these are loop-carried values
                     names.append(name)
-                    ret_types.append(loop_defs[name].type)
-                    init_args.append(liveins[name])
+                    ret_types.append(loop_val.type)
+                    init_args.append(live_val)
 
             self._set_insertion_point_and_loc(ip, last_loc)
             while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
@@ -972,16 +982,13 @@ class CodeGenerator(ast.NodeVisitor):
             names = []
             for name in self.local_defs:
                 if name in liveins:
-                    assert _is_triton_tensor(self.local_defs[name]), f'cannot reassign constxpr {name} in the loop'
-                    assert _is_triton_tensor(liveins[name]), f'cannot reassign constxpr {name} in the loop'
-                    assert self.local_defs[name].type == liveins[name].type, \
-                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
-                        f'but is re-assigned to {self.local_defs[name].type} in loop! '\
-                        f'Please make sure that the type stays consistent.'
+                    loop_val = self.local_defs[name]
+                    live_val = liveins[name]
+                    self._verify_loop_carried_variable(name, loop_val, live_val)
 
                     names.append(name)
-                    init_args.append(language.semantic.to_tensor(liveins[name], self.builder))
-                    yields.append(language.semantic.to_tensor(self.local_defs[name], self.builder))
+                    init_args.append(live_val)
+                    yields.append(loop_val)
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1051,7 +1058,7 @@ class CodeGenerator(ast.NodeVisitor):
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
-        args = [arg if _is_triton_tensor(arg) else constexpr(arg) for arg in args]
+        args = [arg if _is_triton_value(arg) else constexpr(arg) for arg in args]
         # generate function def
         attributes = {}
         constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
@@ -1110,7 +1117,7 @@ class CodeGenerator(ast.NodeVisitor):
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
-        if (hasattr(fn, '__self__') and _is_triton_tensor(fn.__self__)) or language.core.is_builtin(fn):
+        if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
             extra_kwargs = {"_builder": self.builder}
             sig = inspect.signature(fn)
             if '_generator' in sig.parameters:
