@@ -317,11 +317,13 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-                  .getMMAv2Rep(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+  auto repA =
+      cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+          .getMMAv2Rep(aShapePerCTA, dotOpA.getKWidth(), dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-                  .getMMAv2Rep(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
+  auto repB =
+      cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+          .getMMAv2Rep(bShapePerCTA, dotOpB.getKWidth(), dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);

@@ -386,6 +386,23 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         }
         return true;
       }
+      if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
+        if (auto nvidiaMma =
+                dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
+          if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
+            return false;
+          }
+          if (useLegacyMMAConversion) {
+            return false;
+          }
+          // Enabling LL path for now just for the case that's buggy in the non
+          // LL path See also [Note: Enable small kWidth Path] in
+          // TritonGPUToLLVMTypeConverter::getElementTypeForStruct;
+          bool smallKWidth =
+              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() < 32;
+          return smallKWidth && nvidiaMma.isAmpere();
+        }
+      }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
       }

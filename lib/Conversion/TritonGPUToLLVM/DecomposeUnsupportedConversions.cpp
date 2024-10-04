@@ -88,6 +88,14 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
     auto dstDotOp =
         dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
     if (srcBlocked && dstDotOp) {
+      // We support this one via LLs, as the LocalLoad path is buggy
+      // See also [Note: Enable small kWidth Path]
+      bool smallKWidth =
+          dstDotOp.getKWidth() * dstType.getElementTypeBitWidth() < 32;
+      if (smallKWidth) {
+        return;
+      }
+
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
       auto tmpType = MemDescType::get(

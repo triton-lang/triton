@@ -1955,11 +1955,11 @@ int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
   return 2 * getMMAv1Rep(opIdx)[opIdx];
 }
 SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
-                                                        int bitwidth,
+                                                        int kWidth,
                                                         int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
-  SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
+  SmallVector<int> shapePerWarp = {1, 16, 8, kWidth * 8};
   int numRepBatch =
       rank == 3
           ? std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]))
@@ -1990,11 +1990,21 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
   }
   // A100
   if (isAmpere()) {
-    auto rep = getMMAv2Rep(shapePerCTA, eltTy.getIntOrFloatBitWidth(), opIdx);
+    auto rep = getMMAv2Rep(shapePerCTA, kWidth, opIdx);
+    int ret;
     if (opIdx == 0)
-      return 4 * rep[0] * rep[1] * rep[2];
+      ret = 4 * rep[0] * rep[1] * rep[2];
     if (opIdx == 1)
-      return 4 * rep[0] * rep[1] * std::max<int>(rep[2] / 2, 1);
+      ret = 4 * rep[0] * rep[1] * std::max<int>(rep[2] / 2, 1);
+    // Inconsistent return, as when kWidth is the default one, we pack the
+    // result in an int32_t. This is a workaround to avoid having to change the
+    // whole codegen for mmav2 See also [Note: Enable small kWidth Path] in
+    // TritonGPUToLLVMTypeConverter::getElementTypeForStruct;
+    bool smallKWidth = kWidth * eltTy.getIntOrFloatBitWidth() < 32;
+    if (smallKWidth) {
+      ret *= kWidth;
+    }
+    return ret;
   }
   // V100
   if (isVolta()) {

@@ -731,7 +731,6 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     Value warpSize = i32_val(32);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
-    // TODO: fix the bug in MMAEncodingAttr document
     SmallVector<Value> multiDimWarpId(2);
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
     auto warpOrder = triton::gpu::getWarpOrder(mmaLayout);

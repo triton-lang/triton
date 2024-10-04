@@ -83,6 +83,14 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;
   int bitwidth = elemTy.getIntOrFloatBitWidth();
+  // [Note: Enable small kWidth Path]
+  // TODO(Lezcano): Hackity hack to avoid having to change the whole mma gen
+  // code. At the moment dotOp for Ampere packs contiguous elems into 32 bits.
+  // That's alright when you have at least 32 contiguous bits! We should try
+  // always return elemTy once we fully migrate to LLs
+  auto smallKWidth = dotOpLayout.getKWidth() * bitwidth < 32;
+  if (mmaParent.isAmpere() && smallKWidth)
+    return elemTy;
   assert(bitwidth <= 32);
   return IntegerType::get(ctx, 32);
 }
