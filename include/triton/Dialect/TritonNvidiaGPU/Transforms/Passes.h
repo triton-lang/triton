@@ -51,6 +51,7 @@ std::unique_ptr<Pass>
 createTritonNvidiaGPUFenceInsertionPass(int computeCapability = 90);
 
 std::unique_ptr<Pass> createTritonNvidiaGPUTMALoweringPass();
+std::unique_ptr<Pass> createTritonNvidiaGPUGlobalScratchAllocationPass();
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

@@ -10,6 +10,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -368,13 +369,54 @@ inline bool isKernel(FunctionOpInterface funcOp) {
 inline Value getStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
   if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 1);
+    return funcOp.getArgument(funcOp.getNumArguments() - 2);
   }
 
   auto mod = funcOp->getParentOfType<ModuleOp>();
   auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
   assert(globalBase);
   return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+}
+
+inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                                 FunctionOpInterface funcOp,
+                                 Value allocOffset = {}) {
+  if (!isKernel(funcOp)) {
+    return funcOp.getArgument(funcOp.getNumArguments() - 1);
+  }
+
+  // Base for entire kernel
+  auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+
+  ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
+  Value gridIdx[3];
+  Value gridDim[2];
+  for (int k = 0; k < 3; ++k) {
+    gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
+  }
+  for (int k = 0; k < 2; ++k) {
+    gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
+  }
+
+  Value linearId = gridIdx[2];
+  for (int k = 0; k < 2; ++k) {
+    linearId = add(gridIdx[1 - k], mul(linearId, gridDim[1 - k]));
+  }
+
+  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
+      "triton_nvidia_gpu.global_scratch_memory_size");
+  assert(allocSizeAttr);
+  auto allocSize = allocSizeAttr.getValue().getZExtValue();
+
+  Value offset = mul(linearId, i32_val(allocSize));
+  if (allocOffset) {
+    offset = add(offset, allocOffset);
+  }
+
+  auto *ctx = rewriter.getContext();
+  auto res =
+      gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
+  return res;
 }
 
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,

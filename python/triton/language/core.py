@@ -1129,6 +1129,42 @@ class tensor(_value):
         ...
 
 
+class _experimental_tensor_descriptor(_value):
+    """A descriptor representing a tensor in global memory.
+    """
+
+    def __init__(self, handle, shape: List[tensor], strides: List[tensor], type: block_type):
+        """Not called by user code."""
+        # IR handle
+        super().__init__(handle)
+        # Global shape
+        self.shape = shape
+        self.strides = strides
+        self.type = type  # Tensor type (block_type)
+        # Following the practice in pytorch, dtype is scalar type
+        self.dtype = type.scalar
+
+    @builtin
+    def _as_ptr(self, _builder):
+        return tensor(self.handle, pointer_type(int8))
+
+    @property
+    def block_shape(self):
+        return self.type.shape
+
+    def __str__(self) -> str:
+        # ex. "tensor_descriptor<float32[16, 32]>"
+        return f"tensor_descriptor<{self.type}>"
+
+    @builtin
+    def load(self, offsets: List[tensor], _builder=None) -> tensor:
+        return _experimental_descriptor_load(self, offsets, self.type.shape, self.type.element_ty, _builder=_builder)
+
+    @builtin
+    def store(self, offsets: List[tensor], value: tensor, _builder=None) -> tensor:
+        return _experimental_descriptor_store(self, value, offsets, _builder=_builder)
+
+
 def get_bool_env_var(var_name):
     v = os.getenv(var_name, "0")
     return v == "1" or v == "true" or v == "on"
@@ -1737,6 +1773,17 @@ def advance(base, offsets, _builder=None):
     :param offsets: the offsets to advance, a tuple by dimension
     """
     return semantic.advance(base, offsets, _builder)
+
+
+@builtin
+def _experimental_make_tensor_descriptor(
+    base: tensor,
+    shape: List[tensor],
+    strides: List[tensor],
+    block_shape: List[constexpr],
+    _builder=None,
+):
+    return semantic.make_tensor_descriptor(base, shape, strides, block_shape, _builder)
 
 
 # -----------------------

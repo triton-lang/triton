@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
+from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
@@ -146,7 +147,7 @@ def make_launcher(constants, signature, ids):
         }[ty]
 
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
-    format = "iiiKKOOOO" + args_format
+    format = "iiiKKOOOOO" + args_format
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     internal_args_list = []
@@ -207,8 +208,8 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   return cuLaunchKernelExHandle;
 }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+  void *params[] = {{ {', '.join(f"&arg{i}" for i in params)}, &global_scratch }};
   if (gridX*gridY*gridZ > 0) {{
     if (num_ctas == 1) {{
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
@@ -341,10 +342,12 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
+  PyObject *global_scratch_obj = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function,
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
+                                           &_stream, &_function, &global_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
-                                           &launch_enter_hook, &launch_exit_hook {args_list})) {{
+                                           &launch_enter_hook, &launch_exit_hook{args_list})) {{
     return NULL;
   }}
 
@@ -363,11 +366,20 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
       return NULL;
   }}
 
+  CUdeviceptr global_scratch = 0;
+  if (global_scratch_obj != Py_None) {{
+    DevicePtrInfo global_scratch_info = getPointer(global_scratch_obj, -1);
+    if (!global_scratch_info.valid) {{
+      return NULL;
+    }}
+    global_scratch = global_scratch_info.dev_ptr;
+  }}
+
   // raise exception asap
   {"".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
   {"".join([f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" if ty == "nvTmaDesc" else "" for i, ty in signature.items()])};
   Py_BEGIN_ALLOW_THREADS;
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
     return NULL;
@@ -382,9 +394,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   }}
 
-  // return None
-  Py_INCREF(Py_None);
-  return Py_None;
+  Py_RETURN_NONE;
 }}
 
 static PyMethodDef ModuleMethods[] = {{
@@ -423,9 +433,17 @@ class CudaLauncher(object):
         src = make_launcher(constants, signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
+        self.global_scratch_size = metadata.global_scratch_size
+        self.global_scratch_align = metadata.global_scratch_align
 
-    def __call__(self, *args, **kwargs):
-        self.launch(*args, **kwargs)
+    def __call__(self, gridX, gridY, gridZ, stream, function, *args):
+        if self.global_scratch_size > 0:
+            grid_size = gridX * gridY * gridZ
+            alloc_size = grid_size * self.global_scratch_size
+            global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
+        else:
+            global_scratch = None
+        self.launch(gridX, gridY, gridZ, stream, function, global_scratch, *args)
 
 
 class CudaDriver(GPUDriver):

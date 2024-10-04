@@ -1,4 +1,4 @@
-﻿#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "cublas_instance.h"
@@ -37,6 +37,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_allocate_global_scratch_memory",
+                     mlir::createTritonNvidiaGPUGlobalScratchAllocationPass);
 }
 
 void init_triton_nvidia(py::module &&m) {
