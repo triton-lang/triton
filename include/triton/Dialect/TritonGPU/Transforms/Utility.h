@@ -209,6 +209,9 @@ MMALoadType getMMALoadType(Operation *loadOp);
 std::optional<triton::LinearLayout>
 getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
                      Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
+
+// Convert \param op operands and results to layout \param encoding.
+void convertOpEncoding(Attribute encoding, Operation *op);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
