@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor
+from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor, register_descriptor
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
@@ -73,10 +73,15 @@ class HIPOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+@register_descriptor
 class HIPAttrsDescriptor(AttrsDescriptor):
-    # tt.pointer_range: this property asserts if the underlying
-    # storage area of a given pointer can be resepresented as a
-    # 32 bit integer
+    # This property asserts if the underlying storage area of a given pointer
+    # can be resepresented as a 32 bit integer. When this is true, we can be
+    # sure that all indices into the tensor behind that pointer can use 32-bit
+    # indexing. That opens the door for the AMD backend to use buffer load/store
+    # instrinsics, which requires this property. Buffer load/store intrinsics
+    # gives direct out-of-bound support and simplifies index calculation for
+    # lower register pressure.
     __slots__ = ("pointer_range_32")
 
     def _add_backend_properties(self, params=None, values=None):

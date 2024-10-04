@@ -8,7 +8,21 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 from types import ModuleType
 
+# Table that associates strings to AttrsDescriptor (sub)classes.
+# In this way we can dynamically select the correct class
+# constructor
+descriptor_table = {}
 
+
+def register_descriptor(cls):
+    """
+    Register a descriptor into the descriptor table
+    """
+    descriptor_table[cls.__name__] = cls
+    return cls
+
+
+@register_descriptor
 class AttrsDescriptor:
     """
     This class handles compile-time properties for specific function parameters.
@@ -135,18 +149,18 @@ class AttrsDescriptor:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def to_dict(self):
-        return self.arg_properties
+        return {"arg_properties": self.arg_properties, "cls": type(self).__name__}
 
     @staticmethod
     def from_dict(data):
-        attrsDescriptor = AttrsDescriptor()
-        for prop_name, param_ids in data.items():
-            attrsDescriptor.arg_properties[prop_name] = param_ids
-        attrsDescriptor._init_slots()
-        return attrsDescriptor
+        attrs_descriptor = descriptor_table[data["cls"]]()
+        for prop_name, param_ids in data["arg_properties"].items():
+            attrs_descriptor.arg_properties[prop_name] = param_ids
+        attrs_descriptor._init_slots()
+        return attrs_descriptor
 
-    @staticmethod
-    def from_hints(hints: List[Tuple[int, int]]):
+    @classmethod
+    def from_hints(cls, hints: List[Tuple[int, int]]):
         """
         Create the class from a set of hints that are passed in.
 
@@ -156,11 +170,11 @@ class AttrsDescriptor:
         then we insert `param_index` into the correct list (e.g., in
         `arg_properties[prop0]`)
         """
-        attrsDescriptor = AttrsDescriptor()
-        for prop_name, prop_val in attrsDescriptor.property_values.items():
-            attrsDescriptor.arg_properties[prop_name] = [i for i, h in hints.items() if h == prop_val]
-        attrsDescriptor._init_slots()
-        return attrsDescriptor
+        attrs_descriptor = cls()
+        for prop_name, prop_val in attrs_descriptor.property_values.items():
+            attrs_descriptor.arg_properties[prop_name] = [i for i, h in hints.items() if h == prop_val]
+        attrs_descriptor._init_slots()
+        return attrs_descriptor
 
     @staticmethod
     def is_divisible_by_16(x):
