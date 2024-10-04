@@ -232,6 +232,36 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct ConvertLayoutOpBlockedToDotOpShortcutConversion
+    : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
+  const TargetInfoBase &targetInfo;
+  explicit ConvertLayoutOpBlockedToDotOpShortcutConversion(
+      LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+      PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
+  LogicalResult
+  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = op.getContext();
+
+    const auto &shape = op.getType().getShape();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
+    auto dstDotEncoding = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+    if (!dstDotEncoding)
+      return failure();
+    if (!isa<BlockedEncodingAttr>(srcTy.getEncoding()) ||
+        !isa<BlockedEncodingAttr>(dstDotEncoding.getParent()))
+      return failure();
+    if (cvtNeedsSharedMemory(srcTy, dstTy))
+      return failure();
+    rewriter.replaceOp(op, adaptor.getSrc());
+    return success();
+  }
+};
+
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
@@ -657,5 +687,7 @@ void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
   // one left.
   mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
       typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
+  patterns.add<ConvertLayoutOpBlockedToDotOpShortcutConversion>(
+      typeConverter, targetInfo, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
 }
