@@ -274,7 +274,7 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
   auto funcName = mangleFunc(getStoreNameRaw(cm), funcType);
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
-  LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, pred, pred}));
+  LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
 } // namespace mlir::LLVM::AMD
