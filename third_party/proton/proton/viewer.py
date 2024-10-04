@@ -105,6 +105,7 @@ for width in TritonHook.flops_width:
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
+    exclusive_metrics = ["util"] + list(derivable_metrics.keys()) + list(avg_time_factor_dict.factor.keys())
     internal_frame_indices = gf.dataframe["device_id"].isna()
 
     def get_time_seconds(df):
@@ -133,6 +134,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) /
                                                time_factor_dict.factor[metric_time_unit])
             derived_metrics.append(f"{metric} (inc)")
+            metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['count'] /
@@ -141,7 +143,12 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)
-
+        if metric not in exclusive_metrics:
+            single_frame = gf.dataframe[metric_name]
+            total = gf.dataframe[metric_name].iloc[0]
+            metric = metric.split("/")[0]
+            gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
+            derived_metrics.append(f"{metric}/% (inc)")
     if original_metrics:
         original_metrics = match_available_metrics(original_metrics, raw_metrics)
     return derived_metrics + original_metrics
@@ -227,6 +234,10 @@ Derived metrics can be created when source metrics are available.
 - flop[<8/16/32/64>]/s, gflop[<8/16/32/64>]/s, tflop[<8/16/32/64>]/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
+
+For inclusive metrics (e.g. time) an additional column is printed showing the percentage
+each frame is of the full model.
+
 """,
     )
     argparser.add_argument(
