@@ -144,10 +144,10 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
         else:
             original_metrics.append(metric)
         if metric not in exclusive_metrics:
-            single = gf.dataframe[metric_name]
+            single_frame = gf.dataframe[metric_name]
             total = gf.dataframe[metric_name].iloc[0]
             metric = metric.split("/")[0]
-            gf.dataframe[f"{metric}/% (inc)"] = (single / total) * 100.0
+            gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
             derived_metrics.append(f"{metric}/% (inc)")
     if original_metrics:
         original_metrics = match_available_metrics(original_metrics, raw_metrics)
@@ -234,6 +234,10 @@ Derived metrics can be created when source metrics are available.
 - flop[<8/16/32/64>]/s, gflop[<8/16/32/64>]/s, tflop[<8/16/32/64>]/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
+
+For inclusive metrics (e.g. time) an additional column is printed showing the percentage 
+each frame is of the full model.
+
 """,
     )
     argparser.add_argument(
