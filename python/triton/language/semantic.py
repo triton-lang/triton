@@ -211,9 +211,8 @@ def binary_op_sanitize_overflow_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir
     min_value = lhs_sca_ty.get_int_min_value()
     min_value = tl.tensor(builder.get_int64(min_value), tl.int64)
     cond = and_(less_equal(ret, max_value, builder), greater_equal(ret, min_value, builder), builder)
-    cond = splat(cond, [1], builder)
     msg = "integer overflow detected"
-    builder.create_assert(cond.handle, msg)
+    device_assert(cond, msg, builder)
 
 
 def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
