@@ -602,6 +602,12 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
 
     let assemblyFormat = "$axis attr-dict `:` type($result)";
 
+    let builders = [
+      OpBuilder<(ins "int":$axis), [{
+        build($_builder, $_state, $_builder.getI32Type(), ProgramIDDimAttr::get($_builder.getContext(), ProgramIDDim(axis)));
+      }]>
+    ];
+
     let extraClassDeclaration = [{
       int32_t getAxisAsInt() {
         return static_cast<int32_t>(getAxis());
@@ -615,6 +621,11 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
     let results = (outs I32:$result);
 
     let assemblyFormat = "$axis attr-dict `:` type($result)";
+    let builders = [
+      OpBuilder<(ins "int":$axis), [{
+        build($_builder, $_state, $_builder.getI32Type(), ProgramIDDimAttr::get($_builder.getContext(), ProgramIDDim(axis)));
+      }]>
+    ];
 
     let extraClassDeclaration = [{
       int32_t getAxisAsInt() {
