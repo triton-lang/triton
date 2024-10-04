@@ -109,6 +109,10 @@ private:
     auto newCallOp = rewriter.create<LLVM::CallOp>(
         callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
         promotedOperands, callOp->getAttrs());
+    newCallOp.getProperties().setOpBundleSizes(
+        rewriter.getDenseI32ArrayAttr({}));
+    newCallOp.getProperties().setOperandSegmentSizes(
+        {static_cast<int>(promotedOperands.size()), 0});
     return newCallOp;
   }
 
