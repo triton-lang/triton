@@ -189,8 +189,8 @@ private:
     } else if (calleeName == "__triton_hip_fast_fdividef") {
       assert(operands.size() == 2);
       const char *intrinsic = "llvm.amdgcn.rcp.f32";
-      auto rcpOp = LLVM::createLLVMIntrinsicCall(rewriter, loc, intrinsic,
-                                                 returnType, operands[1]);
+      auto rcpOp = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic,
+                                                   returnType, operands[1]);
 
       LLVM::FastmathFlagsAttr defaultFlags{};
       replacementOp = rewriter.create<LLVM::FMulOp>(

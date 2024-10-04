@@ -220,8 +220,8 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   if (32 / dElType.getIntOrFloatBitWidth() > 1 || dElType.isInteger(32)) {
     operands.push_back(int_val(1, false));
   }
-  auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCall(rewriter, loc, name,
-                                                     valC.getType(), operands);
+  auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
+      rewriter, loc, name, valC.getType(), operands);
   return wmmaIntrinsic.getResult(0);
 }
 

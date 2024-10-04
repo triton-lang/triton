@@ -47,8 +47,8 @@ void createSchedGroupBarrier(PatternRewriter &rewriter, Location loc,
   Value groupId = LLVM::createConstantI32(loc, rewriter,
                                           static_cast<int32_t>(groupIdValue));
 
-  LLVM::createLLVMIntrinsicCall(rewriter, loc, intrinsicName, TypeRange{},
-                                ValueRange{mask, size, groupId});
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, TypeRange{},
+                                  ValueRange{mask, size, groupId});
 }
 
 // Insert intrinsic that controls the types of instructions that may be
@@ -61,8 +61,8 @@ Operation *createSchedBarrier(PatternRewriter &rewriter, Location loc,
 
   Value mask =
       LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(maskValue));
-  return LLVM::createLLVMIntrinsicCall(rewriter, loc, intrinsicName,
-                                       TypeRange{}, ValueRange{mask});
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName,
+                                         TypeRange{}, ValueRange{mask});
 }
 
 // Insert an experimental intrinsic for instruction group level parallelism.
@@ -73,8 +73,8 @@ Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
   LLVM::FastmathFlagsAttr defaultFlags{};
   Value iglpValue =
       LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(value));
-  return LLVM::createLLVMIntrinsicCall(rewriter, loc, intrinsicName,
-                                       TypeRange{}, ValueRange{iglpValue});
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName,
+                                         TypeRange{}, ValueRange{iglpValue});
 }
 
 struct InstructionSchedHintsRewriter

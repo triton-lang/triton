@@ -1,8 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/Attributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "llvm/ADT/STLExtras.h"
@@ -518,20 +517,22 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                           builder.getIntegerAttr(ty, value));
 }
 
-LLVM::CallIntrinsicOp createLLVMIntrinsicCall(OpBuilder &builder, Location loc,
-                                              StringRef intrinsic,
-                                              TypeRange types,
-                                              ValueRange args) {
-  llvm::SmallVector<mlir::NamedAttribute, 4> attrs;
-  attrs.push_back(
-      builder.getNamedAttr("intrin", builder.getStringAttr(intrinsic)));
-  attrs.push_back(builder.getNamedAttr("op_bundle_sizes",
-                                       builder.getDenseI32ArrayAttr({})));
-  attrs.push_back(builder.getNamedAttr(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({static_cast<int>(args.size()), 0})));
+LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
+                              LLVMFuncOp funcOp, ValueRange args) {
+  auto op = builder.create<LLVM::CallOp>(loc, funcOp, args);
+  op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
+  op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
+  return op;
+}
 
-  return builder.create<LLVM::CallIntrinsicOp>(loc, types, args, attrs);
+LLVM::CallIntrinsicOp
+createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
+                          TypeRange types, ValueRange args) {
+  auto op = builder.create<LLVM::CallIntrinsicOp>(loc, types, args);
+  op.getProperties().setIntrin(builder.getStringAttr(intrinsic));
+  op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
+  op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
+  return op;
 }
 
 bool isConstantZero(Value v) {

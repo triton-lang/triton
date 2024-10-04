@@ -69,8 +69,8 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  return LLVM::createLLVMIntrinsicCall(rewriter, loc, "llvm.amdgcn.ballot",
-                                       type, cmp)
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.ballot",
+                                         type, cmp)
       ->getResult(0);
 }
 

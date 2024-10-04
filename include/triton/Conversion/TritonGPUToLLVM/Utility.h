@@ -101,7 +101,7 @@ using namespace mlir::triton;
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
-#define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
+#define call(...) LLVM::createLLVMCallOp(rewriter, loc, __VA_ARGS__)
 
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
@@ -228,9 +228,11 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value);
 
-LLVM::CallIntrinsicOp createLLVMIntrinsicCall(OpBuilder &builder, Location loc,
-                                              StringRef intrinsic,
-                                              TypeRange types, ValueRange args);
+LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
+                              LLVMFuncOp funcOp, ValueRange args);
+LLVM::CallIntrinsicOp
+createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
+                          TypeRange types, ValueRange args);
 
 // Is v an integer or floating-point scalar constant equal to 0?
 bool isConstantZero(Value v);
