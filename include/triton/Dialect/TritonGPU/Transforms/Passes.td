@@ -59,19 +59,6 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
                            "mlir::arith::ArithDialect"];
 }
 
-def TritonAMDGPUBypassLDSForDotLayout: Pass<"tritonamdgpu-bypass-lds-for-dot-layout", "mlir::ModuleOp"> {
-  let summary = "Bypass moving data trough LDS for dot layout when possible";
-
-  let description = [{
-    Bypass moving data trough LDS for dot layout when possible.
-  }];
-
-  let constructor = "mlir::createTritonAMDGPUBypassLDSForDotLayout()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::arith::ArithDialect"];
-}
-
 def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
   let summary = "accelerate matmul";
 
