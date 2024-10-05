@@ -95,10 +95,11 @@ def test_remark_vectorization(capfd):
     assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
     os.environ["MLIR_ENABLE_REMARK"] = "0"
 
+
 def test_remark_size_per_thread_equals_one(capfd, fresh_triton_cache):
 
     @triton.jit
-    def triton_per_fused_sum(in_ptr0, out_ptr0, XBLOCK : tl.constexpr):
+    def triton_per_fused_sum(in_ptr0, out_ptr0, XBLOCK: tl.constexpr):
         xnumel = 8134407
         rnumel = 33
         RBLOCK: tl.constexpr = 64
@@ -106,11 +107,10 @@ def test_remark_size_per_thread_equals_one(capfd, fresh_triton_cache):
         xindex = xoffset + tl.arange(0, XBLOCK)[:, None]
         xmask = xindex < xnumel
         rindex = tl.arange(0, RBLOCK)[None, :]
-        roffset = 0
         rmask = rindex < rnumel
         r1 = rindex
         x0 = xindex
-        tmp0 = tl.load(in_ptr0 + (r1 + (rnumel*x0)), rmask & xmask, other=0.0)
+        tmp0 = tl.load(in_ptr0 + (r1 + (rnumel * x0)), rmask & xmask, other=0.0)
         tmp1 = tl.broadcast_to(tmp0, [XBLOCK, RBLOCK])
         tmp3 = tl.where(rmask & xmask, tmp1, 0)
         tmp4 = tl.sum(tmp3, 1)[:, None]
@@ -119,7 +119,8 @@ def test_remark_size_per_thread_equals_one(capfd, fresh_triton_cache):
     with enable_remark_context():
         triton.compile(
             triton.compiler.ASTSource(fn=triton_per_fused_sum, signature={'in_ptr0': '*fp32', 'out_ptr0': '*fp32'},
-                                      constants={'XBLOCK': 128}), options={"cluster_dims": (63551, 1, 1)})
+                                      constants={'XBLOCK': 128}), options={"cluster_dims": (63551, # tl.cdiv(xnumel, XBLOCK)
+                                       1, 1)})
 
     _, err = capfd.readouterr()
     assert ("remark: Warning: operation accesses only 1 element per thread."
