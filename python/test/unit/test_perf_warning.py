@@ -119,8 +119,11 @@ def test_remark_size_per_thread_equals_one(capfd, fresh_triton_cache):
     with enable_remark_context():
         triton.compile(
             triton.compiler.ASTSource(fn=triton_per_fused_sum, signature={'in_ptr0': '*fp32', 'out_ptr0': '*fp32'},
-                                      constants={'XBLOCK': 128}), options={"cluster_dims": (63551, # tl.cdiv(xnumel, XBLOCK)
-                                       1, 1)})
+                                      constants={'XBLOCK': 128}), options={
+                                          "cluster_dims": (
+                                              63551,  # tl.cdiv(xnumel, XBLOCK)
+                                              1, 1)
+                                      })
 
     _, err = capfd.readouterr()
     assert ("remark: Warning: operation accesses only 1 element per thread."
