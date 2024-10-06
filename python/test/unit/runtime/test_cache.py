@@ -426,6 +426,7 @@ def test_jit_warmup_cache(device) -> None:
 
 def test_jit_debug(device) -> None:
 
+    @triton.jit
     def kernel(tmp):
         tl.device_assert(tl.load(tmp) == 1, "tmp == 1")
 
