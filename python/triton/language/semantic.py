@@ -197,7 +197,7 @@ def binary_op_type_checking_impl(lhs: tl.tensor | numbers.Number, rhs: tl.tensor
 
 
 def binary_op_sanitize_overflow_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder, binary_op: callable):
-    if lhs.type.scalar.int_bitwidth >= 64 or not builder.options.debug:
+    if lhs.type.scalar.int_bitwidth >= 64 or not builder.options.sanitize_overflow:
         return
     lhs_sca_ty = lhs.type.scalar
     rhs_sca_ty = rhs.type.scalar
@@ -205,7 +205,7 @@ def binary_op_sanitize_overflow_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir
     assert lhs_sca_ty.is_int()
     lhs = cast(lhs, tl.int64, builder)
     rhs = cast(rhs, tl.int64, builder)
-    ret = binary_op(lhs, rhs, builder)
+    ret = binary_op(lhs, rhs, False, builder)
     max_value = lhs_sca_ty.get_int_max_value()
     max_value = tl.tensor(builder.get_int64(max_value), tl.int64)
     min_value = lhs_sca_ty.get_int_min_value()
@@ -215,7 +215,8 @@ def binary_op_sanitize_overflow_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir
     device_assert(cond, msg, builder)
 
 
-def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
+def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -235,12 +236,14 @@ def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
     # int + int
     elif input_scalar_ty.is_int():
-        binary_op_sanitize_overflow_impl(input, other, builder, add)
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, add)
         return tl.tensor(builder.create_add(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {input_scalar_ty}")
 
 
-def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
+def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, False)
     scalar_ty = input.type.scalar
     # ptr - offset
@@ -251,12 +254,14 @@ def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
         return tl.tensor(builder.create_fsub(input.handle, other.handle), input.type)
     # int - int
     elif scalar_ty.is_int():
-        binary_op_sanitize_overflow_impl(input, other, builder, sub)
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, sub)
         return tl.tensor(builder.create_sub(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {scalar_ty}")
 
 
-def mul(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
+def mul(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder)
     scalar_ty = input.type.scalar
     # float * float
@@ -264,7 +269,8 @@ def mul(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
         return tl.tensor(builder.create_fmul(input.handle, other.handle), input.type)
     # int * int
     elif scalar_ty.is_int():
-        binary_op_sanitize_overflow_impl(input, other, builder, mul)
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, mul)
         return tl.tensor(builder.create_mul(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {scalar_ty}")
 
@@ -328,7 +334,8 @@ def mod(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
     # float % float
     if scalar_ty.is_floating():
         # input - input.div(other, rounding_mode="floor") * other
-        ret = sub(input, mul(math.floor(fdiv(input, other, False, builder), _builder=builder), other, builder), builder)
+        ret = sub(input, mul(math.floor(fdiv(input, other, False, builder), _builder=builder), other, True, builder),
+                  builder)
         return ret
     # % int
     elif scalar_ty.is_int():
@@ -482,7 +489,7 @@ def minus(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     if input_sca_ty.is_ptr():
         raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
     _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
-    return sub(_0, input, builder)
+    return sub(_0, input, True, builder)
 
 
 def invert(input: tl.tensor, builder: tl.tensor) -> tl.tensor:

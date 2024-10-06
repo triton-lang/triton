@@ -34,11 +34,11 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
         _c0, _c2 = c0, c2
         c0 = math.umulhi(B, _c2) ^ c1 ^ k0
         c2 = math.umulhi(A, _c0) ^ c3 ^ k1
-        c1 = B * _c2
-        c3 = A * _c0
+        c1 = tl.mul(B, _c2, sanitize_overflow=False)
+        c3 = tl.mul(A, _c0, sanitize_overflow=False)
         # raise key
-        k0 = k0 + PHILOX_KEY_A
-        k1 = k1 + PHILOX_KEY_B
+        k0 = tl.add(k0, PHILOX_KEY_A, sanitize_overflow=False)
+        k1 = tl.add(k1, PHILOX_KEY_B, sanitize_overflow=False)
     return c0, c1, c2, c3
 
 

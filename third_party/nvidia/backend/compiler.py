@@ -102,6 +102,7 @@ class CUDAOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'cuda'
+    sanitize_overflow: bool = True
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'

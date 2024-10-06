@@ -30,6 +30,7 @@ def builtin(fn: T) -> T:
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
+            print(kwargs)
             raise ValueError("Did you forget to add @triton.jit ? "
                              "(`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
@@ -761,31 +762,27 @@ class tensor:
 
     @builtin
     def __add__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.add(self, other, _builder)
+        return add(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __radd__(self, other, _builder=None):
-        return self.__add__(other, _builder=_builder)
+        return add(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __sub__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.sub(self, other, _builder)
+        return sub(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __rsub__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.sub(other, self, _builder)
+        return sub(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __mul__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.mul(self, other, _builder)
+        return mul(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __rmul__(self, other, _builder=None):
-        return self.__mul__(other, _builder=_builder)
+        return mul(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __truediv__(self, other, _builder=None):
@@ -1875,6 +1872,33 @@ def where(condition, x, y, _builder=None):
 # -----------------------
 # Math
 # -----------------------
+
+
+@builtin
+def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    x = semantic.to_tensor(x, _builder)
+    y = semantic.to_tensor(y, _builder)
+    return semantic.add(x, y, sanitize_overflow, _builder)
+
+
+@builtin
+def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    x = semantic.to_tensor(x, _builder)
+    y = semantic.to_tensor(y, _builder)
+    return semantic.sub(x, y, sanitize_overflow, _builder)
+
+
+@builtin
+def mul(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    x = semantic.to_tensor(x, _builder)
+    y = semantic.to_tensor(y, _builder)
+    return semantic.mul(x, y, sanitize_overflow, _builder)
 
 
 @builtin
