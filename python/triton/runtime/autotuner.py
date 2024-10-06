@@ -38,7 +38,7 @@ class Autotuner(KernelInterface):
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
             self.configs = configs
-        self.key_idx = [arg_names.index(k) for k in key]
+        self.keys = key
         self.cache = {}
         self.arg_names = arg_names
 
@@ -126,9 +126,7 @@ class Autotuner(KernelInterface):
 
         try:
             if self.use_cuda_graph:
-                import torch
-                with torch.cuda.stream(torch.cuda.Stream()):
-                    return do_bench_cudagraph(kernel_call, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
+                return do_bench_cudagraph(kernel_call, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except (OutOfResources, CompileTimeAssertionFailure):
             return [float("inf"), float("inf"), float("inf")]
@@ -138,12 +136,9 @@ class Autotuner(KernelInterface):
         used_cached_result = True
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
-            _args = []
-            for name in self.arg_names:
-                if name in all_args:
-                    _args.append(all_args[name])
-            key = [_args[i] for i in self.key_idx]
-            for arg in _args:
+            _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
+            key = [_args[key] for key in self.keys if key in _args]
+            for _, arg in _args.items():
                 if hasattr(arg, "dtype"):
                     key.append(str(arg.dtype))
             key = tuple(key)

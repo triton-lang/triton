@@ -36,7 +36,7 @@ SmallVector<unsigned> getParentOrder(Attribute layout) {
   if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return getParentOrder(sliceEncoding.getParent());
   }
-  return getOrder(layout);
+  return getThreadOrder(layout);
 }
 
 } // namespace
@@ -75,7 +75,7 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
     threadOffset = threadsPerWarp[sliceLayout.getDim()];
   } else {
     auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-    auto order = getOrder(srcLayout);
+    auto order = getThreadOrder(srcLayout);
     for (unsigned i = 0; i < order.size(); i++) {
       if (order[i] == axis)
         break;
@@ -425,6 +425,8 @@ bool supportMFMATypes(Type a, Type b) {
   if (a.getIntOrFloatBitWidth() != b.getIntOrFloatBitWidth())
     return false;
 
+  auto F8E5M2 = TypeID::get<Float8E5M2Type>();
+  auto F8E4M3FN = TypeID::get<Float8E4M3FNType>();
   auto F8E4M3FNUZ = TypeID::get<Float8E4M3FNUZType>();
   auto F8E5M2FNUZ = TypeID::get<Float8E5M2FNUZType>();
   auto F16 = TypeID::get<Float16Type>();
@@ -435,6 +437,8 @@ bool supportMFMATypes(Type a, Type b) {
       {F32, F32},
       {F16, F16},
       {BF16, BF16},
+      {F8E5M2, F8E5M2},
+      {F8E4M3FN, F8E4M3FN},
       {F8E4M3FNUZ, F8E4M3FNUZ},
       {F8E4M3FNUZ, F8E5M2FNUZ},
       {F8E5M2FNUZ, F8E4M3FNUZ},
@@ -484,6 +488,11 @@ bool supportMMA(triton::DotOp op, int version) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
     auto retType = op.getType();
+    RankedTensorType typeA = op.getA().getType();
+    int k = typeA.getShape().back();
+    // If k size is smaller than the native mma size, we cannot use MMA.
+    if (k < 256 / aElemTy.getIntOrFloatBitWidth())
+      return false;
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
     auto mod = op->getParentOfType<ModuleOp>();
@@ -493,14 +502,14 @@ bool supportMMA(triton::DotOp op, int version) {
       return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
           retShapePerCTA[rank - 1] % 8 == 0 &&
-          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
+          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN() ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
       return false;
     }
     // We cannot use MMA_V3 if we need to accumulate in F32 within the MMA op.
     if (op.getMaxNumImpreciseAcc() < 32 &&
-        (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ()) &&
+        (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN()) &&
         cast<RankedTensorType>(op.getType()).getElementType().isF32()) {
       return false;
     }
@@ -527,7 +536,76 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+  auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (blockedLayout == nullptr || dotOperandLayout == nullptr)
+    return false;
+  auto parentLayout =
+      dyn_cast<BlockedEncodingAttr>(dotOperandLayout.getParent());
+  if (parentLayout == nullptr)
+    return false;
+  auto opShape = srcTy.getShape();
+  auto rank = opShape.size();
+
+  int kDim = dotOperandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  int nonKDim = dotOperandLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
+  auto ctaLayout = blockedLayout.getCTALayout();
+
+  // The following logic checks that a source blocked layout matches a
+  // destination dot operand layout. This means that given tensor in source
+  // layout could be converted into destination layout without any data movement
+  // between registers or threads.
+  //
+  // It is considered a match if
+  // 1) Each thread in source layout holds a whole copy of all elements along
+  //    the K dimension of a tensor
+  // 2) Distribution of data along all other non-K dimensions(Batch/M/N)
+  //    matches between source and destination parent layouts.
+  //
+  // First condition comes from the property of dot operand layout with Blocked
+  // parent: size per threads along K dimension equals size of the tensor along
+  // K. Second condition comes from other property: dot operand layout
+  // inherits non-K dimensions from it's parent layout.
+  //
+  // clang-format off
+  //
+  // For example, following conversion is a no op:
+  //   tensor<128x32xf16,                          #blocked<{sizePerThread = [2, 32], threadsPerWarp = [32, 1]}>>
+  //     ->
+  //   tensor<128x32xf16, #dot_op<{opIdx=0, parent=#blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1]}>>>
+  //
+  // clang-format on
+  bool ctaLayoutCompatible =
+      ctaLayout.getCTASplitNum()[kDim] == 1 &&
+      blockedLayout.getCTALayout() == parentLayout.getCTALayout();
+  bool threadHoldsWholeKDim =
+      blockedLayout.getSizePerThread()[kDim] == opShape[kDim];
+  bool nonKDimCompatible =
+      blockedLayout.getOrder() == parentLayout.getOrder() &&
+      blockedLayout.getSizePerThread()[nonKDim] ==
+          parentLayout.getSizePerThread()[nonKDim] &&
+      blockedLayout.getThreadsPerWarp()[nonKDim] ==
+          parentLayout.getThreadsPerWarp()[nonKDim] &&
+      blockedLayout.getWarpsPerCTA()[nonKDim] ==
+          parentLayout.getWarpsPerCTA()[nonKDim];
+  bool matrixDimsCompatible =
+      ctaLayoutCompatible && threadHoldsWholeKDim && nonKDimCompatible;
+  if (rank == 2)
+    return matrixDimsCompatible;
+
+  // additional check for batch dimension if it is present
+  assert(rank == 3);
+  bool bDimCompatible =
+      blockedLayout.getSizePerThread()[0] ==
+          parentLayout.getSizePerThread()[0] &&
+      blockedLayout.getThreadsPerWarp()[0] ==
+          parentLayout.getThreadsPerWarp()[0] &&
+      blockedLayout.getWarpsPerCTA()[0] == parentLayout.getWarpsPerCTA()[0];
+  return matrixDimsCompatible && bDimCompatible;
+}
+
+bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
@@ -543,21 +621,6 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 
-static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
-  auto src = dyn_cast<NvidiaMmaEncodingAttr>(srcEncoding);
-  auto dst = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding);
-  if (!src || !dst)
-    return false;
-  // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
-  return src && dst && src.getVersionMajor() == 3 &&
-         src.getWarpsPerCTA()[1] == 1 && dst.getVersionMajor() == 3 &&
-         dst.getWarpsPerCTA()[1] == 1;
-}
-
-bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  return isMmaToMmaShortcut(srcTy.getEncoding(), dstTy.getEncoding());
-}
-
 // For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
@@ -567,14 +630,17 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
     return false;
   }
   int elementTypeSize = srcTy.getElementType().getIntOrFloatBitWidth();
-  auto ans =
-      mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
-      isMmaToMmaShortcut(dotOperandLayout.getParent(), srcTy.getEncoding()) &&
-      (elementTypeSize == 16 || elementTypeSize == 8);
+  auto parentTy = RankedTensorType::get(
+      srcTy.getShape(), srcTy.getElementType(), dotOperandLayout.getParent());
+  auto ans = mmaLayout.getVersionMajor() == 3 &&
+             dotOperandLayout.getOpIdx() == 0 &&
+             mmaLayout.getWarpsPerCTA()[1] == 1 &&
+             !cvtNeedsSharedMemory(parentTy, srcTy) &&
+             (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
 }
 
-bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
+bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   MLIRContext *ctx = srcTy.getContext();
   std::optional<LinearLayout> srcLayout =
       toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
@@ -586,12 +652,12 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
     StringAttr kLane = StringAttr::get(ctx, "lane");
     StringAttr kWarp = StringAttr::get(ctx, "warp");
     StringAttr kBlock = StringAttr::get(ctx, "block");
-    // In principle, there's no need for shared memory if there's no
-    // communication between warps.  However, right now we only have implemented
-    // the shortcut case where there's no communication between *threads*.
-    //
-    // TODO(jlebar): Remove the kLane layout once we add support for
-    // shuffle-based layout conversions in ConvertLayoutToLLVM.
+    // TODO(jlebar): These checks are overly-restrictive.  For example, we can
+    // transfer by shuffling registers (case 1) if and only if all of the bases
+    // for `register` have 0s for lane, warp, and block.  But the check below is
+    // stronger than this, checking also that the choice of lane/warp/block does
+    // not affect the permutation of registers.  If we allow different
+    // lane/warp/blocks to have different permutations, we can generalize this.
     if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kLane),
                                                   kLane, kLane) *
                          LinearLayout::identity1D(comp.getInDimSize(kWarp),
@@ -599,13 +665,42 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
                          LinearLayout::identity1D(comp.getInDimSize(kBlock),
                                                   kBlock, kBlock))
             .has_value()) {
-      return false;
+      return true;
     }
   }
+  return false;
+}
 
-  // TODO(jlebar): Remove these special cases once they're fully subsumed by the
-  // linear-layout check above.
-  return !isMmaToMmaShortcut(srcTy, dstTy) &&
+bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
+  MLIRContext *ctx = srcTy.getContext();
+  std::optional<LinearLayout> srcLayout =
+      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+  std::optional<LinearLayout> dstLayout =
+      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+  if (srcLayout.has_value() && dstLayout.has_value()) {
+    // comp describes the layout function for converting from src to dst.
+    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
+    StringAttr kWarp = StringAttr::get(ctx, "warp");
+    StringAttr kBlock = StringAttr::get(ctx, "block");
+    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kWarp),
+                                                  kWarp, kWarp) *
+                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
+                                                  kBlock, kBlock))
+            .has_value()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
+  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut`,
+  // `isBlockedToDotShortcut` and `isMfmaToDotShortcut`) once they're fully
+  // subsumed by the linear-layout checks.
+  // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
+  // supported yet in Triton's backend.
+  return !cvtReordersRegisters(srcTy, dstTy) &&
+         !isBlockedToDotShortcut(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
 }

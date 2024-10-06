@@ -8,6 +8,7 @@ namespace roctracer {
 struct ExternLibRoctracer : public ExternLibBase {
   using RetType = roctracer_status_t;
   static constexpr const char *name = "libroctracer64.so";
+  static constexpr const char *defaultDir = "";
   static constexpr RetType success = ROCTRACER_STATUS_SUCCESS;
   static void *lib;
 };

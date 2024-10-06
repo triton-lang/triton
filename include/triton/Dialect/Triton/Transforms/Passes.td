@@ -6,12 +6,17 @@ include "mlir/Pass/PassBase.td"
 def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp"> {
   let summary = "combine ops";
   let description = [{
-    dot(a, b, 0) + c => dot(a, b, c)
+    This pass aims to optimize the five following patterns:
+    - `dot(a, b, 0) + c => dot(a, b, c)`
 
-    addptr(addptr(ptr, idx0), idx1) => addptr(ptr, AddI(idx0, idx1))
+    - `addptr(addptr(ptr, idx0), idx1) => addptr(ptr, AddI(idx0, idx1))`
 
-    select(cond, load(ptrs, broadcast(cond), ???), other) =>
-        load(ptrs, broadcast(cond), other)
+    - `select(cond, load(ptrs, broadcast(cond), ???), other) =>
+         load(ptrs, broadcast(cond), other)`
+
+    - `broadcast(constant) => reshaped_constant`
+    - `torch.sum(x[:,:,None].expand(-1,-1,n) * y[None,:,:].expand(m,-1,-1),1)
+       => dot(x,y,splat(0))`
   }];
 
   let constructor = "mlir::triton::createCombineOpsPass()";
@@ -22,7 +27,11 @@ def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp">
 def TritonReorderBroadcast : Pass</*cli-arg*/"triton-reorder-broadcast", /*Op*/"mlir::ModuleOp"> {
   let summary = "Moves broadcast and splat after elementwise operations";
   let description = [{
-    elementwise(splat(a), splat(b), ...) => splat(elementwise(a, b, ...))
+    The purpose of this pass is to transform:
+      - `elementwise(broadcast(a)) => broadcast(elementwise(a))`
+      - `elementwise(splat(a), splat(b), ...) => splat(elementwise(a, b, ...))`
+    In the event of a match, the broadcast (or splat) operation is delayed
+    and performed after the ElementWise operation.
   }];
   let constructor = "mlir::triton::createReorderBroadcastPass()";
   let dependentDialects = ["mlir::triton::TritonDialect"];
@@ -38,6 +47,16 @@ def TritonRewriteTensorPointer : Pass</*cli-arg*/"triton-rewrite-tensor-pointer"
 
   let constructor = "mlir::triton::createRewriteTensorPointerPass()";
 
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
+def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Loop unroller";
+  let description = [{
+    The pass unrolls a scf loop with tt.loop_unroll_factor attribute. The attribute specialises how many iterations
+    the loop should be unrolled.
+  }];
+  let constructor = "mlir::triton::createLoopUnrollPass()";
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 

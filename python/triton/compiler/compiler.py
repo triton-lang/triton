@@ -3,43 +3,18 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget
+from ..backends.compiler import GPUTarget, AttrsDescriptor
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
+from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
-from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
 import re
 import functools
 import os
-
-
-@dataclass
-class AttrsDescriptor:
-    divisible_by_16: set = None
-    equal_to_1: set = None
-
-    def __post_init__(self):
-        if self.divisible_by_16 is None:
-            self.divisible_by_16 = set()
-        if self.equal_to_1 is None:
-            self.equal_to_1 = set()
-
-    def to_dict(self):
-        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
-
-    @staticmethod
-    def from_dict(data):
-        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
-                               equal_to_1=set(data.get('equal_to_1', [])))
-
-    def hash(self):
-        key = str([sorted(x) for x in self.__dict__.values()])
-        return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -96,8 +71,16 @@ class ASTSource:
         self.attrs = attrs
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
+        else:
+            for k in self.signature.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Signature keys must be string")
         if self.constants is None:
-            self.constants = dict()
+            self.constants = {}
+        else:
+            for k in self.constants.keys():
+                if not isinstance(k, str):
+                    raise TypeError("Constants keys must be string")
         if self.attrs is None:
             self.attrs = AttrsDescriptor()
 
@@ -109,8 +92,9 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, context):
-        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+    def make_ir(self, options, codegen_fns, module_map, context):
+        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
 
     def parse_options(self):
         return dict()
@@ -132,7 +116,7 @@ class IRSource:
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, context):
+    def make_ir(self, options, codegen_fns, module_map, context):
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
@@ -172,7 +156,7 @@ def triton_key():
     contents.append(libtriton_hash.hexdigest())
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
-    for lib in pkgutil.iter_modules([language_path]):
+    for lib in pkgutil.walk_packages([language_path], prefix="triton.language."):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha256(f.read()).hexdigest()]
     return f'{__version__}' + '-'.join(contents)
@@ -195,6 +179,9 @@ def filter_traceback(e: BaseException):
 
     These are uninteresting to the user -- "just show me *my* code!"
     """
+    if os.getenv("TRITON_FRONT_END_DEBUGGING", "0") == "1":
+        return
+
     if e.__cause__ is not None:
         filter_traceback(e.__cause__)
     if e.__context__ is not None:
@@ -277,27 +264,27 @@ def compile(src, target=None, options=None):
     ir.load_dialects(context)
     backend.load_dialects(context)
     codegen_fns = backend.get_codegen_implementation()
+    module_map = backend.get_module_map()
     try:
-        module = src.make_ir(options, codegen_fns, context)
+        module = src.make_ir(options, codegen_fns, module_map, context)
     except Exception as e:
         filter_traceback(e)
         raise
-    use_ttgir_loc = os.environ.get("USE_TTGIR_LOC", "0") == "1"
+    use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
-        if (fn_override_manager is not None and fn_override_manager.has_file(ir_filename)):
-            print(f"\nOverriding kernel with file {ir_filename}")
-            full_name = fn_override_manager.get_file(ir_filename)
+        if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
+            print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
-        # use an env variable to parse ttgir from file
-        if use_ttgir_loc and ext == "ttgir":
-            ttgir_full_name = fn_cache_manager.get_file(ir_filename)
-            next_module.create_location_snapshot(ttgir_full_name)
-            print(f"Create new locations for {ttgir_full_name}")
+        # use an env variable to parse ir from file
+        if use_ir_loc == ext:
+            ir_full_name = fn_cache_manager.get_file(ir_filename)
+            next_module.create_location_snapshot(ir_full_name)
+            print(f"Creating new locations for {ir_full_name}")
         module = next_module
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
@@ -336,6 +323,19 @@ class LazyDict:
         self.extras.append((func, args))
 
 
+class AsmDict(dict):
+
+    def __missing__(self, key):
+
+        if key == "sass":
+            value = get_sass(self["cubin"])
+        else:
+            raise KeyError("Unknown key: '%s'" % key)
+
+        self[key] = value
+        return value
+
+
 class CompiledKernel:
 
     # Hooks for external tools to monitor the execution of triton kernels
@@ -361,10 +361,10 @@ class CompiledKernel:
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         binary_ext = backend.binary_ext
-        self.asm = {
+        self.asm = AsmDict({
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
-        }
+        })
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things

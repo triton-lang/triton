@@ -4,6 +4,7 @@ add_triton_library(TritonGPUTransforms
   F32DotTC.cpp
   CombineTensorSelectAndIf.cpp
   ReduceDataDuplication.cpp
+  OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp
   OptimizeThreadLocality.cpp
   Pipeliner/MatmulLoopPipeline.cpp

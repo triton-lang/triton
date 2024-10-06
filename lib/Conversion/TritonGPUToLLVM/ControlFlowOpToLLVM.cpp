@@ -51,8 +51,10 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 // CallOpInterfaceLowering is adapted from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
 struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
-  CallOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit) {}
+  CallOpConversion(LLVMTypeConverter &converter,
+                   const TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::CallOp callOp,
@@ -85,8 +87,8 @@ private:
       promotedOperands.push_back(base);
       return promotedOperands;
     }
-    promotedOperands.push_back(
-        LLVM::getSharedMemoryBase(callOp->getLoc(), rewriter, callOp));
+    promotedOperands.push_back(LLVM::getSharedMemoryBase(
+        callOp->getLoc(), rewriter, targetInfo, callOp));
     return promotedOperands;
   }
 
@@ -107,6 +109,10 @@ private:
     auto newCallOp = rewriter.create<LLVM::CallOp>(
         callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
         promotedOperands, callOp->getAttrs());
+    newCallOp.getProperties().setOpBundleSizes(
+        rewriter.getDenseI32ArrayAttr({}));
+    newCallOp.getProperties().setOperandSegmentSizes(
+        {static_cast<int>(promotedOperands.size()), 0});
     return newCallOp;
   }
 
@@ -129,13 +135,14 @@ private:
     }
     return results;
   }
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
 void mlir::triton::populateControlFlowOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
-  patterns.add<CallOpConversion>(typeConverter, benefit);
+  patterns.add<CallOpConversion>(typeConverter, targetInfo, benefit);
 }

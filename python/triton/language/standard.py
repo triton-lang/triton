@@ -335,7 +335,7 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     ileft = left.to(idtype, bitcast=True)
     iright = right.to(idtype, bitcast=True)
     ix = x.to(idtype, bitcast=True)
-    ret = ix ^ core.where((left > right) ^ flip, ileft ^ iright, zeros_like(ix))
+    ret = ix ^ core.where((left > right) != flip, ileft ^ iright, zeros_like(ix))
     return ret.to(x.dtype, bitcast=True)
 
 
@@ -433,7 +433,7 @@ def flip(x, dim=None):
 def interleave(a, b):
     """
     Interleaves the values of two tensors along their last dimension. The two tensors must have the same shape.
-    Equivalent to `tl.join(a, b).reshape(a.shape[-1:] + [2 * a.shape[-1]])`
+    Equivalent to `tl.join(a, b).reshape(a.shape[:-1] + [2 * a.shape[-1]])`
 
     :param a: The first input tensor.
     :type a: Tensor
@@ -442,7 +442,6 @@ def interleave(a, b):
     """
     c = core.join(a, b)
 
-    assert isinstance(c.shape, list)
     if len(c.shape) == 1:
         # We must have interleaved two scalars.
         return c

@@ -18,8 +18,9 @@ using namespace mlir::triton;
 /// information.
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
+                   const TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps),
+        targetInfo(targetInfo) {}
 
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
@@ -38,12 +39,14 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   }
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
-                             ConversionPatternRewriter &rewriter) const {
+                             ConversionPatternRewriter &rewriter,
+                             const TargetInfoBase &targetInfo) const {
     // Push back a variable that indicates the current stack pointer of shared
     // memory to the function arguments.
     auto loc = funcOp.getLoc();
     auto ctx = funcOp->getContext();
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                            targetInfo.getSharedAddressSpace());
     // 1. Modify the function type to add the new argument.
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
@@ -67,13 +70,49 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     return amendedFuncOp;
   }
 
+  // Map the MLIR attribute `tt.nv_tma_desc` to the appropriate LLVM and NVVM
+  // attributes.
+  static void handleByvalTmaDescArgs(LLVM::LLVMFuncOp &llvmFuncOp) {
+    const bool isKernel = LLVM::isKernel(llvmFuncOp);
+    for (unsigned i = 0; i < llvmFuncOp.getNumArguments(); ++i) {
+      const auto attrs = llvmFuncOp.getArgAttrDict(i);
+      if (!attrs) {
+        continue;
+      }
+
+      for (const auto &attr : attrs) {
+        if (attr.getName() == "tt.nv_tma_desc") {
+          const auto i32_type =
+              mlir::IntegerType::get(llvmFuncOp.getContext(), 32);
+          assert(attr.getValue() == mlir::IntegerAttr::get(i32_type, 1));
+          assert(isKernel &&
+                 "tt.nv_tma_desc is not supported for device functions");
+
+          // See
+          // https://github.com/google/jax/blob/main/jaxlib/mosaic/gpu/passes.cc
+          mlir::BlockArgument arg = llvmFuncOp.getArgument(i);
+          const auto byteType =
+              mlir::IntegerType::get(llvmFuncOp.getContext(), 8);
+          const auto arrayType = mlir::LLVM::LLVMArrayType::get(
+              llvmFuncOp.getContext(), byteType, 128);
+          llvmFuncOp.setArgAttr(i, "llvm.byval",
+                                mlir::TypeAttr::get(arrayType));
+          llvmFuncOp.setArgAttr(i, "nvvm.grid_constant",
+                                mlir::UnitAttr::get(llvmFuncOp.getContext()));
+          llvmFuncOp.setArgAttr(i, "llvm.align",
+                                mlir::IntegerAttr::get(i32_type, 64));
+        }
+      }
+    }
+  }
+
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
     if (!LLVM::isKernel(funcOp))
-      amendedFuncOp = amendFuncOp(funcOp, rewriter);
+      amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
 
     FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
         mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
@@ -105,17 +144,22 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     newFuncOp->setAttr("nvvm.reqntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
     rewriter.eraseOp(funcOp);
+
+    // Add attributes for by-value TMA descriptor args (nvidia)
+    handleByvalTmaDescArgs(newFuncOp);
+
     return success();
   }
 
 private:
   int numWarps{0};
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
 void mlir::triton::populateFuncOpConversionPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    PatternBenefit benefit) {
-  patterns.add<FuncOpConversion>(typeConverter, numWarps, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<FuncOpConversion>(typeConverter, numWarps, targetInfo, benefit);
 }

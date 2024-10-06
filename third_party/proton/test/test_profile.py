@@ -25,7 +25,7 @@ def test_torch(context):
         if context == "shadow":
             assert len(data[0]["children"]) == 1
             assert data[0]["children"][0]["frame"]["name"] == "test"
-            assert data[0]["children"][0]["children"][0]["metrics"]["Time (ns)"] > 0
+            assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         elif context == "python":
             assert len(data[0]["children"]) == 1
             # The last frame is the torch kernel
@@ -62,9 +62,6 @@ def test_triton():
 
 
 def test_cudagraph():
-    if is_hip():
-        pytest.skip("HIP backend does not support profiling CUDA graphs")
-
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -97,8 +94,9 @@ def test_cudagraph():
         torch.cuda.synchronize()
         proton.exit_scope()
         proton.finalize()
+
         data = json.load(f)
-        # CUDA graph may also invoke additional kernels to reset outputs
+        # CUDA/HIP graph may also invoke additional kernels to reset outputs
         # {torch.ones, add, foo, test}
         assert len(data[0]["children"]) >= 4
         # find the test frame
@@ -109,8 +107,11 @@ def test_cudagraph():
                 break
         assert test_frame is not None
         # {torch.ones, add, foo}
-        assert len(test_frame["children"]) >= 3
-        assert test_frame["children"][0]["metrics"]["Time (ns)"] > 0
+        if is_hip():
+            assert len(test_frame["children"]) >= 2
+        else:
+            assert len(test_frame["children"]) >= 3
+        assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics():
@@ -196,7 +197,41 @@ def test_hook():
         assert data[0]["children"][0]["frame"]["name"] == "test0"
         assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
         assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
-        assert data[0]["children"][0]["children"][0]["metrics"]["Time (ns)"] > 0
+        assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+
+
+def test_pcsampling():
+    if is_hip():
+        pytest.skip("HIP backend does not support pc sampling")
+
+    import os
+    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+        pytest.skip("PC sampling test is disabled")
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        for _ in range(1000):
+            tl.store(y + offs, tl.load(x + offs))
+
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+        proton.start(f.name.split(".")[0], hook="triton", backend="cupti_pcsampling")
+        with proton.scope("init"):
+            x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+            y = torch.zeros_like(x)
+        with proton.scope("test"):
+            foo[(1, )](x, y, x.size()[0], num_warps=4)
+        proton.finalize()
+        data = json.load(f)
+        init_frame = data[0]["children"][0]
+        test_frame = data[0]["children"][1]
+        # With line mapping
+        assert "foo" in test_frame["children"][0]["frame"]["name"]
+        assert test_frame["children"][0]["children"][0]["metrics"]["num_samples"] > 0
+        assert "@" in test_frame["children"][0]["children"][0]["frame"]["name"]
+        # Without line mapping
+        assert "elementwise" in init_frame["children"][0]["frame"]["name"]
+        assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
 def test_deactivate():
@@ -210,6 +245,6 @@ def test_deactivate():
         proton.finalize()
         data = json.load(f)
         # Root shouldn't have device id
-        assert "DeviceId" not in data[0]["metrics"]
+        assert "device_id" not in data[0]["metrics"]
         assert len(data[0]["children"]) == 1
-        assert "DeviceId" in data[0]["children"][0]["metrics"]
+        assert "device_id" in data[0]["children"][0]["metrics"]

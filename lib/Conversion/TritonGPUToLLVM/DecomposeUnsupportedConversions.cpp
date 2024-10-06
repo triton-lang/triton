@@ -44,7 +44,6 @@ void decomposeSplatOpToSharedLayoutConversion(ModuleOp module) {
   });
 }
 
-template <typename TensorCoreEncodingAttr>
 void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
                                               ShortcutFn shortcutFn) {
   int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
@@ -55,7 +54,7 @@ void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
     OpBuilder builder(cvtOp);
     auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
     auto dstType = cast<RankedTensorType>(cvtOp.getType());
-    auto srcMma = dyn_cast<TensorCoreEncodingAttr>(srcType.getEncoding());
+    auto srcMma = dyn_cast<MmaEncodingTrait>(srcType.getEncoding());
     auto dstDotOp =
         dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
     if (srcMma && dstDotOp && !shortcutFn(srcType, dstType)) {
@@ -76,12 +75,6 @@ void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
   });
 }
 
-template void decomposeTensorCoreToDotLayoutConversion<
-    triton::gpu::NvidiaMmaEncodingAttr>(ModuleOp, ShortcutFn);
-template void
-    decomposeTensorCoreToDotLayoutConversion<triton::gpu::AMDMfmaEncodingAttr>(
-        ModuleOp, ShortcutFn);
-
 void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
   int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(module);
@@ -90,6 +83,8 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
     OpBuilder builder(cvtOp);
     auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
     auto dstType = cast<RankedTensorType>(cvtOp.getType());
+    if (!cvtNeedsSharedMemory(srcType, dstType))
+      return;
     auto srcBlocked =
         dyn_cast<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding());
     auto dstDotOp =

@@ -24,6 +24,7 @@
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include <csignal>
+#include <memory>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
@@ -38,6 +39,30 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 } // namespace llvm
 
 using namespace llvm;
+
+std::unique_ptr<TargetMachine>
+createTargetMachine(llvm::Module *module, std::string proc,
+                    bool enable_fp_fusion, const std::string &features) {
+  std::string error;
+  auto target =
+      llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
+  llvm::TargetOptions opt;
+  bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
+  if (enable_fp_fusion)
+    opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+  opt.UnsafeFPMath = false;
+  opt.NoInfsFPMath = false;
+  opt.NoNaNsFPMath = true;
+  opt.TrapUnreachable = true;
+  opt.MCOptions.AsmVerbose = true;
+  opt.MCOptions.PreserveAsmComments = true;
+  std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
+      module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
+      std::nullopt,
+      disableLLVMOpt ? llvm::CodeGenOptLevel::None
+                     : llvm::CodeGenOptLevel::Aggressive)};
+  return machine;
+}
 
 std::string translateLLVMIRToASM(llvm::Module &module,
                                  const std::string &triple,
@@ -106,21 +131,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 
   // create machine
   module.setTargetTriple(triple);
-  std::string error;
-  auto target =
-      llvm::TargetRegistry::lookupTarget(module.getTargetTriple(), error);
-  llvm::TargetOptions opt;
-  if (enable_fp_fusion)
-    opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
-  opt.UnsafeFPMath = false;
-  opt.NoInfsFPMath = false;
-  opt.NoNaNsFPMath = true;
-  opt.TrapUnreachable = true;
-  std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-      module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      std::nullopt,
-      disableLLVMOpt ? llvm::CodeGenOptLevel::None
-                     : llvm::CodeGenOptLevel::Aggressive)};
+  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
   // set data layout
   module.setDataLayout(machine->createDataLayout());
   // emit machine code
@@ -265,94 +276,119 @@ void init_triton_llvm(py::module &&m) {
     mod->setDataLayout(machine->createDataLayout());
   });
 
-  m.def("optimize_module", [](llvm::Module *mod,
-                              const llvm::OptimizationLevel &opt) {
-    if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
-      return;
-    // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-    if (!flagList.empty()) {
-      auto options = llvm::cl::getRegisteredOptions();
-      llvm::SmallVector<StringRef, 3> split;
-      StringRef(flagList.c_str()).split(split, ',');
-      for (auto flag : split) {
-        auto optIt = options.find(flag);
-        if (optIt != options.end()) {
-          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-          *optPtr = true;
+  m.def(
+      "optimize_module",
+      [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
+         std::string arch, std::string features, std::vector<std::string> flags,
+         bool enable_fp_fusion) {
+        if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+          return;
+        // Check to see if we are passing a list of flags to disable
+        // optimizations.
+        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+        if (!flagList.empty()) {
+          auto options = llvm::cl::getRegisteredOptions();
+          llvm::SmallVector<StringRef, 3> split;
+          StringRef(flagList.c_str()).split(split, ',');
+          for (auto flag : split) {
+            auto optIt = options.find(flag);
+            if (optIt != options.end()) {
+              auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+              *optPtr = true;
+            }
+          }
         }
-      }
-    }
-    using namespace llvm;
-    LoopAnalysisManager lam;
-    FunctionAnalysisManager fam;
-    CGSCCAnalysisManager cgam;
-    ModuleAnalysisManager mam;
+        using namespace llvm;
+        LoopAnalysisManager lam;
+        FunctionAnalysisManager fam;
+        CGSCCAnalysisManager cgam;
+        ModuleAnalysisManager mam;
 
-    PassInstrumentationCallbacks *instrCbPtr = nullptr;
-    PassInstrumentationCallbacks passInstrCb;
-    StandardInstrumentations standardInstr(mod->getContext(),
-                                           /*DebugLogging*/ true);
-    if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-      auto optMap = llvm::cl::getRegisteredOptions();
-      auto optIt = optMap.find("print-after-all");
-      if (optIt != optMap.end()) {
-        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-        *optPtr = true;
-      }
-      standardInstr.registerCallbacks(passInstrCb, &mam);
-      instrCbPtr = &passInstrCb;
-    }
+        PassInstrumentationCallbacks *instrCbPtr = nullptr;
+        PassInstrumentationCallbacks passInstrCb;
+        StandardInstrumentations standardInstr(mod->getContext(),
+                                               /*DebugLogging*/ true);
+        if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+          auto optMap = llvm::cl::getRegisteredOptions();
+          auto optIt = optMap.find("print-after-all");
+          if (optIt != optMap.end()) {
+            auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+            *optPtr = true;
+          }
+          standardInstr.registerCallbacks(passInstrCb, &mam);
+          instrCbPtr = &passInstrCb;
+        }
 
-    PipelineTuningOptions tuningOptions;
-    tuningOptions.LoopUnrolling = true;
-    tuningOptions.LoopInterleaving = true;
-    tuningOptions.LoopVectorization = true;
-    // TODO: currently we run SLP vectorizer with an empty target machine.
-    // This cause the vectorizer to create larger vector which could be bad.
-    // Disabling it would currently cause regressions as this pass also applies
-    // some scheduling that helps performance in some cases. We should work on
-    // using NVPTX target instead and address the performance regressions with
-    // some scheduling solution.
-    tuningOptions.SLPVectorization = true;
+        PipelineTuningOptions tuningOptions;
+        tuningOptions.LoopUnrolling = true;
+        tuningOptions.LoopInterleaving = true;
+        tuningOptions.LoopVectorization = true;
+        // TODO: currently we run SLP vectorizer with an empty target machine.
+        // This cause the vectorizer to create larger vector which could be bad.
+        // Disabling it would currently cause regressions as this pass also
+        // applies some scheduling that helps performance in some cases. We
+        // should work on using NVPTX target instead and address the performance
+        // regressions with some scheduling solution.
+        tuningOptions.SLPVectorization = true;
 
-    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
-                   instrCbPtr);
+        std::string pluginFile =
+            mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
 
-    std::string pluginFile =
-        mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
+        // We don't pass the targetMachine to the LLVM-IR pass builder, unless
+        // `arch` is specified.
+        //
+        // Don't set target machine in LLVM pass builder when using LLVM IR
+        // level plugins. LLVM IR level plugin passes typically want to insert
+        // calls to externally generated code (i.e. precompile a Cuda/Hip kernel
+        // with Clang and then insert a call to it within an instrumentation
+        // pass) setting the targetMachine value here can can cause a mis-match
+        // in the target machine between the MLIR and Clang generated kernels
+        // and break the lowering of some target specific intrinsics.
+        std::unique_ptr<TargetMachine> targetMachine = nullptr;
+        if (!arch.empty() && pluginFile.empty())
+          targetMachine =
+              createTargetMachine(mod, arch, enable_fp_fusion, features);
+        PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
+                       std::nullopt, instrCbPtr);
 
-    if (!pluginFile.empty()) {
-      // TODO: Add some logging here that we inserted a pass into the LLVM
-      // pass pipeline
-      auto passPlugin = llvm::PassPlugin::Load(pluginFile);
-      if (!passPlugin) {
-        llvm::Error Err = passPlugin.takeError();
-        std::string ErrMsg =
-            "Pass Plugin Error: " + llvm::toString(std::move(Err));
-        throw std::runtime_error(ErrMsg);
-      }
-      passPlugin->registerPassBuilderCallbacks(pb);
-    }
+        if (!pluginFile.empty()) {
+          // TODO: Add some logging here that we inserted a pass into the LLVM
+          // pass pipeline
+          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+          if (!passPlugin) {
+            llvm::Error Err = passPlugin.takeError();
+            std::string ErrMsg =
+                "Pass Plugin Error: " + llvm::toString(std::move(Err));
+            throw std::runtime_error(ErrMsg);
+          }
+          passPlugin->registerPassBuilderCallbacks(pb);
+        }
 
-    pb.registerModuleAnalyses(mam);
-    pb.registerCGSCCAnalyses(cgam);
-    pb.registerFunctionAnalyses(fam);
-    pb.registerLoopAnalyses(lam);
-    pb.crossRegisterProxies(lam, fam, cgam, mam);
+        pb.registerModuleAnalyses(mam);
+        pb.registerCGSCCAnalyses(cgam);
+        pb.registerFunctionAnalyses(fam);
+        pb.registerLoopAnalyses(lam);
+        pb.crossRegisterProxies(lam, fam, cgam, mam);
 
-    ModulePassManager mpm;
-    pb.registerVectorizerStartEPCallback(
-        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-          // Triton generates large structure of scalars which may pessimise
-          // optimizations, we run a pass to break up phi of struct to make
-          // sure all the struct are removed for the following passes.
-          fpm.addPass(BreakStructPhiNodesPass());
-          fpm.addPass(InstCombinePass());
-        });
-    mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
-    mpm.run(*mod, mam);
-  });
+        ModulePassManager mpm;
+        pb.registerVectorizerStartEPCallback(
+            [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+              // Triton generates large structure of scalars which may pessimise
+              // optimizations, we run a pass to break up phi of struct to make
+              // sure all the struct are removed for the following passes.
+              fpm.addPass(BreakStructPhiNodesPass());
+              fpm.addPass(InstCombinePass());
+            });
+        mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
+        mpm.run(*mod, mam);
+      },
+      // Mandatory parameters
+      py::arg("mod"), py::arg("opt"),
+      // If we want to specify the target machine, we require additional
+      // (optional) parameters
+      py::arg("arch") = "", py::arg("features") = "",
+      py::arg("flags") = std::vector<std::string>{},
+      py::arg("enable_fp_fusion") = false);
 
   m.def(
       "translate_to_asm",

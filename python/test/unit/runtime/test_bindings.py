@@ -59,26 +59,29 @@ def test_module_walk(device):
         torch.empty((32, 32), device=device),  # out_ptr
         16,  # BLOCK_SIZE
     ]
+    target = triton.runtime.driver.active.get_current_target()
+    backend = triton.compiler.compiler.make_backend(target)
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
-        signature={i: kernel._type_of(kernel._key_of(arg))
-                   for i, arg in enumerate(args)
-                   if i not in kernel.constexprs},
-        constants={i: arg
+        signature={
+            kernel.arg_names[i]: kernel._type_of(kernel._key_of(arg))
+            for i, arg in enumerate(args)
+            if i not in kernel.constexprs
+        },
+        constants={kernel.arg_names[i]: arg
                    for i, arg in enumerate(args)
                    if not isinstance(arg, torch.Tensor)},
-        attrs=kernel._get_config(*args, ),
+        attrs=backend.get_attrs_descriptor(args, kernel.params),
     )
 
     context = triton._C.libtriton.ir.context()
-    target = triton.runtime.driver.active.get_current_target()
-    backend = triton.compiler.compiler.make_backend(target)
     options = backend.parse_options(dict())
     codegen_fns = dict()
+    module_map = backend.get_module_map()
     triton._C.libtriton.ir.load_dialects(context)
     backend.load_dialects(context)
 
-    ttir_module = src.make_ir(options, codegen_fns, context)
+    ttir_module = src.make_ir(options, codegen_fns, module_map, context)
     ttir_module.walk(walk_fn)
 
 

@@ -1,6 +1,6 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames
 import numpy as np
 
 file_path = __file__
@@ -31,12 +31,29 @@ def test_format_frames(option):
         assert idx.sum() == 1
 
 
+@pytest.mark.parametrize("option", ["include", "exclude"])
+def test_filter_frames(option):
+    include = ""
+    exclude = ""
+    with open(frame_example_file, "r") as f:
+        gf, _, _ = get_raw_metrics(f)
+        if option == "include":
+            include = ".*test0.*"
+        elif option == "exclude":
+            exclude = ".*test1.*"
+        gf = filter_frames(gf, include=include, exclude=exclude)
+        idx = gf.dataframe["name"] == "test1"
+        assert idx.sum() == 0
+        idx = gf.dataframe["name"] == "test0"
+        assert idx.sum() == 1
+
+
 def test_min_time_flops():
     with open(cuda_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # sm89
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000025]], atol=1e-5)
         # sm90
@@ -44,8 +61,8 @@ def test_min_time_flops():
     with open(hip_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # MI200
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000026]], atol=1e-5)
         # MI300
@@ -56,8 +73,8 @@ def test_min_time_bytes():
     with open(cuda_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_bytes(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # sm89
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[9.91969e-06]], atol=1e-6)
         # sm90
@@ -65,8 +82,8 @@ def test_min_time_bytes():
     with open(hip_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_bytes(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # MI200
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[6.10351e-06]], atol=1e-6)
         # MI300
@@ -101,8 +118,11 @@ def test_util():
 def test_time_derivation():
     derivation_metrics_test(
         metrics=["time/s", "time/ms", "time/us", "time/ns"], expected_data={
-            'time/s (inc)': [0.0004096, 0.0002048, 0.0002048], 'time/ms (inc)': [0.4096, 0.2048, 0.2048],
-            'time/us (inc)': [409.6, 204.8, 204.8], 'time/ns (inc)': [409600.0, 204800.0, 204800.0]
+            'time/s (inc)': [0.0004096, 0.0002048, 0.0002048],
+            'time/ms (inc)': [0.4096, 0.2048, 0.2048],
+            'time/us (inc)': [409.6, 204.8, 204.8],
+            'time/ns (inc)': [409600.0, 204800.0, 204800.0],
+            'time/% (inc)': [100.0, 50.0, 50.0],
         }, sample_file=cuda_example_file)
 
 
