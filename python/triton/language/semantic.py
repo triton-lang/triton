@@ -334,8 +334,8 @@ def mod(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
     # float % float
     if scalar_ty.is_floating():
         # input - input.div(other, rounding_mode="floor") * other
-        ret = sub(input, mul(math.floor(fdiv(input, other, False, builder), _builder=builder), other, True, builder),
-                  builder)
+        floor = math.floor(fdiv(input, other, False, builder), _builder=builder)
+        ret = sub(input, mul(floor, other, True, builder), True, builder)
         return ret
     # % int
     elif scalar_ty.is_int():
