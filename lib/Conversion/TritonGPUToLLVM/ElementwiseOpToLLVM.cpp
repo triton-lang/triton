@@ -299,7 +299,7 @@ struct MulhiUIOpConversion
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
     return {
-        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
   }
 
 protected:
@@ -327,7 +327,7 @@ struct ExternElementwiseOpConversion
     LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
         rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
     return {
-        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
   }
 };
 

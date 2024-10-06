@@ -6,6 +6,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -101,7 +102,7 @@ using namespace mlir::triton;
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
-#define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
+#define call(...) LLVM::createLLVMCallOp(rewriter, loc, __VA_ARGS__)
 
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
@@ -227,6 +228,12 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
                           const TypeConverter *converter, int64_t value);
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value);
+
+LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
+                              LLVMFuncOp funcOp, ValueRange args);
+LLVM::CallIntrinsicOp
+createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
+                          TypeRange types, ValueRange args);
 
 // Is v an integer or floating-point scalar constant equal to 0?
 bool isConstantZero(Value v);
@@ -358,17 +365,14 @@ inline bool isKernel(FunctionOpInterface funcOp) {
 
 inline Value getStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
-  auto mod = funcOp->getParentOfType<ModuleOp>();
-  LLVM::GlobalOp globalBase = nullptr;
-  mod.walk([&](LLVM::GlobalOp op) {
-    if (op.getSymName() == "global_smem")
-      globalBase = op;
-  });
-  assert(globalBase);
-  if (isKernel(funcOp))
-    return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
-  else
+  if (!isKernel(funcOp)) {
     return funcOp.getArgument(funcOp.getNumArguments() - 1);
+  }
+
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
+  assert(globalBase);
+  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
 }
 
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,

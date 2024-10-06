@@ -716,12 +716,20 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
         raise ValueError(f'Unsupported bitwidth {bitwidth} and signedness {signed}')
 
 
+class _value:
+    """Base class of values that exist in the triton IR (i.e. not constexprs).
+    """
+
+    def __init__(self, handle):
+        self.handle = handle
+
+
 # -----------------------
 # tensor
 # -----------------------
 
 
-class tensor:
+class tensor(_value):
     """Represents an N-dimensional array of values or pointers.
 
     :code:`tensor` is the fundamental data structure in Triton programs.  Most
@@ -744,7 +752,7 @@ class tensor:
     def __init__(self, handle, type: dtype):
         """Not called by user code."""
         # IR handle
-        self.handle = handle
+        super().__init__(handle)
         # Block shape
         self.shape = type.shape if type.is_block() else ()
         self.numel = 1

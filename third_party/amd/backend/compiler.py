@@ -265,6 +265,11 @@ class HIPBackend(BaseBackend):
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
 
+        # Hint the compiler that we'd like the firmware to set the kernel arguments
+        # to user SGPRs so that the kernel does not need to s_load its arguments
+        # from memory.
+        amd.set_all_fn_arg_inreg(fns[0])
+
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)

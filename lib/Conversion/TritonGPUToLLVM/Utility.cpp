@@ -1,8 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/Attributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "llvm/ADT/STLExtras.h"
@@ -516,6 +515,24 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
   Type ty = builder.getIntegerType(width);
   return builder.create<LLVM::ConstantOp>(loc, ty,
                                           builder.getIntegerAttr(ty, value));
+}
+
+LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
+                              LLVMFuncOp funcOp, ValueRange args) {
+  auto op = builder.create<LLVM::CallOp>(loc, funcOp, args);
+  op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
+  op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
+  return op;
+}
+
+LLVM::CallIntrinsicOp
+createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
+                          TypeRange types, ValueRange args) {
+  auto op = builder.create<LLVM::CallIntrinsicOp>(loc, types, args);
+  op.getProperties().setIntrin(builder.getStringAttr(intrinsic));
+  op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
+  op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
+  return op;
 }
 
 bool isConstantZero(Value v) {
