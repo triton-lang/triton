@@ -329,9 +329,9 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
         'args': a list of arguments passed to the kernel.
         'exception': the exception raised by the kernel in case of a compilation or runtime error.
     :type post_hook: lambda args, exception
-    :param warmup: warmup time (in ms) to pass to benchmarking (Deprecated).
+    :param warmup: warmup time (in ms) to pass to benchmarking (deprecated).
     :type warmup: int
-    :param rep: repetition time (in ms) to pass to benchmarking (Deprecated).
+    :param rep: repetition time (in ms) to pass to benchmarking (deprecated).
     :type rep: int
     :param do_bench: a benchmark function to measure the time of each run.
     :type do_bench: lambda fn, quantiles
