@@ -192,8 +192,8 @@ class ContainsReturnChecker(ast.NodeVisitor):
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, attributes, constants, function_name, jit_fn: JITFunction, options,
-                 codegen_fns, module_map, debug=None, module=None, is_kernel=False,
-                 function_types: Optional[Dict] = None, noinline=False, file_name: Optional[str] = None, begin_line=0):
+                 codegen_fns, module_map, module=None, is_kernel=False, function_types: Optional[Dict] = None,
+                 noinline=False, file_name: Optional[str] = None, begin_line=0):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
@@ -229,7 +229,6 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.cur_node = None
-        self.debug = options.debug if debug is None else debug
         self.noinline = noinline
         self.scf_stack = []
         self.ret_type = None
@@ -1048,11 +1047,8 @@ class CodeGenerator(ast.NodeVisitor):
         return node.arg, self.visit(node.value)
 
     def visit_Assert(self, node) -> Any:
-        if not self.debug:
-            return
         test = self.visit(node.test)
         msg = self.visit(node.msg) if node.msg is not None else ""
-        # Convert assert to triton's device_assert which happens on the device
         return language.core.device_assert(test, msg, _builder=self.builder)
 
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
@@ -1074,12 +1070,11 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            debug = self.debug if fn.debug is None else fn.debug
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map, debug=debug)
+                                      module_map=self.builder.module_map)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1111,9 +1106,6 @@ class CodeGenerator(ast.NodeVisitor):
 
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
-        # TODO: this should not be so hardcoded
-        if fn is language.core.device_assert and not self.debug:
-            return
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)

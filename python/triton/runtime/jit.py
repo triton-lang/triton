@@ -561,13 +561,14 @@ class JITFunction(KernelInterface[T]):
         ]
 
     def run(self, *args, grid, warmup, **kwargs):
+        kwargs["debug"] = kwargs.get("debug", False) or os.environ.get("TRITON_DEBUG", "0") == "1"
+
         # parse options
         from ..compiler import make_backend
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
         target = driver.active.get_current_target()
         backend = make_backend(target)
-        kwargs["debug"] = self.debug
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
@@ -697,7 +698,6 @@ class JITFunction(KernelInterface[T]):
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel = None
-        self.debug = True if os.environ.get("TRITON_DEBUG", "0") == "1" else debug
         self.noinline = noinline
 
         # TODO(jlebar): Remove uses of these fields outside this file, then
