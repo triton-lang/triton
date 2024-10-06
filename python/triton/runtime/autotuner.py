@@ -94,10 +94,10 @@ class Autotuner(KernelInterface):
         # and proceed with the old behavior.
         if warmup is not None or rep is not None or use_cuda_graph:
             import warnings
-            warnings.warn("warmup, rep, and use_cuda_graph parameters are deprecated. See _ for details.",
-                          DeprecationWarning)
-            import torch
-            if use_cuda_graph and torch.cuda.is_available():
+            warnings.warn(("warmup, rep, and use_cuda_graph parameters are deprecated. See "
+                           "https://github.com/triton-lang/triton/pull/4496 for details."), DeprecationWarning,
+                          stacklevel=1)
+            if use_cuda_graph:
                 from ..testing import do_bench_cudagraph
                 self.do_bench = lambda kernel_call, quantiles: do_bench_cudagraph(
                     kernel_call,
@@ -113,6 +113,7 @@ class Autotuner(KernelInterface):
                 rep=rep if rep is not None else 100,
                 quantiles=quantiles,
             )
+            return
 
         if do_bench is None:
             self.do_bench = driver.active.get_benchmarker()
