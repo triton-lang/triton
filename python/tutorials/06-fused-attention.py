@@ -3,11 +3,13 @@ Fused Attention
 ===============
 
 This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf)
+
 Credits: OpenAI kernel team
 
 Extra Credits:
-- Original flash attention paper (https://arxiv.org/abs/2205.14135)
-- Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
+
+* Original flash attention paper (https://arxiv.org/abs/2205.14135)
+* Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
 """
 
@@ -584,7 +586,7 @@ for mode in ["fwd", "bwd"]:
                 line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
                 (["Flash-2"] if HAS_FLASH else []),
                 styles=[("red", "-"), ("blue", "-"), ("green", "-")],
-                ylabel="ms",
+                ylabel="TFLOPS",
                 plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}",
                 args={
                     "H": N_HEADS,
@@ -631,7 +633,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
         total_flops *= 0.5
     if mode == "bwd":
         total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
-    return total_flops / ms * 1e-9
+    return total_flops * 1e-12 / (ms * 1e-3)
 
 
 if __name__ == "__main__":

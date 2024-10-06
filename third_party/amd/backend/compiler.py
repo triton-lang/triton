@@ -34,8 +34,10 @@ class HIPOptions:
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
+    sanitize_overflow: bool = True
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
+    deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
@@ -44,6 +46,13 @@ class HIPOptions:
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
+
+    # The following option provides hints to the AMDGPU backend regarding instruction scheduling
+    # for all `tt.dot` operations in a kernel. The "default" variant preserves the default
+    # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
+    # The option is experimental and may change at any time regarding its semantics and/or may
+    # be gone entirely anytime.
+    instruction_sched_variant: str = 'default'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -141,6 +150,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
+        passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
         return mod
 
@@ -160,7 +170,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "0") == "1"
+        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "1") == "1"
         if amd.has_matrix_core_feature(options.arch):
             if use_new_pipeliner:
                 # In the old pipeliner we only support num_stages = 0/1, which means something
@@ -172,11 +182,14 @@ class HIPBackend(BaseBackend):
                 if options.num_stages == 0:
                     amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
+        amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if use_new_pipeliner or options.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
+        amd.passes.ttgpuir.add_canonicalize_pointers(pm)
+        passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         pm.run(mod)
@@ -217,6 +230,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
@@ -232,6 +246,7 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, '')
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -251,11 +266,16 @@ class HIPBackend(BaseBackend):
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
 
+        # Hint the compiler that we'd like the firmware to set the kernel arguments
+        # to user SGPRs so that the kernel does not need to s_load its arguments
+        # from memory.
+        amd.set_all_fn_arg_inreg(fns[0])
+
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")

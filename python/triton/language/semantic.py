@@ -1,6 +1,8 @@
 from __future__ import annotations  # remove after python 3.11
+import warnings
 
 from typing import List, Optional, Sequence, Tuple, TypeVar
+import numbers
 
 from .._C.libtriton import ir
 from . import core as tl
@@ -56,7 +58,19 @@ def integer_promote_impl(a_ty: tl.dtype, b_ty: tl.dtype) -> tl.dtype:
     raise TypeError(f"unexpected signedness {a_sn} and {b_sn}")
 
 
-def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> tl.dtype:
+def computation_type_impl(a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_is_scalar: bool,
+                          div_or_mod: bool) -> tl.dtype:
+    # 0) For scalars we follow semantics similar to PyTorch, namely:
+    # - If the scalar is of a lower or equal kind (bool < uint < int < fp),
+    #   it doesn't participate in the pomotion
+    if a_is_scalar != b_is_scalar:
+        scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
+        if scalar_ty.kind().value <= tensor_ty.kind().value:
+            # Upcast because of 3) and 4) below!
+            if div_or_mod and (tensor_ty in (tl.float16, tl.bfloat16)):
+                return tl.float32
+            return tensor_ty
+
     # 1) if one operand is double, the other is implicitly
     #    converted to double
     if a_ty.is_fp64() or b_ty.is_fp64():
@@ -94,6 +108,44 @@ def computation_type_impl(a_ty: tl.dtype, b_ty: tl.dtype, div_or_mod: bool) -> t
     return integer_promote_impl(a_ty, b_ty)
 
 
+def to_tensor(x, builder, check_type: bool = True):
+    if isinstance(x, bool):
+        return tl.tensor(builder.get_int1(x), tl.int1)
+    # Note: compile-time const integers are represented by unsigned values
+    elif isinstance(x, int):
+        if -2**31 <= x < 2**31:
+            dtype = tl.int32
+        elif 2**31 <= x < 2**32:
+            dtype = tl.uint32
+        elif -2**63 <= x < 2**63:
+            dtype = tl.int64
+        elif 2**63 <= x < 2**64:
+            dtype = tl.uint64
+        else:
+            raise ValueError(f'Nonrepresentable integer {x}.')
+        return full((), x, dtype=dtype, builder=builder)
+    elif isinstance(x, float):
+        min_float32 = 2**-126
+        max_float32 = (2 - 2**-23) * 2**127
+        abs_x = __builtins__['abs'](x)
+        if abs_x == float("inf") or\
+           abs_x == 0.0 or \
+           x != x or \
+           min_float32 <= abs_x <= max_float32:
+            dtype = tl.float32
+        else:
+            dtype = tl.float64
+        return full((), x, dtype=dtype, builder=builder)
+
+    elif isinstance(x, tl.constexpr):
+        return to_tensor(x.value, builder)
+    elif isinstance(x, tl.tensor):
+        return x
+    if check_type:
+        raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
+    return x
+
+
 # ===----------------------------------------------------------------------===//
 #                               Binary Operators
 # ===----------------------------------------------------------------------===//
@@ -111,24 +163,60 @@ def check_ptr_type_impl(type_a: tl.dtype, type_b: tl.dtype, allow_ptr_a: bool) -
             raise IncompatibleTypeErrorImpl(type_a, type_b)
 
 
-def binary_op_type_checking_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder, allow_lhs_ptr=False,
-                                 allow_rhs_ptr=False, arithmetic_check=True,
+def binary_op_type_checking_impl(lhs: tl.tensor | numbers.Number, rhs: tl.tensor | numbers.Number, builder: ir.builder,
+                                 allow_lhs_ptr=False, allow_rhs_ptr=False, arithmetic_check=True,
                                  div_or_mod=False) -> Tuple[tl.tensor, tl.tensor]:
-    # implicit broadcasting
-    lhs, rhs = broadcast_impl_value(lhs, rhs, builder)
+    lhs_is_scalar = isinstance(lhs, numbers.Number)
+    rhs_is_scalar = isinstance(rhs, numbers.Number)
+    if lhs_is_scalar:
+        lhs_scalar = lhs
+        lhs = to_tensor(lhs, builder)
+    if rhs_is_scalar:
+        rhs_scalar = rhs
+        rhs = to_tensor(rhs, builder)
+
     # implicit typecasting
     lhs_sca_ty = lhs.type.scalar
     rhs_sca_ty = rhs.type.scalar
     check_ptr_type_impl(lhs_sca_ty, rhs_sca_ty, allow_lhs_ptr)
     check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
     if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_ptr():
-        ret_sca_ty = computation_type_impl(lhs_sca_ty, rhs_sca_ty, div_or_mod)
-        lhs = cast(lhs, ret_sca_ty, builder)
-        rhs = cast(rhs, ret_sca_ty, builder)
+        ret_sca_ty = computation_type_impl(lhs_sca_ty, lhs_is_scalar, rhs_sca_ty, rhs_is_scalar, div_or_mod)
+        if (lhs_is_scalar and lhs_scalar < 0 and ret_sca_ty.is_int_unsigned()
+                or rhs_is_scalar and rhs_scalar < 0 and ret_sca_ty.is_int_unsigned()):
+            raise ValueError("Cannot perform a binary operation between an unsigned tensor and a negative scalar. "
+                             "Perform a explicit cast on one of them.")
+        lhs = full(
+            (), lhs_scalar, dtype=ret_sca_ty, builder=builder) if lhs_is_scalar else cast(lhs, ret_sca_ty, builder)
+        rhs = full(
+            (), rhs_scalar, dtype=ret_sca_ty, builder=builder) if rhs_is_scalar else cast(rhs, ret_sca_ty, builder)
+
+    # implicit broadcasting
+    lhs, rhs = broadcast_impl_value(lhs, rhs, builder)
     return lhs, rhs
 
 
-def add(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+def binary_op_sanitize_overflow_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder, binary_op: callable):
+    if lhs.type.scalar.int_bitwidth >= 64 or not builder.options.sanitize_overflow:
+        return
+    lhs_sca_ty = lhs.type.scalar
+    rhs_sca_ty = rhs.type.scalar
+    assert lhs_sca_ty == rhs_sca_ty
+    assert lhs_sca_ty.is_int()
+    lhs = cast(lhs, tl.int64, builder)
+    rhs = cast(rhs, tl.int64, builder)
+    ret = binary_op(lhs, rhs, False, builder)
+    max_value = lhs_sca_ty.get_int_max_value()
+    max_value = tl.tensor(builder.get_int64(max_value), tl.int64)
+    min_value = lhs_sca_ty.get_int_min_value()
+    min_value = tl.tensor(builder.get_int64(min_value), tl.int64)
+    cond = and_(less_equal(ret, max_value, builder), greater_equal(ret, min_value, builder), builder)
+    msg = f"int{lhs_sca_ty.int_bitwidth} overflow detected for operation {binary_op.__name__}"
+    device_assert(cond, msg, builder)
+
+
+def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -148,11 +236,14 @@ def add(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
     # int + int
     elif input_scalar_ty.is_int():
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, add)
         return tl.tensor(builder.create_add(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {input_scalar_ty}")
 
 
-def sub(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, False)
     scalar_ty = input.type.scalar
     # ptr - offset
@@ -163,23 +254,28 @@ def sub(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
         return tl.tensor(builder.create_fsub(input.handle, other.handle), input.type)
     # int - int
     elif scalar_ty.is_int():
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, sub)
         return tl.tensor(builder.create_sub(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {scalar_ty}")
 
 
-def mul(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+def mul(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder)
     scalar_ty = input.type.scalar
     # float * float
     if scalar_ty.is_floating():
         return tl.tensor(builder.create_fmul(input.handle, other.handle), input.type)
-    # * int
+    # int * int
     elif scalar_ty.is_int():
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, mul)
         return tl.tensor(builder.create_mul(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {scalar_ty}")
 
 
-def truediv(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+def truediv(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -205,7 +301,7 @@ def truediv(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tenso
     return tl.tensor(builder.create_fdiv(input.handle, other.handle), input.type)
 
 
-def floordiv(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+def floordiv(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -220,7 +316,8 @@ def floordiv(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tens
     raise TypeError(f"unexpected type {input_scalar_ty}")
 
 
-def fdiv(input: tl.tensor, other: tl.tensor, ieee_rounding: bool, builder: ir.builder) -> tl.tensor:
+def fdiv(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, ieee_rounding: bool,
+         builder: ir.builder) -> tl.tensor:
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
     if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
@@ -230,14 +327,15 @@ def fdiv(input: tl.tensor, other: tl.tensor, ieee_rounding: bool, builder: ir.bu
     return tl.tensor(ret, input.type)
 
 
-def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
+def mod(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
     scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
     # float % float
     if scalar_ty.is_floating():
         # input - input.div(other, rounding_mode="floor") * other
-        ret = sub(input, mul(math.floor(fdiv(input, other, False, builder), _builder=builder), other, builder), builder)
+        floor = math.floor(fdiv(input, other, False, builder), _builder=builder)
+        ret = sub(input, mul(floor, other, True, builder), True, builder)
         return ret
     # % int
     elif scalar_ty.is_int():
@@ -312,7 +410,7 @@ def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.Propag
 
 def bitwise_op_type_checking_impl(input: tl.tensor, other: tl.tensor,
                                   builder: ir.builder) -> Tuple[tl.tensor, tl.tensor]:
-    input, other = binary_op_type_checking_impl(input, other, builder, False, False, False)
+    input, other = binary_op_type_checking_impl(input, other, builder)
     input_sca_ty = input.type.scalar
     other_sca_ty = other.type.scalar
     if not input_sca_ty.is_int() or not other_sca_ty.is_int():
@@ -391,7 +489,7 @@ def minus(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     if input_sca_ty.is_ptr():
         raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
     _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
-    return sub(_0, input, builder)
+    return sub(_0, input, True, builder)
 
 
 def invert(input: tl.tensor, builder: tl.tensor) -> tl.tensor:
@@ -853,6 +951,8 @@ def _str_to_load_cache_modifier(cache_modifier):
             cache = ir.CACHE_MODIFIER.CA
         elif cache_modifier == ".cg":
             cache = ir.CACHE_MODIFIER.CG
+        elif cache_modifier == ".cv":
+            cache = ir.CACHE_MODIFIER.CV
         else:
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
@@ -995,12 +1095,13 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
     elt_ty = ptr_ty.element_ty
 
     # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
-    if elt_ty == tl.int1:
+    is_bool = elt_ty == tl.int1
+    if is_bool:
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
 
-    # Cast `other` into `ele_ty` type
+    # Cast `other` into `elt_ty` type
     if other is not None:
         other = cast(other, elt_ty, builder)
 
@@ -1014,11 +1115,14 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
 
     # Build IR
     if mask is None:
-        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
+        ret = tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
     else:
-        return tl.tensor(
+        ret = tl.tensor(
             builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache, eviction,
                                        is_volatile), dst_ty)
+    if is_bool:
+        ret = cast(ret, tl.int1, builder)
+    return ret
 
 
 def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], boundary_check: Tuple,
@@ -1429,13 +1533,17 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
 
 def where(condition: tl.tensor, x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
+    if condition.dtype != tl.int1:
+        warnings.warn(
+            f"tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got {condition.dtype}"
+        )
     condition = cast(condition, tl.int1, builder)
+    x, y = binary_op_type_checking_impl(x, y, builder, True, True)
+    # x, y are broadcasted
     if condition.type.is_block():
         condition, x = broadcast_impl_value(condition, x, builder)
         x, y = broadcast_impl_value(x, y, builder)
-        condition, x = broadcast_impl_value(condition, x, builder)
-    x, y = binary_op_type_checking_impl(x, y, builder, True, True)
-    if not condition.type.is_block():
+    else:
         condition, _ = broadcast_impl_value(condition, x, builder)
     ret_ty = x.type
     return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
@@ -1552,12 +1660,14 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
     return tl.tensor(builder.create_print(prefix, hex, new_args, is_signed), tl.void)
 
 
-def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: int, builder: ir.builder) -> tl.tensor:
+def device_assert(cond: tl.tensor, msg: str, builder: ir.builder) -> tl.tensor:
+    if not builder.options.debug:
+        return
     cond_ty = cond.type
     if not cond_ty.is_block():
         cond_ty = tl.block_type(cond_ty.scalar, (1, ))
         cond = tl.tensor(builder.create_splat(cond.handle, (1, )), cond_ty)
-    return tl.tensor(builder.create_assert(cond.handle, msg, file_name, func_name, lineno), tl.void)
+    return tl.tensor(builder.create_assert(cond.handle, msg), tl.void)
 
 
 def assume(cond, builder: ir.builder) -> tl.tensor:

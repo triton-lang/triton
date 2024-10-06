@@ -157,6 +157,7 @@ void init_triton_ir(py::module &&m) {
       .value("WB", CacheModifier::WB)
       .value("CS", CacheModifier::CS)
       .value("WT", CacheModifier::WT)
+      .value("CV", CacheModifier::CV)
       .export_values();
 
   py::enum_<MemSemantic>(m, "MEM_SEMANTIC", py::module_local())
@@ -225,6 +226,7 @@ void init_triton_ir(py::module &&m) {
                     math::MathDialect, arith::ArithDialect, index::IndexDialect,
                     scf::SCFDialect, ::mlir::gpu::GPUDialect,
                     cf::ControlFlowDialect, LLVM::LLVMDialect>();
+    mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
     mlir::LLVM::registerInlinerInterface(registry);
@@ -1415,19 +1417,13 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, int axis) -> Value {
              if (axis < 0 || axis > 3)
                throw pybind11::index_error("program_id must be in [0,3]");
-             return self.create<GetProgramIdOp>(
-                 self.getBuilder().getI32Type(),
-                 ProgramIDDimAttr::get(self.getBuilder().getContext(),
-                                       ProgramIDDim(axis)));
+             return self.create<GetProgramIdOp>(axis);
            })
       .def("create_get_num_programs",
            [](TritonOpBuilder &self, int axis) -> Value {
              if (axis < 0 || axis > 3)
                throw pybind11::index_error("program_id must be in [0,3]");
-             return self.create<GetNumProgramsOp>(
-                 self.getBuilder().getI32Type(),
-                 ProgramIDDimAttr::get(self.getBuilder().getContext(),
-                                       ProgramIDDim(axis)));
+             return self.create<GetNumProgramsOp>(axis);
            })
       .def("create_dot",
            [](TritonOpBuilder &self, mlir::Value &a, mlir::Value &b,
@@ -1544,17 +1540,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
-              const std::string &message, const std::string &fileName,
-              const std::string &funcName, unsigned lineNo) -> void {
+              const std::string &message) -> void {
              auto messageAttr = StringAttr::get(self.getBuilder().getContext(),
                                                 llvm::StringRef(message));
-             auto fileNameAttr = StringAttr::get(self.getBuilder().getContext(),
-                                                 llvm::StringRef(fileName));
-             auto funcNameAttr = StringAttr::get(self.getBuilder().getContext(),
-                                                 llvm::StringRef(funcName));
-             auto lineNoAttr = self.getBuilder().getI32IntegerAttr(lineNo);
-             self.create<AssertOp>(condition, messageAttr, fileNameAttr,
-                                   funcNameAttr, lineNoAttr);
+             self.create<AssertOp>(condition, messageAttr);
            })
       .def("create_assume",
            [](TritonOpBuilder &self, Value &condition) {

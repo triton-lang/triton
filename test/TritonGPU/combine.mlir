@@ -2307,7 +2307,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 :
 tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i1>, #blocked>) {
   %0 = tt.load %ptr : tensor<1024x!tt.ptr<i1>, #blocked>
   %1 = triton_gpu.convert_layout %0 : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
-  tt.assert %1, "cond must be true ", "unknown", "unknown", 0 : tensor<1024xi1, #blocked1>
+  tt.assert %1, "cond must be true " : tensor<1024xi1, #blocked1>
   tt.return
 }
 }
@@ -2587,5 +2587,23 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     tt.return %0#0, %0#1 : tensor<64x64xf32, #mma>, tensor<64x128xf32, #mma1>
     // CHECK: %[[W:.+]]:2 = triton_nvidia_gpu.warp_group_dot_wait
     // CHECK: tt.return %[[W]]#0, %[[W]]#1 : tensor<64x64xf32, #mma>, tensor<64x128xf32, #mma1>
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @split_propagation
+  // CHECK-SAME: (%[[ARG:.+]]: tensor<128x64x2xf32
+  //      CHECK: %[[S:.+]], %{{.+}} = tt.split %[[ARG]]
+  //      CHECK: %[[C:.+]] = triton_gpu.convert_layout %[[S]]
+  //      CHECK: tt.return %[[C]]
+  tt.func public @split_propagation(%arg0: tensor<128x64x2xf32, #blocked>) -> tensor<128x64xf32, #blocked1> {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<128x64x2xf32, #blocked> -> tensor<128x64x2xf32, #blocked2>
+    %outLHS, %outRHS = tt.split %0 : tensor<128x64x2xf32, #blocked2> -> tensor<128x64xf32, #blocked1>
+    tt.return %outLHS : tensor<128x64xf32, #blocked1>
   }
 }

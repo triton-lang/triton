@@ -1,5 +1,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+#include <cstdint>
 #include <numeric>
 
 #include "mlir/IR/DialectImplementation.h"
@@ -9,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -246,6 +248,30 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
   return order;
 }
 
+SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
+  SmallVector<unsigned> order(rank);
+  // The 'order' field typically represents a descending sorted array of
+  // dimensions based on contiguity. For instance, in axisInfo utilities that
+  // retrieve tensor contiguity, it's assumed that the dimension with the
+  // highest contiguity corresponds to order[0].
+  //
+  // The relation between contiguity and order is only relevant if the layout
+  // interfaces with HBM, as is the case when we load tensor from HBM to
+  // registers in the dot layout to bypass LDS. When bypassing LDS, we make the
+  // following assumptions about tensor layouts:
+  // - Tensor A (opIdx == 0) is considered to be row-major.
+  // - Tensor B (opIdx == 1) is considered to be column-major.
+  //
+  // Based on these assumptions, we define the following orders:
+  // - For opIdx == 0, we assume an order of [1, 0].
+  // - For opIdx == 1, we assume an order of [0, 1].
+  std::iota(order.rbegin(), order.rend(), 0);
+  if (opIdx == 1) {
+    std::swap(order[0], order[1]);
+  }
+  return order;
+}
+
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     return llvm::to_vector(blockedLayout.getOrder());
@@ -255,20 +281,16 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     auto rank = distributedLayout.getWarpsPerCTA().size();
     SmallVector<unsigned> order(rank);
     std::iota(order.rbegin(), order.rend(), 0);
-    auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout);
-    if (!mfmaLayout)
-      return order;
-    // For transposed MFMA layouts, we swap M and N dimensions, which is
-    // always the first two in order; as we can have an optional batch
-    // dimension following them.
-    if (mfmaLayout.getIsTransposed())
-      std::swap(order[0], order[1]);
     return order;
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
     SmallVector<unsigned> order(rank);
-    std::iota(order.rbegin(), order.rend(), 0);
+    if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
+      return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
+    } else {
+      std::iota(order.rbegin(), order.rend(), 0);
+    }
     return order;
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -286,6 +308,14 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   }
 
   llvm::report_fatal_error("Unimplemented usage of getOrder");
+  return {};
+};
+
+SmallVector<unsigned> getThreadOrder(Attribute layout) {
+  if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
+    return distributedLayout.getThreadOrder();
+  else
+    llvm::report_fatal_error("Unimplemented usage of getThreadOrder");
   return {};
 };
 
@@ -924,6 +954,27 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 SmallVector<unsigned>
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                           Type eltTy) const {
+
+  if (auto parent = mlir::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
+    auto rank = shape.size();
+    assert(rank == 2 || rank == 3);
+
+    auto idx = getOpIdx();
+    assert(idx == 0 || idx == 1);
+
+    SmallVector<unsigned> elemsPerThread(rank);
+
+    auto kWidth = getKWidth();
+    auto rep = parent.getMFMARepForOperands(shape, kWidth, idx);
+
+    if (rank == 3)
+      elemsPerThread[0] = rep[0];
+    elemsPerThread[rank - 2] = (idx == 0) ? rep[1] : rep[1] * kWidth;
+    elemsPerThread[rank - 1] = (idx == 0) ? rep[2] * kWidth : rep[2];
+
+    return elemsPerThread;
+  }
+
   llvm_unreachable("getElemsPerThread is not supported for dot operand");
   return SmallVector<unsigned>();
 }
@@ -1535,7 +1586,10 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpOrder() const {
   return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadOrder() const {
-  return ::getOrder(*this);
+  auto order = ::getOrder(*this);
+  if (getIsTransposed())
+    std::swap(order[0], order[1]);
+  return order;
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadsPerWarp() const {
   unsigned rows, cols;
@@ -2637,22 +2691,21 @@ struct TritonGPUInferLayoutInterface
           loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
                "and CTAsPerCGA = 1 for the last dimension of the input");
     }
-    if (enc.getOrder().front() != enc.getOrder().size() - 1) {
-      return emitOptionalError(
-          loc, "SplitOp requires the last dimension to be most-minor in order");
-    }
     if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
       return emitOptionalError(
           loc,
           "SplitOp requires the last dimension to be most-minor in CTAOrder");
     }
-
+    SmallVector<unsigned> newOrder(enc.getOrder());
+    int splitDim = newOrder.size() - 1;
+    // Remove splitDim from order.
+    newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
+                   newOrder.end());
     dstEnc = BlockedEncodingAttr::get(
         enc.getContext(), //
         ArrayRef(enc.getSizePerThread()).drop_back(1),
         ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
-        ArrayRef(enc.getWarpsPerCTA()).drop_back(1),
-        ArrayRef(enc.getOrder()).drop_front(1),
+        ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
         CTALayoutAttr::get(enc.getContext(), //
                            ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
                            ArrayRef(enc.getCTASplitNum()).drop_back(1),
@@ -2736,6 +2789,28 @@ struct CanonicalizeConvertFromLocalStore
       return failure();
     rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
                                                            op.getDst());
+    return mlir::success();
+  }
+};
+
+struct CanonicalizeConvertFromSplit
+    : public mlir::OpRewritePattern<triton::SplitOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::SplitOp op,
+                  PatternRewriter &rewriter) const override {
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
+      return failure();
+    auto srcEncoding = convert.getSrc().getType().getEncoding();
+    // Multiple source layout can give the same output layout, if the source
+    // layout of the convert gives the same destination layout we can skip the
+    // convert.
+    auto dstEncoding = inferDstEncoding(op, srcEncoding);
+    if (dstEncoding != op.getOutLHS().getType().getEncoding())
+      return failure();
+    rewriter.replaceOpWithNewOp<triton::SplitOp>(op, convert.getSrc());
     return mlir::success();
   }
 };
@@ -2871,6 +2946,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromHistogram>(context);
   patterns.add<CanonicalizeConvertFromAlloc>(context);
   patterns.add<CanonicalizeConvertFromLocalStore>(context);
+  patterns.add<CanonicalizeConvertFromSplit>(context);
 }
 
 // LocalAllocOp
@@ -3030,7 +3106,8 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
 //===----------------------------------------------------------------------===//
 
 // Return N-D delinearized indices from a linear index.
-static SmallVector<int64_t> delinearize(int64_t idx, ArrayRef<int64_t> shape) {
+static SmallVector<int64_t> delinearizeIndex(int64_t idx,
+                                             ArrayRef<int64_t> shape) {
   SmallVector<int64_t> ret(shape.size());
   for (int i = shape.size() - 1; i >= 0; i--) {
     ret[i] = idx % shape[i];
@@ -3055,8 +3132,124 @@ static std::string paddedString(int value, int max) {
   return str;
 }
 
-std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
-                                            bool useHWPointOfView) {
+std::string getSharedLayoutStr(RankedTensorType tensorType,
+                               bool useHWPointOfView) {
+  auto layout = tensorType.getEncoding();
+  if (!layout)
+    return "";
+
+  std::optional<LinearLayout> ll =
+      triton::gpu::toLinearLayout(tensorType.getShape(), layout);
+  if (!ll.has_value())
+    llvm::report_fatal_error("Failed to convert layout to linear layout");
+
+  StringAttr kOffset = StringAttr::get(tensorType.getContext(), "offset");
+  StringAttr kBlock = StringAttr::get(tensorType.getContext(), "block");
+  int64_t tensorSize = product(tensorType.getShape());
+  unsigned numBlocks = getNumCTAs(layout);
+  int32_t blockSize = tensorSize / numBlocks;
+
+  // elementMapping is for the non-hw layout, offsetMapping for hw-layout
+  std::vector<std::string> elementMapping(tensorSize);
+  std::vector<std::string> offsetMapping;
+
+  // Shared layouts are a mapping of (block, offset) --> (...)
+
+  // We can just use a single int to index into elementMapping because
+  // the 'swizzle' operation rearranges the indicies---and we want to keep it
+  // that way
+  int32_t idx = 0;
+  // Enumerate all the offsets for each block
+  for (int32_t block = 0; block < numBlocks; block++) {
+    for (int32_t offset = 0; offset < blockSize; offset++) {
+      SmallVector<std::pair<StringAttr, int32_t>> inputs = {
+          {kBlock, block},
+          {kOffset, offset},
+      };
+
+      SmallVector<std::pair<StringAttr, int32_t>> outputs = ll->apply(inputs);
+
+      std::string sharedInfo = "(";
+      std::string &value = elementMapping[idx];
+
+      if (!value.empty())
+        value += "|";
+
+      value += "(";
+      // We can build up both strings (for hw/non-hw layouts) concurrently
+      for (int i = 0; i < outputs.size(); i++) {
+        // Based on the formatting from LinearLayout::toString, the format for
+        // the hw layout is slightly different. HW layouts use "," vs ":".
+        if (i > 0) {
+          sharedInfo += ",";
+          value += ":";
+        }
+        auto index = paddedString(outputs[i].second, tensorType.getDimSize(i));
+        sharedInfo += index;
+        value += index;
+      }
+      value += ")";
+      sharedInfo += ")";
+
+      offsetMapping.push_back(sharedInfo);
+
+      idx++;
+    }
+  }
+
+  std::string layoutStr;
+
+  if (!useHWPointOfView) {
+    int rank = tensorType.getRank();
+    bool newLine = true;
+    for (int i = 0; i < tensorSize; i++) {
+      auto indices = delinearizeIndex(i, tensorType.getShape());
+      int numOpenBracket = 0;
+      for (int j = rank - 1; j >= 0; j--) {
+        if (indices[j] % tensorType.getDimSize(j) != 0)
+          break;
+        layoutStr += "[";
+        numOpenBracket++;
+      }
+      if (newLine) {
+        for (int j = 0; j < rank - numOpenBracket; j++)
+          layoutStr += " ";
+        newLine = false;
+      }
+
+      layoutStr += elementMapping[i];
+      auto nextIndices = delinearizeIndex(i + 1, tensorType.getShape());
+      for (int j = rank - 1; j >= 0; j--) {
+        if (nextIndices[j] % tensorType.getDimSize(j) != 0)
+          break;
+        layoutStr += "]";
+      }
+      if (nextIndices.back() % tensorType.getShape().back() == 0) {
+        layoutStr += "\n";
+        newLine = true;
+      } else {
+        layoutStr += ",";
+      }
+    }
+  } else {
+    // For the HW view here, print the (block, offset) --> (r,c) mapping
+    uint32_t idx = 0;
+    for (int32_t block = 0; block < numBlocks; block++) {
+      layoutStr += "Block: " + std::to_string(block) + ":\n";
+      for (int32_t offset = 0; offset < (tensorSize / numBlocks); offset++) {
+        layoutStr += "Offset: " + std::to_string(offset) + " -> ";
+        layoutStr += offsetMapping[idx];
+        layoutStr += "\n";
+        idx++;
+      }
+    }
+  }
+
+  return layoutStr;
+}
+
+std::string getDistributedLayoutStr(RankedTensorType tensorType,
+                                    bool useHWPointOfView) {
   auto layout = tensorType.getEncoding();
   if (!layout)
     return "";
@@ -3123,11 +3316,11 @@ std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
   }
   std::string layoutStr;
   if (!useHWPointOfView) {
-    // Printing the threads containning each elements of the tensor.
+    // Printing the threads containing each elements of the tensor.
     int rank = tensorType.getRank();
     bool newLine = true;
     for (int i = 0; i < tensorSize; i++) {
-      auto indices = delinearize(i, tensorType.getShape());
+      auto indices = delinearizeIndex(i, tensorType.getShape());
       int numOpenBracket = 0;
       for (int j = rank - 1; j >= 0; j--) {
         if (indices[j] % tensorType.getDimSize(j) != 0)
@@ -3142,7 +3335,7 @@ std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
       }
 
       layoutStr += elementMapping[i];
-      auto nextIndices = delinearize(i + 1, tensorType.getShape());
+      auto nextIndices = delinearizeIndex(i + 1, tensorType.getShape());
       for (int j = rank - 1; j >= 0; j--) {
         if (nextIndices[j] % tensorType.getDimSize(j) != 0)
           break;
@@ -3179,6 +3372,24 @@ std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
     }
   }
   return layoutStr;
+}
+
+std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
+                                            bool useHWPointOfView) {
+  auto layout = tensorType.getEncoding();
+
+  // tensorType is needed later on (e.g., getDimSize(j)), so we still have to
+  // pass it as a param
+  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+    return getSharedLayoutStr(tensorType, useHWPointOfView);
+  } else if (auto distributedLayout =
+                 mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
+    return getDistributedLayoutStr(tensorType, useHWPointOfView);
+  }
+
+  // else unimplemented, return error
+  llvm::report_fatal_error("Unimplemented usage of getLayoutStr");
+  return "";
 }
 
 void mlir::triton::gpu::dumpLayout(RankedTensorType tensorType) {
