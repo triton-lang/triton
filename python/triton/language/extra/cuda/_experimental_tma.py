@@ -67,7 +67,7 @@ def experimental_device_tensormap_create2d(
 
     element_size = element_ty.primitive_bitwidth // 8
     element_size_t = core.full([], element_size, core.int64, _builder=_builder)
-    global_stride = semantic.mul(element_size_t, global_size[-1], _builder)
+    global_stride = semantic.mul(element_size_t, global_size[-1], True, _builder)
     # Undocumented, but global_stride seems to be divided by 16
     global_stride = semantic.ashr(global_stride, semantic.to_tensor(4, _builder), _builder)
 
