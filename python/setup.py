@@ -32,9 +32,11 @@ import pybind11
 @dataclass
 class Backend:
     name: str
-    package_data: dict
+    package_data: list[str]
+    language_package_data: list[str]
     src_dir: str
     backend_dir: str
+    language_dir: str
     install_dir: str
     is_external: bool
 
@@ -62,12 +64,22 @@ class BackendInstaller:
         backend_path = os.path.abspath(os.path.join(backend_src_dir, "backend"))
         assert os.path.exists(backend_path), f"{backend_path} does not exist!"
 
+        language_dir = os.path.abspath(os.path.join(backend_src_dir, "language"))
+        if not os.path.exists(language_dir):
+            language_dir = None
+
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
         install_dir = os.path.join(os.path.dirname(__file__), "triton", "backends", backend_name)
         package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
-        return Backend(name=backend_name, package_data=package_data, src_dir=backend_src_dir, backend_dir=backend_path,
+
+        language_package_data = []
+        if language_dir is not None:
+            language_package_data = [f"{os.path.relpath(p, language_dir)}/*" for p, _, _, in os.walk(language_dir)]
+
+        return Backend(name=backend_name, package_data=package_data, language_package_data=language_package_data,
+                       src_dir=backend_src_dir, backend_dir=backend_path, language_dir=language_dir,
                        install_dir=install_dir, is_external=is_external)
 
     # Copy all in-tree backends under triton/third_party.
@@ -556,6 +568,19 @@ def add_link_to_backends():
             shutil.rmtree(backend.install_dir)
         os.symlink(backend.backend_dir, backend.install_dir)
 
+        if backend.language_dir:
+            # Link the contents of each backend's `language` directory into
+            # `triton.language.extra`.
+            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "triton", "language", "extra"))
+            for x in os.listdir(backend.language_dir):
+                src_dir = os.path.join(backend.language_dir, x)
+                install_dir = os.path.join(extra_dir, x)
+                if os.path.islink(install_dir):
+                    os.unlink(install_dir)
+                if os.path.exists(install_dir):
+                    shutil.rmtree(install_dir)
+                os.symlink(src_dir, install_dir)
+
 
 def add_link_to_proton():
     proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "third_party", "proton", "proton"))
@@ -602,10 +627,31 @@ class plugin_egginfo(egg_info):
 
 
 package_data = {
-    "triton/tools": ["compile.h", "compile.c"],
-    **{f"triton/backends/{b.name}": b.package_data
-       for b in backends},
+    "triton/tools": ["compile.h", "compile.c"], **{f"triton/backends/{b.name}": b.package_data
+                                                   for b in backends}, "triton/language/extra": sum(
+        (b.language_package_data for b in backends), [])
 }
+
+
+def get_language_extra_packages():
+    packages = []
+    for backend in backends:
+        if backend.language_dir is None:
+            continue
+
+        # Walk the `language` directory of each backend to enumerate
+        # any subpackages, which will be added to `triton.language.extra`.
+        for dir, dirs, files in os.walk(backend.language_dir, followlinks=True):
+            if not any(f for f in files if f.endswith(".py")) or dir == backend.language_dir:
+                # Ignore directories with no python files.
+                # Also ignore the root directory which corresponds to
+                # "triton/language/extra".
+                continue
+            subpackage = os.path.relpath(dir, backend.language_dir)
+            package = os.path.join("triton/language/extra", subpackage)
+            packages.append(package)
+
+    return list(packages)
 
 
 def get_packages():
@@ -615,15 +661,15 @@ def get_packages():
         "triton/compiler",
         "triton/language",
         "triton/language/extra",
-        "triton/language/extra/cuda",
-        "triton/language/extra/hip",
         "triton/runtime",
         "triton/backends",
         "triton/tools",
     ]
     packages += [f'triton/backends/{backend.name}' for backend in backends]
+    packages += get_language_extra_packages()
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         packages += ["triton/profiler"]
+
     return packages
 
 
