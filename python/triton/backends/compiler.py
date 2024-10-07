@@ -11,14 +11,14 @@ from types import ModuleType
 # Table that associates strings to AttrsDescriptor (sub)classes.
 # In this way we can dynamically select the correct class
 # constructor
-descriptor_table = {}
+_descriptor_table = {}
 
 
 def register_descriptor(cls):
     """
     Register a descriptor into the descriptor table
     """
-    descriptor_table[cls.__name__] = cls
+    _descriptor_table[cls.__name__] = cls
     return cls
 
 
@@ -149,11 +149,21 @@ class AttrsDescriptor:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def to_dict(self):
+        """
+        Store the fields of this class in a serializable dictionary
+        """
+        # We need to only store the `arg_properties` field. To initialize the
+        # other fields we relay on the class type. We store it as a string in
+        # the dictionary so that we can use it to invoke the appropriate
+        # (sub)class constructor in the `from_dict` method.
         return {"arg_properties": self.arg_properties, "cls": type(self).__name__}
 
     @staticmethod
     def from_dict(data):
-        attrs_descriptor = descriptor_table[data["cls"]]()
+        """
+        Create the object from a serializable dictionary
+        """
+        attrs_descriptor = _descriptor_table[data["cls"]]()
         for prop_name, param_ids in data["arg_properties"].items():
             attrs_descriptor.arg_properties[prop_name] = param_ids
         attrs_descriptor._init_slots()

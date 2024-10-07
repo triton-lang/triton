@@ -191,7 +191,11 @@ struct LoadStoreConversionBase {
             })
             .Case<arith::RemSIOp>([&](auto remsiOp) {
               // a % b >= 0 iff a>=0
-              return (verifyNonNegativeExpr(remsiOp.getLhs()));
+              return verifyNonNegativeExpr(remsiOp.getLhs());
+            })
+            .Case<arith::TruncIOp, arith::ExtSIOp>([&](Operation *unaryOp) {
+              // a = OP b >= 0 iff b >= 0
+              return verifyNonNegativeExpr(unaryOp->getOperand(0));
             })
             .Case<arith::AddIOp, arith::MinSIOp, arith::MulIOp, arith::DivSIOp>(
                 // Generally speaking, a OP b >= 0  iff  a >= 0 && b >= 0 when
