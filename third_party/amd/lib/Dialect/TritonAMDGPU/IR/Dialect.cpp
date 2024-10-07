@@ -97,7 +97,7 @@ LogicalResult ViewSliceOp::verify() {
 
   if (!hasUnitStride()) {
     return emitError("expected unit strides but found unsupported stride [")
-           << getStrides() << "]";
+           << getStaticStrides() << "]";
   }
 
   return success();
