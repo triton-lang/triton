@@ -1,50 +1,20 @@
 # flake8: noqa: F821,F841
-import contextlib
-import itertools
-import re
-from typing import Optional
-import math
-import textwrap
 import tempfile
 
 import numpy as np
 import pytest
 import torch
-import os
-import inspect
-from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.language.extra import libdevice
 
-from triton._internal_testing import (
-    is_interpreter,
-    is_hip,
-    get_arch,
-    torch_float8_dtypes,
-    torch_dtypes,
-)
+from triton._internal_testing import is_hip
 
-
-@contextlib.contextmanager
-def promotion_numpy_2_0():
-    state = np._get_promotion_state()
-    np._set_promotion_state("weak")
-    try:
-        yield
-    finally:
-        np._set_promotion_state(state)
-
-
-# TODO: enable multiple cta cluster testing.
-# num_ctas_list = [1, 4] if torch.cuda.get_device_capability()[0] == 9 else [1]
 num_ctas_list = [1]
 
 GPU_DIALECT = "triton_gpu"
-if is_interpreter():
-    THREADS_PER_WARP = 1
-elif is_hip():
+
+if is_hip():
     THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 else:
     THREADS_PER_WARP = 32
@@ -71,8 +41,8 @@ class BlockedLayout:
 
 view_layout = [
     BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [16, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [16, 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([2, 2], [64, 1], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([2, 2], [16, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
 ]
@@ -92,14 +62,14 @@ blocked_layout = [
 @pytest.mark.parametrize("blocked_layout", blocked_layout)
 def test_view_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset, blocked_layout, view_layout,
                     device='cuda'):
-    if torch.version.hip is None:
+    if not is_hip():
         pytest.skip("view_slice is AMD specific instruction.")
 
     ir = f"""
     #blocked = {blocked_layout}
     #view_layout = {view_layout}
     module attributes {{"triton_gpu.num-ctas" = 1, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = {str(64)} : i32}} {{
-    tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+    tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
         %cst_n = arith.constant dense<{N_tile_size}> : tensor<{M_tile_size}x1xi32, #blocked>
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #blocked}}>>
