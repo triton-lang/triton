@@ -6,8 +6,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir::triton {
-#define GEN_PASS_DEF_INSERTINSTRUCTIONSCHEDHINTS
-#define GEN_PASS_DEF_LOWERINSTRUCTIONSCHEDHINTS
+#define GEN_PASS_DEF_TRITONAMDGPUINSERTINSTRUCTIONSCHEDHINTS
+#define GEN_PASS_DEF_TRITONAMDGPULOWERINSTRUCTIONSCHEDHINTS
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace mlir::triton
 
@@ -171,7 +171,7 @@ struct InstructionSchedHintsRewriter
   // see:
   // include/ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.h
   void createCKV3Schedule(PatternRewriter &rewriter, Location loc,
-                          amdgpu::InstructionSchedHint schedHint) {
+                          amdgpu::InstructionSchedHint schedHint) const {
     const uint32_t numDsReadInstA = schedHint.getNumDsReadsA().getValue();
     const uint32_t numDsReadInstB = schedHint.getNumDsReadsB().getValue();
 
@@ -299,7 +299,7 @@ struct InstructionSchedHintsRewriter
       break;
     }
     case SchedulingType::CK_V3: {
-
+      createCKV3Schedule(rewriter, loc, instructionSchedHint);
       break;
     }
     case SchedulingType::NONE:
@@ -320,11 +320,11 @@ private:
   SchedulingType schedulingType;
 };
 
-struct LowerInstructionSchedHints
-    : public triton::impl::LowerInstructionSchedHintsBase<
-          LowerInstructionSchedHints> {
+struct TritonAMDGPULowerInstructionSchedHints
+    : public triton::impl::TritonAMDGPULowerInstructionSchedHintsBase<
+          TritonAMDGPULowerInstructionSchedHints> {
 
-  explicit LowerInstructionSchedHints(std::string variant) {
+  explicit TritonAMDGPULowerInstructionSchedHints(std::string variant) {
     this->variant = variant;
   }
 
@@ -346,15 +346,24 @@ struct LowerInstructionSchedHints
   }
 };
 
-struct InsertInstructionSchedHints
-    : public triton::impl::InsertInstructionSchedHintsBase<
-          InsertInstructionSchedHints> {
+struct TritonAMDGPUInsertInstructionSchedHints
+    : public triton::impl::TritonAMDGPUInsertInstructionSchedHintsBase<
+          TritonAMDGPUInsertInstructionSchedHints> {
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
 
-    mod->walk([this, ctx](triton::DotOp dot) {
-      if (auto forOp = dyn_cast<scf::ForOp>(dot->getParentOp())) {
+    mod.walk([this, ctx](scf::ForOp forOp) {
+      triton::DotOp dot = nullptr;
+      size_t dotCounter = 0;
+      forOp->walk([&dot, &dotCounter](triton::DotOp op) {
+        dot = op;
+        ++dotCounter;
+      });
+      // Note, instruction sched. barriers are inserted only in the case of
+      // a single `tt.dot` op in a `scf::ForOp` scope in the current
+      // implementation.
+      if (dotCounter == 1) {
         mlir::OpBuilder rewriter(ctx);
         rewriter.setInsertionPointAfter(dot);
         rewriter.create<amdgpu::InstructionSchedHint>(dot->getLoc());
@@ -497,12 +506,12 @@ struct InsertInstructionSchedHints
 
 namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
-createLowerInstructionSchedHintsPass(std::string variant) {
-  return std::make_unique<LowerInstructionSchedHints>(variant);
+createTritonAMDGPULowerInstructionSchedHintsPass(std::string variant) {
+  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(variant);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createInsertInstructionSchedHintsPass() {
-  return std::make_unique<InsertInstructionSchedHints>();
+createTritonAMDGPUInsertInstructionSchedHintsPass() {
+  return std::make_unique<TritonAMDGPUInsertInstructionSchedHints>();
 }
 } // namespace mlir::triton
