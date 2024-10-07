@@ -68,9 +68,11 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz) {
+  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz,
+                                     bool enable_buffer_ops) {
     this->arch = targetArch.str();
     this->ftz = ftz;
+    this->enable_buffer_ops = enable_buffer_ops;
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -91,7 +93,7 @@ struct ConvertTritonAMDGPUToLLVM
     // Given how young is the buffer intrinsic support in Triton, we shield it
     // behind this variable. Once we smooth all the edges, we should get rid of
     // this
-    bool enableBufferIntrinsics = tools::getBoolEnv("AMDGCN_USE_BUFFER_OPS");
+    bool enableBufferIntrinsics = this->enable_buffer_ops;
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
@@ -265,8 +267,10 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz,
+                                    bool enable_buffer_ops) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz,
+                                                     enable_buffer_ops);
 }
 
 } // namespace triton
