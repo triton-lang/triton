@@ -163,95 +163,6 @@ void LayoutRematerialization::cleanup() {
     op->erase();
 }
 
-// Look ahead to at the transitive uses and see if there is a convert to mma
-// operations.
-bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
-  SmallVector<Value> queue = {op->getResult(0)};
-  SetVector<Operation *> forwardSlice;
-  llvm::SmallDenseSet<Value> seen;
-  llvm::SmallDenseSet<Operation *> seenOps;
-  while (!queue.empty()) {
-    Value currentValue = queue.back();
-    queue.pop_back();
-    getForwardSlice(currentValue, &forwardSlice);
-    for (Operation *op : forwardSlice) {
-      // HACK: Stop propagation if the ReduceOp is using mma layout but is
-      // producing tensor smaller than the layout we would like to propagate.
-      // This is to avoid stepping into the known bug.
-      if (isa<mlir::triton::ReduceOp>(op)) {
-        auto tensorType =
-            dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-        if (tensorType &&
-            isa<NvidiaMmaEncodingAttr>(tensorType.getEncoding())) {
-          auto mmaInstrShape =
-              cast<NvidiaMmaEncodingAttr>(encoding).getInstrShape();
-          if (tensorType.getShape()[tensorType.getRank() - 2] <
-                  mmaInstrShape[0] ||
-              tensorType.getShape()[tensorType.getRank() - 1] <
-                  mmaInstrShape[1]) {
-            return false;
-          }
-        }
-      }
-
-      if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
-        Attribute dstEncoding = convertOp.getType().getEncoding();
-        if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding))
-          return (mmaLayout.getVersionMajor() > 1) ? true
-                                                   : mmaLayout == encoding;
-        if (isa<triton::gpu::AMDMfmaEncodingAttr,
-                triton::gpu::AMDWmmaEncodingAttr>(dstEncoding))
-          return true;
-        if (isa<triton::gpu::DotOperandEncodingAttr>(dstEncoding)) {
-          if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
-            return mmaLayout.getVersionMajor() > 1;
-          } else {
-            assert((mlir::isa<triton::gpu::AMDMfmaEncodingAttr,
-                              triton::gpu::AMDWmmaEncodingAttr>(encoding)));
-            return true;
-          }
-        }
-      }
-
-      // If an op is visited more than once, it indicates a loop and that
-      // mulitple operands of the op share the same mma layout. Allow the
-      // propagation to avoid unncessary layout conversion within the loop.
-      if (op->hasTrait<OpTrait::Elementwise>()) {
-        if (!seenOps.insert(op).second == true)
-          return true;
-      }
-
-      bool isMMAV3 =
-          isa<NvidiaMmaEncodingAttr>(encoding) &&
-          cast<NvidiaMmaEncodingAttr>(encoding).getVersionMajor() == 3;
-      if (isMMAV3 && (isa<LocalAllocOp>(op) || isa<LocalStoreOp>(op)))
-        return true;
-      auto yield = dyn_cast<scf::YieldOp>(op);
-      if (!yield)
-        continue;
-      if (auto ifOp = dyn_cast<scf::IfOp>(yield->getParentOp())) {
-        for (OpOperand &operand : yield->getOpOperands()) {
-          Operation *def = operand.get().getDefiningOp();
-          if (def &&
-              (forwardSlice.count(def) || operand.get() == currentValue) &&
-              (seen.insert(operand.get()).second == true))
-            queue.push_back(ifOp.getResult(operand.getOperandNumber()));
-        }
-      }
-      auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
-      if (!forOp)
-        continue;
-      for (OpOperand &operand : yield->getOpOperands()) {
-        Operation *def = operand.get().getDefiningOp();
-        if (def && (forwardSlice.count(def) || operand.get() == currentValue) &&
-            (seen.insert(operand.get()).second == true))
-          queue.push_back(forOp.getRegionIterArg(operand.getOperandNumber()));
-      }
-    }
-  }
-  return false;
-}
-
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
@@ -272,18 +183,8 @@ bool isLayoutAnchor(Operation *op) {
 }
 
 void LayoutPropagation::initAnchorLayout() {
-  auto maybeAddAnchor = [&](Value v) {
+  auto addAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
-      // Workaround, don't popagate MMA layout unless there is a convert
-      // back to mma further down to avoid generating reduction with MMA
-      // layout that may have lower performance.
-      // This can be improved with more aggressive backward propagation.
-      if (isa<MmaEncodingTrait>(tensorType.getEncoding()) &&
-          v.getDefiningOp() &&
-          !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
-                                          tensorType.getEncoding())) {
-        return;
-      }
       layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
     }
   };
@@ -292,13 +193,13 @@ void LayoutPropagation::initAnchorLayout() {
   // you can pass a tensor with an encoding as an arg, instead of explicitly
   // calling tt.load.
   for (auto arg : funcOp.getArguments()) {
-    maybeAddAnchor(arg);
+    addAnchor(arg);
   }
 
   funcOp.walk([&](Operation *op) {
     if (isLayoutAnchor(op)) {
       for (auto result : op->getResults()) {
-        maybeAddAnchor(result);
+        addAnchor(result);
       }
     }
   });

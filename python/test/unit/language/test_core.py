@@ -3222,21 +3222,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
                          w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), **kern_kwargs)
 
-    if epilogue == 'softmax' and (in_dtype != 'float32' or input_precision == "tf32"):
-        if not is_cuda():
-            pass
-        else:
-            ptx = pgm.asm["ptx"]
-            start = ptx.find("shfl.sync.bfly")
-            end = ptx.find("cvt.rn.f16.f32")
-            red_code = ptx[start:end]
-            assert len(red_code) > 0
-
-            # skip this check on hopper because there are some functions whose name contain "shared" in ptx.
-            # TODO: we should eliminate these unused functions in ptx code.
-            if not (capability[0] >= 9):
-                assert "shared" not in red_code
-            assert "bar.sync" not in red_code
     # torch result
     if in_dtype == 'int8':
         z_ref = np.matmul(x.astype(np.float32), y.astype(np.float32())).astype(np.int32)
