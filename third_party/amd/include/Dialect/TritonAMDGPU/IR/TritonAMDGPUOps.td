@@ -60,42 +60,59 @@ def TritonAMDGPU_ViewSliceOp
                                      OffsetSizeAndStrideOpInterface, Pure]> {
   let summary = "view slice operation";
   let description = [{
-    The "view_slice" operation enables "viewing" a slice of a tensor in
+    The "view_slice" operation enables viewing a slice of a tensor in
     registers without data exchange.
 
     The "view_slice" operation supports the following arguments:
 
-    * source: the base tensor on which to create a "view" tensor
-    * offsets: offsets into the base tensor at which to create the "view"
+    * source: the base tensor on which to create a view tensor
+    * offsets: offsets into the base tensor at which to create the view
     * size: size of the result "view" tensor
     * strides: the number of strides for each dimension
-
-    Currently only 2D tensors are supported.
 
     Example 1:
 
     ```mlir
-    %1 = triton_gpu.convert_layout %0 : tensor<128x128x!tt.ptr<f16>, #blocked>
-        -> tensor<128x128x!tt.ptr<f16>, #blocked2>
+    #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8],
+        threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
+    #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 8],
+        threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [0, 1]}>
+    %1 = triton_gpu.convert_layout %0 : tensor<128x128xf16, #blocked>
+        -> tensor<128x128xf16, #blocked1>
     // create a slice of base tensor %1 with
     // static offsets and sizes for each dimension
-    %2 = amdgpu.view_slice %0[0, 0] [128, 8] [1, 1] :
-      tensor<128x128x!tt.ptr<f16>, #blocked2> to
-      tensor<128x8x!tt.ptr<f16>, #blocked2>
+    %2 = amdgpu.view_slice %0[0, 0] [128, 32] [1, 1] :
+      tensor<128x128xf16, #blocked1> to tensor<128x32xf16, #blocked1>
     ```
+
+    Example 1 shows how "view_slice" operation may be used. In this example a
+    new view of 128x32 is created. "view_slice" works on tensors with layout
+    where the desired slice has the same layout as the source tensor.
+    "%0" cannot be sliced directly as the resulting slice cannot have the same
+    layout as "%0". Therefore it needs to be converted to a layout suitable
+    for slicing. "#blocked1" layout is appropriate for this as it keeps the
+    sizePerThread the same thus keeping coalescing properties the same.
+    In order to utilize all threads in a warp, "threadsPerWarp" is set to
+    [16,4] for this new layout. This layout conversion carried out before
+    using "view_slice" ensures slicing still uses all threads efficiently.
     }];
 
-  let arguments = (ins AnyRankedTensor:$source, Variadic<I32>:$offsets,
-      Variadic<I32>:$sizes, Variadic<I32>:$strides,
-      DenseI64ArrayAttr:$static_offsets, DenseI64ArrayAttr:$static_sizes,
+  let arguments = (ins AnyRankedTensor:$source,
+      Variadic<I32>:$offsets,
+      Variadic<I32>:$sizes,
+      Variadic<I32>:$strides,
+      DenseI64ArrayAttr:$static_offsets,
+      DenseI64ArrayAttr:$static_sizes,
       DenseI64ArrayAttr:$static_strides);
   let results = (outs AnyRankedTensor:$result);
 
   let builders = [
       // Build a ViewSliceOp with mixed static and dynamic entries and the same
       // result type
-      OpBuilder<(ins "RankedTensorType":$resultType, "Value":$source,
-          "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
+      OpBuilder<(ins "RankedTensorType":$resultType,
+          "Value":$source,
+          "ArrayRef<OpFoldResult>":$offsets,
+          "ArrayRef<OpFoldResult>":$sizes,
           "ArrayRef<OpFoldResult>":$strides,
           CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
   ];
