@@ -83,6 +83,8 @@ class ASTSource:
                     raise TypeError("Constants keys must be string")
         if self.attrs is None:
             self.attrs = AttrsDescriptor()
+        elif isinstance(self.attrs, dict):
+            self.attrs = AttrsDescriptor.from_dict(self.attrs)
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
