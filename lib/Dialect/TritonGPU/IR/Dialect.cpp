@@ -2153,6 +2153,25 @@ NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
   return sizePerThread;
 }
 
+// Temporary solution for fetching the number of elements processed by a thread
+// in a single pseudo-tile during an MFMA dot operation. "Pseudo-tile" refers to
+// a conceptual grouping rather than an actual hardware tile, defined by the
+// kWidth parameter.
+// This function is a temporary workaround because getSizePerThreadForOperands
+// does not currently consider the kWidth parameter (an update is in progress to
+// address this). Once support for kWidth is added, this function should be
+// removed.
+SmallVector<unsigned> sizePerThreadMFMADot(unsigned opIdx, unsigned kWidth) {
+  if (opIdx == 0) {
+    return {1, kWidth};
+  } else if (opIdx == 1) {
+    return {kWidth, 1};
+  } else {
+    llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
+    return {};
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // DotOperand Encoding
 //===----------------------------------------------------------------------===//

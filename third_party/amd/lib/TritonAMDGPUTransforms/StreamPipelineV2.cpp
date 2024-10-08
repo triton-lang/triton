@@ -307,7 +307,6 @@ void StreamPipeliner::assignMemoryLayouts() {
         cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
     unsigned width = vec * pointeeTy.getIntOrFloatBitWidth();
 
-
     if (use->hasTrait<OpTrait::DotLike>()) {
       // Only use shared memory when feeding into a dot op.
       loadInfo.usedByDot = true;
