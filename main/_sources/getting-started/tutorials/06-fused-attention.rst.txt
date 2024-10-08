@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-644
+.. GENERATED FROM PYTHON SOURCE LINES 15-642
 
 
 
@@ -65,25 +65,25 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     113.564986     94.124970
-    1   2048.0     139.705277    111.020471
-    2   4096.0     154.671633    123.261025
-    3   8192.0     166.726657    131.660816
-    4  16384.0     171.111961    134.382909
+    0   1024.0     114.342649     94.074265
+    1   2048.0     140.979453    110.959557
+    2   4096.0     155.100251    124.212683
+    3   8192.0     168.018938    130.665983
+    4  16384.0     173.102721    135.975491
     fused-attention-batch4-head32-d64-fwd-causal=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     157.875282    127.757317
-    1   2048.0     170.007438    127.047472
-    2   4096.0     169.996709    129.476422
-    3   8192.0     171.387363    134.039007
-    4  16384.0     174.432625    134.913371
+    0   1024.0     157.867899    128.227739
+    1   2048.0     165.972859    127.012929
+    2   4096.0     170.124653    131.155858
+    3   8192.0     173.479956    134.412629
+    4  16384.0     174.478689    135.524271
     fused-attention-batch4-head32-d64-bwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      77.238829     75.705517
-    1   2048.0     102.225296    101.662653
-    2   4096.0     120.205958    120.416569
-    3   8192.0     129.067921    132.883907
-    4  16384.0     135.048276    137.894333
+    0   1024.0      77.001326     76.141416
+    1   2048.0     102.056753    101.794350
+    2   4096.0     120.252830    120.387348
+    3   8192.0     129.327541    131.781422
+    4  16384.0     136.585787    137.942166
 
 
 
@@ -683,8 +683,6 @@ Extra Credits:
     @triton.testing.perf_report(configs)
     def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device="cuda"):
         assert mode in ["fwd", "bwd"]
-        warmup = 25
-        rep = 100
         dtype = torch.float16
         if "triton" in provider:
             q = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
@@ -702,7 +700,7 @@ Extra Credits:
                 o = fn()
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
-            ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+            ms = triton.testing.do_bench(fn)
         if provider == "flash":
             qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
             fn = lambda: flash_attn_func(qkv, causal=causal)
@@ -710,7 +708,7 @@ Extra Credits:
                 o = fn()
                 do = torch.randn_like(o)
                 fn = lambda: o.backward(do, retain_graph=True)
-            ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+            ms = triton.testing.do_bench(fn)
         flops_per_matmul = 2.0 * BATCH * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:
@@ -727,7 +725,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 52.092 seconds)
+   **Total running time of the script:** (0 minutes 51.336 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
