@@ -278,6 +278,8 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
+    // Contiguity assumes an increasing sequence. So for SubIOp contiguous
+    // RHS doesn't produce a contiguous result.
     if (isa<arith::SubIOp>(op))
       return gcd(lhs.getContiguity(dim), rhs.getConstancy(dim));
 

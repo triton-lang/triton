@@ -226,7 +226,7 @@ def test_iv_dependent_matmul(type, device):
     torch.testing.assert_close(torch_output, triton_output, rtol=1e-2, atol=1e-2)
 
 
-def test_flip(device):
+def test_reverse_range(device):
 
     @triton.jit
     def kernel(in_ptr, out_ptr):
