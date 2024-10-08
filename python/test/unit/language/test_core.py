@@ -3319,7 +3319,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     (M, N, K, col_a, col_b, type_a, type_b, 4)
     for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
     for col_a, col_b in itertools.product([True, False], repeat=2)
-    # We don't test e5m2 as it seems to overflow more easily
+    # We don't test e5m2 as its range + the uniform sampling overflows easily
     # Tested locally and it works fine other than for ~10 entries out of 10_000
     # which are of the size of 10**30
     for type_a in ["e4m3"]
@@ -3421,7 +3421,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
         # Multiplication preserves infs and NaNs in x_bf16
         mxfp = x_bf16 * scale_bf16
         # If scale is NaN, we encode it as an bf16 inf, so we need to correct for that
-        mxfp = tl.where(scale == 0xFF, bf16(float("nan")), mxfp)
+        mxfp = tl.where(scale == 0xFF, float("nan"), mxfp)
 
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         tl.store(mxfp_ptr + offsets, tl.ravel(mxfp), mask=offsets < N * 32)
