@@ -121,10 +121,10 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
             gf.dataframe.loc[internal_frame_indices, "util (inc)"] = np.nan
             derived_metrics.append("util (inc)")
-        elif metric in derivable_metrics:
-            deriveable_metric = derivable_metrics[metric]
-            metric_name = deriveable_metric.name
-            metric_factor_dict = deriveable_metric.factor
+        elif metric in derivable_metrics:  # flop<width>/s, <t/g>byte/s
+            derivable_metric = derivable_metrics[metric]
+            metric_name = derivable_metric.name
+            metric_factor_dict = derivable_metric.factor
             matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
             gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] / (get_time_seconds(gf.dataframe)) /
                                                metric_factor_dict[metric])
@@ -134,7 +134,6 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) /
                                                time_factor_dict.factor[metric_time_unit])
             derived_metrics.append(f"{metric} (inc)")
-            metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['count'] /
@@ -144,9 +143,10 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
         else:
             original_metrics.append(metric)
         if metric not in exclusive_metrics:
-            single_frame = gf.dataframe[metric_name]
-            total = gf.dataframe[metric_name].iloc[0]
-            metric = metric.split("/")[0]
+            metric_name = metric.split("/")[0]
+            matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
+            single_frame = gf.dataframe[matched_metric_name]
+            total = gf.dataframe[matched_metric_name].iloc[0]
             gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
             derived_metrics.append(f"{metric}/% (inc)")
     if original_metrics:
