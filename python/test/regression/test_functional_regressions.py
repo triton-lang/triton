@@ -224,3 +224,18 @@ def test_iv_dependent_matmul(type, device):
         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K, type=type,  #
         num_stages=num_stages)
     torch.testing.assert_close(torch_output, triton_output, rtol=1e-2, atol=1e-2)
+
+
+def test_flip(device):
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr):
+        x0 = tl.arange(0, 512)
+        tmp0 = tl.load(in_ptr + (512 - x0))
+        tl.store(out_ptr + x0, tmp0)
+
+    data = torch.randn((516, ), dtype=torch.float32, device=device)
+    res = torch.empty((512, ), dtype=torch.float32, device=device)
+    kernel[(1, )](data, res)
+    ref = torch.flip(data[1:513], [0])
+    assert (res == ref).all()
