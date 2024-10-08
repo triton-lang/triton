@@ -60,9 +60,10 @@ class Autotuner(KernelInterface):
 
             def _pre_hook(args, reset_only=False):
                 for i in self.reset_idx:
-                    args[i].zero_()
+                    if args[i] is not None:
+                        args[i].zero_()
                 if not reset_only:
-                    self.restore_copies = [args[i].clone() for i in self.restore_idx]
+                    self.restore_copies = [args[i].clone() if args[i] is not None else None for i in self.restore_idx]
 
             self.pre_hook = _pre_hook
 
@@ -72,7 +73,8 @@ class Autotuner(KernelInterface):
 
             def _post_hook(args, exception):
                 for i, j in enumerate(self.restore_idx):
-                    args[j].copy_(self.restore_copies[i])
+                    if args[j] is not None:
+                        args[j].copy_(self.restore_copies[i])
                 self.restore_copies = []
 
             self.post_hook = _post_hook
