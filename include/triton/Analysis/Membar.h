@@ -10,30 +10,38 @@ namespace mlir {
 
 class OpBuilder;
 
-struct BlockInfo {
-  using IntervalSetT = std::set<Interval<size_t>>;
+/// Callback to allow backend to provide more information on whether a barrier
+/// is needed between two operations. Even though two operations access the same
+/// shared memory thay may not require a barrier in between them.
+using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
-  IntervalSetT syncReadIntervals;
-  IntervalSetT syncWriteIntervals;
+struct BlockInfo {
+  using IntervalMapT = std::map<Interval<size_t>, std::set<Operation *>>;
+
+  IntervalMapT syncReadIntervals;
+  IntervalMapT syncWriteIntervals;
 
   BlockInfo() = default;
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
-    syncReadIntervals.insert(other.syncReadIntervals.begin(),
-                             other.syncReadIntervals.end());
-    syncWriteIntervals.insert(other.syncWriteIntervals.begin(),
-                              other.syncWriteIntervals.end());
+    for (auto &interval : other.syncReadIntervals)
+      syncReadIntervals[interval.first].insert(interval.second.begin(),
+                                               interval.second.end());
+    for (auto &interval : other.syncWriteIntervals)
+      syncWriteIntervals[interval.first].insert(interval.second.begin(),
+                                                interval.second.end());
     return *this;
   }
 
   /// Returns true if intervals in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other) const {
-    return /*RAW*/ isIntersected(syncWriteIntervals, other.syncReadIntervals) ||
+  bool isIntersected(const BlockInfo &other, MembarFilterFn filter) const {
+    return /*RAW*/ isIntersected(syncWriteIntervals, other.syncReadIntervals,
+                                 filter) ||
            /*WAR*/
-           isIntersected(syncReadIntervals, other.syncWriteIntervals) ||
+           isIntersected(syncReadIntervals, other.syncWriteIntervals, filter) ||
            /*WAW*/
-           isIntersected(syncWriteIntervals, other.syncWriteIntervals);
+           isIntersected(syncWriteIntervals, other.syncWriteIntervals, filter);
   }
 
   /// Clears the intervals because a barrier is inserted.
@@ -51,12 +59,17 @@ struct BlockInfo {
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
-  bool isIntersected(const IntervalSetT &lhsIntervalSet,
-                     const IntervalSetT &rhsIntervalSet) const {
+  bool isIntersected(const IntervalMapT &lhsIntervalSet,
+                     const IntervalMapT &rhsIntervalSet,
+                     MembarFilterFn filter) const {
     for (auto &lhs : lhsIntervalSet)
       for (auto &rhs : rhsIntervalSet)
-        if (lhs.intersects(rhs))
-          return true;
+        if (lhs.first.intersects(rhs.first))
+          for (auto lhsOp : lhs.second)
+            for (auto rhsOp : rhs.second)
+              if (!filter || !filter(lhsOp, rhsOp))
+                return true;
+
     return false;
   }
 };
@@ -81,7 +94,8 @@ public:
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
   MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation) : allocation(allocation) {}
+  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
+      : allocation(allocation), filter(filter) {}
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
@@ -116,6 +130,7 @@ private:
 
 private:
   Allocation *allocation = nullptr;
+  MembarFilterFn filter = nullptr;
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
@@ -125,9 +140,10 @@ private:
 /// before and after function calls, but might be a bit conservative.
 class ModuleMembarAnalysis : public CallGraph<BlockInfo> {
 public:
-  ModuleMembarAnalysis(ModuleAllocation *moduleAllocation)
+  ModuleMembarAnalysis(ModuleAllocation *moduleAllocation,
+                       MembarFilterFn filter = nullptr)
       : CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
-        moduleAllocation(moduleAllocation) {}
+        moduleAllocation(moduleAllocation), filter(filter) {}
 
   void run() {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -138,7 +154,7 @@ public:
           auto *allocation = moduleAllocation->getFuncData(funcOp);
           auto [it, inserted] = funcMap.try_emplace(funcOp, BlockInfo());
           if (inserted) {
-            MembarAnalysis analysis(allocation);
+            MembarAnalysis analysis(allocation, filter);
             analysis.run(funcMap);
           }
         });
@@ -146,6 +162,7 @@ public:
 
 private:
   ModuleAllocation *moduleAllocation;
+  MembarFilterFn filter;
 };
 
 } // namespace mlir

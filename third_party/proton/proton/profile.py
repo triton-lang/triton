@@ -42,7 +42,7 @@ def start(
         name (str, optional): The name (with path) of the profiling session.
                               If not provided, the default name is "~/proton.hatchet".
         backend (str, optional): The backend to use for profiling.
-                                 Available options are ["cupti"].
+                                 Available options are [None, "cupti", "cupti_pcsampling", "roctracer"].
                                  Defaults to None, which automatically selects the backend matching the current active runtime.
         context (str, optional): The context to use for profiling.
                                  Available options are ["shadow", "python"].

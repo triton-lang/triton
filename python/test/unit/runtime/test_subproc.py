@@ -3,6 +3,7 @@ import shutil
 
 import triton
 import triton.language as tl
+from triton.backends.compiler import AttrsDescriptor
 from triton.compiler import ASTSource
 
 target = triton.runtime.driver.active.get_current_target()
@@ -17,15 +18,15 @@ def compile_fn(attrs):
 
     src = ASTSource(
         fn=kernel_sub,
-        constants={3: 32},
-        signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
+        constants={'N': 32},
+        signature={'a': "*fp32", 'b': "*fp32", 'o': "*fp32"},
         attrs=attrs,
     )
     triton.compile(src=src, target=target)
 
 
 def test_compile_in_subproc() -> None:
-    config = triton.compiler.AttrsDescriptor(tuple(range(4)), ())
+    config = AttrsDescriptor.from_hints({i: 16 for i in range(4)})
     multiprocessing.set_start_method('fork')
     proc = multiprocessing.Process(target=compile_fn, args=(config, ))
     proc.start()
@@ -42,12 +43,12 @@ def compile_fn_dot(attrs):
         z = tl.dot(z, z)
         tl.store(Z + offs, z)
 
-    src = ASTSource(fn=kernel_dot, signature={0: "*fp32"}, attrs=attrs, constants=dict())
+    src = ASTSource(fn=kernel_dot, signature={'Z': "*fp32"}, attrs=attrs, constants={})
     triton.compile(src=src, target=target)
 
 
 def test_compile_in_forked_subproc(fresh_triton_cache) -> None:
-    config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
+    config = AttrsDescriptor.from_hints({0: 16})
     assert multiprocessing.get_start_method() == 'fork'
     proc = multiprocessing.Process(target=compile_fn_dot, args=(config, ))
     proc.start()
@@ -63,7 +64,7 @@ def compile_empty_kernel_with_gc(attrs):
 
     import gc
     gc.collect()
-    src = ASTSource(fn=empty_kernel, signature={}, attrs=attrs, constants=dict())
+    src = ASTSource(fn=empty_kernel, signature={}, attrs=attrs, constants={})
     triton.compile(src=src, target=target)
 
 
@@ -86,7 +87,7 @@ def test_compile_in_forked_subproc_with_forced_gc(fresh_triton_cache) -> None:
     gc.disable()
 
     # stage 1.p
-    config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
+    config = AttrsDescriptor.from_hints({0: 16})
     compile_empty_kernel_with_gc(config)
 
     # stage 2.p

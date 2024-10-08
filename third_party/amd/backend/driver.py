@@ -484,6 +484,10 @@ class HIPDriver(GPUDriver):
         self.utils = HIPUtils()
         self.launcher_cls = HIPLauncher
 
+    def get_device_interface(self):
+        import torch
+        return torch.cuda
+
     @staticmethod
     def is_active():
         import torch
@@ -495,3 +499,7 @@ class HIPDriver(GPUDriver):
         arch = device_properties['arch']
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench

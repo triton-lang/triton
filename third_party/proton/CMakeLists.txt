@@ -40,6 +40,11 @@ if(APPLE)
   set(PROTON_PYTHON_LDFLAGS "-undefined dynamic_lookup")
 endif()
 
+if(DEFINED CUPTI_LIB_DIR)
+  message(STATUS "CUPTI lib directory: ${CUPTI_LIB_DIR}")
+  add_compile_definitions(CUPTI_LIB_DIR=${CUPTI_LIB_DIR})
+endif()
+
 include_directories(${CUPTI_INCLUDE_DIR})
 include_directories(SYSTEM ${ROCTRACER_INCLUDE_DIR})
 target_compile_definitions(proton PRIVATE __HIP_PLATFORM_AMD__)

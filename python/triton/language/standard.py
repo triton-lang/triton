@@ -335,7 +335,7 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     ileft = left.to(idtype, bitcast=True)
     iright = right.to(idtype, bitcast=True)
     ix = x.to(idtype, bitcast=True)
-    ret = ix ^ core.where((left > right) ^ flip, ileft ^ iright, zeros_like(ix))
+    ret = ix ^ core.where((left > right) != flip, ileft ^ iright, zeros_like(ix))
     return ret.to(x.dtype, bitcast=True)
 
 

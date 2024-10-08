@@ -43,7 +43,7 @@ def get_min_time_flops(df, device_info):
             num_sms = device_info[device_type][device_index]["num_sms"]
             clock_rate = device_info[device_type][device_index]["clock_rate"]
             for width in TritonHook.flops_width:
-                idx = df["DeviceId"] == device_index
+                idx = df["device_id"] == device_index
                 device_frames = df[idx]
                 if f"flops{width}" not in device_frames.columns:
                     continue
@@ -72,7 +72,7 @@ def get_min_time_bytes(df, device_info):
     min_time_bytes = pd.DataFrame(0.0, index=df.index, columns=["min_time"])
     for device_type in device_info:
         for device_index in device_info[device_type]:
-            idx = df["DeviceId"] == device_index
+            idx = df["device_id"] == device_index
             device_frames = df[idx]
             memory_clock_rate = device_info[device_type][device_index]["memory_clock_rate"]  # in khz
             bus_width = device_info[device_type][device_index]["bus_width"]  # in bits
@@ -105,7 +105,8 @@ for width in TritonHook.flops_width:
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
     original_metrics = []
-    internal_frame_indices = gf.dataframe["DeviceId"].isna()
+    exclusive_metrics = ["util"] + list(derivable_metrics.keys()) + list(avg_time_factor_dict.factor.keys())
+    internal_frame_indices = gf.dataframe["device_id"].isna()
 
     def get_time_seconds(df):
         time_metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
@@ -133,15 +134,21 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) /
                                                time_factor_dict.factor[metric_time_unit])
             derived_metrics.append(f"{metric} (inc)")
+            metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
-            gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['Count'] /
+            gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['count'] /
                                                avg_time_factor_dict.factor[metric_time_unit])
             gf.dataframe.loc[internal_frame_indices, f"{metric} (inc)"] = np.nan
             derived_metrics.append(f"{metric} (inc)")
         else:
             original_metrics.append(metric)
-
+        if metric not in exclusive_metrics:
+            single_frame = gf.dataframe[metric_name]
+            total = gf.dataframe[metric_name].iloc[0]
+            metric = metric.split("/")[0]
+            gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
+            derived_metrics.append(f"{metric}/% (inc)")
     if original_metrics:
         original_metrics = match_available_metrics(original_metrics, raw_metrics)
     return derived_metrics + original_metrics
@@ -180,7 +187,7 @@ WHERE p."name" =~ "{exclude}"
     return gf
 
 
-def parse(metrics, filename, include, exclude, threshold, depth, format):
+def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)
@@ -190,10 +197,10 @@ def parse(metrics, filename, include, exclude, threshold, depth, format):
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
-        emitWarnings(gf, metrics)
+        emit_warnings(gf, metrics)
 
 
-def emitWarnings(gf, metrics):
+def emit_warnings(gf, metrics):
     if "bytes (inc)" in metrics:
         byte_values = gf.dataframe["bytes (inc)"].values
         min_byte_value = np.nanmin(byte_values)
@@ -209,7 +216,6 @@ def show_metrics(file_name):
             for raw_metric in raw_metrics:
                 raw_metric_no_unit = raw_metric.split("(")[0].strip().lower()
                 print(f"- {raw_metric_no_unit}")
-        return
 
 
 def main():
@@ -228,6 +234,10 @@ Derived metrics can be created when source metrics are available.
 - flop[<8/16/32/64>]/s, gflop[<8/16/32/64>]/s, tflop[<8/16/32/64>]/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
+
+For inclusive metrics (e.g. time) an additional column is printed showing the percentage
+each frame is of the full model.
+
 """,
     )
     argparser.add_argument(

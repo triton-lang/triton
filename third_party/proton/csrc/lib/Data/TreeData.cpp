@@ -180,66 +180,76 @@ void TreeData::dumpHatchet(std::ostream &os) const {
   jsonNodes[Tree::TreeNode::RootId] = &(output.back());
   std::set<std::string> valueNames;
   std::map<uint64_t, std::set<uint64_t>> deviceIds;
-  this->tree->template walk<Tree::WalkPolicy::PreOrder>(
-      [&](Tree::TreeNode &treeNode) {
-        const auto contextName = treeNode.name;
-        auto contextId = treeNode.id;
-        json *jsonNode = jsonNodes[contextId];
-        (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
-        (*jsonNode)["metrics"] = json::object();
-        for (auto [metricKind, metric] : treeNode.metrics) {
-          if (metricKind == MetricKind::Kernel) {
-            auto kernelMetric = std::dynamic_pointer_cast<KernelMetric>(metric);
-            auto duration = std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::Duration));
-            auto invocations = std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::Invocations));
-            auto deviceId = std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::DeviceId));
-            auto deviceType = std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::DeviceType));
-            auto deviceTypeName =
-                getDeviceTypeString(static_cast<DeviceType>(deviceType));
-            (*jsonNode)["metrics"]
-                       [kernelMetric->getValueName(KernelMetric::Duration)] =
-                           duration;
-            (*jsonNode)["metrics"]
-                       [kernelMetric->getValueName(KernelMetric::Invocations)] =
-                           invocations;
-            (*jsonNode)["metrics"]
-                       [kernelMetric->getValueName(KernelMetric::DeviceId)] =
-                           std::to_string(deviceId);
-            (*jsonNode)["metrics"]
-                       [kernelMetric->getValueName(KernelMetric::DeviceType)] =
-                           deviceTypeName;
-            valueNames.insert(
-                kernelMetric->getValueName(KernelMetric::Duration));
-            valueNames.insert(
-                kernelMetric->getValueName(KernelMetric::Invocations));
-            deviceIds.insert({deviceType, {deviceId}});
-          } else {
-            throw std::runtime_error("MetricKind not supported");
-          }
-        }
-        for (auto [_, flexibleMetric] : treeNode.flexibleMetrics) {
-          auto valueName = flexibleMetric.getValueName(0);
+  this->tree->template walk<Tree::WalkPolicy::PreOrder>([&](Tree::TreeNode
+                                                                &treeNode) {
+    const auto contextName = treeNode.name;
+    auto contextId = treeNode.id;
+    json *jsonNode = jsonNodes[contextId];
+    (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
+    (*jsonNode)["metrics"] = json::object();
+    for (auto [metricKind, metric] : treeNode.metrics) {
+      if (metricKind == MetricKind::Kernel) {
+        std::shared_ptr<KernelMetric> kernelMetric =
+            std::dynamic_pointer_cast<KernelMetric>(metric);
+        uint64_t duration =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
+        uint64_t invocations = std::get<uint64_t>(
+            kernelMetric->getValue(KernelMetric::Invocations));
+        uint64_t deviceId =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
+        uint64_t deviceType = std::get<uint64_t>(
+            kernelMetric->getValue(KernelMetric::DeviceType));
+        std::string deviceTypeName =
+            getDeviceTypeString(static_cast<DeviceType>(deviceType));
+        (*jsonNode)["metrics"]
+                   [kernelMetric->getValueName(KernelMetric::Duration)] =
+                       duration;
+        (*jsonNode)["metrics"]
+                   [kernelMetric->getValueName(KernelMetric::Invocations)] =
+                       invocations;
+        (*jsonNode)["metrics"]
+                   [kernelMetric->getValueName(KernelMetric::DeviceId)] =
+                       std::to_string(deviceId);
+        (*jsonNode)["metrics"]
+                   [kernelMetric->getValueName(KernelMetric::DeviceType)] =
+                       deviceTypeName;
+        valueNames.insert(kernelMetric->getValueName(KernelMetric::Duration));
+        valueNames.insert(
+            kernelMetric->getValueName(KernelMetric::Invocations));
+        deviceIds.insert({deviceType, {deviceId}});
+      } else if (metricKind == MetricKind::PCSampling) {
+        auto pcSamplingMetric =
+            std::dynamic_pointer_cast<PCSamplingMetric>(metric);
+        for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
+          auto valueName = pcSamplingMetric->getValueName(i);
           valueNames.insert(valueName);
           std::visit(
               [&](auto &&value) { (*jsonNode)["metrics"][valueName] = value; },
-              flexibleMetric.getValues()[0]);
+              pcSamplingMetric->getValues()[i]);
         }
-        (*jsonNode)["children"] = json::array();
-        auto children = treeNode.children;
-        for (auto _ : children) {
-          (*jsonNode)["children"].push_back(json::object());
-        }
-        auto idx = 0;
-        for (auto child : children) {
-          auto [index, childId] = child;
-          jsonNodes[childId] = &(*jsonNode)["children"][idx];
-          idx++;
-        }
-      });
+      } else {
+        throw std::runtime_error("MetricKind not supported");
+      }
+    }
+    for (auto [_, flexibleMetric] : treeNode.flexibleMetrics) {
+      auto valueName = flexibleMetric.getValueName(0);
+      valueNames.insert(valueName);
+      std::visit(
+          [&](auto &&value) { (*jsonNode)["metrics"][valueName] = value; },
+          flexibleMetric.getValues()[0]);
+    }
+    (*jsonNode)["children"] = json::array();
+    auto children = treeNode.children;
+    for (auto _ : children) {
+      (*jsonNode)["children"].push_back(json::object());
+    }
+    auto idx = 0;
+    for (auto child : children) {
+      auto [index, childId] = child;
+      jsonNodes[childId] = &(*jsonNode)["children"][idx];
+      idx++;
+    }
+  });
   // Hints for all available metrics
   for (auto valueName : valueNames) {
     output[Tree::TreeNode::RootId]["metrics"][valueName] = 0;
