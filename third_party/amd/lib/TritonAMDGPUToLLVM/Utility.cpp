@@ -7,6 +7,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeRange.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -457,6 +458,10 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
       Value vecData = bufferEmitter.emitMaskedBufferLoad(
           elemTy, basePtr, offset, pred, falseVal);
       vecData = bitcast(vecData, elemTy);
+      DenseIntElementsAttr constVal;
+      if (!matchPattern(falseVal, m_Constant(&constVal)) ||
+          !constVal.isSplat() || !constVal.getSplatValue<APInt>().isZero())
+        vecData = select(pred, vecData, falseVal);
       return vecData;
     }
   }

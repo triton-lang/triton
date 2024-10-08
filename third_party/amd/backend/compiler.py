@@ -268,9 +268,11 @@ class HIPBackend(BaseBackend):
         ##    For now it is used as a controller for developers only.
         __HIP_FTZ = True
 
-        ## enable_buffer_ops determines if using buffer operations while lowering
-        ## memory operations
-        enable_buffer_ops = True  #os.environ.get("AMDGCN_USE_BUFFER_OPS")
+        ## enable_buffer_ops determines if using buffer operations while
+        ## lowering memory operations. Given how young is the buffer intrinsic
+        ## support in Triton, we shield it behind this env variable. Once we
+        ## smooth all the edges, we should get rid of this
+        enable_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS")
 
         amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ, enable_buffer_ops)
         passes.common.add_canonicalizer(pm)

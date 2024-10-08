@@ -90,17 +90,13 @@ struct ConvertTritonAMDGPUToLLVM
       return signalPassFailure();
     }
 
-    // Given how young is the buffer intrinsic support in Triton, we shield it
-    // behind this variable. Once we smooth all the edges, we should get rid of
-    // this
-    bool enableBufferIntrinsics = this->enable_buffer_ops;
-
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 
     TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
 
+    bool enableBufferIntrinsics = this->enable_buffer_ops;
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
