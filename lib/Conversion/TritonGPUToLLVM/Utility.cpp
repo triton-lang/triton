@@ -536,13 +536,17 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 }
 
 bool isConstantZero(Value v) {
-  if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
+  if (auto constantOp = v.getDefiningOp<LLVM::ConstantOp>()) {
+    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue()))
       return attr.getValue().isZero();
-    }
-    if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
+    if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue()))
       return attr.getValue().isZero();
-    }
+    if (auto denseAttr =
+            dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
+      return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero();
+    if (auto denseAttr =
+            dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
+      return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
   }
   return false;
 }

@@ -235,7 +235,7 @@ LLVM::CallIntrinsicOp
 createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
                           TypeRange types, ValueRange args);
 
-// Is v an integer or floating-point scalar constant equal to 0?
+// Is v an integer or floating-point scalar or vector constant equal to 0?
 bool isConstantZero(Value v);
 
 /// Helper function to get strides from a given shape and its order

@@ -458,9 +458,8 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
       Value vecData = bufferEmitter.emitMaskedBufferLoad(
           elemTy, basePtr, offset, pred, falseVal);
       vecData = bitcast(vecData, elemTy);
-      DenseIntElementsAttr constVal;
-      if (!matchPattern(falseVal, m_Constant(&constVal)) ||
-          !constVal.isSplat() || !constVal.getSplatValue<APInt>().isZero())
+      DenseElementsAttr constVal;
+      if (!isConstantZero(falseVal))
         vecData = select(pred, vecData, falseVal);
       return vecData;
     }
