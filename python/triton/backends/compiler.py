@@ -5,7 +5,7 @@ import subprocess
 
 from abc import ABCMeta, abstractmethod, abstractclassmethod
 from dataclasses import dataclass
-from typing import Dict, Union
+from typing import Dict, List, Tuple, Union
 from types import ModuleType
 
 
@@ -146,7 +146,7 @@ class AttrsDescriptor:
         return attrsDescriptor
 
     @staticmethod
-    def from_hints(hints: list[tuple[int, int]]):
+    def from_hints(hints: List[Tuple[int, int]]):
         """
         Create the class from a set of hints that are passed in.
 

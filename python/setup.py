@@ -14,7 +14,7 @@ import json
 from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
-from typing import NamedTuple
+from typing import List, NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
@@ -32,8 +32,8 @@ import pybind11
 @dataclass
 class Backend:
     name: str
-    package_data: list[str]
-    language_package_data: list[str]
+    package_data: List[str]
+    language_package_data: List[str]
     src_dir: str
     backend_dir: str
     language_dir: str
