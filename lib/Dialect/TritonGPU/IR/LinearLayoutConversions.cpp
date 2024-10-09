@@ -781,7 +781,6 @@ LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
     for (auto &l : lanes) {
       std::swap(l[0], l[1]);
     }
-    std::swap(dimNames[0], dimNames[1]);
   }
 
   LinearLayout ctaLayout({{S("register"), registers}, {S("lane"), lanes}},
