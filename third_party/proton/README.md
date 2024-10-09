@@ -161,7 +161,6 @@ The following example demonstrates how to use instruction sampling:
 ```python
 import triton.profiler as proton
 
-
 proton.start(name="profile_name", context="shadow", backend="cupti_pcsampling")
 ```
 
