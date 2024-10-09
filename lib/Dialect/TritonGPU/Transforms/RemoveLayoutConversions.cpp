@@ -397,18 +397,47 @@ void LayoutPropagation::propagateLayout() {
   }
 }
 
+bool isCompatibleLayout(Value v, Attribute layout) {
+  auto tensorTy = dyn_cast<RankedTensorType>(v.getType());
+  if (!tensorTy)
+    return false;
+  auto rank = tensorTy.getRank();
+  auto shape = tensorTy.getShape();
+  if (auto mfma = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
+    if ((shape[rank - 2] != 1 && shape[rank - 2] < mfma.getMDim()) ||
+        (shape[rank - 1] != 1 && shape[rank - 1] < mfma.getNDim())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void LayoutPropagation::resolveConflicts() {
   for (auto &it : layouts) {
     Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
-    if (info.encodings.size() <= 1)
+    if (info.encodings.empty())
       continue;
+    // Filter incompatible layouts
+    llvm::SmallSetVector<Attribute, 8> candidateEncodings;
+    for (Attribute e : info.encodings) {
+      if (isCompatibleLayout(it.first, e))
+        candidateEncodings.insert(e);
+    }
+    if (candidateEncodings.empty()) {
+      // no compatible layouts, fallback to original layout
+      info.encodings.clear();
+      auto origEnc =
+          dyn_cast<RankedTensorType>(it.first.getType()).getEncoding();
+      info.encodings.insert(origEnc);
+      continue;
+    }
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
-    Attribute encoding = *info.encodings.begin();
+    Attribute encoding = *candidateEncodings.begin();
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
-    for (Attribute e : info.encodings) {
+    for (Attribute e : candidateEncodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
         encoding = e;
