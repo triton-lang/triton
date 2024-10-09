@@ -9,13 +9,13 @@ import triton.language as tl
 @contextmanager
 def enable_dump_context(pass_name="1"):
     try:
-        os.environ["MLIR_ENABLE_REMARK"] = pass_name
+        os.environ["MLIR_ENABLE_DUMP"] = pass_name
         yield
     finally:
-        os.environ["MLIR_ENABLE_REMARK"] = "0"
+        os.environ["MLIR_ENABLE_DUMP"] = "0"
 
 
-def test_fn_dump(capfd, device):
+def test_fn_dump(capfd, device, fresh_triton_cache):
     N = 1024
     src = torch.zeros(N, device=device)
 
@@ -31,6 +31,7 @@ def test_fn_dump(capfd, device):
         BLOCK_SIZE = 16
         _kernel[grid](src, N, BLOCK_SIZE)
     captured = capfd.readouterr()
+    print(captured.err)
     assert "IR Dump Before" in captured.err
     assert "tt.func public @_kernel" in captured.err
 
