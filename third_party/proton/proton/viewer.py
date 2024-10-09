@@ -140,7 +140,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe.loc[internal_frame_indices, f"{metric} (inc)"] = np.nan
             derived_metrics.append(f"{metric} (inc)")
         else:
-            metric_name = match_available_metrics(metric, raw_metrics)
+            metric_name = match_available_metrics([metric], raw_metrics)
             derived_metrics.append(metric_name)
         if metric not in exclusive_metrics:
             metric_name = metric.split("/")[0]
