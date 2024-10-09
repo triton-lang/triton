@@ -274,6 +274,7 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   }
 
   Py_END_ALLOW_THREADS;
+  Py_INCREF(Py_None);
   return Py_None;
 }
 
@@ -306,6 +307,7 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
     break;
   default:
     PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
+    return NULL;
   }
   assert((elementSize * tensorDim) >= 32 && "block size too small.");
   int rank = 1;
@@ -317,6 +319,7 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
       globalStrides, boxDim, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
+  Py_INCREF(Py_None);
   return Py_None;
 }
 
@@ -379,6 +382,7 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
       globalStrides, tensorDims, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
       CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
+  Py_INCREF(Py_None);
   return Py_None;
 }
 

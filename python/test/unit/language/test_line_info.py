@@ -172,12 +172,10 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "test_line_info.py", 16))
     elif func == "call":
         assert (check_file_lines(file_lines, "test_line_info.py", 28))
-        assert (check_file_lines(file_lines, "test_line_info.py", 21))
         assert (check_file_lines(file_lines, "test_line_info.py", 30))
     elif func == "call_noinline":
         assert (check_file_lines(file_lines, "test_line_info.py", 42))
         assert (check_file_lines(file_lines, "test_line_info.py", 35))
-        assert (check_file_lines(file_lines, "test_line_info.py", 36))
         assert (check_file_lines(file_lines, "test_line_info.py", 37))
     elif func == "autotune":
         assert (check_file_lines(file_lines, "test_line_info.py", 53))

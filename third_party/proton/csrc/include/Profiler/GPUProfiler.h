@@ -31,6 +31,16 @@ public:
                     std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
   using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
 
+  ConcreteProfilerT &enablePCSampling() {
+    pcSamplingEnabled = true;
+    return dynamic_cast<ConcreteProfilerT &>(*this);
+  }
+  ConcreteProfilerT &disablePCSampling() {
+    pcSamplingEnabled = false;
+    return dynamic_cast<ConcreteProfilerT &>(*this);
+  }
+  bool isPCSamplingEnabled() const { return pcSamplingEnabled; }
+
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
@@ -140,6 +150,8 @@ protected:
     ConcreteProfilerT &profiler;
   };
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
+
+  bool pcSamplingEnabled{false};
 };
 
 } // namespace proton

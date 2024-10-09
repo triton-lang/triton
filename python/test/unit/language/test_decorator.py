@@ -33,7 +33,9 @@ def test_triton_heuristic(device):
     src = torch.empty(N, device=device)
     dst = torch.zeros(N, device=device)
 
-    @triton.autotune(configs=[triton.Config(kwargs={'BLOCK_SIZE': 32})], key=['N'], warmup=1, rep=1)
+    do_bench = lambda kernel, quantiles: triton.testing.do_bench(kernel, quantiles=quantiles, warmup=1, rep=1)
+
+    @triton.autotune(configs=[triton.Config(kwargs={'BLOCK_SIZE': 32})], key=['N'], do_bench=do_bench)
     @triton.heuristics({'EVEN_N': lambda nargs: nargs['N'] % 2 == 0})  # test kwargs
     @triton.heuristics({'EVEN_src': lambda nargs: nargs['src'].data_ptr() % 2 == 0})  # test args
     @triton.jit

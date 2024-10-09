@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
+from . import runtime
 
 
 def nvsmi(attrs):
@@ -91,8 +92,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(torch.tensor(ret), quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-             device_type="cuda"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", device_type="cuda"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -107,14 +107,12 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :type grad_to_none: torch.tensor, optional
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float], optional
-    :param fast_flush: Use faster kernel to flush L2 cache between measurements
-    :type fast_flush: bool, default is True
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".    :type return_mode: str
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
     import torch
 
-    di = torch._dynamo.device_interface.get_interface_for_device(device_type)
+    di = runtime.driver.active.get_device_interface()
 
     fn()
     di.synchronize()
@@ -123,10 +121,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # before each kernel call to make sure that the L2 cache
     # doesn't contain any input data before the run
     cache_size = 256 * 1024 * 1024
-    if fast_flush:
-        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device_type)
-    else:
-        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device_type)
+    cache = torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')
 
     # Estimate the runtime of the function
     start_event = di.Event(enable_timing=True)

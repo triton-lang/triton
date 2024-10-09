@@ -3,7 +3,9 @@ Libdevice (`tl.extra.libdevice`) function
 ==============================
 Triton can invoke a custom function from an external library.
 In this example, we will use the `libdevice` library to apply `asin` on a tensor.
-Please refer to https://docs.nvidia.com/cuda/libdevice-users-guide/index.html (CUDA) and/or https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src (HIP) regarding the semantics of all available libdevice functions.
+
+Please refer to `CUDA libdevice-users-guide <https://docs.nvidia.com/cuda/libdevice-users-guide/index.html>`_ and/or `HIP device-lib source code <https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs/ocml/src>`_ regarding the semantics of all available libdevice functions.
+
 In `libdevice.py`, we try to aggregate functions with the same computation but different data types together.
 For example, both `__nv_asin` and `__nv_asinf` calculate the principal value of the arc sine of the input, but `__nv_asin` operates on `double` and `__nv_asinf` operates on `float`.
 Triton automatically selects the correct underlying device function to invoke based on input and output types.

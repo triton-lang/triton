@@ -18,8 +18,9 @@ using namespace mlir::triton;
 /// information.
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
+                   const TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps),
+        targetInfo(targetInfo) {}
 
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
@@ -38,12 +39,14 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   }
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
-                             ConversionPatternRewriter &rewriter) const {
+                             ConversionPatternRewriter &rewriter,
+                             const TargetInfoBase &targetInfo) const {
     // Push back a variable that indicates the current stack pointer of shared
     // memory to the function arguments.
     auto loc = funcOp.getLoc();
     auto ctx = funcOp->getContext();
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                            targetInfo.getSharedAddressSpace());
     // 1. Modify the function type to add the new argument.
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
@@ -109,7 +112,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
     if (!LLVM::isKernel(funcOp))
-      amendedFuncOp = amendFuncOp(funcOp, rewriter);
+      amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
 
     FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
         mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
@@ -150,12 +153,13 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
 private:
   int numWarps{0};
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
 void mlir::triton::populateFuncOpConversionPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    PatternBenefit benefit) {
-  patterns.add<FuncOpConversion>(typeConverter, numWarps, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<FuncOpConversion>(typeConverter, numWarps, targetInfo, benefit);
 }

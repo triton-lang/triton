@@ -7,7 +7,7 @@ class TmaDescKernelParam:
     TMA_DESC_SIZE = 128
 
     def __init__(self, ptr, dims, block_dims, element_size):
-        self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.int8, device="cpu")
+        self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
         assert len(dims) == len(block_dims)
         assert 1 <= len(dims) <= 2
         assert self.desc.data_ptr() % 64 == 0

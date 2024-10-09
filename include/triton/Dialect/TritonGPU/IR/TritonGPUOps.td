@@ -143,13 +143,27 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 
     Explicitly deallocating a buffer is optional; see local_dealloc.
   }];
-  let arguments = (ins Optional<TT_Tensor>:$src);
+  let arguments = (
+    ins
+    Optional<TT_Tensor>:$src,
+    OptionalAttr<I32Attr>:$alignment
+  );
+
+  let builders = [
+    OpBuilder<(ins "Type":$result),
+              [{ build($_builder, $_state, result, Value(), IntegerAttr()); }]>,
+    OpBuilder<(ins "Type":$result, "Value":$src),
+              [{ build($_builder, $_state, result, src, IntegerAttr()); }]>,
+    OpBuilder<(ins "Type":$result, "Value":$src, "int32_t":$alignment),
+              [{ build($_builder, $_state, result, src, $_builder.getI32IntegerAttr(alignment)); }]>
+  ];
 
   let extraClassDeclaration = [{
     bool isSharedMemoryAlloc() {
       return getType().getMemorySpace() &&
              isa<SharedMemorySpaceAttr>(getType().getMemorySpace());
     }
+    int32_t getAlignmentOrDefault();
   }];
   let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 

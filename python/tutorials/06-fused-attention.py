@@ -3,11 +3,13 @@ Fused Attention
 ===============
 
 This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf)
+
 Credits: OpenAI kernel team
 
 Extra Credits:
-- Original flash attention paper (https://arxiv.org/abs/2205.14135)
-- Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
+
+* Original flash attention paper (https://arxiv.org/abs/2205.14135)
+* Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
 """
 
@@ -584,7 +586,7 @@ for mode in ["fwd", "bwd"]:
                 line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
                 (["Flash-2"] if HAS_FLASH else []),
                 styles=[("red", "-"), ("blue", "-"), ("green", "-")],
-                ylabel="ms",
+                ylabel="TFLOPS",
                 plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}",
                 args={
                     "H": N_HEADS,
@@ -599,8 +601,6 @@ for mode in ["fwd", "bwd"]:
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device="cuda"):
     assert mode in ["fwd", "bwd"]
-    warmup = 25
-    rep = 100
     dtype = torch.float16
     if "triton" in provider:
         q = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
@@ -618,7 +618,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+        ms = triton.testing.do_bench(fn)
     if provider == "flash":
         qkv = torch.randn((BATCH, N_CTX, 3, H, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
         fn = lambda: flash_attn_func(qkv, causal=causal)
@@ -626,14 +626,14 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+        ms = triton.testing.do_bench(fn)
     flops_per_matmul = 2.0 * BATCH * H * N_CTX * N_CTX * HEAD_DIM
     total_flops = 2 * flops_per_matmul
     if causal:
         total_flops *= 0.5
     if mode == "bwd":
         total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
-    return total_flops / ms * 1e-9
+    return total_flops * 1e-12 / (ms * 1e-3)
 
 
 if __name__ == "__main__":
