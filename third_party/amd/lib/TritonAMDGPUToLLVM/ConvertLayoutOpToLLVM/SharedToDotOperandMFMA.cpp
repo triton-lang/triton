@@ -219,6 +219,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto kWidth = encoding.getKWidth();
   auto elemsPerInstr = mfmaLayout.getInstrShapeForOperand(kWidth, opIdx);
 
+  if (elemsPerInstr[nonKDimIdx] > shape[nonKDimIdx] ||
+      elemsPerInstr[kDimIdx] > shape[kDimIdx]) {
+    // This pattern does not support cases tensor shape is smaller than
+    // one instruction size, it will be processed by LinearLayout converter
+    return Value();
+  }
   int64_t mfmaInstrNonK;
   int64_t mfmaInstrK;
   // TODO(Lixun): make it simpler
