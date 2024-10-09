@@ -93,13 +93,10 @@ def test_mma_remark(capfd, fresh_triton_cache):
                     "stride_cn": "i32",
                 },
                 constants={},
-            )
-        )
+            ))
     captured = capfd.readouterr()
 
-    assert (
-        "remark: Warning: can't use MMA V3 for the dot op" in captured.err
-    ), "expect MMA V3 remark"
+    assert ("remark: Warning: can't use MMA V3 for the dot op" in captured.err), "expect MMA V3 remark"
     assert "note: see current operation:" in captured.err
 
 
@@ -146,9 +143,7 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
         )
 
     _, err = capfd.readouterr()
-    assert (
-        "remark: Warning: vectorization fails" in err
-    ), "expect vectorization failure remark"
+    assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
 
 
 def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
@@ -157,7 +152,7 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
     def kernel_pipe_error(in_ptr, out_ptr):
         SIZE: tl.constexpr = 64
         in_ptrs = in_ptr + tl.arange(0, SIZE)
-        val = tl.zeros((SIZE,), dtype=tl.float32)
+        val = tl.zeros((SIZE, ), dtype=tl.float32)
         k = 0
         for i in tl.range(0, 64, num_stages=3):
             in_ptrs = in_ptr + tl.arange(0, SIZE) + SIZE * k
