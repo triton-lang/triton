@@ -35,9 +35,9 @@ module attributes {"triton_gpu.target" = "hip:gfx942", "triton_gpu.num-ctas" = 1
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: triton_gpu.local_store
     // CHECK: scf.for
-    // CHECK:   tt.dot
-    // CHECK:   tt.dot
     // CHECK:   tt.load
+    // CHECK:   tt.dot
+    // CHECK:   tt.dot
     // CHECK:   triton_gpu.local_store
     // CHECK:   scf.yield
     %17:2 = scf.for %arg2 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg3 = %cst_1, %arg4 = %cst_2) -> (tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>)  : i32 {
@@ -164,12 +164,12 @@ module attributes {"triton_gpu.target" = "hip:gfx942", "triton_gpu.num-ctas" = 1
 
 // CHECK-LABEL: tt.func public @add_barrier_kernel
 // CHECK:  tt.load
+// CHECK:  gpu.barrier
 // CHECK:  scf.for
+// CHECK:    tt.load
 // CHECK:    gpu.barrier
 // CHECK:    tt.store
-// CHECK:    tt.load
 // CHECK:    scf.yield
-// CHECK:  gpu.barrier
 // CHECK:  tt.store
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
