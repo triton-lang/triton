@@ -140,16 +140,20 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe.loc[internal_frame_indices, f"{metric} (inc)"] = np.nan
             derived_metrics.append(f"{metric} (inc)")
         else:
-            metric_name = metric.split("/")[0]
-            matched_metric_name = match_available_metrics([metric], raw_metrics)[0]
+            metric_name_and_unit = metric.split("/")
+            metric_name = metric_name_and_unit[0]
+            if len(metric_name_and_unit) > 1:
+                metric_unit = metric_name_and_unit[1]
+                if metric_unit != "%":
+                    raise ValueError(f"Unsupported unit {metric_unit}")
+                matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
+                single_frame = gf.dataframe[matched_metric_name]
+                total = gf.dataframe[matched_metric_name].iloc[0]
+                gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
+                derived_metrics.append(f"{metric}/% (inc)")
+            else:
+                matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
             derived_metrics.append(matched_metric_name)
-        if metric not in exclusive_metrics:
-            metric_name = metric.split("/")[0]
-            matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
-            single_frame = gf.dataframe[matched_metric_name]
-            total = gf.dataframe[matched_metric_name].iloc[0]
-            gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
-            derived_metrics.append(f"{metric}/% (inc)")
     return derived_metrics
 
 
