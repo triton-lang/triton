@@ -104,7 +104,6 @@ for width in TritonHook.flops_width:
 
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
-    exclusive_metrics = ["util"] + list(derivable_metrics.keys()) + list(avg_time_factor_dict.factor.keys())
     internal_frame_indices = gf.dataframe["device_id"].isna()
 
     def get_time_seconds(df):
