@@ -237,7 +237,7 @@ Derived metrics can be created when source metrics are available.
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
 
-For inclusive metrics (e.g. time) an additional column (i.e. <metric-name>/%) can be printed to show the percentage
+For inclusive metrics (e.g. time) an additional column (i.e. metric-name/%) can be printed to show the percentage
 each frame is of the full model.
 
 """,
