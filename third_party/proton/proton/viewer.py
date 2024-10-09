@@ -104,7 +104,6 @@ for width in TritonHook.flops_width:
 
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
-    original_metrics = []
     exclusive_metrics = ["util"] + list(derivable_metrics.keys()) + list(avg_time_factor_dict.factor.keys())
     internal_frame_indices = gf.dataframe["device_id"].isna()
 
@@ -141,7 +140,8 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe.loc[internal_frame_indices, f"{metric} (inc)"] = np.nan
             derived_metrics.append(f"{metric} (inc)")
         else:
-            original_metrics.append(metric)
+            metric_name = match_available_metrics(metric, raw_metrics)
+            derived_metrics.append(metric_name)
         if metric not in exclusive_metrics:
             metric_name = metric.split("/")[0]
             matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
@@ -149,9 +149,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             total = gf.dataframe[matched_metric_name].iloc[0]
             gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
             derived_metrics.append(f"{metric}/% (inc)")
-    if original_metrics:
-        original_metrics = match_available_metrics(original_metrics, raw_metrics)
-    return derived_metrics + original_metrics
+    return derived_metrics
 
 
 def format_frames(gf, format):
