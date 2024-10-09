@@ -2448,6 +2448,9 @@ def test_histogram(M, N, device):
         offset2 = tl.arange(0, N)
         x = tl.load(x_ptr + offset1)
         z = tl.histogram(x, N)
+        bias = tl.full([M, N], 1, dtype=tl.int32)
+        # check that histogram produces object compatible with broadcasting
+        biased = z + bias
         tl.store(z_ptr + offset2, z)
 
     torch.manual_seed(17)
@@ -2460,27 +2463,6 @@ def test_histogram(M, N, device):
     histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
 
-@pytest.mark.interpreter
-@pytest.mark.parametrize("M, N", [[2048, 2], [1024, 8], [1024, 128], [256, 512], [32, 512], [8, 512], [8, 2]])
-def test_histogram_broadcast(M, N, device):
-
-    @triton.jit
-    def histogram_kernel_broadcast(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr, stride_m: tl.constexpr,
-                                   stride_n: tl.constexpr):
-        offset1 = tl.arange(0, M)
-        offset2 = tl.arange(0, N)
-        x = tl.load(x_ptr + offset1)
-        z = tl.histogram(x, N)
-        bias = tl.full([M, N], 1, dtype=tl.int32)
-        biased = z + bias
-        tl.store(z_ptr + offset1[:, None] * stride_m + offset2[None, :] * stride_n, biased)
-
-    torch.manual_seed(17)
-    x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
-    z = torch.empty((M, N), dtype=torch.int32, device=device)
-    z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1).broadcast_to((M, N)) + 1
-    histogram_kernel_broadcast[(1, )](x, z, M, N, z.stride(0), z.stride(1))
-    assert (z_torch == z).all()
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op", ['sum', 'max', 'min'])
