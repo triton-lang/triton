@@ -149,8 +149,7 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
                 matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
                 single_frame = gf.dataframe[matched_metric_name]
                 total = gf.dataframe[matched_metric_name].iloc[0]
-                gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
-                derived_metrics.append(f"{metric}/% (inc)")
+                gf.dataframe[f"{metric_name}/% (inc)"] = (single_frame / total) * 100.0
             else:
                 matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
             derived_metrics.append(matched_metric_name)
