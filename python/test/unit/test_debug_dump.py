@@ -1,8 +1,18 @@
 import os
+from contextlib import contextmanager
 
 import torch
 import triton
 import triton.language as tl
+
+
+@contextmanager
+def enable_dump_context(pass_name="1"):
+    try:
+        os.environ["MLIR_ENABLE_REMARK"] = pass_name
+        yield
+    finally:
+        os.environ["MLIR_ENABLE_REMARK"] = "0"
 
 
 def test_fn_dump(capfd, device):
