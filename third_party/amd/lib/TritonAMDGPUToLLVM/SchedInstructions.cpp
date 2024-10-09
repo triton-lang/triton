@@ -372,24 +372,44 @@ struct TritonAMDGPUInsertInstructionSchedHints
     });
   }
 
-  template <typename OpType>
-  llvm::SmallVector<OpType> getUsersOfType(Value value) const {
-    llvm::SmallVector<OpType> concreteUsers;
+  template <typename Type> bool isOf(Operation *op) const {
+    return llvm::dyn_cast<Type>(op) ? true : false;
+  }
+
+  template <typename... Types>
+  llvm::SmallVector<Operation *> getUsersOfTypes(Value value) const {
+    llvm::SmallVector<Operation *> concreteUsers;
     for (auto user : value.getUsers()) {
-      if (auto concreteUser = llvm::dyn_cast<OpType>(user))
-        concreteUsers.push_back(concreteUser);
+      std::vector<bool> values = {(isOf<Types>(user), ...)};
+      const auto isTypeOf =
+          llvm::any_of(values, [](bool value) { return value; });
+      if (isTypeOf)
+        concreteUsers.push_back(user);
     }
     return concreteUsers;
   }
 
-  // Go through a single use chain of `convert_layout` Ops to get the final
-  // value after all conversions
-  Value rewindConvertLayoutOps(Value value) const {
-    auto convertOps = getUsersOfType<triton::gpu::ConvertLayoutOp>(value);
-    while (!convertOps.empty()) {
-      assert(convertOps.size() == 1);
-      value = convertOps.begin()->getResult();
-      convertOps = getUsersOfType<triton::gpu::ConvertLayoutOp>(value);
+  template <typename Type>
+  llvm::SmallVector<Type> getUsersOfType(Value value) const {
+    auto users = getUsersOfTypes<Type>(value);
+    llvm::SmallVector<Type> concreteUsers;
+    for (auto user : getUsersOfTypes<Type>(value)) {
+      concreteUsers.push_back(cast<Type>(user));
+    }
+    return concreteUsers;
+  }
+
+  // Go through a single use chain of `convert_layout` and/or `fp_to_fp` Ops to
+  // get the final value after all conversions
+  Value rewindUnaryOps(Value value) const {
+    auto unaryOps =
+        getUsersOfTypes<triton::gpu::ConvertLayoutOp, triton::FpToFpOp>(value);
+    while (!unaryOps.empty()) {
+      assert(unaryOps.size() == 1);
+      value = unaryOps[0]->getResult(0);
+      unaryOps =
+          getUsersOfTypes<triton::gpu::ConvertLayoutOp, triton::FpToFpOp>(
+              value);
     }
     return value;
   }
@@ -457,7 +477,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
         }
       }
 
-      loopCarriedLoadValue = rewindConvertLayoutOps(loopCarriedLoadValue);
+      loopCarriedLoadValue = rewindUnaryOps(loopCarriedLoadValue);
       assert(loopCarriedLoadValue.hasOneUse());
 
       // Handle pipelining - i.e., `local_store`, `memdesc_subview`,
@@ -470,17 +490,27 @@ struct TritonAMDGPUInsertInstructionSchedHints
                              .getDefiningOp<triton::gpu::MemDescSubviewOp>();
         Value subviewResult = subviewOp.getResult();
         auto it = llvm::find(yieldedValues, subviewResult);
-        assert(it != yieldedValues.end());
-        size_t idx = std::distance(yieldedValues.begin(), it);
-        Value loopCarriedSubviewValue = initArgs[idx];
+        if (it != yieldedValues.end()) {
+          size_t idx = std::distance(yieldedValues.begin(), it);
+          Value loopCarriedSubviewValue = initArgs[idx];
 
-        auto subviewLoadOps =
-            getUsersOfType<triton::gpu::LocalLoadOp>(loopCarriedSubviewValue);
-        assert(subviewLoadOps.size() == 1);
-        localLoadOp = *subviewLoadOps.begin();
+          auto subviewLoadOps =
+              getUsersOfType<triton::gpu::LocalLoadOp>(loopCarriedSubviewValue);
+          assert(subviewLoadOps.size() == 1);
+          localLoadOp = *subviewLoadOps.begin();
 
-        loopCarriedLoadValue = localLoadOp.getResult();
-        loopCarriedLoadValue = rewindConvertLayoutOps(loopCarriedLoadValue);
+          loopCarriedLoadValue = localLoadOp.getResult();
+        } else {
+          auto localLoadOps =
+              getUsersOfType<triton::gpu::LocalLoadOp>(subviewResult);
+          assert(localLoadOps.size() == 1);
+          localLoadOp = *localLoadOps.begin();
+          auto it = llvm::find(yieldedValues, localLoadOp.getResult());
+          assert(it != yieldedValues.end());
+          size_t idx = std::distance(yieldedValues.begin(), it);
+          loopCarriedLoadValue = initArgs[idx];
+        }
+        loopCarriedLoadValue = rewindUnaryOps(loopCarriedLoadValue);
       }
 
       // Find the corresponding `DotOp`.
