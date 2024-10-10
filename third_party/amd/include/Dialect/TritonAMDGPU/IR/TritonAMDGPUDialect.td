@@ -35,6 +35,9 @@ def TritonAMDGPU_Dialect : Dialect {
   }];
 
   let dependentDialects = [];
+
+  let useDefaultAttributePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
 }
 
 #endif
