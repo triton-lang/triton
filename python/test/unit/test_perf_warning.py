@@ -3,6 +3,16 @@ import triton.language as tl
 import os
 import pytest
 import torch
+from contextlib import contextmanager
+
+
+@contextmanager
+def enable_remark_context():
+    try:
+        os.environ['MLIR_ENABLE_REMARK'] = '1'
+        yield
+    finally:
+        os.environ['MLIR_ENABLE_REMARK'] = '0'
 
 
 def is_perf_warning_enabled():
@@ -84,3 +94,60 @@ def test_remark_vectorization(capfd):
     _, err = capfd.readouterr()
     assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
     os.environ["MLIR_ENABLE_REMARK"] = "0"
+
+
+def test_remark_size_per_thread_equals_one(capfd, fresh_triton_cache):
+
+    @triton.jit
+    def triton_per_fused_sum(in_ptr0, out_ptr0, XBLOCK: tl.constexpr):
+        xnumel: tl.constexpr = 8134407
+        rnumel: tl.constexpr = 33
+        RBLOCK: tl.constexpr = 64
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)[:, None]
+        xmask = xindex < xnumel
+        rindex = tl.arange(0, RBLOCK)[None, :]
+        rmask = rindex < rnumel
+        tmp0 = tl.load(in_ptr0 + (rindex + (rnumel * xindex)), rmask & xmask, other=0.0)
+        tmp4 = tl.sum(tmp0, 1)[:, None]
+        tl.store(out_ptr0 + (xindex), tmp4, xmask)
+
+    with enable_remark_context():
+        triton.compile(
+            triton.compiler.ASTSource(fn=triton_per_fused_sum, signature={'in_ptr0': '*fp32', 'out_ptr0': '*fp32'},
+                                      constants={'XBLOCK': 128}), options={
+                                          "cluster_dims": (
+                                              63551,  # tl.cdiv(xnumel, XBLOCK)
+                                              1, 1)
+                                      })
+
+    _, err = capfd.readouterr()
+    assert ("remark: Warning: loading only 1 element per thread."
+            in err), "expect performance warning remark:" + err
+    assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
+
+
+def test_remark_size_per_thread_equals_one_(capfd, fresh_triton_cache):
+
+    @triton.jit
+    def triton_per_fused_sum(in_ptr0, out_ptr0, XBLOCK: tl.constexpr):
+        xnumel: tl.constexpr = 8134408
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)
+        xmask = xindex < xnumel
+        tmp0 = tl.load(in_ptr0 + xindex, xmask, other=0.0)
+        tmp4 = tl.sum(tmp0, 0)
+        tl.store(out_ptr0 + xindex, tmp4, xmask)
+
+    with enable_remark_context():
+        triton.compile(
+            triton.compiler.ASTSource(fn=triton_per_fused_sum, signature={'in_ptr0': '*fp32', 'out_ptr0': '*fp32'},
+                                      constants={'XBLOCK': 128}), options={
+                                          "cluster_dims": (
+                                              63551,  # tl.cdiv(xnumel, XBLOCK)
+                                              1, 1)
+                                      })
+
+    _, err = capfd.readouterr()
+    assert ("remark: Warning: loading only 1 element per thread."
+            in err), "expect performance warning remark:" + err
