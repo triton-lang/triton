@@ -556,29 +556,9 @@ void init_triton_ir(py::module &&m) {
       //  .def("has_attr", &::FuncOp::hasAttr)
       .def("finalize",
            [](FuncOp &self) -> void {
-             // Remove dead code
-             // 1. Unreachable code after return
-             self.walk([&](Block *block) {
-               Operation *retOp = nullptr;
-               // It's better to not use walk here because we only want to
-               // check operations in the current block
-               for (auto &op : block->getOperations()) {
-                 if (isa<ReturnOp>(op))
-                   if (retOp == nullptr) {
-                     retOp = &op;
-                     break;
-                   }
-               }
-               if (retOp && retOp != &block->back()) {
-                 auto pos = retOp->getIterator();
-                 pos++;
-                 auto *newBlock = block->splitBlock(pos);
-                 newBlock->erase();
-               }
-             });
-             // 2. Check if the result of tl.advance is used
-             self.walk([&](Operation *op) {
-               if (isa<AdvanceOp>(op) && op->getResult(0).use_empty())
+             // Check if the result of tl.advance is used
+             self.walk([&](AdvanceOp op) {
+               if (op->getResult(0).use_empty())
                  outputWarning(op->getLoc(), "The result of tl.advance is not "
                                              "being used. Note that tl.advance "
                                              "does not have any side effects. "
