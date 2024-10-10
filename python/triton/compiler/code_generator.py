@@ -438,22 +438,24 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.set_insertion_point_to_start(entry)
         # visit function body
         self.visit_compound_statement(node.body)
+
         # finalize function
+        assert not self.builder.get_insertion_block().has_terminator()
         if self.ret_type is None or self.ret_type == language.void:
             self.ret_type = language.void
             self.builder.ret([])
         else:
-            # update return type
-            if isinstance(self.ret_type, tuple):
-                self.prototype.ret_types = list(self.ret_type)
-                self.fn.reset_type(self.prototype.to_ir(self.builder))
-            else:
-                self.prototype.ret_types = [self.ret_type]
-                self.fn.reset_type(self.prototype.to_ir(self.builder))
+            self.prototype.ret_types = list(self.ret_type) if isinstance(self.ret_type, tuple) else [self.ret_type]
+            self.fn.reset_type(self.prototype.to_ir(self.builder))
+            self.builder.ret([
+                self.builder.create_undef(ty.to_ir(self.builder))
+                for ty in self.prototype.ret_types
+                if self.ret_type is not None
+            ])
+        self.fn.finalize()
+
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
-        # Remove dead code
-        self.fn.finalize()
 
     def visit_arguments(self, node):
         arg_names = []
@@ -620,40 +622,35 @@ class CodeGenerator(ast.NodeVisitor):
         return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
 
     def visit_if_top_level(self, cond, node):
-        has_endif_block = True
         with enter_sub_region(self) as sr:
             liveins, ip_block = sr
             then_block = self.builder.create_block()
             else_block = self.builder.create_block()
-            # create basic-block after conditional
-            endif_block = self.builder.create_block()
             # create branch
             self.builder.set_insertion_point_to_end(ip_block)
             self.builder.create_cond_branch(cond.handle, then_block, else_block)
             # visit then and else blocks
             then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types = \
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            # create basic-block after conditional
+            endif_block = self.builder.create_block()
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
-            if then_block.has_return() and else_block.has_return():
-                has_endif_block = False
-                endif_block.erase()
-            if not then_block.has_terminator() and has_endif_block:
-                self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
+            assert not then_block.has_terminator(), f"{then_block}"
+            self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
             # else terminator
             self.builder.set_insertion_point_to_end(else_block)
-            if not else_block.has_terminator() and has_endif_block:
-                self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
-            if has_endif_block:
-                for ty in ir_ret_types:
-                    endif_block.add_argument(ty)
-        if has_endif_block:
-            # change block
-            self.builder.set_insertion_point_to_start(endif_block)
-            # update value
-            for i, name in enumerate(names):
-                new_tensor = language.core.tensor(endif_block.arg(i), ret_types[i])
-                self.set_value(name, new_tensor)
+            assert not else_block.has_terminator(), f"{else_block}"
+            self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+            for ty in ir_ret_types:
+                endif_block.add_argument(ty)
+
+        # change block
+        self.builder.set_insertion_point_to_start(endif_block)
+        # update value
+        for i, name in enumerate(names):
+            new_tensor = language.core.tensor(endif_block.arg(i), ret_types[i])
+            self.set_value(name, new_tensor)
 
     # TODO: refactor
     def visit_if_scf(self, cond, node):
