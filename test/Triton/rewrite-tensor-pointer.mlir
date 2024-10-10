@@ -141,26 +141,30 @@ tt.func public @rewrite_for(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>) {
 // CHECK: tt.num_stages = 3
 
 // -----
-tt.func public @rewrite_if(%arg0: !tt.ptr<f16>, %arg1: i1) -> tensor<128x32xf16> {
+tt.func public @rewrite_if(%arg0: !tt.ptr<f16>, %arg1: i1, %arg2: tensor<128x32xf32>) -> tensor<128x32xf16> {
   %c0_i32 = arith.constant 0 : i32
   %c32_i32 = arith.constant 32 : i32
   %c1_i64 = arith.constant 1 : i64
   %c32_i64 = arith.constant 32 : i64
   %c128_i64 = arith.constant 128 : i64
   %0 = tt.make_tensor_ptr %arg0, [%c128_i64, %c32_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
-  %1 = scf.if %arg1 -> (!tt.ptr<tensor<128x32xf16>>) {
+  %1:2 = scf.if %arg1 -> (tensor<128x32xf16>, !tt.ptr<tensor<128x32xf16>>) {
     %2 = tt.advance %0, [%c32_i32, %c0_i32] : !tt.ptr<tensor<128x32xf16>>
-    scf.yield %2 : !tt.ptr<tensor<128x32xf16>>
+    %3 = arith.truncf %arg2 : tensor<128x32xf32> to tensor<128x32xf16>
+    scf.yield %3, %2 : tensor<128x32xf16>, !tt.ptr<tensor<128x32xf16>>
   } else {
-    scf.yield %0 : !tt.ptr<tensor<128x32xf16>>
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16>
+    scf.yield %cst, %0 : tensor<128x32xf16>, !tt.ptr<tensor<128x32xf16>>
   }
-  %4 = tt.load %1 {boundaryCheck = array<i32: 1>, padding = 2 : i32} : !tt.ptr<tensor<128x32xf16>>
-  tt.return %4 : tensor<128x32xf16>
+  %4 = tt.load %1#1 {boundaryCheck = array<i32: 1>, padding = 2 : i32} : !tt.ptr<tensor<128x32xf16>>
+  %5 = arith.addf %1#0, %4 : tensor<128x32xf16>
+  tt.return %5 : tensor<128x32xf16>
 }
 
 // CHECK-LABEL: tt.func public @rewrite_if(
 // CHECK-SAME:     %[[ARG0:[a-zA-Z0-9_]+]]: !tt.ptr<f16>
 // CHECK-SAME:     %[[ARG1:[a-zA-Z0-9_]+]]: i1
+// CHECK-SAME:     %[[ARG2:[a-zA-Z0-9_]+]]: tensor<128x32xf32>
 // CHECK-DAG: %[[C0_I32:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[C32_I32:.*]] = arith.constant 32 : i32
 // CHECK-DAG: %[[C1_I64:.*]] = arith.constant 1 : i64
@@ -168,14 +172,19 @@ tt.func public @rewrite_if(%arg0: !tt.ptr<f16>, %arg1: i1) -> tensor<128x32xf16>
 // CHECK-DAG: %[[C128_I64:.*]] = arith.constant 128 : i64
 // CHECK: %[[EXTSI0:.*]] = arith.extsi %[[C0_I32]] : i32 to i64
 // CHECK: %[[EXTSI1:.*]] = arith.extsi %[[C0_I32]] : i32 to i64
-// CHECK: %[[IF:.*]]:2 = scf.if %[[ARG1]] -> (i64, i64) {
+// CHECK: %[[IF:.*]]:3 = scf.if %[[ARG1]] -> (tensor<128x32xf16>, i64, i64) {
 // CHECK:   %[[EXTSI2:.*]] = arith.extsi %[[C32_I32]] : i32 to i64
 // CHECK:   %[[ADDI0:.*]] = arith.addi %[[EXTSI0]], %[[EXTSI2]] : i64
 // CHECK:   %[[EXTSI3:.*]] = arith.extsi %[[C0_I32]] : i32 to i64
 // CHECK:   %[[ADDI1:.*]] = arith.addi %[[EXTSI1]], %[[EXTSI3]] : i64
-// CHECK:   scf.yield %[[ADDI0]], %[[ADDI1]] : i64, i64
+// CHECK:   %[[TRUNCF:.*]] = arith.truncf %[[ARG2]] : tensor<128x32xf32> to tensor<128x32xf16>
+// CHECK:   scf.yield %[[TRUNCF]], %[[ADDI0]], %[[ADDI1]] : tensor<128x32xf16>, i64, i64
 // CHECK: } else {
-// CHECK:   scf.yield %[[EXTSI0]], %[[EXTSI1]] : i64, i64
+// CHECK:   %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<128x32xf16>
+// CHECK:   scf.yield %[[CST]], %[[EXTSI0]], %[[EXTSI1]] : tensor<128x32xf16>, i64, i64
+// CHECK:   %{{.*}} = tt.splat %[[IF]]#1 : i64 -> tensor<128xi64>
+// CHECK:   %{{.*}} = tt.splat %[[IF]]#2 : i64 -> tensor<32xi64>
+// CHECK:   %{{.*}} = arith.addf %[[IF]]#0, %{{.*}} : tensor<128x32xf16>
 // CHECK: }
 
 
