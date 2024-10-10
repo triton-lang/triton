@@ -32,7 +32,7 @@ prototype_pattern = {
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<)]+|<[^>]+>)+),?'
+mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<)]+|<[^>]+>)+(?: {[^}]+})?),?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
@@ -45,6 +45,10 @@ def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
     match = re.search(r'!tt\.ptr<([^,]+)', x)
+    tma = re.search(r'tt.nv_tma_desc = 1', x)
+    if tma is not None:
+        return 'nvTmaDesc'
+    x = re.sub(r' {[^}]+}', '', x)
     if match is not None:
         return '*' + convert_type_repr(match.group(1))
     return x
