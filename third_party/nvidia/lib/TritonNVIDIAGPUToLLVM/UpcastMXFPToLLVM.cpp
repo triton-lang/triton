@@ -80,6 +80,18 @@ public:
         ret.push_back(v);
       }
     }
+    // FIXME The DotOperandEncodingAttr without LLs encodes the
+    // layout as
+    // e0 e1
+    // e2 e3
+    // rather than transposed that, as the PTX docs say
+    // We transpose every block of 4 elements (kWidth = 8 -> 4 bf16x2)
+    assert(ret.size() % 16 == 0);
+    for (int i = 0; i < ret.size() / 16; ++i) {
+      for (int j = 0; j < 4; ++j) {
+        std::swap(ret[16 * i + j + 4], ret[16 * i + j + 8]);
+      }
+    }
 
     return ret;
   }
@@ -139,12 +151,11 @@ public:
           targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[2]),
           targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[3]),
       };
-      // si indices for the 16 elements in x
-      std::array<int, 16> siMap = {0, 0, 2, 2, 0, 0, 2, 2,
-                                   1, 1, 3, 3, 1, 1, 3, 3};
+      // si indices for the 16 elements in groups of 4 bf16x2
+      std::array<int, 16> siMap = {0, 2, 1, 3};
 
       for (int j = 0; j < 16; ++j) {
-        xVals[16 * i + j] = scaleBf16x2(xVals[16 * i + j], si[siMap[j]]);
+        xVals[16 * i + j] = scaleBf16x2(xVals[16 * i + j], si[j / 4]);
       }
     }
 
