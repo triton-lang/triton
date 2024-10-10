@@ -94,13 +94,15 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       // cache.
       perThread = std::min<int>(
           perThread, getNumElementsPerThread(op, order, axisInfoAnalysis));
+    } else {
+      // loading 1 element per thread may not utilize the vectorization
+      if (perThread == 1) {
+            op->emitRemark()
+                << "Warning: loading only 1 element per thread. \n"
+                << "Performance may be suboptimal. \n";
+          }
     }
-
-    if (perThread == 1) {
-      op->emitRemark()
-          << "Warning: operation accesses only 1 element per thread. \n"
-          << "Performance may be suboptimal. \n";
-    }
+    
     SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
 
