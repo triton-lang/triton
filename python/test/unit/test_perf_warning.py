@@ -124,6 +124,7 @@ def test_remark_size_per_thread_equals_one(capfd, fresh_triton_cache):
     _, err = capfd.readouterr()
     assert ("remark: Warning: loading only 1 element per thread."
             in err), "expect performance warning remark:" + err
+    assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
 
 
 def test_remark_size_per_thread_equals_one_(capfd, fresh_triton_cache):
