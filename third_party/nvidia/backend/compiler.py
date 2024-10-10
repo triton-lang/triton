@@ -152,7 +152,7 @@ class CUDABackend(BaseBackend):
         return (
             metadata.num_warps,
             metadata.num_ctas,
-            metadata.shared,
+            # metadata.shared,
             metadata.cluster_dims[0],
             metadata.cluster_dims[1],
             metadata.cluster_dims[2],
@@ -366,10 +366,10 @@ class CUDABackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.capability)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.capability)
-        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.capability)
-        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.capability)
+        # stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.capability)
+        # stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.capability)
+        # stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.capability)
+        # stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.capability)
 
     @functools.lru_cache()
     def hash(self):
