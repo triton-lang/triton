@@ -361,10 +361,6 @@ class CodeGenerator(ast.NodeVisitor):
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
-        # ret_block = self.builder.create_block()
-        # post_ret_block = self.builder.create_block()
-        # self.builder.create_branch(ret_block)
-        # self.builder.set_insertion_point_to_end(ret_block)
         if ret_value is None:
             self.builder.ret([])
             ret_ty = language.void
@@ -377,13 +373,15 @@ class CodeGenerator(ast.NodeVisitor):
             ret = language.semantic.to_tensor(ret_value, self.builder)
             self.builder.ret([ret.handle])
             ret_ty = ret.type
-        # self.builder.create_branch(post_ret_block)
-        # self.builder.set_insertion_point_to_end(post_ret_block)
 
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
             raise TypeError(f'Inconsistent return types: {self.ret_type} and {ret_ty}')
+
+        # Create a dead basic block to insert any ops that come after the return
+        post_ret_block = self.builder.create_block()
+        self.builder.set_insertion_point_to_end(post_ret_block)
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -688,18 +686,15 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_If(self, node):
         cond = self.visit(node.test)
 
-        def raise_if_scf():
-            if self.scf_stack:
-                raise self._unsupported(
-                    node, "Cannot have `return` statements inside `while` or `for` statements in triton "
-                    "(note that this also applies to `return` statements that are inside functions "
-                    "transitively called from within `while`/`for` statements)")
-
         if _is_triton_tensor(cond):
             cond = cond.to(language.int1, _builder=self.builder)
             contains_return = ContainsReturnChecker(self.gscope).visit(node)
             if contains_return:
-                raise_if_scf()
+                if self.scf_stack:
+                    raise self._unsupported(
+                        node, "Cannot have `return` statements inside `while` or `for` statements in triton "
+                        "(note that this also applies to `return` statements that are inside functions "
+                        "transitively called from within `while`/`for` statements)")
                 self.visit_if_top_level(cond, node)
             else:
                 self.visit_if_scf(cond, node)
@@ -712,18 +707,8 @@ class CodeGenerator(ast.NodeVisitor):
                         ', '.join(_.__name__ for _ in _condition_types),
                         type(cond).__name__))
 
-            # Early returns may generate invalid control flow if we inline them (see #4883). So
-            # instead, create an unnecessary branch and let the optimizer fold it later.
             active_block = node.body if cond else node.orelse
-            true = ast.Constant(True, lineno=node.lineno, col_offset=node.col_offset)
-            fake_node = ast.If(test=true, body=active_block, orelse=[])
-            contains_return = ContainsReturnChecker(self.gscope).visit(fake_node)
-            if contains_return:
-                raise_if_scf()
-                cond = language.semantic.to_tensor(True, self.builder)
-                self.visit_if_top_level(cond, fake_node)
-            else:
-                self.visit_compound_statement(active_block)
+            self.visit_compound_statement(active_block)
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
