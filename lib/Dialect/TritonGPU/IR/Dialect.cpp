@@ -7,6 +7,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -983,7 +984,18 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
   assert(parentLayout && "DotOperandEncodingAttr must have a parent");
   if (auto distributedLayout =
           mlir::dyn_cast<DistributedEncodingTrait>(parentLayout)) {
-    return distributedLayout.getWarpsPerCTA();
+    auto warps = distributedLayout.getWarpsPerCTA();
+
+    // FIXME We should swap the warps for all parent layouts unconditionally!!
+    auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent());
+    if (mma && mma.isAmpere()) {
+      auto largeK = getKWidth() == 8;
+      if (largeK) {
+        auto kDim = getOpIdx() == 0 ? 1 : 0;
+        warps[kDim] = 1;
+      }
+    }
+    return warps;
   } else {
     llvm::report_fatal_error(
         "DotOperandEncodingAttr non-DistributedEncodingAttr parent not "
@@ -1961,9 +1973,20 @@ int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
 }
 SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
                                                         int bitwidth,
+                                                        int kWidth,
                                                         int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
+
+  // FIXME This is implementedd in DotOperandEncodingAttr::getWarpPerCTA
+  // This method should live in DotOperand so that the correct behaviour is
+  // inherited
+  auto largeK = kWidth == 8;
+  if (largeK) {
+    auto kDim = opIdx == 0 ? 1 : 0;
+    warpsPerCTA[kDim] = 1;
+  }
+
   SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
   int numRepBatch =
       rank == 3
@@ -1995,7 +2018,8 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
   }
   // A100
   if (isAmpere()) {
-    auto rep = getMMAv2Rep(shapePerCTA, eltTy.getIntOrFloatBitWidth(), opIdx);
+    auto rep =
+        getMMAv2Rep(shapePerCTA, eltTy.getIntOrFloatBitWidth(), kWidth, opIdx);
     if (opIdx == 0)
       return 4 * rep[0] * rep[1] * rep[2];
     if (opIdx == 1)

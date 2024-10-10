@@ -517,6 +517,60 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_tile_kwidth8) {
                 {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
+  EXPECT_EQ(
+      toLinearLayout({128, 128}, dotMMAv2(0, 8, {4, 1}, {1, 0})),
+      LinearLayout(
+          {
+              {S("register"),
+               {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {0, 32}, {0, 64}, {64, 0}}},
+              {S("lane"), {{0, 8}, {0, 16}, {1, 0}, {2, 0}, {4, 0}}},
+              {S("warp"), {{16, 0}, {32, 0}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({128, 64}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
+            LinearLayout(
+                {
+                    {S("register"),
+                     {{1, 0},
+                      {2, 0},
+                      {4, 0},
+                      {32, 0},
+                      {0, 8},
+                      {0, 16},
+                      {0, 32},
+                      {64, 0}}},
+                    {S("lane"), {{8, 0}, {16, 0}, {0, 1}, {0, 2}, {0, 4}}},
+                    {
+                        S("warp"),
+                        {},
+                    },
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({64, 128}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
+            LinearLayout(
+                {
+                    {S("register"),
+                     {{1, 0},
+                      {2, 0},
+                      {4, 0},
+                      {32, 0},
+                      {0, 8},
+                      {0, 16},
+                      {0, 32},
+                      {0, 64}}},
+                    {S("lane"), {{8, 0}, {16, 0}, {0, 1}, {0, 2}, {0, 4}}},
+                    {
+                        S("warp"),
+                        {},
+                    },
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
   auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                      /*isTransposed=*/false);

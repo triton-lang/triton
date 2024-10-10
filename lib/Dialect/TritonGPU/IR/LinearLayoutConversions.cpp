@@ -783,10 +783,13 @@ LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
     }
   }
 
-  LinearLayout ctaLayout({{S("register"), registers}, {S("lane"), lanes}},
-                         llvm::to_vector(llvm::reverse(ArrayRef(dimNames))));
+  LinearLayout ctaLayout(
+      {{S("register"), registers}, {S("lane"), lanes}},
+      llvm::to_vector(llvm::reverse(ArrayRef(dimNames).take_back(2))));
 
-  ctaLayout *= identityND(S("warp"), dot.getWarpsPerCTA(), {1, 0}, dimNames);
+  auto order = dot.getCTAOrder();
+  assert(order[0] == 1 && order[1] == 0);
+  ctaLayout *= identityND(S("warp"), dot.getWarpsPerCTA(), order, dimNames);
 
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }

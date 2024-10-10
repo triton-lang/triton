@@ -440,6 +440,7 @@ public:
     auto instrShape = mmaVersionToInstrShape(versionMajor, retShapePerCTA,
                                              rewriter.getBF16Type(), numWarps);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
+    // TODO Use warpsPerTileV2
     SmallVector<unsigned> warpsPerCTA = {numWarps, 1};
     auto mmaEnc = NvidiaMmaEncodingAttr::get(ctx, /*versionMajor=*/versionMajor,
                                              /*versionMinor=*/0, warpsPerCTA,

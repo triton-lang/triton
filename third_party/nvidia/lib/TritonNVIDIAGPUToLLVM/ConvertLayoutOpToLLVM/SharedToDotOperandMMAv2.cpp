@@ -603,9 +603,9 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
 
-  auto numRep =
-      mmaLayout.getMMAv2Rep(shapePerCTA, bitwidth, encoding.getOpIdx());
   int kWidth = encoding.getKWidth();
+  auto numRep =
+      mmaLayout.getMMAv2Rep(shapePerCTA, bitwidth, kWidth, encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto order = triton::gpu::getOrder(mmaLayout);
