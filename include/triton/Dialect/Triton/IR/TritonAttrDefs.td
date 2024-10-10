@@ -119,4 +119,18 @@ def TT_InputPrecisionAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton";
 }
 
+// Type for F8F6F4 kind of floats.
+def TT_F8F6F4TypeAttr : I32EnumAttr<
+    "F8F6F4Type", "",
+    [
+      I32EnumAttrCase<"E4M3", 0, "e4m3">,
+      I32EnumAttrCase<"E5M2", 1, "e5m2">,
+      I32EnumAttrCase<"E2M3", 2, "e2m3">,
+      I32EnumAttrCase<"E3M2", 3, "e3m2">,
+      I32EnumAttrCase<"E2M1", 4, "e2m1">
+
+    ]>{
+  let cppNamespace = "::mlir::triton";
+}
+
 #endif

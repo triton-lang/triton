@@ -256,4 +256,24 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   }];
 }
 
+def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+  let summary = "Convert an mxfp tensor to bf16";
+
+  let hasVerifier = 1;
+
+  let description = [{
+    Compute the bf16 encoded in the given mxfp number as per
+    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+  }];
+  let arguments = (ins
+                   TT_Tensor:$src,
+                   TT_Tensor:$scale,
+                   TT_F8F6F4TypeAttr:$fp_type);
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
+  }];
+}
+
 #endif
