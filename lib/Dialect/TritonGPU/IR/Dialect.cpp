@@ -986,7 +986,8 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
           mlir::dyn_cast<DistributedEncodingTrait>(parentLayout)) {
     auto warps = distributedLayout.getWarpsPerCTA();
 
-    // FIXME We should swap the warps for all parent layouts unconditionally!!
+    // FIXME [Dot LL]
+    // We should swap the warps for all parent layouts unconditionally!!
     auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent());
     if (mma && mma.isAmpere()) {
       auto largeK = getKWidth() == 8;
@@ -1978,7 +1979,8 @@ SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
 
-  // FIXME This is implementedd in DotOperandEncodingAttr::getWarpPerCTA
+  // FIXME [Dot LL]
+  // This is implemented in DotOperandEncodingAttr::getWarpPerCTA
   // This method should live in DotOperand so that the correct behaviour is
   // inherited
   auto largeK = kWidth == 8;

@@ -395,6 +395,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           if (useLegacyMMAConversion) {
             return false;
           }
+          // FIXME [Dot LL]
           // Enabling LL path for buggy kWidth path
           bool largeKWidth =
               dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
@@ -454,9 +455,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
+    // FIXME [Dot LL]
     // We know it's just for largeKWidth case in Ampere
     // In this case, we need to pack the outputs into i32
-
     if (isa<DotOperandEncodingAttr>(dstTy.getEncoding())) {
       auto concat = [&](Value a, Value b) {
         return or_(zext(i32_ty, bitcast(a, i16_ty)),

@@ -58,6 +58,7 @@ public:
             dstDotOp.getParent() == srcMfmaEncoding)
           return;
       }
+      // FIXME [Dot LL]
       // We support this one via LLs, as the LocalLoad path is buggy
       bool largeKWidth =
           dstDotOp.getKWidth() * dstType.getElementTypeBitWidth() > 64;

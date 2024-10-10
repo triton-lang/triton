@@ -66,7 +66,8 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   int offset{};
   ValueTableV2 vals;
 
-  // This can be generalised for kWidth * elemBitWidth >= 32
+  // FIXME [Dot LL]
+  // [ez] Generalize the logic below for kWidth * elemBitWidth > 32
   auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
   auto largeK = dot.getKWidth() == 8 &&
                 cast<NvidiaMmaEncodingAttr>(dot.getParent()).isAmpere();
@@ -377,10 +378,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int repM = repA[1], repN = repB[2], repK = repA[2];
   int repBatch = repA[0];
 
-  // shape / shape_per_cta
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
-  // FIXME max(repN / 2, 1) is wrong for repN = 1!
+
+  // FIXME [Dot LL]
+  // max(repN / 2, 1) is wrong for repN = 1!
   // This is also wrong in
   // NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand
   auto hb = getValuesFromDotOperandLayoutStruct(

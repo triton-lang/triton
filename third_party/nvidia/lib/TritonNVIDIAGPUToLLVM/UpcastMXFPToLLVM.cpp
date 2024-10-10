@@ -80,7 +80,8 @@ public:
         ret.push_back(v);
       }
     }
-    // FIXME The DotOperandEncodingAttr without LLs encodes the
+    // FIXME [Dot LL]
+    // The DotOperandEncodingAttr without LLs encodes the
     // layout as
     // e0 e1
     // e2 e3
