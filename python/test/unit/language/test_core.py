@@ -4855,6 +4855,33 @@ def test_nested_while(device):
     assert data[0] == 40
 
 
+def test_constexpr_if_return(device):
+    # Reproducer for #4883, return statement in an if with a constexpr causes
+    # errors when combined with non-trivial control flow graphs
+
+    @triton.jit
+    def kernel(Semaphore, Out, total: tl.constexpr):
+        if total == 1:
+            tl.store(Out, tl.program_id(0))
+            return
+
+        prev = tl.atomic_add(Semaphore, 1)
+        if prev + 1 != total:
+            return
+
+        tl.store(Out, tl.program_id(0) + prev)
+
+    sem = torch.zeros((), device=device, dtype=torch.int32)
+    out = torch.empty((), device=device, dtype=torch.int32)
+    kernel[(1, )](sem, out, 1)
+    assert out.item() == 0
+
+    sem = torch.zeros((), device=device, dtype=torch.int32)
+    out = torch.full((), fill_value=-1, device=device, dtype=torch.int32)
+    kernel[(4, )](sem, out, 4)
+    assert out.item() >= 0
+
+
 # -----------------------
 # test extra
 # -----------------------

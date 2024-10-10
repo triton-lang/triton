@@ -687,18 +687,22 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = self.visit(node.test)
-        if _is_triton_tensor(cond):
-            cond = cond.to(language.int1, _builder=self.builder)
-            contains_return = ContainsReturnChecker(self.gscope).visit(node)
-            if self.scf_stack and contains_return:
+
+        def raise_if_scf():
+            if self.scf_stack:
                 raise self._unsupported(
                     node, "Cannot have `return` statements inside `while` or `for` statements in triton "
                     "(note that this also applies to `return` statements that are inside functions "
                     "transitively called from within `while`/`for` statements)")
-            elif self.scf_stack or not contains_return:
-                self.visit_if_scf(cond, node)
-            else:
+
+        if _is_triton_tensor(cond):
+            cond = cond.to(language.int1, _builder=self.builder)
+            contains_return = ContainsReturnChecker(self.gscope).visit(node)
+            if contains_return:
+                raise_if_scf()
                 self.visit_if_top_level(cond, node)
+            else:
+                self.visit_if_scf(cond, node)
         else:
             cond = _unwrap_if_constexpr(cond)
             # not isinstance - we insist the real thing, no subclasses and no ducks
@@ -707,10 +711,19 @@ class CodeGenerator(ast.NodeVisitor):
                     node, "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
                         ', '.join(_.__name__ for _ in _condition_types),
                         type(cond).__name__))
-            if cond:
-                self.visit_compound_statement(node.body)
+
+            # Early returns may generate invalid control flow if we inline them (see #4883). So
+            # instead, create an unnecessary branch and let the optimizer fold it later.
+            active_block = node.body if cond else node.orelse
+            true = ast.Constant(True, lineno=node.lineno, col_offset=node.col_offset)
+            fake_node = ast.If(test=true, body=active_block, orelse=[])
+            contains_return = ContainsReturnChecker(self.gscope).visit(fake_node)
+            if contains_return:
+                raise_if_scf()
+                cond = language.semantic.to_tensor(True, self.builder)
+                self.visit_if_top_level(cond, fake_node)
             else:
-                self.visit_compound_statement(node.orelse)
+                self.visit_compound_statement(active_block)
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
