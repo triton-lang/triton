@@ -177,7 +177,8 @@ class HIPBackend(BaseBackend):
                 # different than the NVIDIA side. In the new pipeliner we unify the num_stages
                 # interpretation. Default to use 2 stages if not explicitly set.
                 num_stages = options.num_stages if options.num_stages != 0 else 2
-                amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages)
+                prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH_V3", "0") == "1"
+                amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages, prefetch)
             else:
                 if options.num_stages == 0:
                     amd.passes.ttgpuir.add_stream_pipeline(pm)
