@@ -48,17 +48,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    /usr/local/lib/python3.10/dist-packages/hatchet/external/console.py:103: SyntaxWarning: More than 2 metrics specified in metric_column=. Tree() will only show 2 metrics at a time. The remaining metrics will not be shown.
-      warnings.warn(
-    202.690 13.561 ROOT
-    ├─ nan 0.049 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
+    203.570 13.503 ROOT
+    ├─ nan 0.048 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
     ├─ nan 0.044 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 213.623 3.217 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 3.217 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 194.991 3.524 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 195.677 3.512 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 213.681 3.216 torch [M=8192, N=8192, K=512]
-       └─ nan 3.216 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 214.064 3.210 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 3.210 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 195.921 3.508 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 196.777 3.492 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 214.730 3.200 torch [M=8192, N=8192, K=512]
+       └─ nan 3.200 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -719,7 +717,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.940 seconds)
+   **Total running time of the script:** (0 minutes 1.946 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:

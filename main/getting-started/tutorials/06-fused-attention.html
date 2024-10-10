@@ -8,7 +8,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fused Attention &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
-      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=7ab3649f" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
@@ -126,25 +126,25 @@ to download the full example code.</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     113.691880     94.024519
-1   2048.0     140.476444    110.997705
-2   4096.0     155.142170    123.995480
-3   8192.0     167.218274    130.871589
-4  16384.0     171.929361    135.365516
+0   1024.0     115.729353     94.502158
+1   2048.0     142.534622    111.546012
+2   4096.0     158.258666    125.649625
+3   8192.0     169.368820    134.028863
+4  16384.0     173.552724    136.935018
 fused-attention-batch4-head32-d64-fwd-causal=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     157.672371    128.588898
-1   2048.0     167.886475    126.892833
-2   4096.0     169.109858    132.520201
-3   8192.0     170.516415    134.663793
-4  16384.0     175.143940    134.314260
+0   1024.0     159.563453    129.291991
+1   2048.0     171.082138    128.712084
+2   4096.0     173.194645    135.521371
+3   8192.0     174.929939    136.445194
+4  16384.0     176.295994    136.093256
 fused-attention-batch4-head32-d64-bwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      72.635292     72.064238
-1   2048.0      96.231455     96.476223
-2   4096.0     114.857127    114.799413
-3   8192.0     123.434206    125.607347
-4  16384.0     129.671133    130.566759
+0   1024.0      73.223979     72.612345
+1   2048.0      97.645863     98.147695
+2   4096.0     115.854750    115.886006
+3   8192.0     124.936509    127.700230
+4  16384.0     130.741639    133.578218
 </pre></div>
 </div>
 <div class="line-block">
@@ -778,7 +778,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 52.196 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 51.933 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>
