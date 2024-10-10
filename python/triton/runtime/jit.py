@@ -879,6 +879,10 @@ class MockTensor:
     def data_ptr():
         return 0  # optimistically assumes multiple of 16
 
+    @staticmethod
+    def ptr_range():
+        return 0  # optimistically assumes 32 bit pointer range
+
 
 class TensorWrapper:
 

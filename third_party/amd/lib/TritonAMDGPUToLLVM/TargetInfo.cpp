@@ -81,7 +81,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
   }
-  mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
+  mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred, *this);
 }
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
@@ -98,7 +98,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   }
   Value falseVal = rewriter.create<LLVM::ConstantOp>(
       loc, elemTy, rewriter.getZeroAttr(elemTy));
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
+                                 *this);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,

@@ -91,6 +91,46 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  //
+  // This is the same as conversion3, but now the `arith.extsi` operations
+  // disappeared and all the offsets are 32 bits.
+  //
+  // CHECK-LABEL: tt.func @conversion4
+  tt.func @conversion4(%arg0: !tt.ptr<f32>{tt.pointer_range = 32 : i32})-> tensor<1024xf32, #blocked>{
+     %c1024_i32 = arith.constant 1024 : i32
+     %0 = tt.get_program_id x : i32
+     %1 = arith.muli %0, %c1024_i32 : i32
+     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+
+     //CHECK: %0 = tt.get_program_id x : i32
+     //CHECK: %[[pid:.*]] = arith.muli %0, {{.*}} : i32
+     //CHECK: %[[makerange:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformOffset1:.*]] = arith.addi %[[pid]], {{.*}} : i32
+     //CHECK: %[[tensorOffset1:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformOffset0:.*]] = arith.addi %[[pid:.*]], %{{.*}} : i32
+     //CHECK: %[[tensorOffset3:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
+     //CHECK: %[[zero:.*]] = tt.splat %{{.*}} : i32 -> tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformPtr0:.*]] = tt.addptr %arg0, %[[uniformOffset0:.*]] : !tt.ptr<f32>, i32
+     //CHECK: %[[tensorOffset0:.*]]= arith.addi %[[tensorOffset3]], %[[zero]] : tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformPtr1:.*]] = tt.addptr %[[uniformPtr0]], %[[uniformOffset1]] : !tt.ptr<f32>, i32
+     //CHECK: %[[tensorOffset2:.*]] = arith.addi %[[tensorOffset1]], %[[tensorOffset0]]: tensor<1024xi32, #blocked>
+     //CHECK: %[[scalarPtr:.*]] = tt.splat %[[uniformPtr1]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+     //CHECK: %[[newPtr:.*]] = tt.addptr %[[scalarPtr]], %[[tensorOffset2]] : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     //CHECK: tt.load %[[newPtr]]
+     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+     %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     %7 = tt.addptr %6, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>, #blocked>
+     tt.return %8 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @forOp
   tt.func @forOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
     %c1024_i32 = arith.constant 1024 : i32
