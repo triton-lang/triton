@@ -62,7 +62,8 @@ public:
     SCHED_GLOBAL_LOAD,
     SCHED_LOCAL_STORE,
     SCHED_LOCAL_LOAD,
-    SCHED_COMPUTE
+    SCHED_COMPUTE,
+    SCHED_TAIL
   };
   struct ScheduleConfig {
     int stage;
@@ -78,11 +79,12 @@ public:
       clusters.push_back(schedule.clusters.newAtBack());
 
     int lastStage = numStages - 1;
-    config.resize(4);
+    config.resize(5);
     config[SCHED_GLOBAL_LOAD] = {0, clusters[prefetch]};
-    config[SCHED_LOCAL_STORE] = {lastStage - 1, clusters[prefetch * 2]};
+    config[SCHED_LOCAL_STORE] = {lastStage - 1, clusters[prefetch ? 0 : 2]};
     config[SCHED_LOCAL_LOAD] = {lastStage - prefetch, clusters[1]};
     config[SCHED_COMPUTE] = {lastStage, clusters[prefetch]};
+    config[SCHED_TAIL] = {lastStage, clusters[3 + prefetch]};
 
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
@@ -517,7 +519,7 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
-  auto cluster = schedule.clusters.newAtBack();
+  auto cluster = config[SCHED_TAIL].cluster;
   DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (schedule.count(&op) == 0)
@@ -702,6 +704,7 @@ bool StreamPipeliner::pipelineLoop() {
   if (!checkPrecondition(forOp))
     return false;
 
+  // numStages++;
   if (!preprocessLoopAndBuildSchedule())
     return false;
   LDBG("Loop before sending to expander:\n" << *forOp);
