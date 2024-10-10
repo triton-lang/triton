@@ -379,7 +379,8 @@ class CodeGenerator(ast.NodeVisitor):
         elif self.ret_type != ret_ty:
             raise TypeError(f'Inconsistent return types: {self.ret_type} and {ret_ty}')
 
-        # Create a dead basic block to insert any ops that come after the return
+        # A return op must always terminate the basic block, so we create a dead
+        # basic block in case there are any ops after the return.
         post_ret_block = self.builder.create_block()
         self.builder.set_insertion_point_to_end(post_ret_block)
 
