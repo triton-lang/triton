@@ -119,24 +119,38 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   step = forOp.getStep();
 
   dynamicLoop = true;
-  auto upperBoundCst = ub.getDefiningOp<arith::ConstantIndexOp>();
-  auto lowerBoundCst = lb.getDefiningOp<arith::ConstantIndexOp>();
-  auto stepCst = step.getDefiningOp<arith::ConstantIndexOp>();
+
+  auto getIntegerAttrFromValue =
+      [](mlir::Value value) -> std::optional<mlir::IntegerAttr> {
+    auto constantOp = value.getDefiningOp<arith::ConstantOp>();
+    if (!constantOp) {
+      // Not defined by a ConstantOp
+      return std::nullopt;
+    }
+    // return constantOp.getValue().dyn_cast<mlir::IntegerAttr>();
+    return mlir::cast<mlir::IntegerAttr>(constantOp.getValue());
+  };
+  auto upperBoundCst = getIntegerAttrFromValue(ub);
+  auto lowerBoundCst = getIntegerAttrFromValue(lb);
+  auto stepCst = getIntegerAttrFromValue(step);
   if (!upperBoundCst || !lowerBoundCst || !stepCst) {
     if (!options.supportDynamicLoops) {
       LDBG("--dynamic loop not supported -> BAIL");
       return false;
     }
   } else {
-    int64_t ubImm = upperBoundCst.value();
-    int64_t lbImm = lowerBoundCst.value();
-    int64_t stepImm = stepCst.value();
+    int64_t ubImm = upperBoundCst->getInt();
+    int64_t lbImm = lowerBoundCst->getInt();
+    int64_t stepImm = stepCst->getInt();
     int64_t numIteration = llvm::divideCeilSigned(ubImm - lbImm, stepImm);
-    if (numIteration > maxStage) {
+    if (numIteration > options.numStages - 1) {
       dynamicLoop = false;
-    } else if (!options.supportDynamicLoops) {
-      LDBG("--fewer loop iterations than pipeline stages -> BAIL");
-      return false;
+    } else {
+      LDBG("--fewer loop iterations than pipeline stages");
+      forOp.emitRemark() << "fewer loop iterations than pipeline stages\n";
+      if (!options.supportDynamicLoops) {
+        return false;
+      }
     }
   }
   peelEpilogue = options.peelEpilogue;

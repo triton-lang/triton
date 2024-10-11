@@ -57,6 +57,10 @@ struct PipeliningOption {
   /// pipeliner will have to predicate operations in the the prologue/epilogue.
   bool supportDynamicLoops = false;
 
+  /// The number of stages to use for the pipelining. Generally, it comes from
+  /// ``tt.num_stages``.
+  int numStages = 0;
+
   // Callback to predicate operations when the prologue or epilogue are not
   // peeled. This takes the original operation, an i1 predicate value and the
   // pattern rewriter. It is expected to replace the given operation with

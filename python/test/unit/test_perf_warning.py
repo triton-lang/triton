@@ -175,3 +175,25 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
     _, err = capfd.readouterr()
 
     assert "operation scheduled before its operands" in err, "expect swp op remark"
+
+
+def test_remark_swp_num_stages_greater_than_loop_iters(capfd, fresh_triton_cache):
+
+    @triton.jit
+    def kernel_pipe_num_stages_gt_loop_iters(in_ptr, out_ptr):
+        SIZE: tl.constexpr = 64
+        in_ptrs = in_ptr + tl.arange(0, SIZE)
+        for i in tl.range(0, 2, num_stages=4):
+            val = tl.load(in_ptrs)
+            in_ptrs += SIZE
+            out_ptrs = out_ptr + (tl.arange(0, SIZE) + i * SIZE)
+            tl.store(out_ptrs, val)
+
+    with enable_remark_context():
+        triton.compile(
+            triton.compiler.ASTSource(fn=kernel_pipe_num_stages_gt_loop_iters,
+                                      signature={"in_ptr": "*fp32", "out_ptr": "*fp32"}, constants={}),
+            options={"cluster_dims": (1, 1, 1)})
+
+    _, err = capfd.readouterr()
+    assert ("remark: fewer loop iterations than pipeline stages" in err), "expect performance warning remark:" + err
