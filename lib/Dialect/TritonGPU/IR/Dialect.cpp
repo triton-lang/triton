@@ -478,6 +478,15 @@ LogicalResult CTALayoutAttr::verify(
            << CTAOrder << "]";
   }
 
+  if (llvm::any_of(CTAsPerCGA, [](unsigned x) { return x == 0; })) {
+    return emitError() << "Every element in CTAsPerCGA must be greater than 0.";
+  }
+
+  if (llvm::any_of(CTASplitNum, [](unsigned x) { return x == 0; })) {
+    return emitError()
+           << "Every element in CTASplitNum must be greater than 0.";
+  }
+
   return success();
 }
 
