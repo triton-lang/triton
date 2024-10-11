@@ -4882,6 +4882,25 @@ def test_constexpr_if_return(device):
     assert out.item() >= 0
 
 
+@triton.jit
+def return_poison(x):
+    a = False
+    if a:
+        return x
+
+
+def test_poison_return(device):
+
+    @triton.jit
+    def kernel(Out):
+        tl.store(Out, return_poison(0))
+
+    a = torch.empty((), device=device, dtype=torch.int32)
+    h = kernel[(1, )](a)
+    assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
+    assert "poison" in h.asm["llir"], h.asm["llir"]
+
+
 # -----------------------
 # test extra
 # -----------------------

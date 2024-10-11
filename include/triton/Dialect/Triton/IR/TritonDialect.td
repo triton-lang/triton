@@ -28,7 +28,8 @@ def Triton_Dialect : Dialect {
     "arith::ArithDialect",
     "math::MathDialect",
     "scf::SCFDialect",
-    "cf::ControlFlowDialect"
+    "cf::ControlFlowDialect",
+    "ub::UBDialect"
   ];
 
   let extraClassDeclaration = [{

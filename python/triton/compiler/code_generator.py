@@ -448,7 +448,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.prototype.ret_types = list(self.ret_type) if isinstance(self.ret_type, tuple) else [self.ret_type]
             self.fn.reset_type(self.prototype.to_ir(self.builder))
             self.builder.ret([
-                self.builder.create_undef(ty.to_ir(self.builder))
+                self.builder.create_poison(ty.to_ir(self.builder))
                 for ty in self.prototype.ret_types
                 if self.ret_type is not None
             ])
@@ -954,7 +954,7 @@ class CodeGenerator(ast.NodeVisitor):
         ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
         step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
         # Create placeholder for the loop induction variable
-        iv = self.builder.create_undef(iv_ir_type)
+        iv = self.builder.create_poison(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv, iv_type))
 
         with enter_sub_region(self) as sr:
