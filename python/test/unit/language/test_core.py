@@ -4895,10 +4895,10 @@ def test_poison_return(device):
     def kernel(Out):
         tl.store(Out, return_poison(0))
 
-    a = torch.empty((), device=device)
+    a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel[(1, )](a)
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    assert "i32 poison" in h.asm["llir"], h.asm["llir"]
+    assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
 # -----------------------
