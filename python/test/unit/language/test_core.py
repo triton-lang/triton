@@ -3421,7 +3421,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
         # Multiplication preserves infs and NaNs in x_bf16
         mxfp = x_bf16 * scale_bf16
         # If scale is NaN, we encode it as an bf16 inf, so we need to correct for that
-        mxfp = tl.where(scale == 0xFF, bf16(float("nan")), mxfp)
+        mxfp = tl.where(scale == 0xFF, float("nan"), mxfp)
 
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         tl.store(mxfp_ptr + offsets, tl.ravel(mxfp), mask=offsets < N * 32)

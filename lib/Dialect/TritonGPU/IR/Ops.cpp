@@ -51,6 +51,23 @@ LogicalResult UpcastMXFPOp::verify() {
         "all dimensions except the last must match between operands");
   }
 
+  auto layoutX = xTy.getEncoding();
+  if (!layoutX || !isa<DotOperandEncodingAttr>(layoutX)) {
+    return emitOpError("Expected a DotOperandEncodingAttr for values");
+  }
+  auto layoutScale = scaleTy.getEncoding();
+  if (!layoutScale || !isa<BlockedEncodingAttr>(layoutScale)) {
+    return emitOpError("Expected a BlockOperandEncoding for scales");
+  }
+  auto blockedScale = cast<BlockedEncodingAttr>(layoutScale);
+
+  // Necessary to keep all of the scales of a given block of values in the same
+  // warp
+  auto threadsPerWarp = blockedScale.getThreadsPerWarp();
+  if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
+    return emitOpError("Expected threads per warp to be {16, 2}");
+  }
+
   return success();
 }
 

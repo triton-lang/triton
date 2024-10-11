@@ -1513,15 +1513,18 @@ def _str_to_fp_type(float_format: Optional[str]):
 
 
 def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
-               rhs_format, acc: tl.tensor, out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+               rhs_format, acc: tl.tensor | None, out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     #TODO: validate types.
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
     assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-    M = lhs.type.shape[-2]
+    M, K = lhs.type.shape[-2:]
     N = rhs.type.shape[-1]
+    assert K == rhs.type.shape[-2], f"Reduction dimension should agree; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    assert K >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
     B = lhs.type.shape[0] if lhs_rank == 3 else None
+
     ret_ty = tl.block_type(out_dtype, [B, M, N] if B else [M, N])
     _0 = builder.get_fp32(0)
     if acc is None:

@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
@@ -490,23 +491,15 @@ public:
     // With this trick, we could do the full lowering here and remove the
     // UpcastMXFPOp altogether
 
-    auto order =
-        cast<DotOperandEncodingAttr>(a.getType().getEncoding()).getCTAOrder();
-
-    // TODO Adjust for mmav3
-    // Necessary choice to leave all the scales of the tile in that given warp
-
+    assert(instrShape == ArrayRef<unsigned>({16, 8}) ||
+           instrShape == ArrayRef<unsigned>({1, 16, 8}));
     auto shapeTileA = std::array<unsigned, 2>{instrShape[0], instrShape[0]};
+    // Necessary choice to leave all the scales of the tile in that given warp
     auto threadsPerWarp =
-        SmallVector<unsigned>{shapeTileA[order[0]], 32 / shapeTileA[order[0]]};
-
-    // The number of scales in a given warp * 32 gives us the minimum K
-    if (a.getType().getShape()[order[0]] < threadsPerWarp[order[0]] * 32) {
-      return failure();
-    }
+        SmallVector<unsigned>{shapeTileA[0], 32 / shapeTileA[0]};
 
     auto newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
-        ctx, {1, 1}, threadsPerWarp, warpsPerCTA, order, CTALayout);
+        ctx, {1, 1}, threadsPerWarp, warpsPerCTA, {1, 0}, CTALayout);
 
     auto newScaleType = RankedTensorType::get(scale.getType().getShape(),
                                               scale.getType().getElementType(),
