@@ -217,12 +217,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   auto elemTy = aTensorTy.getElementType();
   auto kWidth = encoding.getKWidth();
-  auto elemsPerInstr = mfmaLayout.getMFMAInstrShapeForOperands(kWidth, opIdx);
+  auto elemsPerInstr = mfmaLayout.getInstrShapeForOperand(kWidth, opIdx);
 
   int64_t mfmaInstrNonK;
   int64_t mfmaInstrK;
   // TODO(Lixun): make it simpler
-  // getMFMAInstrShapeForOperands always returns a 2D vector
+  // getInstrShapeForOperand always returns a 2D vector
   if (rank == 3) {
     mfmaInstrNonK = elemsPerInstr[nonKDimIdx - 1];
     mfmaInstrK = elemsPerInstr[kDimIdx - 1];
@@ -231,12 +231,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     mfmaInstrK = elemsPerInstr[kDimIdx];
   }
 
-  auto numReps = mfmaLayout.getMFMARepForOperands(shape, kWidth, opIdx);
+  auto numReps = mfmaLayout.getRepForOperand(shape, kWidth, opIdx);
   auto numRepNonK = numReps[nonKDimIdx];
   auto numRepK = numReps[kDimIdx];
   auto repB = numReps[0];
   // TODO(Lixun): make it simpler
-  // getMFMARepForOperands always returns a 3D vector
+  // getRepForOperand always returns a 3D vector
   if (rank == 2) {
     numRepNonK = numReps[nonKDimIdx + 1];
     numRepK = numReps[kDimIdx + 1];

@@ -1344,7 +1344,16 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   let genVerifyDecl = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() {
-      return getSizePerThread();
+      auto rank = getWarpsPerCTA().size();
+      assert(rank == 2 || rank == 3);
+      SmallVector<unsigned> contigPerThread(rank, 1);
+      auto kWidth = getKWidth();
+      assert(kWidth != 0 && "Do not support kWidth=0");
+      if (getOpIdx() == 0)
+        contigPerThread[rank - 1] = kWidth;
+      else
+        contigPerThread[rank - 2] = kWidth;
+      return contigPerThread;
     };
   }];
 }
