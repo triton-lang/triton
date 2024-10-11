@@ -239,8 +239,8 @@ We can now run the decorated function above. Pass `print_data=True` to see the p
     6      262144.0   384.000001   384.000001
     7      524288.0   614.400016   614.400016
     8     1048576.0   819.200021   819.200021
-    9     2097152.0  1023.999964  1023.999964
-    10    4194304.0  1228.800031  1228.800031
+    9     2097152.0  1068.521715  1023.999964
+    10    4194304.0  1260.307736  1228.800031
     11    8388608.0  1424.695621  1404.342820
     12   16777216.0  1560.380965  1560.380965
     13   33554432.0  1631.601649  1624.859540
@@ -253,7 +253,7 @@ We can now run the decorated function above. Pass `print_data=True` to see the p
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 8.849 seconds)
+   **Total running time of the script:** (0 minutes 11.625 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_01-vector-add.py:
