@@ -673,6 +673,7 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   Value rangeDecr =
       rewriter.create<arith::AddIOp>(loc, rangeIncrStep, stepDecr);
   Value totalIterations = rewriter.create<arith::DivSIOp>(loc, rangeDecr, step);
+  Value lastIter = rewriter.create<arith::SubIOp>(loc, totalIterations, one);
 
   // If total_iters < max_stage, start the epilogue at zero to match the
   // ramp-up in the prologue.
