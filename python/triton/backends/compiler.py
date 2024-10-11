@@ -210,6 +210,9 @@ class AttrsDescriptor:
             return "1"
         return "N"
 
+    def __repr__(self):
+        return f"AttrsDescriptor.from_dict({self.to_dict()})"
+
 
 @dataclass(frozen=True)
 class GPUTarget(object):
