@@ -245,12 +245,11 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
       order.insert(order.begin(), 0);
     }
   } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+    // [batch, m, k]: [2, 0, 1]
+    std::iota(order.rbegin(), order.rend(), 0);
     if (dotOpLayout.getOpIdx() == 0) {
-      // [0, 1]
-      std::iota(order.begin(), order.end(), 0);
-    } else {
-      // [1, 0]
-      std::iota(order.rbegin(), order.rend(), 0);
+      // [batch, k, n]: [2, 1, 0]
+      std::swap(order[0], order[1]);
     }
   }
   return order;
