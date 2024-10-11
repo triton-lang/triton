@@ -245,290 +245,284 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
       order.insert(order.begin(), 0);
     }
   } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    // [batch, m, k]: [2, 0, 1]
+    // opIdx=0: [batch, m, k] -> [2, 0, 1]
+    // opIdx=1: [batch, k, n] -> [2, 1, 0]
     std::iota(order.rbegin(), order.rend(), 0);
     if (dotOpLayout.getOpIdx() == 0) {
-      // [batch, k, n]: [2, 1, 0]
       std::swap(order[0], order[1]);
     }
+    return order;
   }
-  return order;
-}
 
-SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
-  SmallVector<unsigned> order(rank);
-  // The 'order' field typically represents a descending sorted array of
-  // dimensions based on contiguity. For instance, in axisInfo utilities that
-  // retrieve tensor contiguity, it's assumed that the dimension with the
-  // highest contiguity corresponds to order[0].
-  //
-  // The relation between contiguity and order is only relevant if the layout
-  // interfaces with HBM, as is the case when we load tensor from HBM to
-  // registers in the dot layout to bypass LDS. When bypassing LDS, we make
-  // the following assumptions about tensor layouts:
-  // - Tensor A (opIdx == 0) is considered to be row-major.
-  // - Tensor B (opIdx == 1) is considered to be column-major.
-  //
-  // Based on these assumptions, we define the following orders:
-  // - For opIdx == 0, we assume an order of [1, 0].
-  // - For opIdx == 1, we assume an order of [0, 1].
-  std::iota(order.rbegin(), order.rend(), 0);
-  if (opIdx == 1) {
-    std::swap(order[0], order[1]);
-  }
-  return order;
-}
-
-SmallVector<unsigned> getOrder(Attribute layout) {
-  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
-    return llvm::to_vector(blockedLayout.getOrder());
-  }
-  if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
-    auto distributedLayout = cast<DistributedEncodingTrait>(layout);
-    auto rank = distributedLayout.getWarpsPerCTA().size();
+  SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
     SmallVector<unsigned> order(rank);
+    // The 'order' field typically represents a descending sorted array of
+    // dimensions based on contiguity. For instance, in axisInfo utilities that
+    // retrieve tensor contiguity, it's assumed that the dimension with the
+    // highest contiguity corresponds to order[0].
+    //
+    // The relation between contiguity and order is only relevant if the layout
+    // interfaces with HBM, as is the case when we load tensor from HBM to
+    // registers in the dot layout to bypass LDS. When bypassing LDS, we make
+    // the following assumptions about tensor layouts:
+    // - Tensor A (opIdx == 0) is considered to be row-major.
+    // - Tensor B (opIdx == 1) is considered to be column-major.
+    //
+    // Based on these assumptions, we define the following orders:
+    // - For opIdx == 0, we assume an order of [1, 0].
+    // - For opIdx == 1, we assume an order of [0, 1].
     std::iota(order.rbegin(), order.rend(), 0);
-    return order;
-  }
-  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
-    return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
-  }
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
-    SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
-    unsigned dim = sliceLayout.getDim();
-    SmallVector<unsigned> order;
-    for (unsigned d : parentOrder) {
-      if (d != dim)
-        order.push_back(d > dim ? d - 1 : d);
+    if (opIdx == 1) {
+      std::swap(order[0], order[1]);
     }
     return order;
   }
-  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
-    return llvm::to_vector(sharedLayout.getOrder());
-  }
 
-  llvm::report_fatal_error("Unimplemented usage of getOrder");
-  return {};
-};
-
-SmallVector<unsigned> getThreadOrder(Attribute layout) {
-  if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
-    return distributedLayout.getThreadOrder();
-  else
-    llvm::report_fatal_error("Unimplemented usage of getThreadOrder");
-  return {};
-};
-
-CTALayoutAttr getCTALayout(Attribute layout) {
-  if (auto distributedLayout =
-          mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
-    return CTALayoutAttr::get(
-        layout.getContext(), getCTAsPerCGA(distributedLayout),
-        getCTASplitNum(distributedLayout), getCTAOrder(distributedLayout));
-  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout))
-    return sharedLayout.getCTALayout();
-  else
-    llvm::report_fatal_error("Unimplemented usage of getCTALayout");
-  return {};
-}
-
-SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
-  ArrayRef<unsigned> ref;
-  if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
-    return distributedLayout.getCTAsPerCGA();
-  else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout))
-    ref = sharedLayout.getCTALayout().getCTAsPerCGA();
-  else
-    llvm::report_fatal_error("Unimplemented usage of getCTAsPerCGA");
-  return SmallVector<unsigned>(ref.begin(), ref.end());
-}
-
-SmallVector<unsigned> getCTASplitNum(Attribute layout) {
-  SmallVector<unsigned> res;
-  if (auto distributedLayout =
-          mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distributedLayout.getCTASplitNum();
-  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
-    res.assign(sharedLayout.getCTALayout().getCTASplitNum().begin(),
-               sharedLayout.getCTALayout().getCTASplitNum().end());
-  } else {
-    assert(false && "Unimplemented usage of getCTASplitNum");
-  }
-  return res;
-}
-
-SmallVector<unsigned> getCTAOrder(Attribute layout) {
-  SmallVector<unsigned> res;
-  if (auto distributedLayout =
-          mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
-    res = distributedLayout.getCTAOrder();
-  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
-    res = SmallVector<unsigned>(sharedLayout.getCTALayout().getCTAOrder());
-  } else {
-    llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
-  }
-  return res;
-}
-
-SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
-                                    ArrayRef<int64_t> shape) {
-  unsigned rank = shape.size();
-  SmallVector<int64_t> shapePerCTA(rank);
-  for (unsigned i = 0; i < rank; ++i) {
-    // This wrapping rule must be consistent with emitCTAOffsetForLayout
-    unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
-    shapePerCTA[i] = shape[i] / splitNum;
-  }
-  return shapePerCTA;
-}
-
-SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
-    // Special logic for pipeline pass, where shape is 3D and CTALayout is 2D.
-    // The first dim of shape is numStages. This is a work around, otherwise
-    // too many places would have to be modified in pipeline pass. Maybe we
-    // need to refactor this logic in the future.
-    auto CTASplitNum = sharedLayout.getCTALayout().getCTASplitNum();
-    if (shape.size() == CTASplitNum.size() + 1) {
-      auto res = getShapePerCTA(CTASplitNum, shape.drop_front());
-      res.insert(res.begin(), shape.front());
-      return res;
+  SmallVector<unsigned> getOrder(Attribute layout) {
+    if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
+      return llvm::to_vector(blockedLayout.getOrder());
     }
-  }
-  return getShapePerCTA(getCTASplitNum(layout), shape);
-}
+    if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
+      auto distributedLayout = cast<DistributedEncodingTrait>(layout);
+      auto rank = distributedLayout.getWarpsPerCTA().size();
+      SmallVector<unsigned> order(rank);
+      std::iota(order.rbegin(), order.rend(), 0);
+      return order;
+    }
+    if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
+      return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
+    }
+    if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
+      SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
+      unsigned dim = sliceLayout.getDim();
+      SmallVector<unsigned> order;
+      for (unsigned d : parentOrder) {
+        if (d != dim)
+          order.push_back(d > dim ? d - 1 : d);
+      }
+      return order;
+    }
+    if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+      return llvm::to_vector(sharedLayout.getOrder());
+    }
 
-SmallVector<int64_t> getShapePerCTA(Type type) {
-  auto tensorType = cast<TensorOrMemDesc>(type);
-  return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape());
-}
+    llvm::report_fatal_error("Unimplemented usage of getOrder");
+    return {};
+  };
 
-unsigned getNumWarpsPerCTA(Attribute layout) {
-  SmallVector<unsigned> warpsPerCTA;
-  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
-    warpsPerCTA = blockedLayout.getWarpsPerCTA();
-  else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout))
-    return getNumWarpsPerCTA(sliceLayout.getParent());
-  else if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
-    // Use the distributed layout interface to get the number of warps per
-    // CTA.
-    auto distributedLayout = cast<DistributedEncodingTrait>(layout);
-    warpsPerCTA = distributedLayout.getWarpsPerCTA();
-  } else if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout))
-    warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-  else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout))
-    warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-  else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
-    return getNumWarpsPerCTA(dotLayout.getParent());
-  else if (auto sharedLayout = dyn_cast<SharedEncodingAttr>(layout))
-    llvm::report_fatal_error("Cannot get numWarps from SharedEncodingAttr");
-  else
-    llvm::report_fatal_error("Unimplemented usage of getNumWarpsPerCTA");
-  return product<unsigned>(warpsPerCTA);
-}
+  SmallVector<unsigned> getThreadOrder(Attribute layout) {
+    if (auto distributedLayout =
+            mlir::dyn_cast<DistributedEncodingTrait>(layout))
+      return distributedLayout.getThreadOrder();
+    else
+      llvm::report_fatal_error("Unimplemented usage of getThreadOrder");
+    return {};
+  };
 
-unsigned getNumCTAs(Attribute layout) {
-  return product<unsigned>(getCTAsPerCGA(layout));
-}
-
-template <typename T> bool hasEncoding(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = dyn_cast<TensorOrMemDesc>(type)) {
-    auto encoding = tensorType.getEncoding();
-    return encoding && isa<T>(encoding);
-  }
-  return false;
-}
-
-bool hasDotOperandEncoding(Value value) {
-  return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
-}
-
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
-  // If the new elements per thread is less than the old one, we will need to
-  // do convert encoding that goes through shared memory anyway. So we
-  // consider it as expensive.
-  RankedTensorType tensorTy = cat.getType();
-  auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
-  auto shape = tensorTy.getShape();
-  auto elemTy = tensorTy.getElementType();
-  auto newTotalElemsPerThread =
-      gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
-  return newTotalElemsPerThread < totalElemsPerThread;
-}
-
-LogicalResult CTALayoutAttr::verify(
-    function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> CTAsPerCGA,
-    ArrayRef<unsigned> CTASplitNum, ArrayRef<unsigned> CTAOrder) {
-  if (CTAsPerCGA.size() != CTASplitNum.size() ||
-      CTASplitNum.size() != CTAOrder.size()) {
-    return emitError() << "CTAsPerCGA, CTASplitNum, and CTAOrder must all have "
-                          "the same rank.";
+  CTALayoutAttr getCTALayout(Attribute layout) {
+    if (auto distributedLayout =
+            mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
+      return CTALayoutAttr::get(
+          layout.getContext(), getCTAsPerCGA(distributedLayout),
+          getCTASplitNum(distributedLayout), getCTAOrder(distributedLayout));
+    } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout))
+      return sharedLayout.getCTALayout();
+    else
+      llvm::report_fatal_error("Unimplemented usage of getCTALayout");
+    return {};
   }
 
-  if (!isPermutationOfIota(CTAOrder)) {
-    return emitError()
-           << "CTAOrder must be a permutation of 0..(rank-1), but was ["
-           << CTAOrder << "]";
+  SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
+    ArrayRef<unsigned> ref;
+    if (auto distributedLayout =
+            mlir::dyn_cast<DistributedEncodingTrait>(layout))
+      return distributedLayout.getCTAsPerCGA();
+    else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout))
+      ref = sharedLayout.getCTALayout().getCTAsPerCGA();
+    else
+      llvm::report_fatal_error("Unimplemented usage of getCTAsPerCGA");
+    return SmallVector<unsigned>(ref.begin(), ref.end());
   }
 
-  if (llvm::any_of(CTAsPerCGA, [](unsigned x) { return x == 0; })) {
-    return emitError() << "Every element in CTAsPerCGA must be greater than 0.";
+  SmallVector<unsigned> getCTASplitNum(Attribute layout) {
+    SmallVector<unsigned> res;
+    if (auto distributedLayout =
+            mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
+      return distributedLayout.getCTASplitNum();
+    } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+      res.assign(sharedLayout.getCTALayout().getCTASplitNum().begin(),
+                 sharedLayout.getCTALayout().getCTASplitNum().end());
+    } else {
+      assert(false && "Unimplemented usage of getCTASplitNum");
+    }
+    return res;
   }
 
-  if (llvm::any_of(CTASplitNum, [](unsigned x) { return x == 0; })) {
-    return emitError()
-           << "Every element in CTASplitNum must be greater than 0.";
+  SmallVector<unsigned> getCTAOrder(Attribute layout) {
+    SmallVector<unsigned> res;
+    if (auto distributedLayout =
+            mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
+      res = distributedLayout.getCTAOrder();
+    } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+      res = SmallVector<unsigned>(sharedLayout.getCTALayout().getCTAOrder());
+    } else {
+      llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
+    }
+    return res;
   }
 
-  return success();
-}
-
-LogicalResult
-BlockedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                            ArrayRef<unsigned> sizePerThread,
-                            ArrayRef<unsigned> threadsPerWarp,
-                            ArrayRef<unsigned> warpsPerCTA,
-                            ArrayRef<unsigned> order, CTALayoutAttr CTALayout) {
-  if (sizePerThread.size() != threadsPerWarp.size() ||
-      threadsPerWarp.size() != warpsPerCTA.size() ||
-      warpsPerCTA.size() != order.size()) {
-    return emitError() << "sizePerThread, threadsPerWarp, warpsPerCTA, and "
-                          "order must all have the same rank.";
+  SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
+                                      ArrayRef<int64_t> shape) {
+    unsigned rank = shape.size();
+    SmallVector<int64_t> shapePerCTA(rank);
+    for (unsigned i = 0; i < rank; ++i) {
+      // This wrapping rule must be consistent with emitCTAOffsetForLayout
+      unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
+      shapePerCTA[i] = shape[i] / splitNum;
+    }
+    return shapePerCTA;
   }
 
-  // Empty CTALayout is allowed, but if it's present its rank must match the
-  // BlockedEncodingAttr's rank.
-  if (CTALayout.getCTASplitNum().size() != 0 &&
-      sizePerThread.size() != CTALayout.getCTASplitNum().size()) {
-    return emitError() << "BlockedEncodingAttr and CTALayout's fields must "
-                          "have the same rank.";
+  SmallVector<int64_t> getShapePerCTA(Attribute layout,
+                                      ArrayRef<int64_t> shape) {
+    if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+      // Special logic for pipeline pass, where shape is 3D and CTALayout is 2D.
+      // The first dim of shape is numStages. This is a work around, otherwise
+      // too many places would have to be modified in pipeline pass. Maybe we
+      // need to refactor this logic in the future.
+      auto CTASplitNum = sharedLayout.getCTALayout().getCTASplitNum();
+      if (shape.size() == CTASplitNum.size() + 1) {
+        auto res = getShapePerCTA(CTASplitNum, shape.drop_front());
+        res.insert(res.begin(), shape.front());
+        return res;
+      }
+    }
+    return getShapePerCTA(getCTASplitNum(layout), shape);
   }
-  if (!isPermutationOfIota(order)) {
-    return emitError()
-           << "order must be a permutation of 0..(rank-1), but was [" << order
-           << "]";
-  }
-  return success();
-}
 
-// 1 element per thread
-// order = reverse(arange(rank))
-triton::gpu::BlockedEncodingAttr
-getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
-                          int numWarps, int threadsPerWarp, int numCTAs) {
-  int rank = shape.size();
-  llvm::SmallVector<unsigned> order(rank);
-  std::iota(order.begin(), order.end(), 0);
-  std::reverse(order.begin(), order.end());
-  llvm::SmallVector<unsigned> sizePerThread(rank, 1);
-  triton::gpu::BlockedEncodingAttr encoding =
-      triton::gpu::BlockedEncodingAttr::get(context, shape, sizePerThread,
-                                            order, numWarps, threadsPerWarp,
-                                            numCTAs);
-  return encoding;
-}
+  SmallVector<int64_t> getShapePerCTA(Type type) {
+    auto tensorType = cast<TensorOrMemDesc>(type);
+    return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape());
+  }
+
+  unsigned getNumWarpsPerCTA(Attribute layout) {
+    SmallVector<unsigned> warpsPerCTA;
+    if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
+      warpsPerCTA = blockedLayout.getWarpsPerCTA();
+    else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout))
+      return getNumWarpsPerCTA(sliceLayout.getParent());
+    else if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
+      // Use the distributed layout interface to get the number of warps per
+      // CTA.
+      auto distributedLayout = cast<DistributedEncodingTrait>(layout);
+      warpsPerCTA = distributedLayout.getWarpsPerCTA();
+    } else if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout))
+      warpsPerCTA = mfmaLayout.getWarpsPerCTA();
+    else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout))
+      warpsPerCTA = wmmaLayout.getWarpsPerCTA();
+    else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
+      return getNumWarpsPerCTA(dotLayout.getParent());
+    else if (auto sharedLayout = dyn_cast<SharedEncodingAttr>(layout))
+      llvm::report_fatal_error("Cannot get numWarps from SharedEncodingAttr");
+    else
+      llvm::report_fatal_error("Unimplemented usage of getNumWarpsPerCTA");
+    return product<unsigned>(warpsPerCTA);
+  }
+
+  unsigned getNumCTAs(Attribute layout) {
+    return product<unsigned>(getCTAsPerCGA(layout));
+  }
+
+  template <typename T> bool hasEncoding(Value value) {
+    auto type = value.getType();
+    if (auto tensorType = dyn_cast<TensorOrMemDesc>(type)) {
+      auto encoding = tensorType.getEncoding();
+      return encoding && isa<T>(encoding);
+    }
+    return false;
+  }
+
+  bool hasDotOperandEncoding(Value value) {
+    return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
+  }
+
+  bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
+    // If the new elements per thread is less than the old one, we will need to
+    // do convert encoding that goes through shared memory anyway. So we
+    // consider it as expensive.
+    RankedTensorType tensorTy = cat.getType();
+    auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
+    auto shape = tensorTy.getShape();
+    auto elemTy = tensorTy.getElementType();
+    auto newTotalElemsPerThread =
+        gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
+    return newTotalElemsPerThread < totalElemsPerThread;
+  }
+
+  LogicalResult CTALayoutAttr::verify(
+      function_ref<InFlightDiagnostic()> emitError,
+      ArrayRef<unsigned> CTAsPerCGA, ArrayRef<unsigned> CTASplitNum,
+      ArrayRef<unsigned> CTAOrder) {
+    if (CTAsPerCGA.size() != CTASplitNum.size() ||
+        CTASplitNum.size() != CTAOrder.size()) {
+      return emitError()
+             << "CTAsPerCGA, CTASplitNum, and CTAOrder must all have "
+                "the same rank.";
+    }
+
+    if (!isPermutationOfIota(CTAOrder)) {
+      return emitError()
+             << "CTAOrder must be a permutation of 0..(rank-1), but was ["
+             << CTAOrder << "]";
+    }
+
+    return success();
+  }
+
+  LogicalResult BlockedEncodingAttr::verify(
+      function_ref<InFlightDiagnostic()> emitError,
+      ArrayRef<unsigned> sizePerThread, ArrayRef<unsigned> threadsPerWarp,
+      ArrayRef<unsigned> warpsPerCTA, ArrayRef<unsigned> order,
+      CTALayoutAttr CTALayout) {
+    if (sizePerThread.size() != threadsPerWarp.size() ||
+        threadsPerWarp.size() != warpsPerCTA.size() ||
+        warpsPerCTA.size() != order.size()) {
+      return emitError() << "sizePerThread, threadsPerWarp, warpsPerCTA, and "
+                            "order must all have the same rank.";
+    }
+
+    // Empty CTALayout is allowed, but if it's present its rank must match the
+    // BlockedEncodingAttr's rank.
+    if (CTALayout.getCTASplitNum().size() != 0 &&
+        sizePerThread.size() != CTALayout.getCTASplitNum().size()) {
+      return emitError() << "BlockedEncodingAttr and CTALayout's fields must "
+                            "have the same rank.";
+    }
+    if (!isPermutationOfIota(order)) {
+      return emitError()
+             << "order must be a permutation of 0..(rank-1), but was [" << order
+             << "]";
+    }
+    return success();
+  }
+
+  // 1 element per thread
+  // order = reverse(arange(rank))
+  triton::gpu::BlockedEncodingAttr getDefaultBlockedEncoding(
+      MLIRContext * context, ArrayRef<int64_t> shape, int numWarps,
+      int threadsPerWarp, int numCTAs) {
+    int rank = shape.size();
+    llvm::SmallVector<unsigned> order(rank);
+    std::iota(order.begin(), order.end(), 0);
+    std::reverse(order.begin(), order.end());
+    llvm::SmallVector<unsigned> sizePerThread(rank, 1);
+    triton::gpu::BlockedEncodingAttr encoding =
+        triton::gpu::BlockedEncodingAttr::get(context, shape, sizePerThread,
+                                              order, numWarps, threadsPerWarp,
+                                              numCTAs);
+    return encoding;
+  }
 
 } // namespace gpu
 } // namespace triton
