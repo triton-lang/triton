@@ -2,6 +2,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "triton/Dialect/Triton/IR/AttrInterfaces.h.inc"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
