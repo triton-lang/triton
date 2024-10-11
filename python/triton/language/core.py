@@ -42,7 +42,7 @@ def builtin(fn: T) -> T:
 
 def _flatten_list(lst):
     for item in lst:
-        if isinstance(item, list):
+        if isinstance(item, (list, tuple_type, tuple)):
             yield from _flatten_list(item)
         else:
             yield item
@@ -682,14 +682,15 @@ class function_type(dtype):
 
     def __init__(self, ret_types: List[dtype], param_types: List[dtype]) -> None:
         self.ret_types = ret_types
-        self.param_types = param_types
+        # self.param_types = param_types
+        self.full_param_types = param_types
+        self.param_types =  list(_flatten_list(param_types))
 
     def __str__(self):
         return f'fn ({self.param_types}) -> {self.ret_types}'
 
     def to_ir(self, builder: ir.builder):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
-        ir_param_types = list(_flatten_list(ir_param_types))
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
         return builder.get_function_ty(ir_param_types, ret_types)
 
@@ -703,6 +704,9 @@ class tuple_type(dtype):
 
     def __str__(self):
         return self.name
+
+    def __iter__(self):
+        return iter(self.types)
 
     def make_ast_values(self, ir_args):
         assert len(ir_args) == len(self.types)
@@ -815,7 +819,7 @@ class tensor(_value):
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
-        self.shape = [constexpr(s) for s in self.shape]
+        self.shape = tuple([constexpr(s) for s in self.shape])
 
     def serialize(self):
         return [self.handle]
@@ -1208,14 +1212,27 @@ class tuple:
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):
             idx = constexpr(idx)
-        assert isinstance(idx, constexpr)
-        return self.values[idx]
+        if isinstance(idx, constexpr):
+            return self.values[idx]
+        else:
+            return tuple(self.values[idx.start:idx.stop:idx.step])
 
     def __setitem__(self, idx: constexpr, value):
         if isinstance(idx, int):
             idx = constexpr(idx)
         assert isinstance(idx, constexpr)
         self.values[idx] = value
+    
+    def __add__(self, other):
+        if isinstance(other, list):
+            other = tuple(other)
+        return tuple(self.values + other.values)
+        # return tuple(a + b for a, b in zip(self.values, other.values))
+    
+    def __eq__(self, other):
+        if isinstance(other, list):
+            other = tuple(other)
+        return constexpr(self.values == other.values)
     
     def __iter__(self):
         return iter(self.values)
@@ -1573,7 +1590,7 @@ def expand_dims(input, axis, _builder=None):
     """
     input = semantic.to_tensor(input, _builder)
     axis = _constexpr_to_value(axis)
-    axes = list(axis) if isinstance(axis, Sequence) else [axis]
+    axes = list(axis) if isinstance(axis, (Sequence, tuple)) else [axis]
     new_ndim = len(input.shape) + len(axes)
     axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
 

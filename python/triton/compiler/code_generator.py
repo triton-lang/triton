@@ -58,7 +58,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return isinstance(o, constexpr)
+    return isinstance(o, (constexpr, language.core.dtype))
 
 
 def _is_triton_scalar(o: Any) -> bool:
@@ -356,7 +356,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_List(self, node):
         ctx = self.visit(node.ctx)
         assert ctx is None
-        elts = [self.visit(elt) for elt in node.elts]
+        elts = language.tuple([self.visit(elt) for elt in node.elts])
         return elts
 
     # By design, only non-kernel functions can return
@@ -416,6 +416,15 @@ class CodeGenerator(ast.NodeVisitor):
         arg_values = []
         ir_idx = 0
         ast_idx = 0
+
+        # curr = 0
+        # for i in range(len(arg_names)):
+        #     ty = self.prototype.full_param_types[i]
+        #     n_types = ty.num_composite_types
+        #     next = curr + n_types
+        #     [curr:next]
+        #     curr = next
+            
         for i in range(len(arg_names)):
             if i in self.constants:
                 cst = self.constants[i]
@@ -427,7 +436,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if i in self.attributes:
                     for name, value in self.attributes[i]:
                         self.fn.set_arg_attr(ir_idx, name, value)
-                curr_ast_type = self.prototype.param_types[ast_idx]
+                curr_ast_type = self.prototype.full_param_types[ast_idx]
 
                 # Mark this argument as a pass-by-value TMA descriptor (nvidia)
                 if isinstance(curr_ast_type, nv_tma_desc_type):
@@ -1073,24 +1082,19 @@ class CodeGenerator(ast.NodeVisitor):
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
-        args = [
-            arg if _is_triton_value(arg) or isinstance(arg, language.core.tuple) else constexpr(arg) for arg in args
-        ]
-        # generate function def
-        attributes = {}
-        constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
-        constants = {i: args[i] for i in constexprs}
-        # generate call
-        args = [None if i in constexprs else arg for i, arg in enumerate(args)]
-        arg_types = [arg.type for arg in args if arg is not None]
-        fn_name = mangle_fn(fn.__name__, arg_types, constants)
+        arg_vals = [arg for arg in language.core._flatten_list(args) if not _is_constexpr(arg)]
+        constants = {i: args[i] for i, arg in enumerate(args) if _is_constexpr(arg)}
+        # mangle
+        fn_name = mangle_fn(fn.__name__, [arg.type for arg in arg_vals], constants)
+        #
+        arg_types = [arg.type for arg in args if not _is_constexpr(arg)]
+        prototype = language.function_type([], arg_types)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
-            prototype = language.function_type([], arg_types)
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
+            generator = CodeGenerator(self.context, prototype, gscope, {}, constants, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
@@ -1106,7 +1110,6 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
-        arg_vals = language.tuple([x for x in args if x is not None]).serialize()
         call_op = self.builder.call(symbol, arg_vals)
         if callee_ret_type is None:
             return None
