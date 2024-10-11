@@ -14,7 +14,7 @@ import json
 from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
@@ -36,7 +36,7 @@ class Backend:
     language_package_data: List[str]
     src_dir: str
     backend_dir: str
-    language_dir: str
+    language_dir: Optional[str]
     install_dir: str
     is_external: bool
 
