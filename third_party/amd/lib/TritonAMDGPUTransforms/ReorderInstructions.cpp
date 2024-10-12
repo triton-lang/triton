@@ -61,6 +61,24 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
   return ipnt;
 }
 
+// Check if the operation inLoopOp is inside any scf::ForOp and outLoopOp is not
+// inside the same loop.
+bool checkLoopCondition(mlir::Operation *inLoopOp, mlir::Operation *outLoopOp) {
+  scf::ForOp parentForOp = inLoopOp->getParentOfType<scf::ForOp>();
+
+  // If the inLoopOp is not inside an scf::ForOp, return false.
+  if (!parentForOp) {
+    return false;
+  }
+
+  // If the outLoopOp is defined outside the loop, return true.
+  if (!parentForOp.getOperation()->isAncestor(outLoopOp)) {
+    return true;
+  }
+
+  return false;
+}
+
 class TritonAMDGPUReorderInstructionsPass
     : public TritonAMDGPUReorderInstructionsBase<
           TritonAMDGPUReorderInstructionsPass> {
@@ -101,19 +119,28 @@ public:
       kv.first->moveBefore(kv.second);
     opToMove.clear();
 
-    // Move writing to LDS and reading from LDS right after the loading of a
-    // tensor from global memory. There are 2 possible patterns depending on
-    // whether writing to LDS is done using an optional local_alloc argument or
-    // a local_store instruction:
+    // Adjust the placement of LDS writes and reads to immediately follow the
+    // definition of their operands in case where LDS write is in the
+    // loop but it's operand is not. This is a heuristic for optimizing fused
+    // attention by hoisting Q tensor LDS read/write operations outside of the
+    // loop, as Q is a loop invariant and can be loaded once before entering the
+    // loop.
+    // There are two possible patterns for this adjustment depending on
+    // whether the write to LDS is performed using an optional `local_alloc`
+    // argument or a `local_store` instruction.
     //
-    // 1) %1 = load %ptr
+    // clang-format off
+    //
+    // 1) %1 = some_op ... (typically a load or an operation that scales the tensor after loading)
     //    %2 = local_alloc %1
     //    %3 = local_load %2
     //
-    // 2) %1 = load %ptr
+    // 2) %1 = some_op ...
     //    %2 = local_alloc
     //    %3 = local_store %1, %2
     //    %4 = local_load %2
+    //
+    // clang-format on
     m.walk([&](ttg::LocalLoadOp localLoad) {
       auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
       if (!localAlloc)
@@ -123,10 +150,15 @@ public:
       if (localAlloc->getNumOperands() == 1) {
         if (!localAlloc->hasOneUse())
           return;
-        auto loadOp = localAlloc->getOperand(0).getDefiningOp<tt::LoadOp>();
-        if (!loadOp)
+
+        auto definingOp = localAlloc->getOperand(0).getDefiningOp();
+        // Check if localAlloc is in the loop but it's defining op is outside of
+        // it.
+        if (!definingOp || !checkLoopCondition(localAlloc, definingOp)) {
           return;
-        localAlloc->moveAfter(loadOp);
+        }
+
+        localAlloc->moveAfter(definingOp);
         localLoad->moveAfter(localAlloc);
         return;
       }
@@ -145,10 +177,14 @@ public:
       if (!isa<ttg::LocalStoreOp>(localStore))
         return;
 
-      auto loadOp = localStore->getOperand(0).getDefiningOp<tt::LoadOp>();
-      if (!loadOp)
+      auto definingOp = localStore->getOperand(0).getDefiningOp();
+      // Check if localStore is in the loop but it's defining op is outside of
+      // it.
+      if (!definingOp || !checkLoopCondition(localStore, definingOp)) {
         return;
-      localAlloc->moveAfter(loadOp);
+      }
+
+      localAlloc->moveAfter(definingOp);
       localStore->moveAfter(localAlloc);
       localLoad->moveAfter(localStore);
     });
