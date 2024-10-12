@@ -1,8 +1,8 @@
 set(GPU_INSTRUMENTATION_PASSES
-    GPUHello
+	GPUInstrumentationTestLib
     )
 
-set(GPUHello_SOURCES
+set(GPUInstrumentationTestLib_SOURCES
     GPUHello.cpp
     )
 
@@ -24,4 +24,7 @@ foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
      # which causes the llvmGetPassPluginInfo symbol to be hidden and
      # an "entry point not found" error. Reset it just for this target
      target_compile_options(${plugin} PRIVATE -fvisibility=default)
+
+     set_target_properties(${plugin} PROPERTIES
+	     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/instrumentation/triton")
 endforeach()
