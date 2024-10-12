@@ -1091,7 +1091,7 @@ class CodeGenerator(ast.NodeVisitor):
         args = [args[name] for name in fn.arg_names]
         args_flat = [x for x in language.core._flatten_list(args)]
         args_cst = {i: arg for i, arg in enumerate(args_flat) if _is_constexpr(arg)}
-        args_val = [i for i, arg in enumerate(args_flat) if not _is_constexpr(arg)]
+        args_val = [arg for i, arg in enumerate(args_flat) if not _is_constexpr(arg)]
         # mangle
         fn_name = mangle_fn(fn.__name__, [arg.type for arg in args_val], args_cst)
         # generate function def if necessary
