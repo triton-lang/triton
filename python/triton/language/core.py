@@ -690,9 +690,27 @@ class function_type(dtype):
         return f'fn ({self.param_types}) -> {self.ret_types}'
 
     def to_ir(self, builder: ir.builder):
-        ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
+        ir_param_types = [ty.to_ir(builder) for ty in self.param_types if isinstance(ty, dtype)]
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
         return builder.get_function_ty(ir_param_types, ret_types)
+
+    def deserialize(self, arg_values):
+        assert len(arg_values) == len(self.param_types)
+        ret = []
+        indx = 0
+        for ty in self.full_param_types:
+            if ty == constexpr:
+                ret.append(constexpr(arg_values[indx]))
+                indx += 1
+            elif ty == dtype:
+                ret.append(constexpr(arg_values[indx]))
+                indx += 1
+            else:
+                n_vals = ty.num_composite_types
+                curr = arg_values[indx:indx+n_vals]
+                ret.append(ty.make_ast_values(curr))
+                indx += n_vals
+        return ret
 
 
 class tuple_type(dtype):
@@ -710,8 +728,13 @@ class tuple_type(dtype):
 
     def make_ast_values(self, ir_args):
         assert len(ir_args) == len(self.types)
-        ret = tuple([tensor(ir_arg, ty) for ty, ir_arg in zip(self.types, ir_args)])
-        return ret
+        vals = []
+        for ty, ir_arg in zip(self.types, ir_args):
+            if ty == constexpr:
+                vals.append(constexpr(ir_arg))
+            else:
+                vals.append(tensor(ir_arg, ty))
+        return tuple(vals)
 
     def to_ir(self, builder: ir.builder):
         return [ty.to_ir(builder) for ty in self.types]

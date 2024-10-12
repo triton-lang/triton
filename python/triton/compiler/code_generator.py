@@ -17,6 +17,44 @@ from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedL
 from types import ModuleType
 
 
+def insert_multiple(lst, elements, indices):
+    """
+    Insert elements into lst at the specified post-insertion indices.
+
+    :param lst: The original list to modify.
+    :param elements: A list of elements to insert.
+    :param indices: A list of indices where each element should be inserted.
+                    These are post-insertion indices, meaning they refer to
+                    positions in the list after all insertions are complete.
+    :return: None. The original list 'lst' is modified in place.
+    """
+    if len(elements) != len(indices):
+        raise ValueError("Elements and indices must have the same length")
+    
+    final_length = len(lst) + len(elements)
+    result = [None] * final_length
+
+    # Place the new elements at their specified indices
+    for index, element in zip(indices, elements):
+        if index < 0 or index >= final_length:
+            raise IndexError(f"Insertion index {index} out of range")
+        if result[index] is not None:
+            raise ValueError(f"Duplicate insertion index at position {index}")
+        result[index] = element
+
+    # Fill in the old elements into the remaining positions
+    old_index = 0
+    for i in range(final_length):
+        if result[i] is None:
+            if old_index >= len(lst):
+                raise ValueError("Not enough elements in the original list")
+            result[i] = lst[old_index]
+            old_index += 1
+
+    # Modify the original list in place
+    lst[:] = result
+
+
 def mangle_ty(ty):
     if ty.is_tuple():
         return 'T' + '_'.join(map(mangle_ty, ty.types)) + 'T'
@@ -413,42 +451,11 @@ class CodeGenerator(ast.NodeVisitor):
                                                       self.prototype.to_ir(self.builder), visibility, self.noinline)
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
-        arg_values = []
-        ir_idx = 0
-        ast_idx = 0
-
-        # curr = 0
-        # for i in range(len(arg_names)):
-        #     ty = self.prototype.full_param_types[i]
-        #     n_types = ty.num_composite_types
-        #     next = curr + n_types
-        #     [curr:next]
-        #     curr = next
-            
-        for i in range(len(arg_names)):
-            if i in self.constants:
-                cst = self.constants[i]
-                if not _is_constexpr(cst):
-                    cst = constexpr(self.constants[i])
-                arg_values.append(cst)
-                continue
-            else:
-                if i in self.attributes:
-                    for name, value in self.attributes[i]:
-                        self.fn.set_arg_attr(ir_idx, name, value)
-                curr_ast_type = self.prototype.full_param_types[ast_idx]
-
-                # Mark this argument as a pass-by-value TMA descriptor (nvidia)
-                if isinstance(curr_ast_type, nv_tma_desc_type):
-                    self.fn.set_arg_attr(ir_idx, "tt.nv_tma_desc", 1)
-
-                next_ir_idx = ir_idx + curr_ast_type.num_composite_types
-                ir_args = [self.fn.args(i) for i in range(ir_idx, next_ir_idx)]
-                arg_values.append(curr_ast_type.make_ast_values(ir_args))
-                ir_idx = next_ir_idx
-                ast_idx = ast_idx + 1
-
+        arg_values = [self.fn.args(i) for i in range(self.fn.get_num_args())]
+        insert_multiple(arg_values, self.constants.values(), self.constants.keys())
+        arg_values = self.prototype.deserialize(arg_values)
         # bind arguments to symbols
+        print(arg_names, arg_values)
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
         insert_pt = self.builder.get_insertion_block()
@@ -1082,19 +1089,18 @@ class CodeGenerator(ast.NodeVisitor):
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
-        arg_vals = [arg for arg in language.core._flatten_list(args) if not _is_constexpr(arg)]
-        constants = {i: args[i] for i, arg in enumerate(args) if _is_constexpr(arg)}
+        args_flat = [x for x in language.core._flatten_list(args)]
+        args_cst = {i: arg for i, arg in enumerate(args_flat) if _is_constexpr(arg)}
+        args_val = [i for i, arg in enumerate(args_flat) if not _is_constexpr(arg)]
         # mangle
-        fn_name = mangle_fn(fn.__name__, [arg.type for arg in arg_vals], constants)
-        #
-        arg_types = [arg.type for arg in args if not _is_constexpr(arg)]
-        prototype = language.function_type([], arg_types)
+        fn_name = mangle_fn(fn.__name__, [arg.type for arg in args_val], args_cst)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            generator = CodeGenerator(self.context, prototype, gscope, {}, constants, module=self.module,
+            prototype = language.function_type([], [language.core.dtype if isinstance(arg, language.core.dtype) else arg.type for arg in args])
+            generator = CodeGenerator(self.context, prototype, gscope, {}, args_cst, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
@@ -1110,7 +1116,7 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
-        call_op = self.builder.call(symbol, arg_vals)
+        call_op = self.builder.call(symbol, args_val)
         if callee_ret_type is None:
             return None
         elif call_op.get_num_results() == 1:
@@ -1303,28 +1309,41 @@ def kernel_suffix(signature, specialization):
 
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
+    import itertools
+
     attrs = specialization.attrs
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
     constants = {cst_key(key): value for key, value in specialization.constants.items()}
+    n_types = {x: 1 for x in fn.arg_names}
+    for k, v in specialization.signature.items():
+        n_types[k] = str_to_ty(v).num_composite_types
+    cumsums = [i for i in itertools.accumulate(n_types.values())]
+    constant_idxs = {cumsums[cst_key(k)]-1: v for k, v in specialization.constants.items()}
+    def get_arg_type(name):
+        if name in specialization.signature:
+            return str_to_ty(specialization.signature[name])
+        return language.core.constexpr
+    arg_types = [get_arg_type(x) for x in fn.arg_names]
+    
     # visit kernel AST
     gscope = fn.__globals__.copy()
     function_name = fn.repr(specialization)
-    tys = list(specialization.signature.values())
-    new_constants = attrs.get_constants()
-    for k in new_constants:
-        if k in tys and tys[k] == "i1" and new_constants[k] == 1:
-            new_constants[k] = True
-
+    # tys = list(specialization.signature.values())
+    # new_constants = attrs.get_constants()
+    # for k in new_constants:
+    #     if k in tys and tys[k] == "i1" and new_constants[k] == 1:
+    #         new_constants[k] = True
+    # all_constants = constants.copy()
+    # all_constants.update(new_constants)
+    # find index of constants in serialized order
     new_attrs = attrs.filter_out_constants()
     fn_attrs = new_attrs.get_fn_attrs()
-    all_constants = constants.copy()
-    all_constants.update(new_constants)
-    arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
+    # arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
     file_name, begin_line = get_jit_fn_file_line(fn)
 
     prototype = language.function_type([], arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constant_idxs, function_name=function_name,
                               jit_fn=fn, attributes=fn_attrs, is_kernel=True, file_name=file_name,
                               begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())
