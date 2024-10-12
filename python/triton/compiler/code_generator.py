@@ -96,7 +96,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return isinstance(o, (constexpr, language.core.dtype))
+    return isinstance(o, (constexpr, language.core.dtype, int, bool))
 
 
 def _is_triton_scalar(o: Any) -> bool:
@@ -1099,7 +1099,7 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            prototype = language.function_type([], [language.core.dtype if isinstance(arg, language.core.dtype) else arg.type for arg in args])
+            prototype = language.function_type([], [language.core.dtype if isinstance(arg, (int, bool, language.core.dtype)) else arg.type for arg in args])
             generator = CodeGenerator(self.context, prototype, gscope, {}, args_cst, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1116,6 +1116,7 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
+        args_val = [arg.handle for arg in args_val]
         call_op = self.builder.call(symbol, args_val)
         if callee_ret_type is None:
             return None

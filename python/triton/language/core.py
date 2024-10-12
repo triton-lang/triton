@@ -699,10 +699,7 @@ class function_type(dtype):
         ret = []
         indx = 0
         for ty in self.full_param_types:
-            if ty == constexpr:
-                ret.append(constexpr(arg_values[indx]))
-                indx += 1
-            elif ty == dtype:
+            if ty in (constexpr, dtype, int, bool):
                 ret.append(constexpr(arg_values[indx]))
                 indx += 1
             else:
