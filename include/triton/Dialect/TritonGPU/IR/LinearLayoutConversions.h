@@ -48,6 +48,15 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // dimension, determines if the layout moves data across block boundaries.
 bool isCrossCTAConversion(const LinearLayout &layout);
 
+// Given a linear layout where the input dimensions contain a "block" dimension,
+// this method sets the "block" dimension to 0 and removes the corresponding
+// output dimensions.
+//
+// Note that this behavior differs from calling
+// `LinearLayout::sublayout(inDimNames, outDimNames)` when "block" is not in
+// `inDimNames`. The latter does not modify the output sizes.
+LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
+
 // In this function, we construct a linear layout representing the
 // <shared memory offset, iteration, block> -> <tensor element index> mapping
 // for entire `src` and `dst` tensors.  We determine the shape of the

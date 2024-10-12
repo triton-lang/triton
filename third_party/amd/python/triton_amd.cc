@@ -257,4 +257,13 @@ void init_triton_amd(py::module &&m) {
       return false;
     }
   });
+
+  m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
+    for (llvm::Argument &arg : fn->args()) {
+      // Check for incompatible attributes.
+      if (arg.hasByRefAttr() || arg.hasNestAttr())
+        continue;
+      arg.addAttr(llvm::Attribute::InReg);
+    }
+  });
 }

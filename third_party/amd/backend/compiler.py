@@ -34,6 +34,7 @@ class HIPOptions:
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
+    sanitize_overflow: bool = True
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     deprecated_fp8_dtypes: Tuple[str] = ()
@@ -264,6 +265,11 @@ class HIPBackend(BaseBackend):
         fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
+
+        # Hint the compiler that we'd like the firmware to set the kernel arguments
+        # to user SGPRs so that the kernel does not need to s_load its arguments
+        # from memory.
+        amd.set_all_fn_arg_inreg(fns[0])
 
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]

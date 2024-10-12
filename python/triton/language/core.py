@@ -30,6 +30,7 @@ def builtin(fn: T) -> T:
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
+            print(kwargs)
             raise ValueError("Did you forget to add @triton.jit ? "
                              "(`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
@@ -440,6 +441,20 @@ class dtype:
             assert self.is_floating()
             return dtype.KIND.FLOATING
 
+    def get_int_max_value(self):
+        if self.is_int_signed():
+            return 2**(self.int_bitwidth - 1) - 1
+        if self.is_int_unsigned():
+            return 2**self.int_bitwidth - 1
+        assert False
+
+    def get_int_min_value(self):
+        if self.is_int_signed():
+            return -2**(self.int_bitwidth - 1)
+        if self.is_int_unsigned():
+            return 0
+        assert False
+
     @staticmethod
     def is_dtype(type_str):
         return type_str in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES
@@ -701,12 +716,20 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
         raise ValueError(f'Unsupported bitwidth {bitwidth} and signedness {signed}')
 
 
+class _value:
+    """Base class of values that exist in the triton IR (i.e. not constexprs).
+    """
+
+    def __init__(self, handle):
+        self.handle = handle
+
+
 # -----------------------
 # tensor
 # -----------------------
 
 
-class tensor:
+class tensor(_value):
     """Represents an N-dimensional array of values or pointers.
 
     :code:`tensor` is the fundamental data structure in Triton programs.  Most
@@ -729,7 +752,7 @@ class tensor:
     def __init__(self, handle, type: dtype):
         """Not called by user code."""
         # IR handle
-        self.handle = handle
+        super().__init__(handle)
         # Block shape
         self.shape = type.shape if type.is_block() else ()
         self.numel = 1
@@ -747,31 +770,27 @@ class tensor:
 
     @builtin
     def __add__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.add(self, other, _builder)
+        return add(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __radd__(self, other, _builder=None):
-        return self.__add__(other, _builder=_builder)
+        return add(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __sub__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.sub(self, other, _builder)
+        return sub(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __rsub__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.sub(other, self, _builder)
+        return sub(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __mul__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.mul(self, other, _builder)
+        return mul(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __rmul__(self, other, _builder=None):
-        return self.__mul__(other, _builder=_builder)
+        return mul(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __truediv__(self, other, _builder=None):
@@ -1540,6 +1559,29 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
 
 
+@builtin
+def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, out_dtype=float32, _builder=None):
+    """
+    Returns the matrix product of two blocks in microscaling format.
+    lhs and rhs use microscaling formats described here:
+    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+    :param lhs: The first tensor to be multiplied.
+    :type lhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :param lhs_scale: Scale factor for lhs tensor.
+    :type lhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
+    :param lhs_format: format of the lhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :param rhs: The second tensor to be multiplied.
+    :type rhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :param rhs_scale: Scale factor for rhs tensor.
+    :type rhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
+    :param rhs_format: format of the rhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :param acc: The accumulator tensor. If not None, the result is added to this tensor.
+    """
+    out_dtype = _constexpr_to_value(out_dtype)
+    assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
+    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, out_dtype, _builder)
+
+
 # -----------------------
 # Non-Atomic Memory Operations
 # -----------------------
@@ -1861,6 +1903,33 @@ def where(condition, x, y, _builder=None):
 # -----------------------
 # Math
 # -----------------------
+
+
+@builtin
+def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    x = semantic.to_tensor(x, _builder)
+    y = semantic.to_tensor(y, _builder)
+    return semantic.add(x, y, sanitize_overflow, _builder)
+
+
+@builtin
+def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    x = semantic.to_tensor(x, _builder)
+    y = semantic.to_tensor(y, _builder)
+    return semantic.sub(x, y, sanitize_overflow, _builder)
+
+
+@builtin
+def mul(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    x = semantic.to_tensor(x, _builder)
+    y = semantic.to_tensor(y, _builder)
+    return semantic.mul(x, y, sanitize_overflow, _builder)
 
 
 @builtin

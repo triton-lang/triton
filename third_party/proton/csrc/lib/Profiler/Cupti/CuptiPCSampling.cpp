@@ -6,6 +6,7 @@
 #include "Utility/Map.h"
 #include "Utility/String.h"
 #include <memory>
+#include <stdexcept>
 #include <tuple>
 
 namespace proton {

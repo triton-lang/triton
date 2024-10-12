@@ -8,11 +8,6 @@ import pytest
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 print_path = os.path.join(dir_path, "print_helper.py")
-assert_path = os.path.join(dir_path, "assert_helper.py")
-
-# TODO: bfloat16 after LLVM-15
-assert_types = ["device_assert", "device_assert_passes", "assert", "static_assert", "no_debug", "double_assert"]
-nested_types = [(caller, callee) for caller in ["true", "false", "none"] for callee in ["true", "false", "none"]]
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
 
 
@@ -120,59 +115,3 @@ def test_print(func_type: str, data_type: str, device: str):
             continue
         print(f'Expected line "{line}" {expected_lines[line]} time(s), but saw {actual_lines[line]} time(s)')
     assert all(delta == 0 for delta in diff.values())
-
-
-@pytest.mark.parametrize("func_type", assert_types)
-def test_assert(func_type: str, device: str):
-    # The total number of elements in the 1-D tensor to assert on.
-    N = 128
-
-    proc = subprocess.run(
-        [sys.executable, assert_path, "test_assert", func_type, device],
-        capture_output=True,
-        env={**os.environ, "TRITON_DEBUG": "1"},
-    )
-    errs = proc.stderr.splitlines()
-    num_errs = 0
-    for err in errs:
-        if "x != 0" in err.decode("utf-8", errors="ignore"):
-            num_errs += 1
-
-    # Check for segfaults.
-    assert all("segmentation fault" not in line.decode("utf-8", errors="ignore").lower() for line in errs)
-
-    if func_type == "static_assert" or func_type == "device_assert_passes":
-        assert num_errs == 0
-    else:
-        assert num_errs == N - 1
-
-
-@pytest.mark.parametrize("caller_type, callee_type", nested_types)
-def test_assert_nested(caller_type, callee_type, device):
-    # The total number of elements in the 1-D tensor to assert on.
-    N = 128
-
-    proc = subprocess.run(
-        [sys.executable, assert_path, "test_assert_nested", caller_type, callee_type, device],
-        capture_output=True,
-    )
-    errs = proc.stderr.splitlines()
-    num_errs = 0
-    for err in errs:
-        if "x != 0" in err.decode("utf-8", errors="ignore"):
-            num_errs += 1
-    if caller_type == "none":
-        if callee_type == "true":
-            assert num_errs == N - 1
-        else:
-            assert num_errs == 0
-    elif caller_type == "true":
-        if callee_type == "false":
-            assert num_errs == 0
-        else:
-            assert num_errs == N - 1
-    elif caller_type == "false":
-        if callee_type == "true":
-            assert num_errs == N - 1
-        else:
-            assert num_errs == 0

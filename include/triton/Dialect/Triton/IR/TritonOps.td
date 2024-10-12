@@ -602,6 +602,12 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
 
     let assemblyFormat = "$axis attr-dict `:` type($result)";
 
+    let builders = [
+      OpBuilder<(ins "int":$axis), [{
+        build($_builder, $_state, $_builder.getI32Type(), ProgramIDDimAttr::get($_builder.getContext(), ProgramIDDim(axis)));
+      }]>
+    ];
+
     let extraClassDeclaration = [{
       int32_t getAxisAsInt() {
         return static_cast<int32_t>(getAxis());
@@ -615,6 +621,11 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
     let results = (outs I32:$result);
 
     let assemblyFormat = "$axis attr-dict `:` type($result)";
+    let builders = [
+      OpBuilder<(ins "int":$axis), [{
+        build($_builder, $_state, $_builder.getI32Type(), ProgramIDDimAttr::get($_builder.getContext(), ProgramIDDim(axis)));
+      }]>
+    ];
 
     let extraClassDeclaration = [{
       int32_t getAxisAsInt() {
@@ -660,6 +671,43 @@ def TT_DotOp : TT_Op<"dot", [Pure,
       type($a) `*` type($b) `->` type($d)
     }];
     let hasVerifier = 1;
+}
+
+
+//
+// DotScaled Op
+//
+def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
+                             DotLike,
+                             TypesMatchWith<"result's type matches accumulator's type",
+                                            "d", "c", "$_self">]> {
+    let summary = "dot_scaled";
+
+    let description = [{
+        $d = matrix_multiply(scale($lhs, $lhs_scale), scale($rhs, $rhs_scale)) + $c.
+        Where scale(x, s) is a function that applies the scale per block following microscaling spec.
+    }];
+
+    let arguments = (
+      ins
+      // inputs are integer types as they are packed types and we currently
+      // don't have a representation for those.
+      TT_IntTensor:$lhs,
+      TT_IntTensor:$rhs,
+      TT_FloatTensor:$c,
+      TT_IntTensor:$lhs_scale,
+      Optional<TT_IntTensor>:$rhs_scale,
+      TT_F8F6F4TypeAttr:$lhs_type,
+      TT_F8F6F4TypeAttr:$rhs_type
+    );
+
+    let results = (outs TT_FloatTensor:$d);
+
+    // Not sure why I need to fully specify the optional group, but otherwise it complains when loading the mlir file
+    let assemblyFormat = [{
+      $lhs `,` $lhs_scale `,` $rhs (`,`) : (`,` $rhs_scale^ `,`)? $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
+      `:` type($lhs) `,` type($lhs_scale) `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
+    }];
 }
 
 //

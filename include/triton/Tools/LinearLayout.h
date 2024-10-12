@@ -597,7 +597,7 @@ public:
   //
   // TODO(jlebar): Implement divideLeft.
   // std::optional<LinearLayout> divideLeft(const LinearLayout &divisor);
-  std::optional<LinearLayout> divideRight(const LinearLayout &divisor);
+  std::optional<LinearLayout> divideRight(const LinearLayout &divisor) const;
 
   // Gets a layout with only these in/out dimensions.
   //
