@@ -452,9 +452,9 @@ class CodeGenerator(ast.NodeVisitor):
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
         arg_values = [self.fn.args(i) for i in range(self.fn.get_num_args())]
-        for i, arg in enumerate(arg_values):
-            if isinstance(arg, ir.block_argument) and i in self.attributes:
-                for name, value in self.attributes[i]:
+        for i, (idx, _) in enumerate(self.prototype.native_types.items()):
+            if idx in self.attributes:
+                for name, value in self.attributes[idx]:
                     self.fn.set_arg_attr(i, name, value)
         insert_multiple(arg_values, self.constants.values(), self.constants.keys())
         arg_values = self.prototype.deserialize(arg_values)
@@ -1346,6 +1346,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     # arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
     file_name, begin_line = get_jit_fn_file_line(fn)
     prototype = language.function_type([], arg_types)
+    # breakpoint()
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=constant_idxs, function_name=function_name,
                               jit_fn=fn, attributes=fn_attrs, is_kernel=True, file_name=file_name,
                               begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
