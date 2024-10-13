@@ -46,7 +46,7 @@ def insert_multiple(lst, elements, indices):
     orig = dict(zip(indices, elements))
     old_index = 0
     for i in range(final_length):
-        if result[i] is None and (i in orig and orig[i] is not None):
+        if result[i] is None and (i not in orig or orig[i] is not None):
             if old_index >= len(lst):
                 raise ValueError("Not enough elements in the original list")
             result[i] = lst[old_index]
@@ -451,15 +451,14 @@ class CodeGenerator(ast.NodeVisitor):
                                                       self.prototype.to_ir(self.builder), visibility, self.noinline)
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
-        arg_values = [self.fn.args(i) for i in range(self.fn.get_num_args()) if i not in self.constants.keys()]
-        insert_multiple(arg_values, self.constants.values(), self.constants.keys())
+        arg_values = [self.fn.args(i) for i in range(self.fn.get_num_args())]
         for i, arg in enumerate(arg_values):
             if isinstance(arg, ir.block_argument) and i in self.attributes:
                 for name, value in self.attributes[i]:
                     self.fn.set_arg_attr(i, name, value)
+        insert_multiple(arg_values, self.constants.values(), self.constants.keys())
         arg_values = self.prototype.deserialize(arg_values)
         # bind arguments to symbols
-        print(arg_names, arg_values)
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
         insert_pt = self.builder.get_insertion_block()
@@ -1103,7 +1102,7 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            prototype = language.function_type([], [language.core.dtype if isinstance(arg, (language.core.dtype)) else arg.type for arg in args])
+            prototype = language.function_type([], [language.core.dtype if isinstance(arg, (bool, int, language.core.dtype)) else arg.type for arg in args])
             generator = CodeGenerator(self.context, prototype, gscope, {}, args_cst, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1325,7 +1324,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     cumsums = [i for i in itertools.accumulate(n_types.values())]
     constant_idxs = {cumsums[cst_key(k)]-1: v for k, v in specialization.constants.items()}
     def get_arg_type(name):
-        if name in specialization.signature:
+        if name in specialization.signature and fn.arg_names.index(name) not in constant_idxs:
             return str_to_ty(specialization.signature[name])
         return language.core.constexpr
     arg_types = [get_arg_type(x) for x in fn.arg_names]
