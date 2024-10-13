@@ -727,7 +727,7 @@ class tuple_type(dtype):
         assert len(ir_args) == len(self.types)
         vals = []
         for ty, ir_arg in zip(self.types, ir_args):
-            if ty == constexpr:
+            if ty == constexpr or ty == dtype:
                 vals.append(constexpr(ir_arg))
             else:
                 vals.append(tensor(ir_arg, ty))
@@ -1224,7 +1224,11 @@ class tuple:
 
     def __init__(self, args: list):
         self.values = [i for i in args]
-        self.type = tuple_type([x.type for x in args])
+        def get_type(x):
+            if isinstance(x, dtype):
+                return dtype
+            return x.type
+        self.type = tuple_type([get_type(x) for x in args])
 
     def serialize(self):
         return list(_flatten_list([x.serialize() for x in self.values]))
@@ -1250,9 +1254,14 @@ class tuple:
         # return tuple(a + b for a, b in zip(self.values, other.values))
     
     def __eq__(self, other):
-        if isinstance(other, list):
+        import builtins
+        if isinstance(other, (list, builtins.tuple)):
             other = tuple(other)
         return constexpr(self.values == other.values)
+    
+    def __hash__(self):
+        import builtins
+        return hash(builtins.tuple(self.values))
     
     def __iter__(self):
         return iter(self.values)

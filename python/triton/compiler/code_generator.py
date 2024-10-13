@@ -1102,7 +1102,7 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            prototype = language.function_type([], [language.core.dtype if isinstance(arg, (bool, int, language.core.dtype)) else arg.type for arg in args])
+            prototype = language.function_type([], [language.core.dtype if arg is None or isinstance(arg, (bool, int, language.core.dtype)) else arg.type for arg in args])
             generator = CodeGenerator(self.context, prototype, gscope, {}, args_cst, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
