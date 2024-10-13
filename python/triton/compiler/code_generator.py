@@ -453,9 +453,12 @@ class CodeGenerator(ast.NodeVisitor):
         entry = self.fn.add_entry_block()
         arg_values = [self.fn.args(i) for i in range(self.fn.get_num_args())]
         insert_multiple(arg_values, self.constants.values(), self.constants.keys())
+        # for i in range(len(arg_values)):
+        #     if i in self.attributes:
+        #         for name, value in self.attributes[i]:
+        #             self.fn.set_arg_attr(i, name, value)
         arg_values = self.prototype.deserialize(arg_values)
         # bind arguments to symbols
-        print(arg_names, arg_values)
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
         insert_pt = self.builder.get_insertion_block()
@@ -1315,7 +1318,6 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     attrs = specialization.attrs
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
-    constants = {cst_key(key): value for key, value in specialization.constants.items()}
     n_types = {x: 1 for x in fn.arg_names}
     for k, v in specialization.signature.items():
         n_types[k] = str_to_ty(v).num_composite_types
@@ -1342,8 +1344,8 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     fn_attrs = new_attrs.get_fn_attrs()
     # arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
     file_name, begin_line = get_jit_fn_file_line(fn)
-
     prototype = language.function_type([], arg_types)
+    breakpoint()
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=constant_idxs, function_name=function_name,
                               jit_fn=fn, attributes=fn_attrs, is_kernel=True, file_name=file_name,
                               begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
