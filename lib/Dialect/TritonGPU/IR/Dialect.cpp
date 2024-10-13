@@ -249,7 +249,7 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
     // opIdx=1: [batch, k, n] -> [2, 1, 0]
     std::iota(order.rbegin(), order.rend(), 0);
     if (dotOpLayout.getOpIdx() == 0) {
-      std::swap(order[rank - 2], order[rank - 1]);
+      std::swap(order[order.size() - 2], order[order.size() - 1]);
     }
   }
   return order;
