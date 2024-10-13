@@ -10,7 +10,7 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
-include_dir = [os.path.join(dirname, "include")]
+include_dir = os.path.join(dirname, "include")
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
 
@@ -45,6 +45,22 @@ def library_dirs():
     return [libdevice_dir, *libcuda_dirs()]
 
 
+@functools.lru_cache()
+def include_dirs():
+    dirs = []
+    for inc in ['cudacrt', 'cudart', 'cupti']:
+        inc = os.path.join(os.environ.get(f"TRITON_{inc.upper()}_PATH", ""), 'include')
+        if os.path.exists(inc):
+            dirs.append(inc)
+    if os.path.exists(include_dir):
+        dirs.append(include_dir)
+    else:
+        cuda_inc = os.path.join(os.environ.get("CUDA_HOME", ""), 'include')
+        if os.path.exists(cuda_inc):
+            dirs.append(cuda_inc)
+    return dirs
+
+
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
@@ -54,7 +70,7 @@ def compile_module_from_src(src, name):
             src_path = os.path.join(tmpdir, "main.c")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(name, src_path, tmpdir, library_dirs(), include_dir, libraries)
+            so = _build(name, src_path, tmpdir, library_dirs(), include_dirs(), libraries)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
     import importlib.util
