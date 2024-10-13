@@ -360,7 +360,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
         dot = op;
         ++dotCounter;
       });
-      // Note, instruction sched. barriers are inserted only in the case of
+      // Note, instruction schedule barriers are inserted only in the case of
       // a single `tt.dot` op in a `scf::ForOp` scope in the current
       // implementation.
       if (dotCounter == 1) {
@@ -373,7 +373,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
   }
 
   template <typename Type> bool isOf(Operation *op) const {
-    return llvm::dyn_cast<Type>(op) ? true : false;
+    return llvm::isa<Type>(op);
   }
 
   template <typename... Types>
@@ -381,9 +381,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
     llvm::SmallVector<Operation *> concreteUsers;
     for (auto user : value.getUsers()) {
       std::vector<bool> values = {(isOf<Types>(user), ...)};
-      const auto isTypeOf =
-          llvm::any_of(values, [](bool value) { return value; });
-      if (isTypeOf)
+      if (llvm::any_of(values, [](bool value) { return value; }))
         concreteUsers.push_back(user);
     }
     return concreteUsers;
@@ -486,7 +484,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
       auto loadOpUser = *(loopCarriedLoadValue.user_begin());
       auto localStoreOp = llvm::dyn_cast<triton::gpu::LocalStoreOp>(loadOpUser);
       if (localStoreOp) {
-        auto subviewOp = localStoreOp->getOperand(1)
+        auto subviewOp = localStoreOp.getDst()
                              .getDefiningOp<triton::gpu::MemDescSubviewOp>();
         Value subviewResult = subviewOp.getResult();
         auto it = llvm::find(yieldedValues, subviewResult);
