@@ -26,5 +26,6 @@ foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
      target_compile_options(${plugin} PRIVATE -fvisibility=default)
 
      set_target_properties(${plugin} PROPERTIES
-	     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/instrumentation/triton")
+     	     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../instrumentation")
+     	
 endforeach()
