@@ -710,7 +710,7 @@ for
       // starting from the contiguous dimension
       for (unsigned d = 0; d < rank - 1; ++d) {
         unsigned i = order[d];
-        unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, shapePerCTA[i] / sizePerThread[i]);
+        unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, std::max<unsigned>(1, shapePerCTA[i] / sizePerThread[i]));
         threadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
         warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / threadsPerWarp[i], 1, remainingWarps);
         remainingWarps /= warpsPerCTA[i];
@@ -743,7 +743,7 @@ for
       // starting from the most strided dimension
       for (int d = rank - 1; d >= 0; --d) {
         unsigned i = order[d];
-        CTAsPerCGA[i] = std::clamp<unsigned>(remainingCTAs, 1, shape[i] / sizePerThread[i]);
+        CTAsPerCGA[i] = std::clamp<unsigned>(remainingCTAs, 1, std::max<unsigned>(1, shape[i] / sizePerThread[i]));
         CTASplitNum[i] = CTAsPerCGA[i];
         remainingCTAs /= CTAsPerCGA[i];
       }

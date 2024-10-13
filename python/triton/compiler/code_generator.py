@@ -360,10 +360,6 @@ class CodeGenerator(ast.NodeVisitor):
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
-        # ret_block = self.builder.create_block()
-        # post_ret_block = self.builder.create_block()
-        # self.builder.create_branch(ret_block)
-        # self.builder.set_insertion_point_to_end(ret_block)
         if ret_value is None:
             self.builder.ret([])
             ret_ty = language.void
@@ -376,13 +372,16 @@ class CodeGenerator(ast.NodeVisitor):
             ret = language.semantic.to_tensor(ret_value, self.builder)
             self.builder.ret([ret.handle])
             ret_ty = ret.type
-        # self.builder.create_branch(post_ret_block)
-        # self.builder.set_insertion_point_to_end(post_ret_block)
 
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
             raise TypeError(f'Inconsistent return types: {self.ret_type} and {ret_ty}')
+
+        # A return op must always terminate the basic block, so we create a dead
+        # basic block in case there are any ops after the return.
+        post_ret_block = self.builder.create_block()
+        self.builder.set_insertion_point_to_end(post_ret_block)
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -439,22 +438,24 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.set_insertion_point_to_start(entry)
         # visit function body
         self.visit_compound_statement(node.body)
+
         # finalize function
+        assert not self.builder.get_insertion_block().has_terminator()
         if self.ret_type is None or self.ret_type == language.void:
             self.ret_type = language.void
             self.builder.ret([])
         else:
-            # update return type
-            if isinstance(self.ret_type, tuple):
-                self.prototype.ret_types = list(self.ret_type)
-                self.fn.reset_type(self.prototype.to_ir(self.builder))
-            else:
-                self.prototype.ret_types = [self.ret_type]
-                self.fn.reset_type(self.prototype.to_ir(self.builder))
+            self.prototype.ret_types = list(self.ret_type) if isinstance(self.ret_type, tuple) else [self.ret_type]
+            self.fn.reset_type(self.prototype.to_ir(self.builder))
+            self.builder.ret([
+                self.builder.create_poison(ty.to_ir(self.builder))
+                for ty in self.prototype.ret_types
+                if self.ret_type is not None
+            ])
+        self.fn.finalize()
+
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
-        # Remove dead code
-        self.fn.finalize()
 
     def visit_arguments(self, node):
         arg_names = []
@@ -621,40 +622,35 @@ class CodeGenerator(ast.NodeVisitor):
         return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
 
     def visit_if_top_level(self, cond, node):
-        has_endif_block = True
         with enter_sub_region(self) as sr:
             liveins, ip_block = sr
             then_block = self.builder.create_block()
             else_block = self.builder.create_block()
-            # create basic-block after conditional
-            endif_block = self.builder.create_block()
             # create branch
             self.builder.set_insertion_point_to_end(ip_block)
             self.builder.create_cond_branch(cond.handle, then_block, else_block)
             # visit then and else blocks
             then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types = \
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            # create basic-block after conditional
+            endif_block = self.builder.create_block()
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
-            if then_block.has_return() and else_block.has_return():
-                has_endif_block = False
-                endif_block.erase()
-            if not then_block.has_terminator() and has_endif_block:
-                self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
+            assert not then_block.has_terminator(), f"{then_block}"
+            self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
             # else terminator
             self.builder.set_insertion_point_to_end(else_block)
-            if not else_block.has_terminator() and has_endif_block:
-                self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
-            if has_endif_block:
-                for ty in ir_ret_types:
-                    endif_block.add_argument(ty)
-        if has_endif_block:
-            # change block
-            self.builder.set_insertion_point_to_start(endif_block)
-            # update value
-            for i, name in enumerate(names):
-                new_tensor = language.core.tensor(endif_block.arg(i), ret_types[i])
-                self.set_value(name, new_tensor)
+            assert not else_block.has_terminator(), f"{else_block}"
+            self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+            for ty in ir_ret_types:
+                endif_block.add_argument(ty)
+
+        # change block
+        self.builder.set_insertion_point_to_start(endif_block)
+        # update value
+        for i, name in enumerate(names):
+            new_tensor = language.core.tensor(endif_block.arg(i), ret_types[i])
+            self.set_value(name, new_tensor)
 
     # TODO: refactor
     def visit_if_scf(self, cond, node):
@@ -686,18 +682,19 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = self.visit(node.test)
+
         if _is_triton_tensor(cond):
             cond = cond.to(language.int1, _builder=self.builder)
             contains_return = ContainsReturnChecker(self.gscope).visit(node)
-            if self.scf_stack and contains_return:
-                raise self._unsupported(
-                    node, "Cannot have `return` statements inside `while` or `for` statements in triton "
-                    "(note that this also applies to `return` statements that are inside functions "
-                    "transitively called from within `while`/`for` statements)")
-            elif self.scf_stack or not contains_return:
-                self.visit_if_scf(cond, node)
-            else:
+            if contains_return:
+                if self.scf_stack:
+                    raise self._unsupported(
+                        node, "Cannot have `return` statements inside `while` or `for` statements in triton "
+                        "(note that this also applies to `return` statements that are inside functions "
+                        "transitively called from within `while`/`for` statements)")
                 self.visit_if_top_level(cond, node)
+            else:
+                self.visit_if_scf(cond, node)
         else:
             cond = _unwrap_if_constexpr(cond)
             # not isinstance - we insist the real thing, no subclasses and no ducks
@@ -706,10 +703,9 @@ class CodeGenerator(ast.NodeVisitor):
                     node, "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
                         ', '.join(_.__name__ for _ in _condition_types),
                         type(cond).__name__))
-            if cond:
-                self.visit_compound_statement(node.body)
-            else:
-                self.visit_compound_statement(node.orelse)
+
+            active_block = node.body if cond else node.orelse
+            self.visit_compound_statement(active_block)
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
@@ -958,7 +954,7 @@ class CodeGenerator(ast.NodeVisitor):
         ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
         step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
         # Create placeholder for the loop induction variable
-        iv = self.builder.create_undef(iv_ir_type)
+        iv = self.builder.create_poison(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv, iv_type))
 
         with enter_sub_region(self) as sr:
