@@ -196,7 +196,27 @@ def binary_op_type_checking_impl(lhs: tl.tensor | numbers.Number, rhs: tl.tensor
     return lhs, rhs
 
 
-def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
+def binary_op_sanitize_overflow_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder, binary_op: callable):
+    if lhs.type.scalar.int_bitwidth >= 64 or not builder.options.sanitize_overflow:
+        return
+    lhs_sca_ty = lhs.type.scalar
+    rhs_sca_ty = rhs.type.scalar
+    assert lhs_sca_ty == rhs_sca_ty
+    assert lhs_sca_ty.is_int()
+    lhs = cast(lhs, tl.int64, builder)
+    rhs = cast(rhs, tl.int64, builder)
+    ret = binary_op(lhs, rhs, False, builder)
+    max_value = lhs_sca_ty.get_int_max_value()
+    max_value = tl.tensor(builder.get_int64(max_value), tl.int64)
+    min_value = lhs_sca_ty.get_int_min_value()
+    min_value = tl.tensor(builder.get_int64(min_value), tl.int64)
+    cond = and_(less_equal(ret, max_value, builder), greater_equal(ret, min_value, builder), builder)
+    msg = f"int{lhs_sca_ty.int_bitwidth} overflow detected for operation {binary_op.__name__}"
+    device_assert(cond, msg, builder)
+
+
+def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -216,11 +236,14 @@ def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
     # int + int
     elif input_scalar_ty.is_int():
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, add)
         return tl.tensor(builder.create_add(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {input_scalar_ty}")
 
 
-def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
+def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, False)
     scalar_ty = input.type.scalar
     # ptr - offset
@@ -231,18 +254,23 @@ def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
         return tl.tensor(builder.create_fsub(input.handle, other.handle), input.type)
     # int - int
     elif scalar_ty.is_int():
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, sub)
         return tl.tensor(builder.create_sub(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {scalar_ty}")
 
 
-def mul(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
+def mul(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder)
     scalar_ty = input.type.scalar
     # float * float
     if scalar_ty.is_floating():
         return tl.tensor(builder.create_fmul(input.handle, other.handle), input.type)
-    # * int
+    # int * int
     elif scalar_ty.is_int():
+        if sanitize_overflow:
+            binary_op_sanitize_overflow_impl(input, other, builder, mul)
         return tl.tensor(builder.create_mul(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {scalar_ty}")
 
@@ -306,7 +334,8 @@ def mod(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
     # float % float
     if scalar_ty.is_floating():
         # input - input.div(other, rounding_mode="floor") * other
-        ret = sub(input, mul(math.floor(fdiv(input, other, False, builder), _builder=builder), other, builder), builder)
+        floor = math.floor(fdiv(input, other, False, builder), _builder=builder)
+        ret = sub(input, mul(floor, other, True, builder), True, builder)
         return ret
     # % int
     elif scalar_ty.is_int():
@@ -460,7 +489,7 @@ def minus(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     if input_sca_ty.is_ptr():
         raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
     _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
-    return sub(_0, input, builder)
+    return sub(_0, input, True, builder)
 
 
 def invert(input: tl.tensor, builder: tl.tensor) -> tl.tensor:
@@ -1498,6 +1527,48 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
                      ret_ty)
 
 
+def _str_to_fp_type(float_format: Optional[str]):
+    if float_format == 'e4m3':
+        return ir.F8F6F4TY.E4M3
+    if float_format == 'e5m2':
+        return ir.F8F6F4TY.E5M2
+    if float_format == 'e2m3':
+        return ir.F8F6F4TY.E2M3
+    if float_format == 'e3m2':
+        return ir.F8F6F4TY.E3M2
+    if float_format == 'e2m1':
+        return ir.F8F6F4TY.E2M1
+    raise ValueError(f"Invalid float format: {float_format}.")
+
+
+def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
+               rhs_format, acc: tl.tensor | None, out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+    assert lhs.type.is_block() and rhs.type.is_block()
+    #TODO: validate types.
+    lhs_rank = len(lhs.shape)
+    rhs_rank = len(rhs.shape)
+    assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    M, K = lhs.type.shape[-2:]
+    N = rhs.type.shape[-1]
+    assert K == rhs.type.shape[-2], f"Reduction dimension should agree; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    assert K >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
+    B = lhs.type.shape[0] if lhs_rank == 3 else None
+
+    ret_ty = tl.block_type(out_dtype, [B, M, N] if B else [M, N])
+    _0 = builder.get_fp32(0)
+    if acc is None:
+        acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
+    else:
+        acc_handle = acc.handle
+        assert acc.type == ret_ty
+    lhs_format_enum = _str_to_fp_type(lhs_format)
+    rhs_format_enum = _str_to_fp_type(rhs_format)
+    rhs_scale_handle = None if isinstance(rhs_scale, tl.constexpr) else rhs_scale.handle
+    return tl.tensor(
+        builder.create_dot_scaled(lhs.handle, lhs_scale.handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
+                                  rhs_format_enum, acc_handle), ret_ty)
+
+
 # ===----------------------------------------------------------------------===//
 #                               Indexing
 # ===----------------------------------------------------------------------===//
@@ -1632,6 +1703,8 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
 
 
 def device_assert(cond: tl.tensor, msg: str, builder: ir.builder) -> tl.tensor:
+    if not builder.options.debug:
+        return
     cond_ty = cond.type
     if not cond_ty.is_block():
         cond_ty = tl.block_type(cond_ty.scalar, (1, ))

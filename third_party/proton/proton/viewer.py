@@ -104,7 +104,6 @@ for width in TritonHook.flops_width:
 
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
-    original_metrics = []
     internal_frame_indices = gf.dataframe["device_id"].isna()
 
     def get_time_seconds(df):
@@ -120,10 +119,10 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
             gf.dataframe.loc[internal_frame_indices, "util (inc)"] = np.nan
             derived_metrics.append("util (inc)")
-        elif metric in derivable_metrics:
-            deriveable_metric = derivable_metrics[metric]
-            metric_name = deriveable_metric.name
-            metric_factor_dict = deriveable_metric.factor
+        elif metric in derivable_metrics:  # flop<width>/s, <t/g>byte/s
+            derivable_metric = derivable_metrics[metric]
+            metric_name = derivable_metric.name
+            metric_factor_dict = derivable_metric.factor
             matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
             gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] / (get_time_seconds(gf.dataframe)) /
                                                metric_factor_dict[metric])
@@ -140,11 +139,21 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe.loc[internal_frame_indices, f"{metric} (inc)"] = np.nan
             derived_metrics.append(f"{metric} (inc)")
         else:
-            original_metrics.append(metric)
-
-    if original_metrics:
-        original_metrics = match_available_metrics(original_metrics, raw_metrics)
-    return derived_metrics + original_metrics
+            metric_name_and_unit = metric.split("/")
+            metric_name = metric_name_and_unit[0]
+            if len(metric_name_and_unit) > 1:
+                metric_unit = metric_name_and_unit[1]
+                if metric_unit != "%":
+                    raise ValueError(f"Unsupported unit {metric_unit}")
+                matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
+                single_frame = gf.dataframe[matched_metric_name]
+                total = gf.dataframe[matched_metric_name].iloc[0]
+                gf.dataframe[f"{metric_name}/% (inc)"] = (single_frame / total) * 100.0
+                derived_metrics.append(f"{metric_name}/% (inc)")
+            else:
+                matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
+                derived_metrics.append(matched_metric_name)
+    return derived_metrics
 
 
 def format_frames(gf, format):
@@ -227,6 +236,7 @@ Derived metrics can be created when source metrics are available.
 - flop[<8/16/32/64>]/s, gflop[<8/16/32/64>]/s, tflop[<8/16/32/64>]/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
+- <metric>/%%: frame(metric) / sum(metric). Only availble for inclusive metrics (e.g. time)
 """,
     )
     argparser.add_argument(

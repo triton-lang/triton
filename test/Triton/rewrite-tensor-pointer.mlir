@@ -111,7 +111,7 @@ tt.func public @rewrite_for(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>) {
     %4 = arith.addf %arg3, %3 : tensor<128x32xf16>
     %5 = tt.advance %arg4, [%c32_i32, %c0_i32] : !tt.ptr<tensor<128x32xf16>>
     scf.yield %4, %5 : tensor<128x32xf16>, !tt.ptr<tensor<128x32xf16>>
-  }
+  } {tt.num_stages = 3 : i32}
   %2 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>>
   tt.store %2, %1#0 : tensor<128x32x!tt.ptr<f16>>
   tt.return
@@ -138,6 +138,7 @@ tt.func public @rewrite_for(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>) {
 // CHECK: %[[EXTSI3:.*]] = arith.extsi %[[C0_I32]] : i32 to i64
 // CHECK: %[[ADDI1:.*]] = arith.addi %[[ARG5]], %[[EXTSI3]] : i64
 // CHECK: scf.yield %{{.*}}, %[[ADDI0]], %[[ADDI1]] : tensor<128x32xf16>, i64, i64
+// CHECK: tt.num_stages = 3
 
 // -----
 tt.func public @rewrite_if(%arg0: !tt.ptr<f16>, %arg1: i1) -> tensor<128x32xf16> {

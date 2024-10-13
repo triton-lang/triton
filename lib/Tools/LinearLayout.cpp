@@ -640,7 +640,7 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 }
 
 std::optional<LinearLayout>
-LinearLayout::divideRight(const LinearLayout &divisor) {
+LinearLayout::divideRight(const LinearLayout &divisor) const {
   assertCommonDimsSameOrder(getOutDimNames(), divisor.getOutDimNames());
   assertCommonDimsSameOrder(getInDimNames(), divisor.getInDimNames());
 
@@ -681,11 +681,11 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
       std::move(newBases), std::move(newOutDims.takeVector()),
       /*requireSurjective=*/false);
   LDBG("candidate_quotient:" << candidateQuotient);
-  LDBG("*candidate_quotient * divisor=" << *candidateQuotient * divisor);
   if (!candidateQuotient.has_value()) {
     LDBG("candidate quotient failed invariant checks");
     return std::nullopt;
   }
+  LDBG("*candidate_quotient * divisor=" << *candidateQuotient * divisor);
   if (*candidateQuotient * divisor != *this) {
     LDBG("candidate quotient failed invariant checks");
     return std::nullopt;

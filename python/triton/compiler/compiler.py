@@ -3,44 +3,18 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget
+from ..backends.compiler import GPUTarget, AttrsDescriptor
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
-from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
 import re
 import functools
 import os
-
-
-@dataclass
-class AttrsDescriptor:
-    divisible_by_16: set = None
-    equal_to_1: set = None
-
-    def __post_init__(self):
-        if self.divisible_by_16 is None:
-            self.divisible_by_16 = set()
-        if self.equal_to_1 is None:
-            self.equal_to_1 = set()
-
-    def to_dict(self):
-        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
-
-    @staticmethod
-    def from_dict(data):
-        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
-                               equal_to_1=set(data.get('equal_to_1', [])))
-
-    def hash(self):
-        key = str([sorted(x) for x in self.__dict__.values()])
-        return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -58,7 +32,7 @@ prototype_pattern = {
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<)]+|<[^>]+>)+),?'
+mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<)]+|<[^>]+>)+(?: {[^}]+})?),?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
@@ -71,6 +45,10 @@ def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
     match = re.search(r'!tt\.ptr<([^,]+)', x)
+    tma = re.search(r'tt.nv_tma_desc = 1', x)
+    if tma is not None:
+        return 'nvTmaDesc'
+    x = re.sub(r' {[^}]+}', '', x)
     if match is not None:
         return '*' + convert_type_repr(match.group(1))
     return x
