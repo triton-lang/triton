@@ -43,9 +43,10 @@ def insert_multiple(lst, elements, indices):
         result[index] = element
 
     # Fill in the old elements into the remaining positions
+    orig = dict(zip(indices, elements))
     old_index = 0
     for i in range(final_length):
-        if result[i] is None:
+        if result[i] is None and (i in orig and orig[i] is not None):
             if old_index >= len(lst):
                 raise ValueError("Not enough elements in the original list")
             result[i] = lst[old_index]
@@ -96,7 +97,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return isinstance(o, (constexpr, language.core.dtype, int, bool))
+    return o is None or isinstance(o, (constexpr, language.core.dtype, int, bool))
 
 
 def _is_triton_scalar(o: Any) -> bool:
@@ -437,7 +438,6 @@ class CodeGenerator(ast.NodeVisitor):
                 init_node = ast.Assign(targets=[st_target], value=default_value)
             else:
                 init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
-
             try:
                 assert not self.visiting_arg_default_value
                 self.visiting_arg_default_value = True
@@ -451,14 +451,15 @@ class CodeGenerator(ast.NodeVisitor):
                                                       self.prototype.to_ir(self.builder), visibility, self.noinline)
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
-        arg_values = [self.fn.args(i) for i in range(self.fn.get_num_args())]
+        arg_values = [self.fn.args(i) for i in range(self.fn.get_num_args()) if i not in self.constants.keys()]
         insert_multiple(arg_values, self.constants.values(), self.constants.keys())
-        # for i in range(len(arg_values)):
-        #     if i in self.attributes:
-        #         for name, value in self.attributes[i]:
-        #             self.fn.set_arg_attr(i, name, value)
+        for i, arg in enumerate(arg_values):
+            if isinstance(arg, ir.block_argument) and i in self.attributes:
+                for name, value in self.attributes[i]:
+                    self.fn.set_arg_attr(i, name, value)
         arg_values = self.prototype.deserialize(arg_values)
         # bind arguments to symbols
+        print(arg_names, arg_values)
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
         insert_pt = self.builder.get_insertion_block()
@@ -1102,7 +1103,7 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            prototype = language.function_type([], [language.core.dtype if isinstance(arg, (int, bool, language.core.dtype)) else arg.type for arg in args])
+            prototype = language.function_type([], [language.core.dtype if isinstance(arg, (language.core.dtype)) else arg.type for arg in args])
             generator = CodeGenerator(self.context, prototype, gscope, {}, args_cst, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1334,6 +1335,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     function_name = fn.repr(specialization)
     # tys = list(specialization.signature.values())
     # new_constants = attrs.get_constants()
+    # breakpoint()
     # for k in new_constants:
     #     if k in tys and tys[k] == "i1" and new_constants[k] == 1:
     #         new_constants[k] = True
@@ -1345,7 +1347,6 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     # arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
     file_name, begin_line = get_jit_fn_file_line(fn)
     prototype = language.function_type([], arg_types)
-    breakpoint()
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=constant_idxs, function_name=function_name,
                               jit_fn=fn, attributes=fn_attrs, is_kernel=True, file_name=file_name,
                               begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
