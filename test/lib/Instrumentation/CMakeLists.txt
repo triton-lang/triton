@@ -27,5 +27,5 @@ foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
 
      set_target_properties(${plugin} PROPERTIES
      	     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../instrumentation")
-     	
+
 endforeach()
