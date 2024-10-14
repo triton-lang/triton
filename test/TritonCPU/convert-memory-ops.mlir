@@ -1,18 +1,10 @@
-// RUN: triton-opt %s -split-input-file -triton-cpu-convert-memory-ops | FileCheck %s
+// RUN: triton-opt %s -split-input-file -triton-cpu-convert-memory-ops=use-gather-scatter=true -cse | FileCheck %s
 
-// Convert strided masked loads to scalar loads.
+// Convert strided masked loads to gather.
 
 // CHECK-LABEL: @strided_masked_loads
-// CHECK:       %[[COND:.+]] = vector.extract %[[MASK:.+]][[[#IDX:]]] : i1
-// CHECK-NEXT:  scf.if %[[COND]] -> (vector<32xi32>) {
-// CHECK-NEXT:    %[[PTR:.+]] = vector.extract %[[IN:.+]][[[#IDX]]] : i64 from vector<32xi64>
-// CHECK-NEXT:    %[[PTR_:.+]] = tt.int_to_ptr %[[PTR]] : i64 -> !tt.ptr<i32>
-// CHECK-NEXT:    %[[VAL:.+]] = tt.load %[[PTR_]] : !tt.ptr<i32>
-// CHECK-NEXT:    %[[NEW_OUT:.+]] = vector.insert %[[VAL]], %[[OUT:.+]] [[[#IDX]]] : i32 into vector<32xi32>
-// CHECK-NEXT:    scf.yield %[[NEW_OUT]] : vector<32xi32>
-// CHECK-NEXT:  } else {
-// CHECK-NEXT:    scf.yield %[[OUT]] : vector<32xi32>
-// CHECK-NEXT:  }
+// CHECK:       %[[PTR:.+]] = triton_cpu.ptr_to_memref %[[BASE:.+]] : <i32> -> memref<i32>
+// CHECK:       %[[VAL:.+]] = vector.gather %[[PTR]][] [%[[INDEX_VEC:.+]]], %[[MASK:.+]], %[[OTHER:.+]] : memref<i32>, vector<32xi32>, vector<32xi1>, vector<32xi32> into vector<32xi32>
 
 module {
   tt.func public @strided_masked_loads(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
@@ -36,16 +28,11 @@ module {
 
 // -----
 
-// Convert strided masked stores to scalar stores.
+// Convert strided masked stores to scatter.
 
 // CHECK-LABEL: @strided_masked_stores
-// CHECK:       %[[COND:.+]] = vector.extract %[[MASK:.+]][[[#IDX:]]] : i1 from vector<32xi1>
-// CHECK-NEXT:  scf.if %[[COND]] {
-// CHECK-NEXT:    %[[PTR:.+]] = vector.extract %[[OUT:.+]][[[#IDX]]] : i64 from vector<32xi64>
-// CHECK-NEXT:    %[[PTR_:.+]] = tt.int_to_ptr %[[PTR]] : i64 -> !tt.ptr<i32>
-// CHECK-NEXT:    %[[VAL:.+]] = vector.extract %[[IN:.+]][[[#IDX]]] : i32 from vector<32xi32>
-// CHECK-NEXT:    tt.store %[[PTR_]], %[[VAL]] : !tt.ptr<i32>
-// CHECK-NEXT:  }
+// CHECK:       %[[PTR:.+]] = triton_cpu.ptr_to_memref %[[BASE:.+]] : <i32> -> memref<i32>
+// CHECK:       vector.scatter %[[PTR]][] [%[[INDEX_VEC:.+]]], %[[MASK:.+]], %[[VALS:.+]] : memref<i32>, vector<32xi32>, vector<32xi1>, vector<32xi32>
 
 module {
   tt.func public @strided_masked_stores(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32} ) {

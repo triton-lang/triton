@@ -15,8 +15,10 @@
 
 namespace mlir {
 namespace triton {
+namespace cpu {
 #define GEN_PASS_DEF_SCALARIZEUSINGFOROP
 #include "cpu/include/TritonToTritonCPU/Passes.h.inc"
+} // namespace cpu
 } // namespace triton
 } // namespace mlir
 
@@ -30,8 +32,10 @@ template <typename OpTy>
 struct ScalarizeOpConversion : public OpRewritePattern<OpTy> {
 
   ScalarizeOpConversion(ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                        MLIRContext *context)
-      : OpRewritePattern<OpTy>(context), axisAnalysis(axisInfoAnalysis) {}
+                        MLIRContext *context, bool skipGatherScatter)
+      : OpRewritePattern<OpTy>(context), axisAnalysis(axisInfoAnalysis) {
+    this->skipGatherScatter = skipGatherScatter;
+  }
 
   Value createAlloca(Location loc, MemRefType ty, Operation *before,
                      PatternRewriter &rewriter) const {
@@ -138,6 +142,11 @@ struct ScalarizeOpConversion : public OpRewritePattern<OpTy> {
       return false;
     }
 
+    auto [basePtr, offset] = getMemoryBaseOffset(scalarizeOp);
+    if (skipGatherScatter && basePtr && offset) {
+      return false;
+    }
+
     // Scalar memory ops and boundary checks are not expected.
     if (!scalarizeOp.getBoundaryCheck().empty()) {
       return false;
@@ -159,6 +168,7 @@ struct ScalarizeOpConversion : public OpRewritePattern<OpTy> {
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysis;
+  bool skipGatherScatter;
 };
 
 template <>
@@ -351,10 +361,15 @@ bool ScalarizeOpConversion<triton::LoadOp>::shouldScalarizeOp(
 }
 
 struct ScalarizeUsingForOpPass
-    : public triton::impl::ScalarizeUsingForOpBase<ScalarizeUsingForOpPass> {
+    : public triton::cpu::impl::ScalarizeUsingForOpBase<
+          ScalarizeUsingForOpPass> {
   using ScalarizeUsingForOpBase::ScalarizeUsingForOpBase;
 
   ScalarizeUsingForOpPass() : ScalarizeUsingForOpBase() {}
+
+  ScalarizeUsingForOpPass(bool skipGatherScatter) : ScalarizeUsingForOpBase() {
+    this->skipGatherScatter = skipGatherScatter;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -363,8 +378,8 @@ struct ScalarizeUsingForOpPass
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     RewritePatternSet patterns(context);
     patterns.add<ScalarizeOpConversion<triton::LoadOp>,
-                 ScalarizeOpConversion<triton::StoreOp>>(axisInfoAnalysis,
-                                                         context);
+                 ScalarizeOpConversion<triton::StoreOp>>(
+        axisInfoAnalysis, context, skipGatherScatter);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed()) {
       return signalPassFailure();
@@ -380,6 +395,11 @@ namespace cpu {
 
 std::unique_ptr<OperationPass<ModuleOp>> createScalarizeUsingForOpPass() {
   return std::make_unique<ScalarizeUsingForOpPass>();
+}
+
+std::unique_ptr<OperationPass<ModuleOp>>
+createScalarizeUsingForOpPass(bool skipGatherScatter) {
+  return std::make_unique<ScalarizeUsingForOpPass>(skipGatherScatter);
 }
 
 } // namespace cpu

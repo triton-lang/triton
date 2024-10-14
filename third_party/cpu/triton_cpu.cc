@@ -28,11 +28,13 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
       .value("libsleef", cpu::VecLib::Sleef)
       .value("libmvec", cpu::VecLib::Mvec);
 
-  m.def("add_scalarize", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::cpu::createScalarizeUsingForOpPass());
+  m.def("add_scalarize", [](mlir::PassManager &pm, bool skip_gather_scatter) {
+    pm.addPass(
+        mlir::triton::cpu::createScalarizeUsingForOpPass(skip_gather_scatter));
   });
-  m.def("add_convert_memory_ops", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::cpu::createConvertMemoryOps());
+  m.def("add_convert_memory_ops", [](mlir::PassManager &pm,
+                                     bool use_gather_scatter) {
+    pm.addPass(mlir::triton::cpu::createConvertMemoryOps(use_gather_scatter));
   });
   m.def("add_convert_ptr_ops", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createConvertPtrOps());

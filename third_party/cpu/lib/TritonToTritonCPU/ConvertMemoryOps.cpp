@@ -45,9 +45,12 @@ struct MemoryOpConversion : public OpConversionPattern<OpT> {
 
   MemoryOpConversion(ModuleAxisInfoAnalysis &axisInfoAnalysis,
                      ModuleTensorPtrShapeInfoAnalysis &shapeInfoAnalysis,
-                     TypeConverter &typeConverter, MLIRContext *context)
+                     TypeConverter &typeConverter, MLIRContext *context,
+                     bool useGatherScatter)
       : OpConversionPattern<OpT>(typeConverter, context),
-        axisAnalysis(axisInfoAnalysis), shapeAnalysis(shapeInfoAnalysis) {}
+        axisAnalysis(axisInfoAnalysis), shapeAnalysis(shapeInfoAnalysis) {
+    this->useGatherScatter = useGatherScatter;
+  }
 
   Value extractScalarPointer(Location loc, Value ptrs,
                              ArrayRef<int64_t> indices,
@@ -137,6 +140,7 @@ struct MemoryOpConversion : public OpConversionPattern<OpT> {
 protected:
   ModuleAxisInfoAnalysis &axisAnalysis;
   ModuleTensorPtrShapeInfoAnalysis &shapeAnalysis;
+  bool useGatherScatter;
 };
 
 struct LoadOpConversion : public MemoryOpConversion<triton::LoadOp> {
@@ -176,6 +180,9 @@ struct LoadOpConversion : public MemoryOpConversion<triton::LoadOp> {
       auto axisInfo = axisAnalysis.getAxisInfo(ptr);
       if (isContiguousRowMajorAccess(axisInfo, loadOp)) {
         return lowerToContiguousRowMajor(loadOp, rewriter);
+      }
+      if (useGatherScatter && succeeded(lowerToGather(loadOp, rewriter))) {
+        return success();
       }
       return lowerToScalarLoads(loadOp, rewriter);
     }
@@ -257,6 +264,44 @@ struct LoadOpConversion : public MemoryOpConversion<triton::LoadOp> {
     return success();
   }
 
+  LogicalResult lowerToGather(triton::LoadOp loadOp,
+                              ConversionPatternRewriter &rewriter) const {
+    auto loc = loadOp.getLoc();
+    auto vecTy = dyn_cast<VectorType>(
+        getTypeConverter()->convertType(loadOp.getResult().getType()));
+    auto shape = vecTy.getShape();
+
+    auto [basePtr, offset] = getMemoryBaseOffset(loadOp);
+
+    if (!basePtr || !offset)
+      return failure();
+
+    auto pointeeType =
+        dyn_cast<PointerType>(basePtr.getType()).getPointeeType();
+
+    auto gatherBase = rewriter.create<triton::cpu::PtrToMemRefOp>(
+        loc, MemRefType::get({}, pointeeType), basePtr);
+    auto gatherIndices = SmallVector<Value>();
+    auto gatherIndexVec = rewriter.getRemappedValue(offset);
+
+    Value gatherMask;
+    if (auto loadMask = loadOp.getMask()) {
+      gatherMask = rewriter.getRemappedValue(loadMask);
+    } else {
+      auto maskType = VectorType::get(shape, rewriter.getI1Type());
+      gatherMask = rewriter.create<arith::ConstantOp>(
+          loc, maskType, DenseElementsAttr::get(maskType, true));
+    }
+
+    auto passThru = convertOtherVal(loadOp, rewriter);
+
+    auto gatherOp =
+        rewriter.create<vector::GatherOp>(loc, vecTy, gatherBase, gatherIndices,
+                                          gatherIndexVec, gatherMask, passThru);
+    rewriter.replaceOp(loadOp, gatherOp);
+    return success();
+  }
+
   LogicalResult lowerToScalarLoads(triton::LoadOp loadOp,
                                    ConversionPatternRewriter &rewriter) const {
     // Scalar loads and boundary checks are not expected.
@@ -329,6 +374,9 @@ struct StoreOpConversion : public MemoryOpConversion<triton::StoreOp> {
       if (isContiguousRowMajorAccess(axisInfo, storeOp)) {
         return lowerToContiguousRowMajor(storeOp, rewriter);
       }
+      if (useGatherScatter && succeeded(lowerToScatter(storeOp, rewriter))) {
+        return success();
+      }
       return lowerToScalarStores(storeOp, rewriter);
     }
 
@@ -391,6 +439,55 @@ struct StoreOpConversion : public MemoryOpConversion<triton::StoreOp> {
       } else {
         rewriter.create<vector::StoreOp>(loc, val, memRef, zeroIdx);
       }
+    }
+
+    rewriter.eraseOp(storeOp);
+    return success();
+  }
+
+  LogicalResult lowerToScatter(triton::StoreOp storeOp,
+                               ConversionPatternRewriter &rewriter) const {
+    auto loc = storeOp.getLoc();
+    auto vals = rewriter.getRemappedValue(storeOp.getValue());
+    auto vecTy = dyn_cast<VectorType>(vals.getType());
+    auto shape = vecTy.getShape();
+
+    auto [basePtr, offset] = getMemoryBaseOffset(storeOp);
+
+    if (!basePtr || !offset)
+      return failure();
+
+    auto strides = computeStrides(shape);
+    int64_t numElems = vecTy.getNumElements();
+    Type memRefTy = MemRefType::get(shape.back(), vecTy.getElementType());
+    Value mask = storeOp.getMask()
+                     ? rewriter.getRemappedValue(storeOp.getMask())
+                     : nullptr;
+
+    for (int64_t idx = 0; idx < numElems; idx += shape.back()) {
+      auto indices = delinearize(idx, strides);
+      indices.pop_back();
+
+      auto val = rewriter.create<vector::ExtractOp>(loc, vals, indices);
+      auto indexVec = rewriter.create<vector::ExtractOp>(
+          loc, rewriter.getRemappedValue(offset), indices);
+      Value scatterMask;
+
+      if (mask) {
+        scatterMask = rewriter.create<vector::ExtractOp>(loc, mask, indices);
+      } else {
+        // Create a mask with all true values if no mask is provided.
+        auto maskType = VectorType::get({shape.back()}, rewriter.getI1Type());
+        scatterMask = rewriter.create<arith::ConstantOp>(
+            loc, maskType, DenseElementsAttr::get(maskType, true));
+      }
+
+      auto scatterBase = rewriter.create<triton::cpu::PtrToMemRefOp>(
+          loc, MemRefType::get({}, vecTy.getElementType()), basePtr);
+      auto scatterIndices = SmallVector<Value>();
+
+      rewriter.create<vector::ScatterOp>(loc, scatterBase, scatterIndices,
+                                         indexVec, scatterMask, val);
     }
 
     rewriter.eraseOp(storeOp);
@@ -511,6 +608,10 @@ struct ConvertMemoryOps
     : public triton::cpu::impl::ConvertMemoryOpsBase<ConvertMemoryOps> {
   ConvertMemoryOps() = default;
 
+  ConvertMemoryOps(bool useGatherScatter) {
+    this->useGatherScatter = useGatherScatter;
+  }
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
@@ -522,7 +623,8 @@ struct ConvertMemoryOps
     RewritePatternSet patterns(context);
     patterns.add<LoadOpConversion, StoreOpConversion, CpuStoreOpConversion,
                  CpuLoadOpConversion>(axisInfoAnalysis, shapeInfoAnalysis,
-                                      pointerConverter, context);
+                                      pointerConverter, context,
+                                      useGatherScatter);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
@@ -537,6 +639,11 @@ namespace cpu {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertMemoryOps() {
   return std::make_unique<ConvertMemoryOps>();
+}
+
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertMemoryOps(bool useGatherScatter) {
+  return std::make_unique<ConvertMemoryOps>(useGatherScatter);
 }
 
 } // namespace cpu

@@ -8,6 +8,13 @@ def ConvertMemoryOps : Pass<"triton-cpu-convert-memory-ops", "mlir::ModuleOp"> {
     let description = [{
 
     }];
+
+    let options = [
+        Option<"useGatherScatter", "use-gather-scatter",
+               "bool", /*default*/"false",
+               "Use Gather or Scatter to lower memory ops.">,
+    ];
+
     let constructor = "mlir::triton::cpu::createConvertMemoryOps()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
@@ -172,6 +179,12 @@ def ScalarizeUsingForOp : Pass<"triton-cpu-scalarize", "mlir::ModuleOp"> {
         operations that cannot be handled as vectors, and simply increases
         the amount of IR without any further optimization.
     }];
+
+    let options = [
+        Option<"skipGatherScatter", "skip-gather-scatter",
+               "bool", /*default*/"false",
+               "Skip scalarizing gather/scatter ops.">,
+    ];
 
     let constructor = "mlir::triton::cpu::createScalarizeUsingForOpPass()";
 

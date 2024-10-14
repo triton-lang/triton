@@ -2,6 +2,7 @@
 #define TRITONTOTRITONCPU_CONVERSION_PASSES_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/IR/Types.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -23,6 +24,8 @@ namespace cpu {
 std::unique_ptr<OperationPass<ModuleOp>> createConvertElementwiseOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertElemManipOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertMemoryOps();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertMemoryOps(bool useGatherScatter);
 std::unique_ptr<OperationPass<ModuleOp>> createConvertPtrOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertDotOp();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertControlFlowOps();
@@ -35,6 +38,8 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertAtomicOps();
 std::unique_ptr<OperationPass<ModuleOp>> createConvertDebugOps();
 
 std::unique_ptr<OperationPass<ModuleOp>> createScalarizeUsingForOpPass();
+std::unique_ptr<OperationPass<ModuleOp>>
+createScalarizeUsingForOpPass(bool skipGatherScatter);
 
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonToTritonCPU/Passes.h.inc"
@@ -82,6 +87,37 @@ bool isContiguousRowMajorAccess(AxisInfo *axisInfo, OpTy op) {
   auto shape = getShape(type);
   auto contiguity = axisInfo->getContiguity();
   return (shape.back() > 1 && shape.back() == contiguity.back());
+}
+
+// Get the base pointer and offset of a memory operation if the pointer is
+// defined by a SplatOp and an AddPtrOp.
+template <class OpTy,
+          typename std::enable_if_t<is_memory_op_v<OpTy>, bool> = true>
+std::tuple<Value, Value> getMemoryBaseOffset(OpTy op) {
+  Value ptr = op.getPtr();
+
+  auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
+  if (!addPtrOp)
+    return std::make_tuple(nullptr, nullptr);
+
+  Value basePtr = nullptr;
+  Value offset = nullptr;
+
+  if (auto splatOp = addPtrOp->getOperand(0).getDefiningOp<triton::SplatOp>()) {
+    if (isa<PointerType>(splatOp.getOperand().getType())) {
+      basePtr = splatOp.getOperand();
+      offset = addPtrOp.getOperand(1);
+    }
+  }
+
+  if (auto splatOp = addPtrOp->getOperand(1).getDefiningOp<triton::SplatOp>()) {
+    if (!basePtr && isa<PointerType>(splatOp.getOperand().getType())) {
+      basePtr = splatOp.getOperand();
+      offset = addPtrOp.getOperand(0);
+    }
+  }
+
+  return std::make_tuple(basePtr, offset);
 }
 
 } // namespace cpu
