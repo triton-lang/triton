@@ -113,14 +113,14 @@ def to_tensor(x, builder, check_type: bool = True):
         return tl.tensor(builder.get_int1(x), tl.int1)
     # Note: compile-time const integers are represented by unsigned values
     elif isinstance(x, int):
-        if -2**31 <= x < 2**31:
-            dtype = tl.int32
-        elif 2**31 <= x < 2**32:
-            dtype = tl.uint32
-        elif -2**63 <= x < 2**63:
-            dtype = tl.int64
-        elif 2**63 <= x < 2**64:
-            dtype = tl.uint64
+        ranges = {
+            tl.int8: (-2**7, 2**7), tl.uint8: (0, 2**8), tl.int16: (-2**15, 2**15), tl.uint16: (0, 2**16), tl.int32:
+            (-2**31, 2**31), tl.uint32: (0, 2**32), tl.int64: (-2**63, 2**63), tl.uint64: (0, 2**64)
+        }
+
+        for dtype, (lower, upper) in ranges.items():
+            if lower <= x < upper:
+                break
         else:
             raise ValueError(f'Nonrepresentable integer {x}.')
         return full((), x, dtype=dtype, builder=builder)
