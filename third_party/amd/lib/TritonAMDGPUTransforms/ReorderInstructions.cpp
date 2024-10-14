@@ -61,22 +61,12 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
   return ipnt;
 }
 
-// Check if the operation inLoopOp is inside any scf::ForOp and outLoopOp is not
-// inside the same loop.
-bool checkLoopCondition(mlir::Operation *inLoopOp, mlir::Operation *outLoopOp) {
-  scf::ForOp parentForOp = inLoopOp->getParentOfType<scf::ForOp>();
-
-  // If the inLoopOp is not inside an scf::ForOp, return false.
-  if (!parentForOp) {
-    return false;
-  }
-
-  // If the outLoopOp is defined outside the loop, return true.
-  if (!parentForOp.getOperation()->isAncestor(outLoopOp)) {
-    return true;
-  }
-
-  return false;
+// Check if the operation opInsideLoop is inside any scf::ForOp and
+// opOutsideLoop is not inside the same loop.
+bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
+                         mlir::Operation *opOutsideLoop) {
+  scf::ForOp parentForOp = opInsideLoop->getParentOfType<scf::ForOp>();
+  return parentForOp && !parentForOp->isAncestor(opOutsideLoop);
 }
 
 class TritonAMDGPUReorderInstructionsPass
@@ -151,14 +141,14 @@ public:
         if (!localAlloc->hasOneUse())
           return;
 
-        auto definingOp = localAlloc->getOperand(0).getDefiningOp();
-        // Check if localAlloc is in the loop but it's defining op is outside of
-        // it.
-        if (!definingOp || !checkLoopCondition(localAlloc, definingOp)) {
+        auto srcTensorOp = localAlloc->getOperand(0).getDefiningOp();
+        // Check if localAlloc is in the loop but it's src tensor defining op is
+        // outside of it.
+        if (!srcTensorOp || !isCrossLoopBoundary(localAlloc, srcTensorOp)) {
           return;
         }
 
-        localAlloc->moveAfter(definingOp);
+        localAlloc->moveAfter(srcTensorOp);
         localLoad->moveAfter(localAlloc);
         return;
       }
@@ -177,14 +167,14 @@ public:
       if (!isa<ttg::LocalStoreOp>(localStore))
         return;
 
-      auto definingOp = localStore->getOperand(0).getDefiningOp();
-      // Check if localStore is in the loop but it's defining op is outside of
-      // it.
-      if (!definingOp || !checkLoopCondition(localStore, definingOp)) {
+      auto srcTensorOp = localStore->getOperand(0).getDefiningOp();
+      // Check if localStore is in the loop but it's src tensor defining op is
+      // outside of it.
+      if (!srcTensorOp || !isCrossLoopBoundary(localStore, srcTensorOp)) {
         return;
       }
 
-      localAlloc->moveAfter(definingOp);
+      localAlloc->moveAfter(srcTensorOp);
       localStore->moveAfter(localAlloc);
       localLoad->moveAfter(localStore);
     });
