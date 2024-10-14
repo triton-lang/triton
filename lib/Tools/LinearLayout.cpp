@@ -16,6 +16,45 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static __forceinline int __builtin_ctz(unsigned x)
+{
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(_M_HYBRID_X86_ARM64) || defined(_M_ARM64EC)
+    return (int)_CountTrailingZeros(x);
+#elif defined(__AVX2__) || defined(__BMI__)
+    return (int)_tzcnt_u32(x);
+#else
+    unsigned long r;
+    _BitScanForward(&r, x);
+    return (int)r;
+#endif
+}
+
+static __forceinline int __builtin_ctzll(unsigned long long x)
+{
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(_M_HYBRID_X86_ARM64) || defined(_M_ARM64EC)
+    return (int)_CountTrailingZeros64(x);
+#elif defined(_WIN64)
+#if defined(__AVX2__) || defined(__BMI__)
+    return (int)_tzcnt_u64(x);
+#else
+    unsigned long r;
+    _BitScanForward64(&r, x);
+    return (int)r;
+#endif
+#else
+    int l = __builtin_ctz((unsigned)x);
+    int h = __builtin_ctz((unsigned)(x >> 32)) + 32;
+    return !!((unsigned)x) ? l : h;
+#endif
+}
+
+#endif
+
 namespace mlir::triton {
 
 namespace {
