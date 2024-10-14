@@ -182,10 +182,10 @@ tt.func public @rewrite_if(%arg0: !tt.ptr<f16>, %arg1: i1, %arg2: tensor<128x32x
 // CHECK: } else {
 // CHECK:   %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<128x32xf16>
 // CHECK:   scf.yield %[[CST]], %[[EXTSI0]], %[[EXTSI1]] : tensor<128x32xf16>, i64, i64
-// CHECK:   %{{.*}} = tt.splat %[[IF]]#1 : i64 -> tensor<128xi64>
-// CHECK:   %{{.*}} = tt.splat %[[IF]]#2 : i64 -> tensor<32xi64>
-// CHECK:   %{{.*}} = arith.addf %[[IF]]#0, %{{.*}} : tensor<128x32xf16>
 // CHECK: }
+// CHECK: %{{.*}} = tt.splat %[[IF]]#1 : i64 -> tensor<128xi64>
+// CHECK: %{{.*}} = tt.splat %[[IF]]#2 : i64 -> tensor<32xi64>
+// CHECK: %{{.*}} = arith.addf %[[IF]]#0, %{{.*}} : tensor<128x32xf16>
 
 
 // -----
