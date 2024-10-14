@@ -271,9 +271,9 @@ public:
       for (Operation &op : forOp) {
         if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
           loadOps.insert(loadOp);
-        if (isa<triton::DotOp>(&op)) {
+        if (auto curOp = dyn_cast<triton::DotOp>(&op)) {
           nDotOps++;
-          dotOp = dyn_cast<triton::DotOp>(&op);
+          dotOp = curOp;
         }
       }
       // Only apply the optimization when there are 2 load's and 1 dot in the
