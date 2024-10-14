@@ -1909,8 +1909,6 @@ def where(condition, x, y, _builder=None):
 def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.add(x, y, sanitize_overflow, _builder)
 
 
@@ -1918,8 +1916,6 @@ def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
 def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.sub(x, y, sanitize_overflow, _builder)
 
 
@@ -1927,8 +1923,6 @@ def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
 def mul(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.mul(x, y, sanitize_overflow, _builder)
 
 
