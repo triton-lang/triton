@@ -34,6 +34,8 @@ Type getI32SameShape(Type type);
 
 Type getPointerTypeSameShape(Type type);
 
+Type getPointerTypeScalar(Type type);
+
 } // namespace triton
 
 } // namespace mlir
