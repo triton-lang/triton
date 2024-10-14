@@ -30,14 +30,9 @@ include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
-<<<<<<< HEAD
-include "triton/Dialect/Triton/IR/TritonInterfaces.td"
-include "TritonAMDGPUDialect.td"
-include "TritonAMDGPUAttrDefs.td"
-=======
->>>>>>> a1aaf2f1 (Addresses review comments)
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ViewLikeInterface.td" // OffsetSizeAndStrideOpInterface
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
 
@@ -55,8 +50,8 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 // ViewSliceOp
 //===----------------------------------------------------------------------===//
 
-def TritonAMDGPU_ViewSliceOp
-    : TritonAMDGPU_Op<"view_slice", [AttrSizedOperandSegments,
+def ViewSliceOp
+    : TT_AMDGPU_Op<"view_slice", [AttrSizedOperandSegments,
                                      OffsetSizeAndStrideOpInterface, Pure]> {
   let summary = "view slice operation";
   let description = [{
