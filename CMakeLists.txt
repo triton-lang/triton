@@ -15,11 +15,13 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 project(triton)
 include(CTest)
 
-if(NOT WIN32)
-  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+if(WIN32)
+  set(DEFAULT_BUILD_PROTON OFF)
+else()
+  set(DEFAULT_BUILD_PROTON ON)
 endif()
-
-
 
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
@@ -253,7 +255,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
           LLVMAArch64CodeGen
           LLVMAArch64AsmParser
       )
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR
+         CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64") # windows x64
       list(APPEND TRITON_LIBRARIES
           LLVMX86CodeGen
           LLVMX86AsmParser
