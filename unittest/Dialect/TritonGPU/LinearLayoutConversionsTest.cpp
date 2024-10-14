@@ -554,7 +554,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(ampereDotToLinearLayot({64, 128}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
+  EXPECT_EQ(ampereDotToLinearLayout({64, 128}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
             LinearLayout(
                 {
                     {S("register"),
