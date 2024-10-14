@@ -533,6 +533,61 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `d` | ranked tensor of floating-point or integer values
 
+### `tt.dot_scaled` (triton::DotScaledOp)
+
+_Dot_scaled_
+
+
+Syntax:
+
+```
+operation ::= `tt.dot_scaled` $lhs `,` $lhs_scale `,` $rhs (`,`) : (`,` $rhs_scale^ `,`)? $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
+              `:` type($lhs) `,` type($lhs_scale) `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
+```
+
+$d = matrix_multiply(scale($lhs, $lhs_scale), scale($rhs, $rhs_scale)) + $c.
+Where scale(x, s) is a function that applies the scale per block following microscaling spec.
+
+Traits: `AlwaysSpeculatableImplTrait`, `DotLike`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>lhs_type</code></td><td>::mlir::triton::F8F6F4TypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
+* e4m3 (`E4M3`)
+* e5m2 (`E5M2`)
+* e2m3 (`E2M3`)
+* e3m2 (`E3M2`)
+* e2m1 (`E2M1`){{% /markdown %}}</details></td></tr>
+<tr><td><code>rhs_type</code></td><td>::mlir::triton::F8F6F4TypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
+* e4m3 (`E4M3`)
+* e5m2 (`E5M2`)
+* e2m3 (`E2M3`)
+* e3m2 (`E3M2`)
+* e2m1 (`E2M1`){{% /markdown %}}</details></td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `lhs` | ranked tensor of integer values
+| `rhs` | ranked tensor of integer values
+| `c` | ranked tensor of floating-point values
+| `lhs_scale` | ranked tensor of integer values
+| `rhs_scale` | ranked tensor of integer values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `d` | ranked tensor of floating-point values
+
 ### `tt.elementwise_inline_asm` (triton::ElementwiseInlineAsmOp)
 
 _Inline assembly applying an elementwise operation to a group of packed elements._

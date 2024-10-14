@@ -316,3 +316,48 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
 
+### `triton_gpu.upcast_mxfp` (triton::gpu::UpcastMXFPOp)
+
+_Convert an mxfp tensor to bf16_
+
+
+Syntax:
+
+```
+operation ::= `triton_gpu.upcast_mxfp` $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
+```
+
+Compute the bf16 encoded in the given mxfp number as per
+https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>fp_type</code></td><td>::mlir::triton::F8F6F4TypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
+* e4m3 (`E4M3`)
+* e5m2 (`E5M2`)
+* e2m3 (`E2M3`)
+* e3m2 (`E3M2`)
+* e2m1 (`E2M1`){{% /markdown %}}</details></td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | ranked tensor of floating-point or integer or ptr values
+| `scale` | ranked tensor of floating-point or integer or ptr values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values
+

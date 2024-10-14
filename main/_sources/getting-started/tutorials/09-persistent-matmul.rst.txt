@@ -48,15 +48,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    203.278 13.522 ROOT
-    ├─ nan 0.049 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
+    202.682 13.562 ROOT
+    ├─ nan 0.048 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
     ├─ nan 0.044 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 214.189 3.208 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 3.208 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 195.431 3.516 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 196.416 3.499 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 214.340 3.206 torch [M=8192, N=8192, K=512]
-       └─ nan 3.206 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 213.221 3.223 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 3.223 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 194.835 3.527 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 195.932 3.507 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 213.909 3.213 torch [M=8192, N=8192, K=512]
+       └─ nan 3.213 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -717,7 +717,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.988 seconds)
+   **Total running time of the script:** (0 minutes 1.948 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
