@@ -21,15 +21,15 @@ foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
       "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
       )
      # CMAKE_LIBRARY_OUTPUT_DIRECTORY is only set during the Python
-     # build. It is empty if building directly from the root 
+     # build. It is empty if building directly from the root
      # CMakeLists.txt file. Therefore if not building from Python just
      # use the default CMake shared lib path otherwise this causes a hard
      # build error
-     if(DEFINED ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+     if(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
      	set_target_properties(${plugin} PROPERTIES
-     	     LIBRARY_OUTPUT_DIRECTORY 
+     	     LIBRARY_OUTPUT_DIRECTORY
 	     "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../instrumentation")
-     endif(DEFINED ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+     endif(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
 
      # This is set to -fvisibility=hidden in the top level CMake file
      # which causes the llvmGetPassPluginInfo symbol to be hidden and
