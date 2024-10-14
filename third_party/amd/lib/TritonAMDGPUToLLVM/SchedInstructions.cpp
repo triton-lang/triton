@@ -1,5 +1,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -18,9 +20,10 @@ void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
                          unsigned k, Type elementType) {
   auto *ctx = op->getContext();
   auto mmaType = RankedTensorType::get({m, n, k}, elementType);
-  auto counterAttr = amdgpu::InstCounterAttr::get(ctx, mmaCount, mmaType);
+  auto counterAttr =
+      triton::amdgpu::InstCounterAttr::get(ctx, mmaCount, mmaType);
 
-  op->getBlock()->walk([&](amdgpu::InstructionSchedHint schedHint) {
+  op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
     schedHint.setNumMMAsAttr(counterAttr);
   });
 }
@@ -28,11 +31,12 @@ void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
 void setNumGeneratedGlobalLoads(triton::LoadOp op, size_t globalLoadsCount,
                                 Type type) {
   MLIRContext *ctx = op->getContext();
-  auto counterAttr = amdgpu::InstCounterAttr::get(ctx, globalLoadsCount, type);
+  auto counterAttr =
+      triton::amdgpu::InstCounterAttr::get(ctx, globalLoadsCount, type);
 
-  op->getBlock()->walk([&](amdgpu::InstructionSchedHint schedHint) {
-    auto opIdxAttr =
-        cast<amdgpu::OpIdxAttr>(op->getAttr(amdgpu::OpIdxAttr::getMnemonic()));
+  op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
+    auto opIdxAttr = cast<triton::amdgpu::OpIdxAttr>(
+        op->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic()));
     assert(opIdxAttr.getValue() < 2);
     if (opIdxAttr.getValue() == 0)
       schedHint.setNumGlobalLoadsAAttr(counterAttr);
@@ -44,9 +48,10 @@ void setNumGeneratedGlobalLoads(triton::LoadOp op, size_t globalLoadsCount,
 void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t dsReadsCount,
                             Type type) {
   auto *ctx = op->getContext();
-  auto counterAttr = amdgpu::InstCounterAttr::get(ctx, dsReadsCount, type);
+  auto counterAttr =
+      triton::amdgpu::InstCounterAttr::get(ctx, dsReadsCount, type);
 
-  op->getBlock()->walk([&](amdgpu::InstructionSchedHint schedHint) {
+  op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
     Value dst = op.getResult();
     auto dstTensorTy = cast<RankedTensorType>(dst.getType());
     auto dotOperandLayout =
@@ -63,11 +68,12 @@ void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t dsReadsCount,
 void storeOpConversionCallback(triton::gpu::LocalStoreOp op,
                                size_t localStoreOpCount, Type type) {
   MLIRContext *ctx = op->getContext();
-  auto counterAttr = amdgpu::InstCounterAttr::get(ctx, localStoreOpCount, type);
+  auto counterAttr =
+      triton::amdgpu::InstCounterAttr::get(ctx, localStoreOpCount, type);
 
-  op->getBlock()->walk([&](amdgpu::InstructionSchedHint schedHint) {
-    auto opIdxAttr =
-        op->getAttrOfType<amdgpu::OpIdxAttr>(amdgpu::OpIdxAttr::getMnemonic());
+  op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
+    auto opIdxAttr = op->getAttrOfType<triton::amdgpu::OpIdxAttr>(
+        triton::amdgpu::OpIdxAttr::getMnemonic());
     assert(opIdxAttr.getValue() < 2);
     if (opIdxAttr.getValue() == 0)
       schedHint.setNumDsWritesAAttr(counterAttr);
@@ -79,69 +85,39 @@ void storeOpConversionCallback(triton::gpu::LocalStoreOp op,
 
 namespace {
 
-// The bitmask that encodes kinds of the instructions from AMD ISA.
-// The bitmask is used for providing instruction scheduling hints.
-enum InstructionKindMask {
-  NONE = 0x0000000,
-  ALL_ALU = 0x00000001,
-  VALU = 0x00000002,
-  SALU = 0x00000004,
-  MFMA = 0x00000008,
-  ALL_VMEM = 0x00000010,
-  VMEM_READ = 0x00000020,
-  VMEM_WRITE = 0x00000040,
-  ALL_DS = 0x00000080,
-  DS_READ = 0x00000100,
-  DS_WRITE = 0x00000200
-};
-
 // Create an intrinsic to control how different instruction kinds should
 // interleave for better ILP.
 void createSchedGroupBarrier(PatternRewriter &rewriter, Location loc,
-                             InstructionKindMask maskValue, int sizeValue,
-                             int groupIdValue) {
-  MLIRContext *ctx = rewriter.getContext();
-  const char *intrinsicName = "llvm.amdgcn.sched.group.barrier";
-
-  Value mask =
-      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(maskValue));
-  Value size =
-      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(sizeValue));
-  Value groupId = LLVM::createConstantI32(loc, rewriter,
-                                          static_cast<int32_t>(groupIdValue));
-
-  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, TypeRange{},
-                                  ValueRange{mask, size, groupId});
+                             mlir::amdgpu::sched_barrier_opt_enum maskValue,
+                             int sizeValue, int groupIdValue) {
+  IntegerAttr mask =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
+  IntegerAttr size =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(sizeValue));
+  IntegerAttr groupId =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(groupIdValue));
+  rewriter.create<mlir::ROCDL::SchedGroupBarrier>(loc, mask, size, groupId);
 }
 
 // Insert intrinsic that controls the types of instructions that may be
 // allowed to cross the intrinsic during instruction scheduling.
 Operation *createSchedBarrier(PatternRewriter &rewriter, Location loc,
-                              int64_t maskValue) {
-  MLIRContext *ctx = rewriter.getContext();
-  const char *intrinsicName = "llvm.amdgcn.sched.barrier";
-  LLVM::FastmathFlagsAttr defaultFlags{};
-
-  Value mask =
-      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(maskValue));
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName,
-                                         TypeRange{}, ValueRange{mask});
+                              mlir::amdgpu::sched_barrier_opt_enum maskValue) {
+  IntegerAttr mask =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
+  return rewriter.create<mlir::ROCDL::SchedBarrier>(loc, mask);
 }
 
 // Insert an experimental intrinsic for instruction group level parallelism.
 // The intrinsic takes a value that specifies the strategy.
 Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
-  MLIRContext *ctx = rewriter.getContext();
-  const char *intrinsicName = "llvm.amdgcn.iglp.opt";
-  LLVM::FastmathFlagsAttr defaultFlags{};
-  Value iglpValue =
-      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(value));
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName,
-                                         TypeRange{}, ValueRange{iglpValue});
+  IntegerAttr iglpValue =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(value));
+  return rewriter.create<mlir::ROCDL::IglpOpt>(loc, iglpValue);
 }
 
 struct InstructionSchedHintsRewriter
-    : public OpRewritePattern<amdgpu::InstructionSchedHint> {
+    : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
   InstructionSchedHintsRewriter(mlir::MLIRContext *ctx, std::string variant)
       : OpRewritePattern(ctx) {
@@ -170,8 +146,9 @@ struct InstructionSchedHintsRewriter
   // local (LDS to registers) and global (HBN to registers) data prefetching.
   // see:
   // include/ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.h
-  void createCKV3Schedule(PatternRewriter &rewriter, Location loc,
-                          amdgpu::InstructionSchedHint schedHint) const {
+  void
+  createCKV3Schedule(PatternRewriter &rewriter, Location loc,
+                     triton::amdgpu::InstructionSchedHint schedHint) const {
     const uint32_t numDsReadInstA = schedHint.getNumDsReadsA().getValue();
     const uint32_t numDsReadInstB = schedHint.getNumDsReadsB().getValue();
 
@@ -215,56 +192,68 @@ struct InstructionSchedHintsRewriter
 
     for (size_t i = 0; i < numBufferLoadInstA; ++i) {
       for (size_t idswrite = 0; idswrite < numDswritePerIssueA; ++idswrite) {
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_WRITE, 1,
-                                0);
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA, 1, 0);
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::ds_write,
+                                1, 0);
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
+                                1, 0);
       }
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::VMEM_READ, 1,
-                              0);
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA,
+      createSchedGroupBarrier(
+          rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
+      createSchedGroupBarrier(rewriter, loc,
+                              mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
                               num_mfma_per_issue - numDswritePerIssueA, 0);
     }
 
     for (size_t i = 0; i < numBufferLoadInstB; ++i) {
       for (size_t idswrite = 0; idswrite < numDswritePerIssueB; ++idswrite) {
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_WRITE, 1,
-                                0);
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA, 1, 0);
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::ds_write,
+                                1, 0);
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
+                                1, 0);
       }
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::VMEM_READ, 1,
-                              0);
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA,
+      createSchedGroupBarrier(
+          rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
+      createSchedGroupBarrier(rewriter, loc,
+                              mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
                               num_mfma_per_issue - numDswritePerIssueB, 0);
     }
 
     // stage 2
     for (size_t i = 0; i < numDsreadAMfma; ++i) {
       if ((numDsReadInstA - (i + 1) * dsReadAMfmaRate) >= dsReadAMfmaRate) {
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_READ,
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::ds_read,
                                 dsReadAMfmaRate, 0);
       } else {
         createSchedGroupBarrier(
-            rewriter, loc, InstructionKindMask::DS_READ,
+            rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::ds_read,
             numDsReadInstA - (numDsreadAMfma - 1) * dsReadAMfmaRate, 0);
       }
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA, 1, 0);
+      createSchedGroupBarrier(
+          rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma, 1, 0);
     }
 
     for (size_t i = 0; i < numDsreadBMfma; ++i) {
       if ((numDsReadInstB - (i + 1) * dsReadBMfmaRate) >= dsReadBMfmaRate) {
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_READ,
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::ds_read,
                                 dsReadBMfmaRate, 0);
       } else {
         createSchedGroupBarrier(
-            rewriter, loc, InstructionKindMask::DS_READ,
+            rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::ds_read,
             numDsReadInstB - (numDsreadBMfma - 1) * dsReadBMfmaRate, 0);
       }
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA, 1, 0);
+      createSchedGroupBarrier(
+          rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma, 1, 0);
     }
   }
 
   LogicalResult
-  matchAndRewrite(amdgpu::InstructionSchedHint instructionSchedHint,
+  matchAndRewrite(triton::amdgpu::InstructionSchedHint instructionSchedHint,
                   PatternRewriter &rewriter) const override {
 
     if (this->schedulingType == SchedulingType::UNKNOWN) {
@@ -286,7 +275,8 @@ struct InstructionSchedHintsRewriter
     Block *block = instructionSchedHint->getBlock();
     if (limitSchedulingRange) {
       rewriter.setInsertionPointToStart(block);
-      createSchedBarrier(rewriter, loc, InstructionKindMask::NONE);
+      createSchedBarrier(rewriter, loc,
+                         mlir::amdgpu::sched_barrier_opt_enum::none);
     }
 
     rewriter.setInsertionPoint(block, std::prev(block->end()));
@@ -310,7 +300,8 @@ struct InstructionSchedHintsRewriter
     }
 
     if (limitSchedulingRange)
-      createSchedBarrier(rewriter, loc, InstructionKindMask::NONE);
+      createSchedBarrier(rewriter, loc,
+                         mlir::amdgpu::sched_barrier_opt_enum::none);
 
     rewriter.eraseOp(instructionSchedHint);
     return mlir::success();
@@ -334,7 +325,10 @@ struct TritonAMDGPULowerInstructionSchedHints
 
     ConversionTarget target(*ctx);
     target.addLegalDialect<LLVM::LLVMDialect>();
-    target.addIllegalOp<amdgpu::InstructionSchedHint>();
+    target.addIllegalOp<triton::amdgpu::InstructionSchedHint>();
+    target.addLegalOp<ROCDL::SchedBarrier>();
+    target.addLegalOp<ROCDL::IglpOpt>();
+    target.addLegalOp<ROCDL::SchedGroupBarrier>();
 
     RewritePatternSet patterns(ctx);
     patterns.add<InstructionSchedHintsRewriter>(ctx, this->variant);
@@ -366,7 +360,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
       if (dotCounter == 1) {
         mlir::OpBuilder rewriter(ctx);
         rewriter.setInsertionPointAfter(dot);
-        rewriter.create<amdgpu::InstructionSchedHint>(dot->getLoc());
+        rewriter.create<triton::amdgpu::InstructionSchedHint>(dot->getLoc());
         annotateDotUsageOnLoadStore(forOp);
       }
     });
@@ -522,11 +516,12 @@ struct TritonAMDGPUInsertInstructionSchedHints
       size_t opIdx = std::distance(dotOperands.begin(), it);
 
       // Set `OpIdx` attributes.
-      auto opIdxAttr = amdgpu::OpIdxAttr::get(ctx, opIdx);
+      auto opIdxAttr = triton::amdgpu::OpIdxAttr::get(ctx, opIdx);
 
-      loadOp->setAttr(amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
+      loadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
       if (localStoreOp)
-        localStoreOp->setAttr(amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
+        localStoreOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(),
+                              opIdxAttr);
     }
   }
 };
