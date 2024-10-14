@@ -167,7 +167,7 @@ def get_json_package_info():
 def get_llvm_package_info():
     system = platform.system()
     try:
-        arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
+        arch = {"x86_64": "x64", "AMD64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     except KeyError:
         arch = platform.machine()
     if system == "Darwin":
@@ -196,6 +196,8 @@ def get_llvm_package_info():
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
             )
             return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+    elif system == "Windows":
+        system_suffix = f"windows-{arch}"
     else:
         print(
             f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
@@ -297,7 +299,8 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
     platform_name = "sbsa-linux" if arch == "aarch64" else "x86_64-linux"
     src_path = src_path(platform_name, version) if callable(src_path) else src_path
     src_path = os.path.join(tmp_path, src_path)
-    src_path += ".exe" if os.name == "nt" else ""
+    if os.name == "nt" and not os.path.isdir(src_path):
+        src_path += ".exe" if os.name == "nt" else ""
     download = not os.path.exists(src_path)
     if os.path.exists(dst_path) and is_supported and shutil.which(dst_path) is not None:
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
