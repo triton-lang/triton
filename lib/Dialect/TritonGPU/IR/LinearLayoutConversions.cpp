@@ -888,11 +888,13 @@ std::optional<LinearLayout>
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
     return dotOperandMfmaToLinearLayout(*this, shape);
-  } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent())) {
-    if (mma.isAmpere()) {
-      return ampereDotToLinearLayout(shape, *this);
-    }
   }
+  // TODO Activate in a follow-up PR
+  // else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent())) {
+  //  if (mma.isAmpere()) {
+  //    return ampereDotToLinearLayout(shape, *this);
+  //  }
+  //}
   return std::nullopt;
 }
 

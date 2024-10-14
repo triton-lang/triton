@@ -502,7 +502,7 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_4x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, DotMMAv2_tile_kwidth8) {
-  EXPECT_EQ(toLinearLayout({16, 64}, dotMMAv2(0, 8, {1, 1}, {1, 0})),
+  EXPECT_EQ(ampereDotToLinearLayout({16, 64}, dotMMAv2(0, 8, {1, 1}, {1, 0})),
             LinearLayout(
                 {
                     {S("register"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {0, 32}}},
@@ -511,7 +511,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_tile_kwidth8) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({64, 8}, dotMMAv2(1, 8, {1, 1}, {1, 0})),
+  EXPECT_EQ(ampereDotToLinearLayout({64, 8}, dotMMAv2(1, 8, {1, 1}, {1, 0})),
             LinearLayout(
                 {
                     {S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}}},
@@ -524,7 +524,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_tile_kwidth8) {
 
 TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
   EXPECT_EQ(
-      toLinearLayout({128, 128}, dotMMAv2(0, 8, {4, 1}, {1, 0})),
+      ampereDotToLinearLayout({128, 128}, dotMMAv2(0, 8, {4, 1}, {1, 0})),
       LinearLayout(
           {
               {S("register"),
@@ -534,7 +534,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
               {S("block"), {}},
           },
           {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({128, 64}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
+  EXPECT_EQ(ampereDotToLinearLayout({128, 64}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
             LinearLayout(
                 {
                     {S("register"),
@@ -554,7 +554,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({64, 128}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
+  EXPECT_EQ(ampereDotToLinearLayot({64, 128}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
             LinearLayout(
                 {
                     {S("register"),
