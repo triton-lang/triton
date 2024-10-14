@@ -1,4 +1,3 @@
-# flake8: noqa: F821,F841
 import tempfile
 
 import numpy as np

@@ -42,8 +42,8 @@ class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
 // ViewSliceOp
 //===----------------------------------------------------------------------===//
 
-def TritonAMDGPU_ViewSliceOp
-    : TritonAMDGPU_Op<"view_slice", [AttrSizedOperandSegments,
+def ViewSliceOp
+    : TT_AMDGPU_Op<"view_slice", [AttrSizedOperandSegments,
                                      OffsetSizeAndStrideOpInterface, Pure]> {
   let summary = "view slice operation";
   let description = [{

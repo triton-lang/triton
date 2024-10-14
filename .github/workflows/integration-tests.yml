@@ -401,11 +401,18 @@ jobs:
           lit -v "${LIT_TEST_DIR}"
       - name: Run python tests on HIP
         run: |
+<<<<<<< HEAD
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
             echo "Coult not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
+=======
+          SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/_C"
+          if [ ! -d "${SHARED_LIB_DIR}" ]; then
+            echo "Could not find '${SHARED_LIB_DIR}'" ; exit -1
+>>>>>>> 5897e003 (Moves pytest, adds pytest to CI, verifies for static input args to view_slice)
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
+          pytest --capture=tee-sys -rfs third_party/amd/python/test/test_view_slice.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 16 language runtime \
                  --ignore=language/test_line_info.py \
