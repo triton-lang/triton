@@ -1,7 +1,12 @@
 #ifndef PROTON_DRIVER_DISPATCH_H_
 #define PROTON_DRIVER_DISPATCH_H_
 
+#ifndef _WIN32
 #include <dlfcn.h>
+#else
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #include <stdexcept>
 #include <string>
@@ -50,31 +55,42 @@ struct ExternLibBase {
   ExternLibBase() = delete;
   ExternLibBase(const ExternLibBase &) = delete;
   ExternLibBase &operator=(const ExternLibBase &) = delete;
+#ifndef _WIN32
   static inline void *lib{nullptr};
+#else
+  static inline HMODULE lib{nullptr};
+#endif
 };
 
 template <typename ExternLib> class Dispatch {
 public:
   Dispatch() = delete;
 
-  static void init(const char *name, void **lib) {
-    if (*lib == nullptr) {
+  static void init(const char *name, void *libptr) {
+#ifndef _WIN32
+    if (libptr == nullptr) {
       // First reuse the existing handle
-      *lib = dlopen(name, RTLD_NOLOAD);
+      libptr = dlopen(name, RTLD_NOLOAD);
     }
-    if (*lib == nullptr) {
+    if (libptr == nullptr) {
       // If not found, try to load it from LD_LIBRARY_PATH
-      *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
+      libptr = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
     }
-    if (*lib == nullptr) {
+    if (libptr == nullptr) {
       // If still not found, try to load it from the default path
       auto dir = std::string(ExternLib::defaultDir);
       if (dir.length() > 0) {
         auto fullPath = dir + "/" + name;
-        *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
+        libptr = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       }
     }
-    if (*lib == nullptr) {
+#else
+    if (libptr == nullptr) {
+      // First reuse the existing handle
+      libptr = LoadLibraryA(name);
+    }
+#endif
+    if (libptr == nullptr) {
       throw std::runtime_error("Could not find `" + std::string(name) +
                                "`. Make sure it is in your "
                                "LD_LIBRARY_PATH.");
@@ -94,7 +110,11 @@ public:
   exec(FnT &handler, const char *functionName, Args... args) {
     init(ExternLib::name, &ExternLib::lib);
     if (handler == nullptr) {
+#ifndef _WIN32
       handler = reinterpret_cast<FnT>(dlsym(ExternLib::lib, functionName));
+#else
+      handler = reinterpret_cast<FnT>(GetProcAddress((HMODULE)ExternLib::lib, functionName));
+#endif
       if (handler == nullptr) {
         throw std::runtime_error("Failed to load " +
                                  std::string(ExternLib::name));
