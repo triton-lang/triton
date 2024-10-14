@@ -266,12 +266,15 @@ public:
      */
     m.walk([&](scf::ForOp forOp) -> void {
       SetVector<Operation *> loadOps;
+      triton::DotOp dotOp;
       int nDotOps = 0;
       for (Operation &op : forOp) {
         if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
           loadOps.insert(loadOp);
-        if (dyn_cast<triton::DotOp>(&op))
+        if (isa<triton::DotOp>(&op)) {
           nDotOps++;
+          dotOp = dyn_cast<triton::DotOp>(&op);
+        }
       }
       // Only apply the optimization when there are 2 load's and 1 dot in the
       // loop
@@ -281,21 +284,14 @@ public:
       // 1. nonKDim >= 128
       // 2. kDim >= 64
       auto ldAOp = dyn_cast<triton::LoadOp>(loadOps[0]);
-      auto tileAShape =
-          cast<RankedTensorType>(ldAOp.getResult().getType()).getShape();
+      auto tileAShape = cast<RankedTensorType>(ldAOp.getType()).getShape();
       auto ldBOp = dyn_cast<triton::LoadOp>(loadOps[1]);
-      auto tileBShape =
-          cast<RankedTensorType>(ldBOp.getResult().getType()).getShape();
+      auto tileBShape = cast<RankedTensorType>(ldBOp.getType()).getShape();
       if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 &&
             tileBShape[1] >= 128))
         return;
       // move ldBOp right before tt.dot
-      for (Operation &op : forOp) {
-        if (auto dotOp = dyn_cast<triton::DotOp>(&op)) {
-          loadOps[1]->moveBefore(dotOp);
-          break;
-        }
-      }
+      loadOps[1]->moveBefore(dotOp);
     });
   }
 };
