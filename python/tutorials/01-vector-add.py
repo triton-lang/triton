@@ -42,14 +42,13 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     # Create a mask to guard memory operations against out-of-bounds accesses.
-    mask = offsets < n_elements
     # Load x and y from DRAM, masking out any extra elements in case the input is not a
     # multiple of the block size.
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
+    x = tl.load(x_ptr + offsets, cache_modifier='.cg')
+    y = tl.load(y_ptr + offsets, cache_modifier='.cg')
     output = x + y
     # Write x + y back to DRAM.
-    tl.store(output_ptr + offsets, output, mask=mask)
+    tl.store(output_ptr + offsets, output)
 
 
 # %%
@@ -70,7 +69,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
     #  - `triton.jit`'ed functions can be indexed with a launch grid to obtain a callable GPU kernel.
     #  - Don't forget to pass meta-parameters as keywords arguments.
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=2048)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output
