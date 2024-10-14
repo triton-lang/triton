@@ -9,13 +9,25 @@ namespace hip {
 
 struct ExternLibHip : public ExternLibBase {
   using RetType = hipError_t;
+#ifndef _WIN32
   static constexpr const char *name = "libamdhip64.so";
+#else
+  static constexpr const char *name = "amdhip64.dll";
+#endif
   static constexpr const char *defaultDir = "";
   static constexpr RetType success = hipSuccess;
+#ifndef _WIN32
   static void *lib;
+#else
+  static HMODULE lib;
+#endif
 };
 
+#ifndef _WIN32
 void *ExternLibHip::lib = nullptr;
+#else
+HMODULE ExternLibHip::lib = nullptr;
+#endif
 
 DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
 
@@ -70,8 +82,13 @@ const char *getKernelNameRef(const hipFunction_t f) {
   static hipKernelNameRef_t func = nullptr;
   Dispatch<ExternLibHip>::init(ExternLibHip::name, &ExternLibHip::lib);
   if (func == nullptr)
+#ifndef _WIN32
     func = reinterpret_cast<hipKernelNameRef_t>(
         dlsym(ExternLibHip::lib, "hipKernelNameRef"));
+#else
+    func = reinterpret_cast<hipKernelNameRef_t>(
+        GetProcAddress(ExternLibHip::lib, "hipKernelNameRef"));
+#endif
   return (func ? func(f) : NULL);
 }
 
@@ -81,8 +98,13 @@ const char *getKernelNameRefByPtr(const void *hostFunction,
   static hipKernelNameRefByPtr_t func = nullptr;
   Dispatch<ExternLibHip>::init(ExternLibHip::name, &ExternLibHip::lib);
   if (func == nullptr)
+#ifndef _WIN32
     func = reinterpret_cast<hipKernelNameRefByPtr_t>(
         dlsym(ExternLibHip::lib, "hipKernelNameRefByPtr"));
+#else
+    func = reinterpret_cast<hipKernelNameRefByPtr_t>(
+        GetProcAddress(ExternLibHip::lib, "hipKernelNameRefByPtr"));
+#endif
   return (func ? func(hostFunction, stream) : NULL);
 }
 

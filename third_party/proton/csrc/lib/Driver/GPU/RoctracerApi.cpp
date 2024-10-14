@@ -7,13 +7,26 @@ namespace roctracer {
 
 struct ExternLibRoctracer : public ExternLibBase {
   using RetType = roctracer_status_t;
+#ifndef _WIN32
   static constexpr const char *name = "libroctracer64.so";
+#else
+  static constexpr const char *name = "roctracer64.dll";
+#endif
   static constexpr const char *defaultDir = "";
   static constexpr RetType success = ROCTRACER_STATUS_SUCCESS;
+#ifndef _WIN32
   static void *lib;
+#else
+  static HMODULE lib;
+#endif
 };
 
+#ifdef _WIN32
+HMODULE ExternLibRoctracer::lib = nullptr;
+#define dlsym GetProcAddress
+#else
 void *ExternLibRoctracer::lib = nullptr;
+#endif
 
 DEFINE_DISPATCH(ExternLibRoctracer, setProperties, roctracer_set_properties,
                 roctracer_domain_t, void *)

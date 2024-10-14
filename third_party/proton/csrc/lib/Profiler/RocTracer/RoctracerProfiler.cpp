@@ -16,8 +16,10 @@
 #include <mutex>
 #include <tuple>
 
+#ifndef _WIN32
 #include <cxxabi.h>
 #include <unistd.h>
+#endif
 
 namespace proton {
 

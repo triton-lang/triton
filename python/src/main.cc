@@ -4,13 +4,14 @@
 
 namespace py = pybind11;
 
+#define EXPAND(x) x
 #define FOR_EACH_1(MACRO, X) MACRO(X)
 #define FOR_EACH_2(MACRO, X, ...) MACRO(X) FOR_EACH_1(MACRO, __VA_ARGS__)
 #define FOR_EACH_3(MACRO, X, ...) MACRO(X) FOR_EACH_2(MACRO, __VA_ARGS__)
 #define FOR_EACH_4(MACRO, X, ...) MACRO(X) FOR_EACH_3(MACRO, __VA_ARGS__)
 
 #define FOR_EACH_NARG(...) FOR_EACH_NARG_(__VA_ARGS__, FOR_EACH_RSEQ_N())
-#define FOR_EACH_NARG_(...) FOR_EACH_ARG_N(__VA_ARGS__)
+#define FOR_EACH_NARG_(...) EXPAND(FOR_EACH_ARG_N(__VA_ARGS__))
 #define FOR_EACH_ARG_N(_1, _2, _3, _4, N, ...) N
 #define FOR_EACH_RSEQ_N() 4, 3, 2, 1, 0
 
@@ -18,8 +19,7 @@ namespace py = pybind11;
 #define CONCATENATE1(x, y) x##y
 
 #define FOR_EACH(MACRO, ...)                                                   \
-  CONCATENATE(FOR_EACH_, FOR_EACH_NARG_HELPER(__VA_ARGS__))(MACRO, __VA_ARGS__)
-#define FOR_EACH_NARG_HELPER(...) FOR_EACH_NARG(__VA_ARGS__)
+  EXPAND(CONCATENATE(FOR_EACH_, FOR_EACH_NARG(__VA_ARGS__))(MACRO, __VA_ARGS__))
 
 // New macro to remove parentheses
 #define REMOVE_PARENS(...) __VA_ARGS__

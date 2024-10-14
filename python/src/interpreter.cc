@@ -1,3 +1,4 @@
+#include <atomic>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -14,10 +15,17 @@ enum class MemSemantic { ACQUIRE_RELEASE, ACQUIRE, RELEASE, RELAXED };
 enum class RMWOp { ADD, FADD, AND, OR, XOR, XCHG, MAX, MIN, UMIN, UMAX };
 
 std::map<MemSemantic, int> mem_semantic_map = {
+#ifdef _MSC_VER
+    {MemSemantic::ACQUIRE_RELEASE, static_cast<int>(std::memory_order_acq_rel)},
+    {MemSemantic::ACQUIRE, static_cast<int>(std::memory_order_acquire)},
+    {MemSemantic::RELEASE, static_cast<int>(std::memory_order_release)},
+    {MemSemantic::RELAXED, static_cast<int>(std::memory_order_relaxed)},
+#else
     {MemSemantic::ACQUIRE_RELEASE, __ATOMIC_ACQ_REL},
     {MemSemantic::ACQUIRE, __ATOMIC_ACQUIRE},
     {MemSemantic::RELEASE, __ATOMIC_RELEASE},
     {MemSemantic::RELAXED, __ATOMIC_RELAXED},
+#endif
 };
 
 // Use compiler builtin atomics instead of std::atomic which requires

@@ -10,17 +10,29 @@ namespace cupti {
 #define TOSTRING(x) STRINGIFY(x)
 struct ExternLibCupti : public ExternLibBase {
   using RetType = CUptiResult;
+#ifndef _WIN32
   static constexpr const char *name = "libcupti.so";
-#ifdef CUPTI_LIB_DIR
+#else
+  static constexpr const char *name = "cupti.dll";
+#endif
+#if defined(CUPTI_LIB_DIR) && !defined(_WIN32)
   static constexpr const char *defaultDir = TOSTRING(CUPTI_LIB_DIR);
 #else
   static constexpr const char *defaultDir = "";
 #endif
   static constexpr RetType success = CUPTI_SUCCESS;
+#ifndef _WIN32
   static void *lib;
+#else
+  static HMODULE lib;
+#endif
 };
 
+#ifndef _WIN32
 void *ExternLibCupti::lib = nullptr;
+#else
+HMODULE ExternLibCupti::lib = nullptr;
+#endif
 
 DEFINE_DISPATCH(ExternLibCupti, getVersion, cuptiGetVersion, uint32_t *);
 

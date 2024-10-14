@@ -2,7 +2,13 @@
 #define TRITON_CUBLAS_INSTANCE_H
 
 #include "cublas_types.h"
+#ifndef _WIN32
 #include <dlfcn.h>
+#else
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include <stdexcept>
 #include <string>
 
@@ -40,8 +46,6 @@ class CublasLtInstance {
       const cublasLtMatrixLayout_t, const cublasLtMatmulAlgo_t *, void *,
       size_t, cudaStream_t);
 
-  static constexpr const char *name = "libcublas.so";
-
   cublasLtCreate_t cublasLtCreate;
   cublasLtDestroy_t cublasLtDestroy;
   cublasLtMatmulDescCreate_t cublasLtMatmulDescCreate;
@@ -55,8 +59,15 @@ class CublasLtInstance {
   cublasLtMatmulAlgoGetHeuristic_t cublasLtMatmulAlgoGetHeuristic;
   cublasLtMatmul_t cublasLtMatmul;
 
+#ifndef _WIN32
+  static constexpr const char *name = "libcublas.so";
   void *dylibHandle = nullptr;
   cublasLtHandle_t ltHandle;
+#else
+  static constexpr const char *name = "cublas64_12.dll";
+  HMODULE dylibHandle = nullptr;
+  cublasLtHandle_t ltHandle;
+#endif
 
   void *workspace = nullptr;
   size_t workspaceSize = 0;
@@ -64,6 +75,7 @@ class CublasLtInstance {
   cublasLtMatmulPreference_t preference = NULL;
 
   void loadCublasDylib() {
+#ifndef _WIN32
     if (dylibHandle == nullptr) {
       // First reuse the existing handle
       dylibHandle = dlopen(name, RTLD_NOLOAD);
@@ -79,38 +91,57 @@ class CublasLtInstance {
     }
     dlerror(); // Clear any existing error
 
-    cublasLtCreate = (cublasLtCreate_t)dlsym(dylibHandle, "cublasLtCreate");
-    cublasLtDestroy = (cublasLtDestroy_t)dlsym(dylibHandle, "cublasLtDestroy");
-    cublasLtMatmulDescCreate = (cublasLtMatmulDescCreate_t)dlsym(
-        dylibHandle, "cublasLtMatmulDescCreate");
-    cublasLtMatmulDescDestroy = (cublasLtMatmulDescDestroy_t)dlsym(
-        dylibHandle, "cublasLtMatmulDescDestroy");
-    cublasLtMatmulDescSetAttribute = (cublasLtMatmulDescSetAttribute_t)dlsym(
-        dylibHandle, "cublasLtMatmulDescSetAttribute");
-    cublasLtMatrixLayoutCreate = (cublasLtMatrixLayoutCreate_t)dlsym(
-        dylibHandle, "cublasLtMatrixLayoutCreate");
-    cublasLtMatrixLayoutDestroy = (cublasLtMatrixLayoutDestroy_t)dlsym(
-        dylibHandle, "cublasLtMatrixLayoutDestroy");
-    cublasLtMatmulPreferenceCreate = (cublasLtMatmulPreferenceCreate_t)dlsym(
-        dylibHandle, "cublasLtMatmulPreferenceCreate");
-    cublasLtMatmulPreferenceDestroy = (cublasLtMatmulPreferenceDestroy_t)dlsym(
-        dylibHandle, "cublasLtMatmulPreferenceDestroy");
-    cublasLtMatmulPreferenceSetAttribute =
-        (cublasLtMatmulPreferenceSetAttribute_t)dlsym(
-            dylibHandle, "cublasLtMatmulPreferenceSetAttribute");
-    cublasLtMatmulAlgoGetHeuristic = (cublasLtMatmulAlgoGetHeuristic_t)dlsym(
-        dylibHandle, "cublasLtMatmulAlgoGetHeuristic");
-    cublasLtMatmul = (cublasLtMatmul_t)dlsym(dylibHandle, "cublasLtMatmul");
+    #define dlSymbolName(symbolName) (symbolName##_t)dlsym(dylibHandle, #symbolName)
 
+#else
+    if (dylibHandle == nullptr) {
+      dylibHandle = LoadLibraryA(name);
+    }
+    if (dylibHandle == nullptr) {
+      throw std::runtime_error("Could not find `" + std::string(name) +
+                               "`. Make sure it is in your "
+                               "PATH.");
+    }
+
+    #define dlSymbolName(symbolName) (symbolName##_t)GetProcAddress((HMODULE)dylibHandle, #symbolName)
+
+#endif
+
+    cublasLtCreate = dlSymbolName(cublasLtCreate);
+    cublasLtDestroy = dlSymbolName(cublasLtDestroy);
+    cublasLtMatmulDescCreate = dlSymbolName(cublasLtMatmulDescCreate);
+    cublasLtMatmulDescDestroy = dlSymbolName(cublasLtMatmulDescDestroy);
+    cublasLtMatmulDescSetAttribute = dlSymbolName(cublasLtMatmulDescSetAttribute);
+    cublasLtMatrixLayoutCreate = dlSymbolName(cublasLtMatrixLayoutCreate);
+    cublasLtMatrixLayoutDestroy = dlSymbolName(cublasLtMatrixLayoutDestroy);
+    cublasLtMatmulPreferenceCreate = dlSymbolName(cublasLtMatmulPreferenceCreate);
+    cublasLtMatmulPreferenceDestroy = dlSymbolName(cublasLtMatmulPreferenceDestroy);
+    cublasLtMatmulPreferenceSetAttribute = dlSymbolName(cublasLtMatmulPreferenceSetAttribute);
+    cublasLtMatmulAlgoGetHeuristic = dlSymbolName(cublasLtMatmulAlgoGetHeuristic);
+    cublasLtMatmul = dlSymbolName(cublasLtMatmul);
+
+#ifndef _WIN32
     const char *dlsym_error = dlerror();
     if (dlsym_error) {
       throw std::runtime_error("Could not load symbol from `" +
                                std::string(name) +
                                "`: " + std::string(dlsym_error));
     }
+#else
+    long err = GetLastError();
+    if (err) {
+      throw std::runtime_error("Could not load symbol from `" +
+                               std::string(name) +
+                               "`: " + std::to_string(err));
+    }
+#endif
   }
 
+#ifndef _WIN32
   void unloadCublasDylib() { dlclose(dylibHandle); }
+#else
+  void unloadCublasDylib() { FreeLibrary(dylibHandle); }
+#endif
 
   void successOrExit(cublasStatus_t status) {
     if (status != CUBLAS_STATUS_SUCCESS) {
