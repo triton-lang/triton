@@ -68,3 +68,33 @@ tt.func @invalid_stride(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility =
   %1 = amdgpu.view_slice %arg0[0,0] [256, 16] [1,2] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
   tt.return
 }
+
+// -----
+
+// Invalid non static offset
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+tt.func @invalid_non_static_offset(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}, %arg1: i32) {
+  // expected-error @+1 {{currently only static offsets are supported}}
+  %2 = amdgpu.view_slice %arg0[0,%arg1] [256, 16] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+  tt.return
+}
+
+// -----
+
+// Invalid non static size
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+tt.func @invalid_non_static_size(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}, %arg1: i32) {
+  // expected-error @+1 {{currently only static sizes are supported}}
+  %2 = amdgpu.view_slice %arg0[0,0] [256, %arg1] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+  tt.return
+}
+
+// -----
+
+// Invalid non static stride
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+tt.func @invalid_non_static_stride(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}, %arg1: i32) {
+  // expected-error @+1 {{currently only static strides are supported}}
+  %2 = amdgpu.view_slice %arg0[0,0] [256, 16] [1,%arg1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+  tt.return
+}
