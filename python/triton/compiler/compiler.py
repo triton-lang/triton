@@ -111,18 +111,32 @@ class IRSource:
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
+        print ("IRSource.__init__(...)", self.ext, flush=True)
         match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
         self.name = match.group(1)
+        context = ir.context()
+        ir.load_dialects(context)
+        module = ir.parse_mlir_module(self.path, context)
+        #print (module)
+        fn_name = module.get_first_func_name()
+        print (fn_name)
+        funcop = module.get_function(fn_name)
+        func_ty = module.get_function_signature(funcop)
+        print (func_ty)
         signature = match.group(2)
+        print ("signature", signature)
         types = re.findall(arg_type_pattern[self.ext], signature)
+        print (types)
         self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
 
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
+        print ("IRSource.make_ir(...)", flush=True)
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
+
         return module
 
     def parse_options(self):
@@ -223,7 +237,9 @@ def compile(src, target=None, options=None):
     # create backend
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
+        print ("compile(...)")
         src = IRSource(src)
+
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
@@ -247,6 +263,8 @@ def compile(src, target=None, options=None):
     metadata_path = metadata_group.get(metadata_filename)
     always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
     if not always_compile and metadata_path is not None:
+        print ("src cache hit", ir_source == True)
+
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
         return CompiledKernel(src, metadata_group, hash)
@@ -270,8 +288,11 @@ def compile(src, target=None, options=None):
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
     try:
+        print ("src.make_ir(...)", type(src), src.ext, ir_source == True)
         module = src.make_ir(options, codegen_fns, module_map, context)
+        print ("src.make_ir(...) finished")
     except Exception as e:
+        print ("exception in src.make_ir(...)", flush=True)
         filter_traceback(e)
         raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)

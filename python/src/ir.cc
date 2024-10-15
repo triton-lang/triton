@@ -31,6 +31,8 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/SourceMgr.h"
 
+#include <iostream>
+
 namespace {
 
 namespace py = pybind11;
@@ -490,6 +492,19 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, FuncOp &funcOp) -> void {
              self.push_back(funcOp);
            })
+      .def("get_first_func_name",
+           [](ModuleOp &self) -> std::string {
+              std::string str;
+              for (auto &op : self.getOps()) {
+                if (auto func = dyn_cast<FuncOp>(op)) {
+                  //std::cout << "func name: " << func.getName() << std::endl;
+                  //.print(os, printingFlags);
+                   // Return the first function found
+                  return func.getName().str();
+                }
+              }
+              return str;
+           })
       .def("has_function",
            [](ModuleOp &self, std::string &funcName) -> bool {
              if (self.lookupSymbol(funcName))
@@ -499,6 +514,21 @@ void init_triton_ir(py::module &&m) {
       .def("get_function",
            [](ModuleOp &self, std::string &funcName) -> FuncOp {
              return self.lookupSymbol<FuncOp>(funcName);
+           })
+      .def("get_function_signature",
+           [](ModuleOp &self, FuncOp &func) -> std::string {
+              std::string str;
+              llvm::raw_string_ostream os(str);
+              //auto fn = self.lookupSymbol<FuncOp>(func);
+              auto type = func.getFunctionType();
+              unsigned numArgs = type.getNumInputs();
+              ArrayAttr attr = cast<ArrayAttr>(func.getArgAttrs());
+              for (unsigned i = 0; i != numArgs; ++i) {
+                auto ty = type.getInput(i);
+                ty.print(os);
+                attr[i].print(os);
+              }
+              return str;
            })
       .def("get_int_attr",
            [](ModuleOp &self, std::string name) -> py::object {
