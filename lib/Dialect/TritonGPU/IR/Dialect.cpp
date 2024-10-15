@@ -263,7 +263,7 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
   // The 'order' field typically represents a descending sorted array of
   // dimensions based on contiguity. For instance, in axisInfo utilities that
   // retrieve tensor contiguity, it's assumed that the dimension with the
-  // highest contiguity corresponds to order[rank - 1].
+  // highest contiguity corresponds to order[0].
   //
   // The relation between contiguity and order is only relevant if the layout
   // interfaces with HBM, as is the case when we load tensor from HBM to
@@ -277,7 +277,7 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
   // - For opIdx == 1, we assume an order of [2, 0, 1] for 3D tensors.
   std::iota(order.rbegin(), order.rend(), 0);
   if (opIdx == 1) {
-    std::swap(order[rank - 2], order[rank - 1]);
+    std::swap(order[0], order[1]);
   }
   return order;
 }
