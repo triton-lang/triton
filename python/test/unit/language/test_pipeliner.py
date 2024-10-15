@@ -203,6 +203,7 @@ def test_pipeline_epilogue(ROW_COUNT, NUM_STAGES, device):
             input_ptrs = row_start_ptr + col_offsets
             # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
             row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
+            row += 1.0
             # Write back output to DRAM
             output_row_start_ptr = output_ptr + row_idx * output_row_stride
             output_ptrs = output_row_start_ptr + col_offsets
@@ -210,7 +211,7 @@ def test_pipeline_epilogue(ROW_COUNT, NUM_STAGES, device):
 
     width = ROW_COUNT
     depth = 78
-    x = torch.ones(width, depth, device='cuda')
+    x = torch.zeros(width, depth, device='cuda')
     y0 = torch.rand_like(x)
     n_rows, n_cols = x.shape
     BLOCK_SIZE = triton.next_power_of_2(n_cols)

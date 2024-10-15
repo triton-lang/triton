@@ -673,16 +673,13 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   Value rangeDecr =
       rewriter.create<arith::AddIOp>(loc, rangeIncrStep, stepDecr);
   Value totalIterations = rewriter.create<arith::DivSIOp>(loc, rangeDecr, step);
-  Value epilogueStages = getConst(maxStage);
 
   // If total_iters < max_stage, start the epilogue at zero to match the
   // ramp-up in the prologue.
-  // start_iter = total_iters < max_stage ? 0 : total_iters - max_stage
-  Value itersVsStages = rewriter.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::slt, totalIterations, epilogueStages);
+  // start_iter = max(0, total_iters - max_stage)
   Value iterI =
-      rewriter.create<arith::SubIOp>(loc, totalIterations, epilogueStages);
-  iterI = rewriter.create<arith::SelectOp>(loc, itersVsStages, zero, iterI);
+      rewriter.create<arith::SubIOp>(loc, totalIterations, getConst(maxStage));
+  iterI = rewriter.create<arith::MaxSIOp>(loc, zero, iterI);
 
   // Capture predicates for dynamic loops.
   SmallVector<Value> predicates(maxStage + 1);
