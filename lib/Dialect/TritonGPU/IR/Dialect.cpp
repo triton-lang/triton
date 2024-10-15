@@ -476,16 +476,14 @@ LogicalResult CTALayoutAttr::verify(
            << CTAOrder << "]";
   }
 
-  if (CTAsPerCGA.size() != CTASplitNum.size() ||
-      CTASplitNum.size() != CTAOrder.size()) {
-    return emitError() << "CTAsPerCGA, CTASplitNum, and CTAOrder must all have "
-                          "the same rank.";
+  if (llvm::any_of(CTAsPerCGA, [](unsigned x) { return x == 0; })) {
+    return emitError()
+           << "Every element in CTAsPerCGA must be greater than 0.";
   }
 
-  if (!isPermutationOfIota(CTAOrder)) {
+  if (llvm::any_of(CTASplitNum, [](unsigned x) { return x == 0; })) {
     return emitError()
-           << "CTAOrder must be a permutation of 0..(rank-1), but was ["
-           << CTAOrder << "]";
+           << "Every element in CTASplitNum must be greater than 0.";
   }
 
   return success();
