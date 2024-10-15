@@ -31,8 +31,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/SourceMgr.h"
 
-#include <iostream>
-
 namespace {
 
 namespace py = pybind11;
@@ -497,9 +495,6 @@ void init_triton_ir(py::module &&m) {
               std::string str;
               for (auto &op : self.getOps()) {
                 if (auto func = dyn_cast<FuncOp>(op)) {
-                  //std::cout << "func name: " << func.getName() << std::endl;
-                  //.print(os, printingFlags);
-                   // Return the first function found
                   return func.getName().str();
                 }
               }
@@ -515,20 +510,47 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, std::string &funcName) -> FuncOp {
              return self.lookupSymbol<FuncOp>(funcName);
            })
+      /*
+       * def ty_to_cpp(ty) is the consumer of this function.
+       * If the type is a ptr it expects ty[0] == '*', else the type itself.
+       */
+
       .def("get_function_signature",
-           [](ModuleOp &self, FuncOp &func) -> std::string {
-              std::string str;
-              llvm::raw_string_ostream os(str);
+           [](ModuleOp &self, FuncOp &func) -> std::vector<std::string> {
+              std::vector<std::string> strVec;
               //auto fn = self.lookupSymbol<FuncOp>(func);
               auto type = func.getFunctionType();
               unsigned numArgs = type.getNumInputs();
-              ArrayAttr attr = cast<ArrayAttr>(func.getArgAttrs());
               for (unsigned i = 0; i != numArgs; ++i) {
+                std::string tempType;
+                llvm::raw_string_ostream os(tempType);
+
                 auto ty = type.getInput(i);
-                ty.print(os);
-                attr[i].print(os);
+                if (auto attributes = func.getCallableArgAttrs()) {
+                  Attribute attr = attributes[i];
+                  // Check for tt.nv_tma_desc = 1
+                  if (auto dictAttr = dyn_cast_or_null<DictionaryAttr>(attr)) {
+                    if (auto value = dictAttr.get("nv_tma_desc")) {
+                      auto intAttr = dyn_cast<IntegerAttr>(value);
+                      if (intAttr && intAttr.getValue() == 1) {
+                        os << "nvTmaDesc";
+                        strVec.push_back(tempType);
+                        continue;
+                      }
+                    }
+                  }
+                }
+                // If ptr type, print it out, return that.
+                if (auto ptrType = dyn_cast<PointerType>(ty)) {
+                  auto pType = ptrType.getPointeeType();
+                  os << "*";
+                  pType.print(os);
+                } else {
+                  ty.print(os);
+                }
+                strVec.push_back(tempType);
               }
-              return str;
+              return strVec;
            })
       .def("get_int_attr",
            [](ModuleOp &self, std::string name) -> py::object {
