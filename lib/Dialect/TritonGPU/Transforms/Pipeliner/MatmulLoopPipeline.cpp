@@ -508,20 +508,28 @@ filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
   return loadsToPipeline;
 }
 
+// When loop doesn't have num_stages attributes, we will look for any load or
+// dot (only the first one in the chain). With the attribute we should look for
+// any op, but also only the first one.
 static llvm::SmallVector<Operation *>
-getTransitiveUserInBlock(Operation *baseOp) {
+getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
   llvm::SmallVector<Operation *> users;
   DenseSet<Operation *> seen;
+  bool loopHasAttribute = forOp->hasAttr(tt::kNumStagesAttrName);
   std::function<void(Operation *, Operation *)> dfs = [&](Operation *op,
                                                           Operation *baseOp) {
     if (!seen.insert(op).second)
       return;
-    if (op != baseOp)
+    if (op != baseOp) {
       users.push_back(op);
-    if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
-      if (op != baseOp)
-        // Stop recursion when hitting a LoadOp.
+      if (loopHasAttribute)
+        // Only track the first op in the dependence chain.
         return;
+      if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op) ||
+          op->hasTrait<OpTrait::DotLike>()) {
+        // Stop recursion when hitting a LoadOp or a DotOp.
+        return;
+      }
     }
     for (Operation *user : op->getUsers())
       if (user->getBlock() == op->getBlock())
@@ -549,7 +557,7 @@ assignMemoryLayouts(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
 
     // Check stage for uses. If any use is in a different stage, treat it
     // as a pipelined load.
-    auto users = getTransitiveUserInBlock(&op);
+    auto users = getTransitiveUserInBlock(&op, forOp);
     bool isPipelined = false;
     auto [sLoad, _cLoad] = schedule[&op];
     for (auto user : users) {
@@ -1256,7 +1264,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   if (loadToInfo.empty())
     return false;
   for (auto &[loadOp, info] : loadToInfo) {
-    for (auto *use : getTransitiveUserInBlock(loadOp)) {
+    for (auto *use : getTransitiveUserInBlock(loadOp, forOp)) {
       if (!coarseSchedule.count(use))
         continue;
       loadToInfo[loadOp].distToUse =
