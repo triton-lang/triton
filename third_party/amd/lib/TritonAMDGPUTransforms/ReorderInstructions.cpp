@@ -194,6 +194,7 @@ public:
         op->moveAfter(argOp);
     });
 
+    return;
     SmallVector<Operation *> moveOps;
     // Move global loads early to prefetch. This may increase register pressure
     // but it enables issuing global loads early.
