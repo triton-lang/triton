@@ -99,7 +99,6 @@ def _is_triton_tensor(o: Any) -> bool:
 def _is_constexpr(o: Any) -> bool:
     return o is None or isinstance(o, (constexpr, language.core.dtype, int, bool))
 
-
 def _is_triton_scalar(o: Any) -> bool:
     return _is_triton_tensor(o) and (not o.type.is_block() or o.type.numel == 1)
 
@@ -1314,8 +1313,6 @@ def kernel_suffix(signature, specialization):
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     import itertools
-
-    attrs = specialization.attrs
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
     n_types = {x: 1 for x in fn.arg_names}
@@ -1324,30 +1321,20 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     cumsums = [i for i in itertools.accumulate(n_types.values())]
     constant_idxs = {cumsums[cst_key(k)]-1: v for k, v in specialization.constants.items()}
     def get_arg_type(name):
-        if name in specialization.signature and fn.arg_names.index(name) not in constant_idxs:
+        if name in specialization.signature and fn.arg_names.index(name) not in specialization.constants:
             return str_to_ty(specialization.signature[name])
         return language.core.constexpr
     arg_types = [get_arg_type(x) for x in fn.arg_names]
-    
-    # visit kernel AST
-    gscope = fn.__globals__.copy()
-    function_name = fn.repr(specialization)
-    # tys = list(specialization.signature.values())
-    # new_constants = attrs.get_constants()
-    # breakpoint()
-    # for k in new_constants:
-    #     if k in tys and tys[k] == "i1" and new_constants[k] == 1:
-    #         new_constants[k] = True
-    # all_constants = constants.copy()
-    # all_constants.update(new_constants)
+    prototype = language.function_type([], arg_types)
     # find index of constants in serialized order
+    attrs = specialization.attrs
     new_attrs = attrs.filter_out_constants()
     fn_attrs = new_attrs.get_fn_attrs()
-    # arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
     file_name, begin_line = get_jit_fn_file_line(fn)
-    prototype = language.function_type([], arg_types)
-    # breakpoint()
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=constant_idxs, function_name=function_name,
+    generator = CodeGenerator(context, prototype, 
+                              gscope=fn.__globals__.copy(), 
+                              constants=constant_idxs, 
+                              function_name=fn.repr(specialization),
                               jit_fn=fn, attributes=fn_attrs, is_kernel=True, file_name=file_name,
                               begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())

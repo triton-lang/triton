@@ -683,9 +683,9 @@ class function_type(dtype):
     def __init__(self, ret_types: List[dtype], param_types: List[dtype]) -> None:
         self.ret_types = ret_types
         # self.param_types = param_types
-        self.full_param_types = param_types
-        self.param_types =  list(_flatten_list(param_types))
-        self.native_types = {i: ty for i, ty in enumerate(self.param_types) if isinstance(ty, dtype)}
+        self.serialized_param_types =  list(_flatten_list(param_types))
+        self.param_types = param_types
+        self.native_types = {i: ty for i, ty in enumerate(self.serialized_param_types) if isinstance(ty, dtype)}
 
     def __str__(self):
         return f'fn ({self.param_types}) -> {self.ret_types}'
@@ -696,10 +696,10 @@ class function_type(dtype):
         return builder.get_function_ty(ir_param_types, ret_types)
 
     def deserialize(self, arg_values):
-        assert len(arg_values) == len(self.param_types)
+        assert len(arg_values) == len(self.serialized_param_types)
         ret = []
         indx = 0
-        for ty in self.full_param_types:
+        for ty in self.param_types:
             if ty in (constexpr, dtype, int, bool, None):
                 ret.append(constexpr(arg_values[indx]))
                 indx += 1
