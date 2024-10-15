@@ -2167,9 +2167,9 @@ NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
 //===----------------------------------------------------------------------===//
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadsPerWarp() const {
   auto parent = getParent();
-  auto rank = getOrder().size();
   if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     auto threadsPerWarp = mma.getThreadsPerWarp();
+    auto rank = threadsPerWarp.size();
     if (getOpIdx() == 1)
       std::swap(threadsPerWarp[rank - 2], threadsPerWarp[rank - 1]);
     return threadsPerWarp;
