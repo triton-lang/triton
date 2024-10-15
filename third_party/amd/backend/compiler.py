@@ -6,7 +6,6 @@ from types import ModuleType
 import hashlib
 import tempfile
 import os
-import sys
 import re
 import subprocess
 import functools
@@ -100,7 +99,7 @@ class HIPAttrsDescriptor(AttrsDescriptor):
             return arg.ptr_range() <= 2**31 - 1
         if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
             # Please note that 2**31-1 is the max int32 positive limit
-            return sys.getsizeof(arg.untyped_storage()) <= 2**31 - 1
+            return arg.untyped_storage().size() <= 2**31 - 1
         return False
 
     @staticmethod
