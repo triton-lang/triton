@@ -973,6 +973,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 //   AMD-DIS: #[[$SHARED_LAYOUT:shared.*]] = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
 // AMD-LABEL: tt.func @indirect_load_shared_layout
+//       AMD:   %[[LOCAL_ALLOC_0:.*]] = triton_gpu.local_alloc
+//       AMD:   %[[LOCAL_ALLOC_1:.*]] = triton_gpu.local_alloc
 //       AMD:   %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}}, %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %{{.*}})
 //       AMD:     %[[LOCAL_LOAD_47:.*]] = triton_gpu.local_load %[[ARG11]]
 //       AMD:     %[[LOCAL_LOAD_48:.*]] = triton_gpu.local_load %[[ARG12]]
