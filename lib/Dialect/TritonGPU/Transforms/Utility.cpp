@@ -25,8 +25,7 @@ using namespace triton;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                RankedTensorType type,
-                                                int numWarps) {
+                                                Type eltType, int numWarps) {
   if (version == 1)
     return {16, 16};
   else if (version == 2) {
@@ -36,12 +35,11 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     ret[rank - 2] = 16;
     return ret;
   } else if (version == 3) {
-    unsigned k = 256 / type.getElementTypeBitWidth();
+    unsigned k = 256 / eltType.getIntOrFloatBitWidth();
     if (shape[0] % 64 != 0 || shape[1] % 8 != 0) {
       assert(false && "type not supported");
       return {0, 0, 0};
     }
-    auto eltType = type.getElementType();
     SmallVector<unsigned> validN;
 
     // MMAv3 with larger instruction shape is preferred.

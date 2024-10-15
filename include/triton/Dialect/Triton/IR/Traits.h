@@ -81,10 +81,12 @@ public:
     if (aShape.size() != bShape.size() || aShape.size() != cShape.size())
       return op->emitOpError("expected all operands to have the same rank");
     // Check if the first two operands share a common dimension
-    if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-      return op->emitOpError("expected the last dimension of the first operand "
-                             "to be equal to the second-to-last dimension of "
-                             "the second operand");
+    // TODO: enable back with an interface to support scaled dot.
+    // if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
+    //   return op->emitOpError("expected the last dimension of the first
+    //   operand "
+    //                          "to be equal to the second-to-last dimension of
+    //                          " "the second operand");
     // Check the batch dimension
     if (aShape.size() == 3 &&
         (aShape[0] != cShape[0] || bShape[0] != cShape[0]))

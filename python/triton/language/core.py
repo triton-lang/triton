@@ -1559,6 +1559,29 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
 
 
+@builtin
+def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, out_dtype=float32, _builder=None):
+    """
+    Returns the matrix product of two blocks in microscaling format.
+    lhs and rhs use microscaling formats described here:
+    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+    :param lhs: The first tensor to be multiplied.
+    :type lhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :param lhs_scale: Scale factor for lhs tensor.
+    :type lhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
+    :param lhs_format: format of the lhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :param rhs: The second tensor to be multiplied.
+    :type rhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :param rhs_scale: Scale factor for rhs tensor.
+    :type rhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
+    :param rhs_format: format of the rhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :param acc: The accumulator tensor. If not None, the result is added to this tensor.
+    """
+    out_dtype = _constexpr_to_value(out_dtype)
+    assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
+    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, out_dtype, _builder)
+
+
 # -----------------------
 # Non-Atomic Memory Operations
 # -----------------------
@@ -1886,8 +1909,6 @@ def where(condition, x, y, _builder=None):
 def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.add(x, y, sanitize_overflow, _builder)
 
 
@@ -1895,8 +1916,6 @@ def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
 def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.sub(x, y, sanitize_overflow, _builder)
 
 
@@ -1904,8 +1923,6 @@ def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
 def mul(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.mul(x, y, sanitize_overflow, _builder)
 
 

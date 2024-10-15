@@ -125,16 +125,18 @@ using namespace mlir::triton;
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
+#define int_val(bitwidth, val)                                                 \
+  LLVM::createLLVMIntegerConstant(rewriter, loc, bitwidth, val)
 #define i1_val(val) LLVM::createConstantI1(loc, rewriter, val)
 #define true_val() i1_val(true)
 #define false_val() i1_val(false)
 #define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
+#define i8_val(val) int_val(8, val)
+#define i16_val(val) int_val(16, val)
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
 #define i64_val(...) LLVM::createConstantI64(loc, rewriter, __VA_ARGS__)
-#define int_val(width, val)                                                    \
-  LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
 #define tid_val() getThreadId(rewriter, loc)
 
 // Attributes
@@ -1364,11 +1366,11 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target);
 
-void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
-                              Type elemLlvmTy, ArrayRef<Value> srcVals,
-                              Value smemBase, ArrayRef<Value> dstStrides,
-                              Location loc, RewriterBase &rewriter,
-                              const TargetInfoBase &target);
+void storeDistributedToShared(
+    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
+    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 inline Value getStructFromSharedMemoryObject(Location loc,
                                              const SharedMemoryObject &smemObj,
