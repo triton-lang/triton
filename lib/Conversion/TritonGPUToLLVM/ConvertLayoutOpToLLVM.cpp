@@ -404,22 +404,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         }
         return true;
       }
-      if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        if (auto nvidiaMma =
-                dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
-          if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
-            return false;
-          }
-          if (useLegacyMMAConversion) {
-            return false;
-          }
-          // FIXME [Dot LL]
-          // Enabling LL path for buggy kWidth path
-          bool largeKWidth =
-              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
-          return largeKWidth && nvidiaMma.isAmpere();
-        }
-      }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
       }
@@ -474,22 +458,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       } else if (isPtr) {
         outVals[it.index()] = inttoptr(llvmElemTyOrig, it.value());
       }
-    }
-
-    // FIXME [Dot LL]
-    // We know it's just for largeKWidth case in Ampere
-    // In this case, we need to pack the outputs into i32
-    if (isa<DotOperandEncodingAttr>(dstTy.getEncoding())) {
-      auto concat = [&](Value a, Value b) {
-        return or_(zext(i32_ty, bitcast(a, i16_ty)),
-                   shl(zext(i32_ty, bitcast(b, i16_ty)), i32_val(16)));
-      };
-
-      SmallVector<Value> outVals32(outVals.size() / 2);
-      for (int i = 0; i < outVals32.size(); ++i) {
-        outVals32[i] = concat(outVals[2 * i], outVals[2 * i + 1]);
-      }
-      outVals = outVals32;
     }
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
