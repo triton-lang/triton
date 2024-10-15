@@ -323,6 +323,7 @@ will be added later.
 - Switched back to rocprofv1. Check [ticket#228](https://github.com/ROCm/triton-internal/issues/228) for more details.
 - Improved the post-procesing logic to filter out the "spikes" in the profiling results.
 - Reduced the number of iterations in both tuning and benchmark mode (120 and 200).
+- Appended the parameters tuning space with instruction scheduling variants for the main gemm-loop (k-loop).
 
 
 # One config running script

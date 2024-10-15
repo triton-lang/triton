@@ -21,15 +21,16 @@ def read_config(config):
     waves_per_eu = config.get('waves_per_eu')
     mfma_instr_size = config.get('matrix_instr_nonkdim')
     kpack = config.get('kpack')
-    return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack
+    sched_variant = config.get('instruction_sched_variant')
+    return block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfma_instr_size, kpack, sched_variant
 
 
 def gen_configStr(config):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(
+    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, sched_variant = read_config(
         config)
 
     ## {M}_{N}_{K} is removed since the same kernel can be used for differen gemm sizes
-    configStr = f"BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}"
+    configStr = f"BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}_sched{sched_variant[1:-1].upper()}"
 
     return configStr
 
@@ -69,7 +70,7 @@ import triton.language as tl"""
 ## construct the configStr and generate the wrapper function matmul_{configStr}()
 ## If `warmup` is set, the generated kernel will be **compiled**
 def gen_kernel_and_configStr_from_config(config, EVEN_K, dtype_a, dtype_b, dtype_c, bias_size, warmup):
-    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack = read_config(
+    block_m, block_n, block_k, group_m, split_k, num_warps, num_stages, waves_per_eu, mfmaInstrSize, kpack, sched_variant = read_config(
         config)
 
     configStr = gen_configStr(config)
@@ -112,6 +113,7 @@ def matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
         EVEN_K = {EVEN_K},
         GRID_MN = grid_mn,
         NUM_XCDS = {num_xcds},
+        instruction_sched_variant = {sched_variant},
         grid=(1,),
     )
     return None
@@ -145,7 +147,8 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn):
         BIAS = {use_bias},
         EVEN_K = {EVEN_K},
         GRID_MN = grid[0],
-        NUM_XCDS = {num_xcds}
+        NUM_XCDS = {num_xcds},
+        instruction_sched_variant = {sched_variant},
     )
     return c
 """
