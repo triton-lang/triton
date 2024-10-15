@@ -182,32 +182,24 @@ def test_pipeline_vecadd(device):
         assert ttgir.count("triton_gpu.local_alloc") == 2, "alloc number not match"
 
 
-@pytest.mark.parametrize("ROW_COUNT", [0, 83, 183, 263])
+@pytest.mark.parametrize("ROW_COUNT", [0, 1, 2, 3])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2, 3, 4, 5])
 def test_pipeline_epilogue(ROW_COUNT, NUM_STAGES, device):
 
     @triton.jit
     def kernel_up(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, BLOCK_SIZE: tl.constexpr,
                   NUM_STAGES: tl.constexpr):
-        # starting row of the program
-        row_start = tl.program_id(0)
         row_step = tl.num_programs(0)
-
         col_offsets = tl.arange(0, BLOCK_SIZE)
         mask = col_offsets < n_cols
-        for row_idx in tl.range(row_start, n_rows, row_step, num_stages=NUM_STAGES):
-            # The stride represents how much we need to increase the pointer to advance 1 row
+        for row_idx in tl.range(0, n_rows, row_step, num_stages=NUM_STAGES):
             row_start_ptr = input_ptr + row_idx * input_row_stride
-            # The block size is the next power of two greater than n_cols, so we can fit each
-            # row in a single block
             input_ptrs = row_start_ptr + col_offsets
-            # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
-            row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
-            row += 1.0
-            # Write back output to DRAM
+            val = tl.load(input_ptrs, mask=mask, other=-float('inf'))
+            val += 1.0
             output_row_start_ptr = output_ptr + row_idx * output_row_stride
             output_ptrs = output_row_start_ptr + col_offsets
-            tl.store(output_ptrs, row, mask=mask)
+            tl.store(output_ptrs, val, mask=mask)
 
     width = ROW_COUNT
     depth = 78
@@ -215,5 +207,5 @@ def test_pipeline_epilogue(ROW_COUNT, NUM_STAGES, device):
     y0 = torch.rand_like(x)
     n_rows, n_cols = x.shape
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    kernel_up[(121, )](y0, x, x.stride(0), y0.stride(0), n_rows, n_cols, BLOCK_SIZE, NUM_STAGES)
+    kernel_up[(1, )](y0, x, x.stride(0), y0.stride(0), n_rows, n_cols, BLOCK_SIZE, NUM_STAGES)
     assert (y0 == torch.ones_like(x)).all()
