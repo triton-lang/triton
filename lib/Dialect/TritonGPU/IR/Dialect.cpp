@@ -245,12 +245,11 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
       order.insert(order.begin(), 0);
     }
   } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    // opIdx=0: [batch, m, k] -> [2, 0, 1]
-    // opIdx=1: [batch, k, n] -> [2, 1, 0]
+    // opIdx=0: [/*dim0*/batch, /*dim1=*/m, /*dim2=*/k] -> [2, 1, 0]
+    // opIdx=1: [/*dim0*/batch, /*dim1=*/k, /*dim2=*/n] -> [1, 2, 0]
     std::iota(order.rbegin(), order.rend(), 0);
     if (dotOpLayout.getOpIdx() == 0) {
-      auto rank = order.size();
-      std::swap(order[rank - 2], order[rank - 1]);
+      std::swap(order[0], order[1]);
     }
   }
   return order;
@@ -273,8 +272,8 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
   // - Tensor B (opIdx == 1) is considered to be column-major.
   //
   // Based on these assumptions, we define the following orders:
-  // - For opIdx == 0, we assume an order of [2, 1, 0] for 3D tensors.
-  // - For opIdx == 1, we assume an order of [2, 0, 1] for 3D tensors.
+  // - For opIdx == 0, batch=dim0, m=dim1, and k=dim2, we assume an order of [2, 1, 0] for 3D tensors.
+  // - For opIdx == 1, batch=dim0, k=dim1, and n=dim2, we assume an order of [1, 2, 0] for 3D tensors.
   std::iota(order.rbegin(), order.rend(), 0);
   if (opIdx == 1) {
     std::swap(order[0], order[1]);
