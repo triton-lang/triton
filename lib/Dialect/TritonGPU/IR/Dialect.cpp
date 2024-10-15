@@ -2019,7 +2019,7 @@ int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
 }
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getMMAv2RepForOperand(ArrayRef<int64_t> shape,
-                                             int bitwidth, int opIdx) const {
+                                             int bitwidth, int kWidth, int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
   SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
