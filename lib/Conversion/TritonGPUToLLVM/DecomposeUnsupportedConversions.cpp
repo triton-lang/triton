@@ -92,10 +92,12 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
     if (srcBlocked && dstDotOp) {
       // FIXME [Dot LL]
       // We support this one via LLs, as the LocalLoad path is buggy
-      bool largeKWidth =
-          dstDotOp.getKWidth() * dstType.getElementTypeBitWidth() > 64;
-      if (largeKWidth) {
-        return;
+      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dstDotOp.getParent())) {
+        bool largeKWidth =
+            dstDotOp.getKWidth() * dstType.getElementTypeBitWidth() > 64;
+        if (mma.isAmpere() && largeKWidth) {
+          return;
+        }
       }
 
       Attribute sharedMemorySpace =
