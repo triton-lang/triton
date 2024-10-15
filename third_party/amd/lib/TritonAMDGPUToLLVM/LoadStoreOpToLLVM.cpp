@@ -370,8 +370,8 @@ struct BufferLoadOpConversion
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
     SmallVector<Value> loadedVals;
+    Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       if (otherElems.size() != 0)
