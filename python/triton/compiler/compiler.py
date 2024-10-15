@@ -24,19 +24,13 @@ import os
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
 # - (attributes \{[\S\s]+\})? : optionally match attributes enclosed in braces and capture it as group 3
-mlir_prototype_pattern = r"^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: [\S\s]+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*(attributes \{[\S\s]+\})?\s+\{\s*$"
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
-    "ttir": mlir_prototype_pattern,
-    "ttgir": mlir_prototype_pattern,
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<)]+|<[^>]+>)+(?: {[^}]+})?),?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
-    "ttir": mlir_arg_type_pattern,
-    "ttgir": mlir_arg_type_pattern,
     "ptx": ptx_arg_type_pattern,
 }
 
@@ -111,13 +105,22 @@ class IRSource:
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
-        match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
-        module = ir.parse_mlir_module(self.path, context)
-        fn_name = module.get_first_func_name()
-        self.name = "@" + fn_name
-        funcOp = module.get_function(fn_name)
-        func_ty = module.get_function_signature(funcOp)
-        self.signature = {k: ty for k, ty in enumerate(func_ty)}
+
+        # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
+        if self.ext == "ptx" {
+            match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
+            self.name = match.group(1)
+            signature = match.group(2)
+            types = re.findall(arg_type_pattern[self.ext], signature)
+            self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
+        } else {
+            module = ir.parse_mlir_module(self.path, context)
+            fn_name = module.get_first_func_name()
+            self.name = "@" + fn_name
+            funcOp = module.get_function(fn_name)
+            func_ty = module.get_function_signature(funcOp)
+            self.signature = {k: ty for k, ty in enumerate(func_ty)}
+        }
 
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
