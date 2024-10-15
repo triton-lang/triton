@@ -82,7 +82,7 @@ public:
     config.resize(5);
     config[SCHED_GLOBAL_LOAD] = {0, clusters[prefetch]};
     config[SCHED_LOCAL_STORE] = {lastStage - 1, clusters[prefetch ? 0 : 2]};
-    config[SCHED_LOCAL_LOAD] = {lastStage - prefetch, clusters[1]};
+    config[SCHED_LOCAL_LOAD] = {lastStage - prefetch, clusters[prefetch + 1]};
     config[SCHED_COMPUTE] = {lastStage, clusters[prefetch]};
     config[SCHED_TAIL] = {lastStage, clusters[3 + prefetch]};
 
