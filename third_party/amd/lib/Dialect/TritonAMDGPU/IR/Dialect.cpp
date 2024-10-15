@@ -83,17 +83,17 @@ LogicalResult ViewSliceOp::verify() {
   shapePerCTA[0] = std::min(static_cast<unsigned>(srcShape[0]), shapePerCTA[0]);
   shapePerCTA[1] = std::min(static_cast<unsigned>(srcShape[1]), shapePerCTA[1]);
 
-  auto checkForConstInts = [](Value val) {
-    return isa<arith::ConstantIntOp>(val.getDefiningOp());
+  auto checkForConstInts = [](OpFoldResult ofr) {
+    return getConstantIntValue(ofr).has_value();
   };
 
-  if (!llvm::all_of(getOffsets(), checkForConstInts)) {
+  if (!llvm::all_of(getMixedOffsets(), checkForConstInts)) {
     return emitError("currently only static offsets are supported");
   }
-  if (!llvm::all_of(getSizes(), checkForConstInts)) {
+  if (!llvm::all_of(getMixedSizes(), checkForConstInts)) {
     return emitError("currently only static sizes are supported");
   }
-  if (!llvm::all_of(getStrides(), checkForConstInts)) {
+  if (!llvm::all_of(getMixedStrides(), checkForConstInts)) {
     return emitError("currently only static strides are supported");
   }
 
