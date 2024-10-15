@@ -245,8 +245,8 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
       order.insert(order.begin(), 0);
     }
   } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    // opIdx=0: [/*dim0*/batch, /*dim1=*/m, /*dim2=*/k] -> [2, 1, 0]
-    // opIdx=1: [/*dim0*/batch, /*dim1=*/k, /*dim2=*/n] -> [1, 2, 0]
+    // opIdx=0: [/*dim0*/batch, /*dim1=*/m, /*dim2=*/k] -> [1, 2, 0]
+    // opIdx=1: [/*dim0*/batch, /*dim1=*/k, /*dim2=*/n] -> [2, 1, 0]
     std::iota(order.rbegin(), order.rend(), 0);
     if (dotOpLayout.getOpIdx() == 0) {
       std::swap(order[0], order[1]);
