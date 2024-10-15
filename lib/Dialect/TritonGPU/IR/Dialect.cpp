@@ -1709,8 +1709,9 @@ AMDMfmaEncodingAttr::getSizePerThreadForOperand(unsigned kWidth,
   }
 }
 
-SmallVector<unsigned> AMDMfmaEncodingAttr::getShapePerCTATileForOperand(
-    ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
+SmallVector<unsigned>
+AMDMfmaEncodingAttr::getShapePerCTATileForOperand(ArrayRef<int64_t> shape,
+                                                  int kWidth, int opIdx) const {
   assert(getMDim() == 32 || getMDim() == 16);
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   auto rank = parentShapePerCTATile.size();
@@ -1799,8 +1800,9 @@ AMDWmmaEncodingAttr::getSizePerThreadForOperand(unsigned kWidth,
   return sizePerThread;
 }
 
-SmallVector<unsigned> AMDWmmaEncodingAttr::getShapePerCTATileForOperand(
-    ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getShapePerCTATileForOperand(ArrayRef<int64_t> shape,
+                                                  int kWidth, int opIdx) const {
   auto parentShapePerCTA = getShapePerCTATile(shape);
   auto rank = shape.size();
   assert(rank == 2);
@@ -2017,9 +2019,8 @@ SmallVector<int> NvidiaMmaEncodingAttr::getMMAv1ShapePerWarp(int opIdx) const {
 int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
   return 2 * getMMAv1Rep(opIdx)[opIdx];
 }
-SmallVector<int64_t>
-NvidiaMmaEncodingAttr::getMMAv2RepForOperand(ArrayRef<int64_t> shape,
-                                             int bitwidth, int kWidth, int opIdx) const {
+SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2RepForOperand(
+    ArrayRef<int64_t> shape, int bitwidth, int kWidth, int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
   SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
