@@ -272,8 +272,10 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
   // - Tensor B (opIdx == 1) is considered to be column-major.
   //
   // Based on these assumptions, we define the following orders:
-  // - For opIdx == 0, batch=dim0, m=dim1, and k=dim2, we assume an order of [2, 1, 0] for 3D tensors.
-  // - For opIdx == 1, batch=dim0, k=dim1, and n=dim2, we assume an order of [1, 2, 0] for 3D tensors.
+  // - For opIdx == 0, batch=dim0, m=dim1, and k=dim2, we assume an order of [2,
+  // 1, 0] for 3D tensors.
+  // - For opIdx == 1, batch=dim0, k=dim1, and n=dim2, we assume an order of [1,
+  // 2, 0] for 3D tensors.
   std::iota(order.rbegin(), order.rend(), 0);
   if (opIdx == 1) {
     std::swap(order[0], order[1]);
