@@ -831,8 +831,6 @@ LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
   bool isA = dot.getOpIdx() == 0;
 
   assert(mma.isAmpere());
-  assert(rank == 2 || rank == 3);
-  assert(mma.getInstrShape().size() == rank);
   assert((rank == 2 && mma.getInstrShape() == ArrayRef<unsigned>({16, 8})) ||
          (rank == 3 && mma.getInstrShape() == ArrayRef<unsigned>({1, 16, 8})));
 
