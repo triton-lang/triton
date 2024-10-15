@@ -797,8 +797,8 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
     InterfaceMethod<"Return size per thread for dot operands.",
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperand",
-                    (ins "unsigned":$opIdx,
-                         "unsigned":$kWidth)>,
+                    (ins "int":$opIdx,
+                         "int":$kWidth)>,
   ];
 }
 
@@ -916,7 +916,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     bool supportReduction() const {
       return true;
     }
-    SmallVector<unsigned> getSizePerThreadForOperand(unsigned kWidth, unsigned opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
@@ -1023,7 +1023,7 @@ Row |       warp 0                warp 2
     bool supportReduction() const {
       return true;
     }
-    SmallVector<unsigned> getSizePerThreadForOperand(unsigned kWidth, unsigned opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
@@ -1233,7 +1233,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       }
       return false;
     };
-    SmallVector<unsigned> getSizePerThreadForOperand(unsigned kWidth, unsigned opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
 

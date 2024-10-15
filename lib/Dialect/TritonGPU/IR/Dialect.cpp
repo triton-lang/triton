@@ -1697,16 +1697,19 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperand(
 }
 
 SmallVector<unsigned>
-AMDMfmaEncodingAttr::getSizePerThreadForOperand(unsigned kWidth,
-                                                unsigned opIdx) const {
+AMDMfmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
+  auto rank = getWarpsPerCTA().size();
+  auto sizePerThread = SmallVector<unsigned>(rank, 1);
   if (opIdx == 0) {
-    return {1, kWidth};
+    sizePerThread[rank - 2] = 1;
+    sizePerThread[rank - 1] = kWidth;
   } else if (opIdx == 1) {
-    return {kWidth, 1};
+    sizePerThread[rank - 2] = kWidth;
+    sizePerThread[rank - 1] = 1;
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
-    return {};
   }
+  return sizePerThread;
 }
 
 SmallVector<unsigned>
@@ -1781,8 +1784,7 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getSizePerThread() const {
   return sizePerThread;
 }
 SmallVector<unsigned>
-AMDWmmaEncodingAttr::getSizePerThreadForOperand(unsigned kWidth,
-                                                unsigned opIdx) const {
+AMDWmmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
   auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> sizePerThread(rank, 1);
   auto numReplicated = getVersion() == 1 ? 2 : 1;
@@ -2147,17 +2149,20 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getShapePerCTATileForOperand(
   }
 }
 SmallVector<unsigned>
-NvidiaMmaEncodingAttr::getSizePerThreadForOperand(unsigned kWidth,
-                                                  unsigned opIdx) const {
+NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
   assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
+  auto rank = getWarpsPerCTA().size();
+  auto sizePerThread = SmallVector<unsigned>(rank, 1);
   if (opIdx == 0) {
-    return {2, 2 * kWidth};
+    sizePerThread[rank - 2] = 2;
+    sizePerThread[rank - 1] = 2 * kWidth;
   } else if (opIdx == 1) {
-    return {2 * kWidth, 1};
+    sizePerThread[rank - 2] = 2 * kWidth;
+    sizePerThread[rank - 1] = 1;
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
-    return {};
   }
+  return sizePerThread;
 }
 
 //===----------------------------------------------------------------------===//
