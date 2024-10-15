@@ -181,13 +181,14 @@ def test_pipeline_vecadd(device):
         # 3. check alloc
         assert ttgir.count("triton_gpu.local_alloc") == 2, "alloc number not match"
 
+
 @pytest.mark.parametrize("ROW_COUNT", [0, 83, 183, 263])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2, 3, 4, 5])
 def test_pipeline_epilogue(ROW_COUNT, NUM_STAGES, device):
 
     @triton.jit
-    def kernel_up(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols,
-                  BLOCK_SIZE: tl.constexpr, NUM_STAGES: tl.constexpr):
+    def kernel_up(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, BLOCK_SIZE: tl.constexpr,
+                  NUM_STAGES: tl.constexpr):
         # starting row of the program
         row_start = tl.program_id(0)
         row_step = tl.num_programs(0)
@@ -215,4 +216,3 @@ def test_pipeline_epilogue(ROW_COUNT, NUM_STAGES, device):
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
     kernel_up[(121, )](y0, x, x.stride(0), y0.stride(0), n_rows, n_cols, BLOCK_SIZE, NUM_STAGES)
     assert (y0 == torch.ones_like(x)).all()
-
