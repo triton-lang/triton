@@ -24,7 +24,6 @@ static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
   return false;
 }
 
-<<<<<<< HEAD
 // Search through block to find earliest insertion point for move op. This can
 // be either an atomic op or last usage of source pointer. Search ends when move
 // op is encountered.
@@ -70,8 +69,6 @@ bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
   return parentForOp && !parentForOp->isAncestor(opOutsideLoop);
 }
 
-=======
->>>>>>> cdd01a075 ([AMD][Pipeliner] Add prefetch scheduling to stream-pipeline)
 class TritonAMDGPUReorderInstructionsPass
     : public TritonAMDGPUReorderInstructionsBase<
           TritonAMDGPUReorderInstructionsPass> {
