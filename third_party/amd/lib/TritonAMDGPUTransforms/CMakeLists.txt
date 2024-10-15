@@ -6,7 +6,7 @@ add_triton_library(TritonAMDGPUTransforms
   StreamPipeline.cpp
   StreamPipelineV2.cpp
   MfmaGroup.cpp
-
+  AMDBypassLDSForDotOperand.cpp
   DEPENDS
   TritonAMDGPUTransformsIncGen
   TritonGPUIR

@@ -192,6 +192,8 @@ bool isPureUnaryInlineAsm(Operation *op);
 // read the compute capability from the module attributes
 int getNVIDIAComputeCapability(Operation *module);
 
+// Convert \param op operands and results to layout \param encoding.
+void convertOpEncoding(Attribute encoding, Operation *op);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
