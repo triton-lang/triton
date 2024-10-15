@@ -166,7 +166,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto wmmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
   assert(wmmaInstrNonK == 16);
 
-  auto numReps = wmmaLayout.getRepForOperands(shape, elemTy, kWidth, opIdx);
+  auto numReps = wmmaLayout.getRepForOperand(shape, elemTy, kWidth, opIdx);
   auto numRepNonK = numReps[opIdx == 0 ? 1 : 2];
   auto numRepK = numReps[opIdx == 0 ? 2 : 1];
   auto repB = numReps[0];
@@ -177,7 +177,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value linearWaveId = udiv(thread, waveSize);
 
   unsigned numElemsPerThreadPerRep =
-      wmmaLayout.getSizePerThreadForOperands(opIdx)[kDimIdx];
+      wmmaLayout.getSizePerThreadForOperand(kWidth, opIdx)[kDimIdx];
 
   Value lane = urem(thread, waveSize);
   unsigned int maxNumWarps = shape[nonKDimIdx] / wmmaInstrNonK;
