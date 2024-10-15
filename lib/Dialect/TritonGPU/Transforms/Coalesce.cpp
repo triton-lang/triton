@@ -55,8 +55,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
-        auto currOrder =
-            getOrderFromContiguity(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
+        auto currOrder = getOrderFromContiguity(
+            axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
           LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
           memAccessesSameOrder.insert(use);

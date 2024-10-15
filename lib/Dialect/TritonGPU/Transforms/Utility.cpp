@@ -86,7 +86,8 @@ SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr) {
   return ret;
 }
 
-SmallVector<unsigned, 4> getOrderFromContiguity(const SmallVector<int64_t> &arr) {
+SmallVector<unsigned, 4>
+getOrderFromContiguity(const SmallVector<int64_t> &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);
   std::reverse(ret.begin(), ret.end());
