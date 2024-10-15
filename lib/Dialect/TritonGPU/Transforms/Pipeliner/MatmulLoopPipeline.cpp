@@ -268,7 +268,7 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
   tt::AxisInfo::DimVectorT contiguity =
       axisInfo.getAxisInfo(src)->getContiguity();
-  SmallVector<unsigned> order = argSort(contiguity);
+  SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
   unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
   SmallVector<unsigned> sizePerThread(order.size(), 1);
   sizePerThread[order[0]] = currPerThread;
