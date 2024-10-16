@@ -1,12 +1,10 @@
 import multiprocessing
 import shutil
-import tempfile
 
 import triton
 import triton.language as tl
 from triton.backends.compiler import AttrsDescriptor
-from triton.compiler import ASTSource, IRSource
-from triton._C.libtriton import ir
+from triton.compiler import ASTSource
 
 target = triton.runtime.driver.active.get_current_target()
 

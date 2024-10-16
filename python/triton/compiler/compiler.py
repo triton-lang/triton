@@ -90,11 +90,13 @@ class ASTSource:
 
 class IRSource:
 
-    def __init__(self, path, context):
+    def __init__(self, path):
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
+        self.context = ir.context()
+        ir.load_dialects(self.context)
 
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
@@ -105,7 +107,7 @@ class IRSource:
             types = re.findall(arg_type_pattern[self.ext], signature)
             self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
         else:
-            self.module = ir.parse_mlir_module(self.path, context)
+            self.module = ir.parse_mlir_module(self.path, self.context)
             fn_name = self.module.get_first_func_name()
             self.name = "@" + fn_name
             funcOp = self.module.get_function(fn_name)
@@ -116,7 +118,7 @@ class IRSource:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        self.module.context = context
+        self.module.context = self.context
         return self.module
 
     def parse_options(self):
@@ -217,10 +219,7 @@ def compile(src, target=None, options=None):
     # create backend
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
-        # Do an early init, since we use the MLIR parser which needs the context
-        context = ir.context()
-        ir.load_dialects(context)
-        src = IRSource(src, context)
+        src = IRSource(src)
 
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
@@ -264,10 +263,12 @@ def compile(src, target=None, options=None):
         first_stage += 1
 
     # We initialize these
-    if not ir_source:
+    if not isinstance(src, IRSource):
         context = ir.context()
         ir.load_dialects(context)
-    backend.load_dialects(context)
+        backend.load_dialects(context)
+    else:
+        context = src.context
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
     try:
