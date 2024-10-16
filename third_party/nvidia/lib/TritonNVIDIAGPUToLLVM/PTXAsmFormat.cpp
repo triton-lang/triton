@@ -172,15 +172,18 @@ std::string PTXInstrExecution::dump() const {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
 
-  std::string instrRepr = strJoin(instr->instrParts, ".");
-  if (onlyAttachMLIRArgs)
-    return instrRepr;
-
   if (pred) {
     if (!pred->repr)
       os << "@" << pred->dump() << " ";
     else
       os << pred->repr(pred->idx) << " ";
+  }
+
+  std::string instrRepr = strJoin(instr->instrParts, ".");
+  if (onlyAttachMLIRArgs) {
+    os << instrRepr;
+    os.flush();
+    return osStr;
   }
 
   llvm::SmallVector<std::string, 4> argReprs;
