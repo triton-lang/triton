@@ -79,12 +79,14 @@ public:
       clusters.push_back(schedule.clusters.newAtBack());
 
     int lastStage = numStages - 1;
+    int prefetchOrMultibuf = prefetch || numStages > 2;
     config.resize(5);
-    config[SCHED_GLOBAL_LOAD] = {0, clusters[prefetch]};
-    config[SCHED_LOCAL_STORE] = {lastStage - 1, clusters[prefetch ? 0 : 2]};
+    config[SCHED_GLOBAL_LOAD] = {0, clusters[prefetchOrMultibuf]};
+    config[SCHED_LOCAL_STORE] = {lastStage - 1,
+                                 clusters[prefetchOrMultibuf ? 0 : 2]};
     config[SCHED_LOCAL_LOAD] = {lastStage - prefetch, clusters[prefetch + 1]};
-    config[SCHED_COMPUTE] = {lastStage, clusters[prefetch]};
-    config[SCHED_TAIL] = {lastStage, clusters[3 + prefetch]};
+    config[SCHED_COMPUTE] = {lastStage, clusters[prefetchOrMultibuf]};
+    config[SCHED_TAIL] = {lastStage, clusters.back()};
 
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
