@@ -492,13 +492,13 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_first_func_name",
            [](ModuleOp &self) -> std::string {
-              std::string str;
-              for (auto &op : self.getOps()) {
-                if (auto func = dyn_cast<FuncOp>(op)) {
-                  return func.getName().str();
-                }
-              }
-              return str;
+             std::string str;
+             for (auto &op : self.getOps()) {
+               if (auto func = dyn_cast<FuncOp>(op)) {
+                 return func.getName().str();
+               }
+             }
+             return str;
            })
       .def("has_function",
            [](ModuleOp &self, std::string &funcName) -> bool {
@@ -517,46 +517,46 @@ void init_triton_ir(py::module &&m) {
 
       .def("get_function_signature",
            [](ModuleOp &self, FuncOp &func) -> std::vector<std::string> {
-              std::vector<std::string> strVec;
+             std::vector<std::string> strVec;
 
-              auto findTMA = [](ArrayRef<NamedAttribute> dictVals) {
-                for (auto attr : dictVals) {
-                  if (auto intAttr = dyn_cast<IntegerAttr>(attr.getValue())) {
-                    if (intAttr.getInt() == 1)
-                      return true;
-                  }
-                }
-                return false;
-              };
+             auto findTMA = [](ArrayRef<NamedAttribute> dictVals) {
+               for (auto attr : dictVals) {
+                 if (auto intAttr = dyn_cast<IntegerAttr>(attr.getValue())) {
+                   if (intAttr.getInt() == 1)
+                     return true;
+                 }
+               }
+               return false;
+             };
 
-              auto type = func.getFunctionType();
-              unsigned numArgs = type.getNumInputs();
-              for (unsigned i = 0; i != numArgs; ++i) {
-                std::string tempType;
-                llvm::raw_string_ostream os(tempType);
+             auto type = func.getFunctionType();
+             unsigned numArgs = type.getNumInputs();
+             for (unsigned i = 0; i != numArgs; ++i) {
+               std::string tempType;
+               llvm::raw_string_ostream os(tempType);
 
-                auto ty = type.getInput(i);
-                if (auto attributes = func.getCallableArgAttrs()) {
-                  Attribute attr = attributes[i];
-                  // Check for tt.nv_tma_desc = 1
-                  if (auto dAttr = dyn_cast<DictionaryAttr>(attr)) {
-                    ArrayRef<NamedAttribute> dictVals = dAttr.getValue();
-                    if (findTMA(dictVals)) {
-                      strVec.push_back("nvTmaDesc");
-                      continue;
-                    }
-                  }
-                }
-                if (auto ptrType = dyn_cast<PointerType>(ty)) {
-                  auto pType = ptrType.getPointeeType();
-                  os << "*";
-                  pType.print(os);
-                } else {
-                  ty.print(os);
-                }
-                strVec.push_back(tempType);
-              }
-              return strVec;
+               auto ty = type.getInput(i);
+               if (auto attributes = func.getCallableArgAttrs()) {
+                 Attribute attr = attributes[i];
+                 // Check for tt.nv_tma_desc = 1
+                 if (auto dAttr = dyn_cast<DictionaryAttr>(attr)) {
+                   ArrayRef<NamedAttribute> dictVals = dAttr.getValue();
+                   if (findTMA(dictVals)) {
+                     strVec.push_back("nvTmaDesc");
+                     continue;
+                   }
+                 }
+               }
+               if (auto ptrType = dyn_cast<PointerType>(ty)) {
+                 auto pType = ptrType.getPointeeType();
+                 os << "*";
+                 pType.print(os);
+               } else {
+                 ty.print(os);
+               }
+               strVec.push_back(tempType);
+             }
+             return strVec;
            })
       .def("get_int_attr",
            [](ModuleOp &self, std::string name) -> py::object {

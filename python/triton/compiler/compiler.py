@@ -34,6 +34,7 @@ arg_type_pattern = {
     "ptx": ptx_arg_type_pattern,
 }
 
+
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
@@ -45,6 +46,7 @@ def convert_type_repr(x):
     if match is not None:
         return '*' + convert_type_repr(match.group(1))
     return x
+
 
 class ASTSource:
 
