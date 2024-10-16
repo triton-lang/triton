@@ -1548,9 +1548,18 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor,
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
     assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-    M, K = lhs.type.shape[-2:]
-    N = rhs.type.shape[-1]
-    assert K == rhs.type.shape[-2], f"Reduction dimension should agree; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    lhs_format_enum = _str_to_fp_type(lhs_format)
+    rhs_format_enum = _str_to_fp_type(rhs_format)
+    assert lhs_format in ("e2m1", "e4m3", "e5m2"), f"NYI: lhs_format {lhs_format}"
+    assert rhs_format in ("e4m3", "e5m2"), f"NYI: rhs_format {rhs_format}"
+    rhs_scale_is_none = isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None
+    assert rhs_scale_is_none, "NYI: rhs_scale not supported"
+
+    M = lhs.type.shape[-2]
+    K, N = rhs.type.shape[-2:]
+    PACKED = 2 if lhs_format == "e2m1" else 1
+    assert K == PACKED * lhs.type.shape[
+        -1], f"Reduction dimension should pack the same number of elements; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
     assert K >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
     B = lhs.type.shape[0] if lhs_rank == 3 else None
 
@@ -1561,9 +1570,7 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor,
     else:
         acc_handle = acc.handle
         assert acc.type == ret_ty
-    lhs_format_enum = _str_to_fp_type(lhs_format)
-    rhs_format_enum = _str_to_fp_type(rhs_format)
-    rhs_scale_handle = None if isinstance(rhs_scale, tl.constexpr) else rhs_scale.handle
+    rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
     return tl.tensor(
         builder.create_dot_scaled(lhs.handle, lhs_scale.handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
                                   rhs_format_enum, acc_handle), ret_ty)

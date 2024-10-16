@@ -8,6 +8,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -234,8 +235,31 @@ static SmallVector<unsigned> eraseOrder(ArrayRef<unsigned> order,
   return resOrder;
 }
 
+SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
+                                            bool kMajor) {
+  // kMajor: if true, the matrix is fastest-running on k,
+  //         otherwise it is on m (resp. n)
+  // opIdx=0: [batch, m, k] if rank == 3 else [m, k]
+  // opIdx=1: [batch, k, n] if rank == 3 else [k, n]
+  // batch (if rank == 3) is always the slowest running dimension
+  assert(rank == 2 || rank == 3);
+  assert(opIdx == 0 || opIdx == 1);
+  SmallVector<unsigned> order(rank);
+  std::iota(order.rbegin(), order.rend(), 0);
+  // If opIdx is 1 and kMajor is true, the order is [0, 1]
+  // (resp. [1, 2, 0] if rank == 3)
+  // Same if opIdx is 0 and kMajor is false
+  if (bool(opIdx) == kMajor) {
+    std::swap(order[0], order[1]);
+  }
+  return order;
+}
+
 SmallVector<unsigned> getWarpOrder(Attribute layout) {
   auto order = getOrder(layout);
+  // FIXME: This mmaLayout if should just return
+  // getOrderForDotOperand(0, order.size(), kMajor=false)
+  // as mma has the same order as DotOperand(opIdx=0)
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mmaLayout.isHopper()) {
       // Hopper MMA instructions force a warp order of [0, 1]. See docs:
@@ -245,40 +269,8 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
       order.insert(order.begin(), 0);
     }
   } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    // opIdx=0: [/*dim0*/batch, /*dim1=*/m, /*dim2=*/k] -> order=[1, 2, 0]
-    // opIdx=1: [/*dim0*/batch, /*dim1=*/k, /*dim2=*/n] -> order=[2, 1, 0]
-    std::iota(order.rbegin(), order.rend(), 0);
-    if (dotOpLayout.getOpIdx() == 0) {
-      std::swap(order[0], order[1]);
-    }
-  }
-  return order;
-}
-
-SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank) {
-  assert((rank == 2 || rank == 3) &&
-         "Invalid rank for dot operand order computation");
-  SmallVector<unsigned> order(rank);
-  // The 'order' field typically represents a descending sorted array of
-  // dimensions based on contiguity. For instance, in axisInfo utilities that
-  // retrieve tensor contiguity, it's assumed that the dimension with the
-  // highest contiguity corresponds to order[0].
-  //
-  // The relation between contiguity and order is only relevant if the layout
-  // interfaces with HBM, as is the case when we load tensor from HBM to
-  // registers in the dot layout to bypass LDS. When bypassing LDS, we make
-  // the following assumptions about tensor layouts:
-  // - Tensor A (opIdx == 0) is considered to be row-major.
-  // - Tensor B (opIdx == 1) is considered to be column-major.
-  //
-  // Based on these assumptions, we define the following orders:
-  // - For opIdx == 0, batch=dim0, m=dim1, and k=dim2, we assume an order of [2,
-  // 1, 0] for 3D tensors.
-  // - For opIdx == 1, batch=dim0, k=dim1, and n=dim2, we assume an order of [1,
-  // 2, 0] for 3D tensors.
-  std::iota(order.rbegin(), order.rend(), 0);
-  if (opIdx == 1) {
-    std::swap(order[0], order[1]);
+    order = getOrderForDotOperand(dotOpLayout.getOpIdx(), order.size(),
+                                  /*kMajor*/ false);
   }
   return order;
 }
@@ -295,8 +287,8 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     return order;
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
-    return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
+    auto rank = dotLayout.getWarpsPerCTA().size();
+    return getOrderForDotOperand(dotLayout.getOpIdx(), rank, /*kMajor*/ true);
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
     SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
@@ -1048,7 +1040,8 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadOrder() const {
-  return ::getOrder(*this);
+  return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
+                               /*kMajor*/ true);
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
     ArrayRef<int64_t> tensorShape) const {
@@ -2019,6 +2012,7 @@ SmallVector<int64_t> NvidiaMmaEncodingAttr::getMMAv2RepForOperand(
     ArrayRef<int64_t> shape, int bitwidth, int kWidth, int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
+
   SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
   int numRepBatch =
       rank == 3
