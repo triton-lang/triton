@@ -230,6 +230,8 @@ class HIPBackend(BaseBackend):
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
         amd.passes.ttgpuir.add_canonicalize_pointers(pm)
+        if os.environ.get("AMDGCN_USE_BUFFER_OPS"):
+            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -274,11 +276,6 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
-        # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
-        # count caused by predicated loads/stores. In certain kernels, the addition of these blocks can cause the MLIR
-        # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
-        # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
-        # for conditional branching around memory accesses.
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
 

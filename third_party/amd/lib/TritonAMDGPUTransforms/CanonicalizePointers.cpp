@@ -73,6 +73,17 @@ using namespace mlir;
 //    `%fat_ptr = tt.addptr(%t_ptr, %fatPointers[ptr].offset)`
 //    `%data = tt.load(%fat_ptr)`
 //
+// Please note that `%offset` might be a 32bit or 64bit integer. If
+// we can, we would like to use 32 bit integers. This can happen under
+// certain conditions:
+//
+// a) We can determine that the offset cannot overflow. In this case, we can
+//    downcast the pointer just before emitting the load
+// b) We know that the underlying memory size can be expressed as a 32 bit
+//    value. In this case we can simply start with a 32bit offset and downcast
+//    if we ever meet 64 bit operations (because we know that the offset can be
+//    contained in 32 bits)
+//
 class PointerCanonicalizer {
 public:
   explicit PointerCanonicalizer(ModuleOp moduleOp)
@@ -571,12 +582,16 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
   bool propagateAtrs = true;
   if (!isZeroConst(nonUniformOffset)) {
     Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
+    Type fatPtrOffsetType = getElementTypeOrSelf(fatPtrOffset);
     canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
 
-    // If we the incoming offset is 32 bits, then we have to cast to 64
+    // Upcast or downcast the offset accordingly
     if (addPtrOffsetType.isInteger(32))
       nonUniformOffset =
           extend32bitOffsetTo64Bits(rewriter, curLoc, nonUniformOffset);
+    else if (addPtrOffsetType.isInteger(64) && fatPtrOffsetType.isInteger(32))
+      nonUniformOffset =
+          narrow64bitOffsetTo32bits(rewriter, curLoc, nonUniformOffset);
 
     newOffset =
         rewriter.create<arith::AddIOp>(curLoc, nonUniformOffset, fatPtrOffset);
@@ -958,14 +973,18 @@ LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
 
 LogicalResult PointerCanonicalizer::rewriteFunction(triton::FuncOp funcOp) {
   Region &region = funcOp.getRegion();
-  for (Value arg : region.getArguments()) {
+  for (auto [idx, arg] : llvm::enumerate(region.getArguments())) {
     // The pointer argument needs to be a scalar
     if (!isa<triton::PointerType>(arg.getType()))
       continue;
+    int64_t bitness = 64;
+    if (IntegerAttr pointerRangeAttr =
+            funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
+      bitness = pointerRangeAttr.getInt();
 
     rewriter.setInsertionPointToStart(&region.front());
     Value zeroOffset =
-        rewriter.create<arith::ConstantIntOp>(region.getLoc(), 0, 64);
+        rewriter.create<arith::ConstantIntOp>(region.getLoc(), 0, bitness);
 
     // Start the rewrite
     clearFunctionState();
