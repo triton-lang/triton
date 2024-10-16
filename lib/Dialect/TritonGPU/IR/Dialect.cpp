@@ -257,8 +257,9 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
 
 SmallVector<unsigned> getWarpOrder(Attribute layout) {
   auto order = getOrder(layout);
-  // FIXME: mma should just return getOrderForDotOperand(0, order.size(),
-  // kMajor=false)
+  // FIXME: This mmaLayout if should just return
+  // getOrderForDotOperand(0, order.size(), kMajor=false)
+  // as mma has the same order as DotOperand(opIdx=0)
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mmaLayout.isHopper()) {
       // Hopper MMA instructions force a warp order of [0, 1]. See docs:

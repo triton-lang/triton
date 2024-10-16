@@ -469,6 +469,7 @@ public:
             vType.getShape(), vType.getElementType(), newVEncoding);
         return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
       } else {
+        assert(type == F8F6F4Type::E5M2 || type == F8F6F4Type::E4M3);
         auto newVEncoding = DotOperandEncodingAttr::get(
             ctx, idx, newRetType.getEncoding(), /*kWidth=*/8);
         auto newVType = RankedTensorType::get(
