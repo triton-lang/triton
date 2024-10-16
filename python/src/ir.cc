@@ -518,7 +518,17 @@ void init_triton_ir(py::module &&m) {
       .def("get_function_signature",
            [](ModuleOp &self, FuncOp &func) -> std::vector<std::string> {
               std::vector<std::string> strVec;
-              //auto fn = self.lookupSymbol<FuncOp>(func);
+
+              auto findTMA = [](ArrayRef<NamedAttribute> dictVals) {
+                for (auto attr : dictVals) {
+                  if (auto intAttr = dyn_cast<IntegerAttr>(attr.getValue())) {
+                    if (intAttr.getInt() == 1)
+                      return true;
+                  }
+                }
+                return false;
+              };
+
               auto type = func.getFunctionType();
               unsigned numArgs = type.getNumInputs();
               for (unsigned i = 0; i != numArgs; ++i) {
@@ -529,18 +539,14 @@ void init_triton_ir(py::module &&m) {
                 if (auto attributes = func.getCallableArgAttrs()) {
                   Attribute attr = attributes[i];
                   // Check for tt.nv_tma_desc = 1
-                  if (auto dictAttr = dyn_cast_or_null<DictionaryAttr>(attr)) {
-                    if (auto value = dictAttr.get("nv_tma_desc")) {
-                      auto intAttr = dyn_cast<IntegerAttr>(value);
-                      if (intAttr && intAttr.getValue() == 1) {
-                        os << "nvTmaDesc";
-                        strVec.push_back(tempType);
-                        continue;
-                      }
+                  if (auto dAttr = dyn_cast<DictionaryAttr>(attr)) {
+                    ArrayRef<NamedAttribute> dictVals = dAttr.getValue();
+                    if (findTMA(dictVals)) {
+                      strVec.push_back("nvTmaDesc");
+                      continue;
                     }
                   }
                 }
-                // If ptr type, print it out, return that.
                 if (auto ptrType = dyn_cast<PointerType>(ty)) {
                   auto pType = ptrType.getPointeeType();
                   os << "*";

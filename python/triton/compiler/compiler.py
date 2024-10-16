@@ -34,7 +34,6 @@ arg_type_pattern = {
     "ptx": ptx_arg_type_pattern,
 }
 
-
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
@@ -46,17 +45,6 @@ def convert_type_repr(x):
     if match is not None:
         return '*' + convert_type_repr(match.group(1))
     return x
-
-
-def _get_num_warps_from_ir_str(src: str):
-    ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
-    # TODO(jlebar): Using a regex to get num-warps is a hack, and will break if
-    # e.g. someone has an instruction (not module) attribute named "num-warps".
-    num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
-    assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
-    num_warps = int(num_warps_matches[0])
-    return num_warps
-
 
 class ASTSource:
 
@@ -107,33 +95,31 @@ class IRSource:
         self.src = path.read_text()
 
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
-        if self.ext == "ptx" {
+        # TODO - replace with a proper parser
+        if self.ext == "ptx":
             match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
             self.name = match.group(1)
             signature = match.group(2)
             types = re.findall(arg_type_pattern[self.ext], signature)
             self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
-        } else {
-            module = ir.parse_mlir_module(self.path, context)
-            fn_name = module.get_first_func_name()
+        else:
+            self.module = ir.parse_mlir_module(self.path, context)
+            fn_name = self.module.get_first_func_name()
             self.name = "@" + fn_name
-            funcOp = module.get_function(fn_name)
-            func_ty = module.get_function_signature(funcOp)
+            funcOp = self.module.get_function(fn_name)
+            func_ty = self.module.get_function_signature(funcOp)
             self.signature = {k: ty for k, ty in enumerate(func_ty)}
-        }
 
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        module = ir.parse_mlir_module(self.path, context)
-        module.context = context
-
-        return module
+        self.module.context = context
+        return self.module
 
     def parse_options(self):
         if self.ext == "ttgir":
-            return {'num_warps': _get_num_warps_from_ir_str(self.src)}
+            return {'num_warps': self.module.get_int_attr("triton_gpu.num-warps")}
         return dict()
 
 
