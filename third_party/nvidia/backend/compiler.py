@@ -118,6 +118,27 @@ class CUDAOptions:
         hash_dict["extern_libs"] = tuple((k, file_hash(v)) for k, v in sorted(hash_dict["extern_libs"]))
         key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
+    
+
+def _get_mlir_dump_dir() -> Path:
+    dump_dir = os.getenv("MLIR_DUMP_DIR", None)
+    if dump_dir is not None:
+        return Path(dump_dir)
+    return None
+
+
+def _enable_debug_to_file_tree(pm, stage, is_first_stage=False):
+    dump_dir = _get_mlir_dump_dir()
+    if dump_dir is None:
+        return
+
+    if is_first_stage:
+        import shutil
+        shutil.rmtree(dump_dir, ignore_errors=True)
+
+    stage_dump_dir = dump_dir / stage
+    stage_dump_dir.mkdir(parents=True, exist_ok=True)
+    pm.enable_debug_to_file_tree(f"{stage_dump_dir}")
 
 
 class CUDABackend(BaseBackend):
@@ -179,6 +200,7 @@ class CUDABackend(BaseBackend):
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        _enable_debug_to_file_tree(pm, "ttir", is_first_stage=True)
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
@@ -206,6 +228,7 @@ class CUDABackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        _enable_debug_to_file_tree(pm, "ttgir")
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
@@ -248,6 +271,7 @@ class CUDABackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        _enable_debug_to_file_tree(pm, "llir")
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
