@@ -271,6 +271,7 @@ def compile(src, target=None, options=None):
         backend.load_dialects(context)
     else:
         context = src.context
+        backend.load_dialects(context)
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
     try:
