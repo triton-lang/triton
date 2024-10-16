@@ -159,8 +159,8 @@ jobs:
         cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
         cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
         LINKER=$(pwd)/arm-sysroot/lib/ld-linux-aarch64.so.1
-        wget http://ftp.de.debian.org/debian/pool/main/g/gcc-defaults/gcc-aarch64-linux-gnu_14.1.0-2_amd64.deb
-        dpkg-deb -x gcc-aarch64-linux-gnu_14.1.0-2_amd64.deb ./arm-sysroot
+        wget http://ftp.de.debian.org/debian/pool/main/g/gcc-defaults/gcc-aarch64-linux-gnu_14.2.0-1_amd64.deb
+        dpkg-deb -x gcc-aarch64-linux-gnu_14.2.0-1_amd64.deb ./arm-sysroot
         export LD_LIBRARY_PATH=$(pwd)/arm-sysroot/lib:$LD_LIBRARY_PATH
         sudo ln -s $LINKER /lib/ld-linux-aarch64.so.1
         SYSROOT="$(pwd)/arm-sysroot"
