@@ -250,6 +250,13 @@ chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
                      ArrayRef<unsigned> repShape,
                      ArrayRef<unsigned> paddedRepShape,
                      ArrayRef<unsigned> order, int swizzleByteSize);
+
+// FIXME
+// Exposing to use it in LinearLayoutConversionsTest.cpp
+// Remove it once we fully activate the DotOperand conversion via LLs
+class DotOperandEncodingAttr;
+LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
+                                     DotOperandEncodingAttr dot);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

@@ -21,7 +21,6 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "../PatternTritonGPUOpToLLVM.h"
-#include "../TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "SharedToDotOperandHelper.h"
 #include "Utility.h"
 
@@ -218,12 +217,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   auto elemTy = aTensorTy.getElementType();
   auto kWidth = encoding.getKWidth();
-  auto elemsPerInstr = mfmaLayout.getMFMAInstrShapeForOperands(kWidth, opIdx);
+  auto elemsPerInstr = mfmaLayout.getInstrShapeForOperand(kWidth, opIdx);
 
   int64_t mfmaInstrNonK;
   int64_t mfmaInstrK;
   // TODO(Lixun): make it simpler
-  // getMFMAInstrShapeForOperands always returns a 2D vector
+  // getInstrShapeForOperand always returns a 2D vector
   if (rank == 3) {
     mfmaInstrNonK = elemsPerInstr[nonKDimIdx - 1];
     mfmaInstrK = elemsPerInstr[kDimIdx - 1];
@@ -232,12 +231,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     mfmaInstrK = elemsPerInstr[kDimIdx];
   }
 
-  auto numReps = mfmaLayout.getMFMARepForOperands(shape, kWidth, opIdx);
+  auto numReps = mfmaLayout.getRepForOperand(shape, kWidth, opIdx);
   auto numRepNonK = numReps[nonKDimIdx];
   auto numRepK = numReps[kDimIdx];
   auto repB = numReps[0];
   // TODO(Lixun): make it simpler
-  // getMFMARepForOperands always returns a 3D vector
+  // getRepForOperand always returns a 3D vector
   if (rank == 2) {
     numRepNonK = numReps[nonKDimIdx + 1];
     numRepK = numReps[kDimIdx + 1];
@@ -331,7 +330,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int elemsPerLoad = numOfElems / loadsPerThread;
   assert(numOfElems % loadsPerThread == 0);
 
-  VectorType loadVecTy = vec_ty(elemTy, elemsPerLoad);
   for (int b = 0; b < repB; ++b) {
     int operandSize = shape[rank - 1] * shape[rank - 2];
     Value batchOffset = mul(i32_val(operandSize),
@@ -342,6 +340,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       for (int k = 0; k < numRepK; ++k) {
         auto vecTy = vec_ty(resElemTy, numOfElems);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
+          auto loadVecTy = vec_ty(elemTy, elemsPerLoad);
           Value loadOffset;
           loadOffset = offsets[nonK * loadsPerThread * numRepK +
                                k * loadsPerThread + loadId];
@@ -355,14 +354,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
           }
         }
       }
-    }
-  }
-
-  for (auto op : tensor.getUsers()) {
-    if (auto localLoadOp = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op)) {
-      const size_t numDsReadsCount =
-          repB * numRepNonK * numRepK * loadsPerThread;
-      setNumGeneratedDsReads(localLoadOp, numDsReadsCount, loadVecTy);
     }
   }
 
