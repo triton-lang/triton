@@ -492,13 +492,12 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_first_func_name",
            [](ModuleOp &self) -> std::string {
-             std::string str;
              for (auto &op : self.getOps()) {
                if (auto func = dyn_cast<FuncOp>(op)) {
                  return func.getName().str();
                }
              }
-             return str;
+             return "";
            })
       .def("has_function",
            [](ModuleOp &self, std::string &funcName) -> bool {
