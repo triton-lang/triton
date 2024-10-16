@@ -13,10 +13,9 @@ import os
 
 from .._C.libtriton import ir
 from . import semantic
+from ._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape
 
 T = TypeVar('T')
-
-TRITON_MAX_TENSOR_NUMEL = 1048576
 
 TRITON_BUILTIN = "__triton_builtin__"
 
@@ -612,18 +611,11 @@ class block_type(dtype):
         # while tensor's shape is a list of constexpr.
 
         # shape can be empty ([]) when an input is a 0D tensor.
-        if not shape:
+        self.shape = _unwrap_shape(shape)
+        if not self.shape:
             raise TypeError('0d block_type is forbidden')
-        if isinstance(shape[0], constexpr):
-            shape = [s.value for s in shape]
 
-        self.shape = shape
-        self.numel = 1
-        for s in self.shape:
-            self.numel *= s
-        if self.numel > TRITON_MAX_TENSOR_NUMEL:
-            raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
-
+        self.numel = validate_block_shape(self.shape)
         self.name = f'<{self.shape}, {self.element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
@@ -1208,18 +1200,15 @@ arange.__doc__ = f"""
 """
 
 
-def _shape_check_impl(shape):
+def _unwrap_shape(shape):
     shape = _constexpr_to_value(shape)
-    for i, d in enumerate(shape):
-        if isinstance(d, int):
-            d = constexpr(d)
-        if not isinstance(d, constexpr):
-            raise TypeError(f"Shape element {i} must have type `constexpr`")
-        if not isinstance(d.value, int):
-            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
-        if d.value & (d.value - 1) != 0:
-            raise ValueError(f"Shape element {i} must be a power of 2")
-    return [_constexpr_to_value(x) for x in shape]
+    return [_constexpr_to_value(s) for s in shape]
+
+
+def _shape_check_impl(shape):
+    shape = _unwrap_shape(shape)
+    validate_block_shape(shape)
+    return shape
 
 
 @builtin
@@ -1909,8 +1898,6 @@ def where(condition, x, y, _builder=None):
 def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.add(x, y, sanitize_overflow, _builder)
 
 
@@ -1918,8 +1905,6 @@ def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
 def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.sub(x, y, sanitize_overflow, _builder)
 
 
@@ -1927,8 +1912,6 @@ def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
 def mul(x, y, sanitize_overflow: constexpr = True, _builder=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
-    x = semantic.to_tensor(x, _builder)
-    y = semantic.to_tensor(y, _builder)
     return semantic.mul(x, y, sanitize_overflow, _builder)
 
 

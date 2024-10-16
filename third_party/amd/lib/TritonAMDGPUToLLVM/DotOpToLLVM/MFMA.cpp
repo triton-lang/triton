@@ -21,9 +21,9 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "../PatternTritonGPUOpToLLVM.h"
-#include "../TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
+
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 
 using namespace mlir;
@@ -194,10 +194,8 @@ struct DotOpMFMAConversionHelper {
     int kWidth = aEncoding.getKWidth();
     auto rank = aTensorTy.getShape().size();
 
-    auto repA =
-        mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), kWidth, 0);
-    auto repB =
-        mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), kWidth, 1);
+    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
+    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
 
     assert(repA[2] == repB[1]);
 
@@ -263,14 +261,6 @@ struct DotOpMFMAConversionHelper {
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
     Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
-
-    Type elemtTy = elemTyA;
-    const size_t mmaCount =
-        numRepB * numRepM * numRepN * numRepK * kWidth / kBase;
-    setNumGeneratedMMAs(op, mmaCount, maybeMfmaInsn->getMDim(),
-                        maybeMfmaInsn->getNDim(), maybeMfmaInsn->getKDim(),
-                        elemtTy);
-
     rewriter.replaceOp(op, res);
 
     return success();

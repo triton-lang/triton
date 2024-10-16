@@ -404,8 +404,7 @@ void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                               Type elemLlvmTy, ArrayRef<Value> srcVals,
                               Value smemBase, ArrayRef<Value> dstStrides,
                               Location loc, RewriterBase &rewriter,
-                              const TargetInfoBase &target,
-                              std::pair<size_t, Type> *const llvmOpCount) {
+                              const TargetInfoBase &target) {
   bool success = emitTransferBetweenRegistersAndShared(
       srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
       dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
@@ -419,12 +418,7 @@ void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
         store(vec, vecAddr)
             .setAlignment(vecTy.getNumElements() *
                           elemLlvmTy.getIntOrFloatBitWidth() / 8);
-        if (llvmOpCount) {
-          ++(llvmOpCount->first);
-          llvmOpCount->second = vecTy;
-        }
       });
-
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from register to shared");
 }
