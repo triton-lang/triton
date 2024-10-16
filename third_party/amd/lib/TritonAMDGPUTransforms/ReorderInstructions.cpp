@@ -61,6 +61,14 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
   return ipnt;
 }
 
+// Check if the operation opInsideLoop is inside any scf::ForOp and
+// opOutsideLoop is not inside the same loop.
+bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
+                         mlir::Operation *opOutsideLoop) {
+  scf::ForOp parentForOp = opInsideLoop->getParentOfType<scf::ForOp>();
+  return parentForOp && !parentForOp->isAncestor(opOutsideLoop);
+}
+
 class TritonAMDGPUReorderInstructionsPass
     : public TritonAMDGPUReorderInstructionsBase<
           TritonAMDGPUReorderInstructionsPass> {
@@ -101,19 +109,28 @@ public:
       kv.first->moveBefore(kv.second);
     opToMove.clear();
 
-    // Move writing to LDS and reading from LDS right after the loading of a
-    // tensor from global memory. There are 2 possible patterns depending on
-    // whether writing to LDS is done using an optional local_alloc argument or
-    // a local_store instruction:
+    // Adjust the placement of LDS writes and reads to immediately follow the
+    // definition of their operands in case where LDS write is in the
+    // loop but it's operand is not. This is a heuristic for optimizing fused
+    // attention by hoisting Q tensor LDS read/write operations outside of the
+    // loop, as Q is a loop invariant and can be loaded once before entering the
+    // loop.
+    // There are two possible patterns for this adjustment depending on
+    // whether the write to LDS is performed using an optional `local_alloc`
+    // argument or a `local_store` instruction.
     //
-    // 1) %1 = load %ptr
+    // clang-format off
+    //
+    // 1) %1 = some_op ... (typically a load or an operation that scales the tensor after loading)
     //    %2 = local_alloc %1
     //    %3 = local_load %2
     //
-    // 2) %1 = load %ptr
+    // 2) %1 = some_op ...
     //    %2 = local_alloc
     //    %3 = local_store %1, %2
     //    %4 = local_load %2
+    //
+    // clang-format on
     m.walk([&](ttg::LocalLoadOp localLoad) {
       auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
       if (!localAlloc)
@@ -123,10 +140,15 @@ public:
       if (localAlloc->getNumOperands() == 1) {
         if (!localAlloc->hasOneUse())
           return;
-        auto loadOp = localAlloc->getOperand(0).getDefiningOp<tt::LoadOp>();
-        if (!loadOp)
+
+        auto srcTensorOp = localAlloc->getOperand(0).getDefiningOp();
+        // Check if localAlloc is in the loop but it's src tensor defining op is
+        // outside of it.
+        if (!srcTensorOp || !isCrossLoopBoundary(localAlloc, srcTensorOp)) {
           return;
-        localAlloc->moveAfter(loadOp);
+        }
+
+        localAlloc->moveAfter(srcTensorOp);
         localLoad->moveAfter(localAlloc);
         return;
       }
@@ -145,10 +167,14 @@ public:
       if (!isa<ttg::LocalStoreOp>(localStore))
         return;
 
-      auto loadOp = localStore->getOperand(0).getDefiningOp<tt::LoadOp>();
-      if (!loadOp)
+      auto srcTensorOp = localStore->getOperand(0).getDefiningOp();
+      // Check if localStore is in the loop but it's src tensor defining op is
+      // outside of it.
+      if (!srcTensorOp || !isCrossLoopBoundary(localStore, srcTensorOp)) {
         return;
-      localAlloc->moveAfter(loadOp);
+      }
+
+      localAlloc->moveAfter(srcTensorOp);
       localStore->moveAfter(localAlloc);
       localLoad->moveAfter(localStore);
     });
@@ -221,78 +247,6 @@ public:
           dfgop->moveBefore(block, block->begin());
       }
     }
-
-    /**
-     * Sched-load optimization for matmul kernels with large tile sizes
-     * The basic idea of sched-load optimization is to sink the 2nd tt.load
-     * after local_load so that global_load instructions can be interleaved with
-     * mfma's. This can help hide the issue latency of global_load instructions
-     * and improve performance on MI300X.
-     *
-     * It's assumed that the IR before this optimization has the following
-     * structure:
-     * ```mlir
-     * scf.for ..
-     * {
-     *   tileA = tt.load a_ptr
-     *   tileB = tt.load b_ptr
-     *   opA = local_load bufferA
-     *   opB = local_load bufferB
-     *   res = tt.dot opA, opB
-     *   local_store tileA, bufferA
-     *   local_store tileB, bufferB
-     * }
-     * ```
-     * After this optimization, the IR is transformed to
-     * ```mlir
-     * scf.for ..
-     * {
-     *   tileA = tt.load a_ptr
-     *   opA = local_load bufferA
-     *   opB = local_load bufferB
-     *   tileB = tt.load b_ptr  <-- 2nd tt.load is sinked here
-     *   res = tt.dot opA, opB
-     *   local_store tileA, bufferA
-     *   local_store tileB, bufferB
-     * }
-     * ```
-     * For now, we don't have a perfect hueristic about when should this
-     * optimization be applied. Therefore, we implement a simple hueristic that
-     * this is applied when the tile size of A and B are large enough, i.e.
-     * nonKDim >= 128  and kDim >= 64. And also this is only applied for typical
-     * matmul kernels, i.e. only two tt.load's and one dotOp inside the loop. We
-     * are experimenting how to better control instruction scheduling and enable
-     * such optimizations.
-     */
-    m.walk([&](scf::ForOp forOp) -> void {
-      SetVector<Operation *> loadOps;
-      triton::DotOp dotOp;
-      int nDotOps = 0;
-      for (Operation &op : forOp) {
-        if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
-          loadOps.insert(loadOp);
-        if (auto curOp = dyn_cast<triton::DotOp>(&op)) {
-          nDotOps++;
-          dotOp = curOp;
-        }
-      }
-      // Only apply the optimization when there are 2 load's and 1 dot in the
-      // loop
-      if (loadOps.size() != 2 || nDotOps != 1)
-        return;
-      // Only apply the optimization when tile size is large enough
-      // 1. nonKDim >= 128
-      // 2. kDim >= 64
-      auto ldAOp = dyn_cast<triton::LoadOp>(loadOps[0]);
-      auto tileAShape = cast<RankedTensorType>(ldAOp.getType()).getShape();
-      auto ldBOp = dyn_cast<triton::LoadOp>(loadOps[1]);
-      auto tileBShape = cast<RankedTensorType>(ldBOp.getType()).getShape();
-      if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 &&
-            tileBShape[1] >= 128))
-        return;
-      // move ldBOp right before tt.dot
-      loadOps[1]->moveBefore(dotOp);
-    });
   }
 };
 
