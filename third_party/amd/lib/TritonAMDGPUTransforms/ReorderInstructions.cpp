@@ -292,14 +292,14 @@ public:
      */
     m.walk([&](scf::ForOp forOp) -> void {
       SetVector<Operation *> loadOps;
-      triton::DotOp dotOp;
+      Operation *dotOp;
       int nDotOps = 0;
       for (Operation &op : forOp) {
         if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
           loadOps.insert(loadOp);
         if (auto curOp = dyn_cast<triton::DotOp>(&op)) {
           nDotOps++;
-          dotOp = curOp;
+          dotOp = &op;
         }
       }
       // Only apply the optimization when there are 2 load's and 1 dot in the
@@ -317,7 +317,13 @@ public:
             tileBShape[1] >= 128))
         return;
       // move ldBOp right before tt.dot
-      loadOps[1]->moveBefore(dotOp);
+      // Make sure the 2nd loadOp is before the dot, and its first user
+      // is after the dot.
+      bool isBeforeDotOp = loadOps[1]->isBeforeInBlock(dotOp);
+      auto firstUser = *ldBOp.getResult().getUsers().begin();
+      bool firstUserAfterDotOp = dotOp->isBeforeInBlock(firstUser);
+      if (isBeforeDotOp && firstUserAfterDotOp)
+        loadOps[1]->moveBefore(dotOp);
     });
   }
 };
