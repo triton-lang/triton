@@ -1,7 +1,6 @@
 import tempfile
 import triton
 from triton.compiler import IRSource
-from triton._C.libtriton import ir
 
 target = triton.runtime.driver.active.get_current_target()
 

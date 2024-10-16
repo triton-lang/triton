@@ -522,7 +522,8 @@ void init_triton_ir(py::module &&m) {
              auto findTMA = [](ArrayRef<NamedAttribute> dictVals) {
                for (auto attr : dictVals) {
                  if (auto intAttr = dyn_cast<IntegerAttr>(attr.getValue())) {
-                   if (attr.getName() == "tt.nv_tma_desc" && intAttr.getInt() == 1)
+                   if (attr.getName() == "tt.nv_tma_desc" &&
+                       intAttr.getInt() == 1)
                      return true;
                  }
                }
