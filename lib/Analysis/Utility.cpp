@@ -896,15 +896,16 @@ public:
 
   LogicalResult initialize(Operation *top) override {
     WalkResult result = top->walk([&](Operation *op) {
-      if (failed(visit(op)))
+      ProgramPoint programPoint(op);
+      if (failed(visit(&programPoint)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
     return success(!result.wasInterrupted());
   }
 
-  LogicalResult visit(ProgramPoint point) override {
-    Operation *op = point.get<Operation *>();
+  LogicalResult visit(ProgramPoint *point) override {
+    Operation *op = point->getOperation();
     Attribute value;
     if (matchPattern(op, m_Constant(&value))) {
       auto *constant = getOrCreate<dataflow::Lattice<dataflow::ConstantValue>>(
