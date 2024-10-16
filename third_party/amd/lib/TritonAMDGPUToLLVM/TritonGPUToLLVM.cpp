@@ -10,9 +10,11 @@
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
@@ -23,6 +25,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
 namespace triton {
@@ -66,9 +69,11 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz) {
+  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz,
+                                     bool enable_buffer_ops) {
     this->arch = targetArch.str();
     this->ftz = ftz;
+    this->enable_buffer_ops = enable_buffer_ops;
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -92,6 +97,7 @@ struct ConvertTritonAMDGPUToLLVM
     TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
 
+    bool enableBufferIntrinsics = this->enable_buffer_ops;
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -107,6 +113,10 @@ struct ConvertTritonAMDGPUToLLVM
     ModuleAllocation allocation(mod);
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
+
+    // Collect all the assumed expressions
+    DenseSet<Value> assumptions;
+    mod.walk([&](LLVM::AssumeOp op) { assumptions.insert(op->getOperand(0)); });
 
     // Lower functions
     {
@@ -182,9 +192,9 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
-    AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           numWarps, axisInfoAnalysis,
-                                           AMDBenefit);
+    AMD::populateLoadStoreOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, numWarps, axisInfoAnalysis,
+        assumptions, enableBufferIntrinsics, AMDBenefit);
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
                       commonBenefit);
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns,
@@ -255,8 +265,10 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz,
+                                    bool enable_buffer_ops) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz,
+                                                     enable_buffer_ops);
 }
 
 } // namespace triton

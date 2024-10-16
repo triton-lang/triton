@@ -32,7 +32,8 @@ createOptimizeLDSUsagePass(StringRef arch, int32_t customLDSLimit = 0);
 } // namespace AMD
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz,
+                                    bool enable_buffer_ops);
 std::unique_ptr<OperationPass<ModuleOp>> createConvertBuiltinFuncToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
 createInsertInstructionSchedHintsPass();
