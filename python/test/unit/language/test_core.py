@@ -3319,10 +3319,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     (M, N, K, col_a, col_b, type_a, type_b, 4)
     for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
     for col_a, col_b in itertools.product([True, False], repeat=2)
-    # We don't test e5m2 as it seems to overflow more easily
+    # We don't test e5m2 as its range + the uniform sampling overflows easily
     # Tested locally and it works fine other than for ~10 entries out of 10_000
     # which are of the size of 10**30
-    for type_a in ["e4m3"]
+    for type_a in ["e2m1", "e4m3"]
     for type_b in ["e4m3"]
 ])
 def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
@@ -3427,10 +3427,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
         tl.store(mxfp_ptr + offsets, tl.ravel(mxfp), mask=offsets < N * 32)
 
     def dot_scale_ref(x, scale, y, type_x, type_y):
-        e_bits, m_bits = {"e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
+        e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
         type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[type_y]
 
-        # Need to implement fp4 -> fp8 cast to support 1 byte types
         comp_dtype = torch.bfloat16
         out_dtype = torch.float32
 
@@ -3447,11 +3446,17 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
 
     torch.manual_seed(0)
 
-    def create_uint8(shape):
-        return torch.randint(0xff, shape, dtype=torch.uint8, device=device)
+    def create_uint8(shape, col_major=False):
+        if col_major:
+            shape = shape[:-2] + (shape[-1], shape[-2])
+        ret = torch.randint(1 << 8, shape, dtype=torch.uint8, device=device)
+        if col_major:
+            ret = ret.mT
+        return ret
 
-    x = create_uint8((K, M)).T if col_a else create_uint8((M, K))
-    y = create_uint8((N, K)).T if col_b else create_uint8((K, N))
+    DIV_FACTOR = 2 if type_a == "e2m1" else 1
+    x = create_uint8((M, K // DIV_FACTOR), col_major=col_a)
+    y = create_uint8((K, N), col_major=col_b)
     scale_x = create_uint8((M, K // 32))
 
     z = x.new_empty((M, N), dtype=torch.float32)
