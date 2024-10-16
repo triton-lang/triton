@@ -123,7 +123,9 @@ class IRSource:
 
     def parse_options(self):
         if self.ext == "ttgir":
-            return {'num_warps': self.module.get_int_attr("triton_gpu.num-warps")}
+            num_warps = self.module.get_int_attr("triton_gpu.num-warps")
+            assert num_warps != None, "Unable to parse triton_gpu.num-warps attribute"
+            return {'num_warps': num_warps}
         return dict()
 
 
