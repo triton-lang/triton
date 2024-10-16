@@ -1314,12 +1314,6 @@ def kernel_suffix(signature, specialization):
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     import itertools
     # create kernel prototype
-    cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
-    n_types = {x: 1 for x in fn.arg_names}
-    for k, v in specialization.signature.items():
-        n_types[k] = str_to_ty(v).num_composite_types
-    cumsums = [i for i in itertools.accumulate(n_types.values())]
-    constant_idxs = {cumsums[cst_key(k)]-1: v for k, v in specialization.constants.items()}
     def get_arg_type(name):
         if name in specialization.signature and fn.arg_names.index(name) not in specialization.constants:
             return str_to_ty(specialization.signature[name])
@@ -1331,6 +1325,13 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     new_attrs = attrs.filter_out_constants()
     fn_attrs = new_attrs.get_fn_attrs()
     file_name, begin_line = get_jit_fn_file_line(fn)
+    # compute constant idxs
+    cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
+    n_types = {x: 1 for x in fn.arg_names}
+    for k, v in specialization.signature.items():
+        n_types[k] = str_to_ty(v).num_composite_types
+    cumsums = [i for i in itertools.accumulate(n_types.values())]
+    constant_idxs = {cumsums[cst_key(k)]-1: v for k, v in specialization.constants.items()}
     generator = CodeGenerator(context, prototype, 
                               gscope=fn.__globals__.copy(), 
                               constants=constant_idxs, 
