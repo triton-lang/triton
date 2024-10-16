@@ -1,3 +1,4 @@
+#include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -57,15 +58,19 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       amendedInputTy.push_back(sharedPtrTy);
     }
     amendedInputTy.push_back(globalPtrTy);
-    auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
-                                           funcTy.getResults());
+    auto amendedFuncTy =
+        FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
     SmallVector<NamedAttribute> amendedAttrs;
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
-    auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedAttrs.push_back(rewriter.getNamedAttr(
-        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
+    if (auto argAttrs = funcOp.getAllArgAttrs()) {
+      llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                         argAttrs.end());
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      amendedAttrs.push_back(
+          rewriter.getNamedAttr(funcOp.getArgAttrsAttrName(),
+                                rewriter.getArrayAttr(amendedArgAttrs)));
+    }
 
     // 3. Add the new arguments to the region
     auto amendedFuncOp = rewriter.create<triton::FuncOp>(
