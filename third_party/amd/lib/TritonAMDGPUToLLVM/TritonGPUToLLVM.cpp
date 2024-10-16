@@ -1,7 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -21,7 +20,6 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -74,9 +72,8 @@ struct ConvertTritonAMDGPUToLLVM
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry
-        .insert<LLVM::LLVMDialect, NVVM::NVVMDialect, mlir::ROCDL::ROCDLDialect,
-                mlir::triton::amdgpu::TritonAMDGPUDialect>();
+    registry.insert<LLVM::LLVMDialect, NVVM::NVVMDialect,
+                    mlir::ROCDL::ROCDLDialect>();
   }
 
   void runOnOperation() override {
@@ -196,12 +193,8 @@ struct ConvertTritonAMDGPUToLLVM
                       commonBenefit);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns,
                       commonBenefit);
-
-    mlir::triton::BackendCallbacks callbacks;
-    callbacks.localStoreOpConversion = storeOpConversionCallback;
-
-    mlir::triton::populateMemoryOpToLLVMPattern(
-        typeConverter, targetInfo, patterns, commonBenefit, callbacks);
+    mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, targetInfo,
+                                                patterns, commonBenefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, commonBenefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
