@@ -49,7 +49,7 @@ def test_print(func_type: str, data_type: str, device: str):
         assert proc.stderr == b''
         return
 
-    outs = [line for line in proc.stdout.decode("UTF-8").split("\n") if line]
+    outs = [line for line in proc.stdout.decode("UTF-8").splitlines() if line]
     # The total number of elements in the 1-D tensor to print.
     N = 128
 
