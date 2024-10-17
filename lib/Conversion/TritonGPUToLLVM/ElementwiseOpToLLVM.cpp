@@ -27,6 +27,8 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
     return values;
   auto inEncoding = dyn_cast<DotOperandEncodingAttr>(inTensorTy.getEncoding());
   auto ouEncoding = dyn_cast<DotOperandEncodingAttr>(ouTensorTy.getEncoding());
+  auto in_shape = inTensorTy.getShape();
+
   assert(inEncoding == ouEncoding);
   if (!inEncoding)
     return values;
@@ -56,6 +58,12 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
   }
   if (inBitWidth == 8 && ouBitWidth == 16) {
     SmallVector<Value> ret;
+    bool loadsExtraElements =
+        in_shape[1 - inEncoding.getOpIdx()] ==
+        16; // In the corner cases (1) where in_shape[0] == 16 and getOpIdx() ==
+            // 1, and (2) where in_shape[1] == 16 and getOpIdx == 0, extra
+            // elements will be loaded. It is necessary to discard these
+            // additional elements.
     for (unsigned i = 0; i < values.size(); i += 16) {
       ret.push_back(values[i + 0]);
       ret.push_back(values[i + 1]);
@@ -65,6 +73,8 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
       ret.push_back(values[i + 9]);
       ret.push_back(values[i + 10]);
       ret.push_back(values[i + 11]);
+      if (loadsExtraElements)
+        continue; // Discard elements that aren't needed.
       ret.push_back(values[i + 4]);
       ret.push_back(values[i + 5]);
       ret.push_back(values[i + 6]);
