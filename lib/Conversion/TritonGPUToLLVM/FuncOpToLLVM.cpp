@@ -66,7 +66,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (auto argAttrs = funcOp.getAllArgAttrs()) {
       llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
                                                          argAttrs.end());
-      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      while (amendedArgAttrs.size() < amendedInputTy.size()) {
+        amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      }
       amendedAttrs.push_back(
           rewriter.getNamedAttr(funcOp.getArgAttrsAttrName(),
                                 rewriter.getArrayAttr(amendedArgAttrs)));

@@ -85,10 +85,10 @@ private:
     if (!caller->hasAttr("allocation.offset")) {
       auto base = LLVM::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
-      return promotedOperands;
+    } else {
+      auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, callOp);
+      promotedOperands.push_back(base);
     }
-    promotedOperands.push_back(LLVM::getSharedMemoryBase(
-        callOp->getLoc(), rewriter, targetInfo, callOp));
 
     auto opOffsetAttr = caller->getAttrOfType<mlir::IntegerAttr>(
         "triton_nvidia_gpu.global_scratch_memory_offset");
@@ -98,9 +98,8 @@ private:
       opOffsetVal = i32_val(opOffset);
     }
 
-    auto funcOp = caller->getParentOfType<triton::FuncOp>();
     promotedOperands.push_back(
-        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, opOffsetVal));
+        LLVM::getGlobalScratchPtr(loc, rewriter, caller, opOffsetVal));
     return promotedOperands;
   }
 

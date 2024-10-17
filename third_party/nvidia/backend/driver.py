@@ -161,7 +161,8 @@ def make_launcher(constants, signature, ids):
             internal_args_list.append(f"_arg{i}")
 
     # generate glue code
-    params = [i for i in signature.keys() if i not in constants]
+    params = [f"&arg{i}" for i in signature.keys() if i not in constants]
+    params.append("&global_scratch")
     src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
@@ -209,7 +210,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 }}
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in params)}, &global_scratch }};
+  void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
     if (num_ctas == 1) {{
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
