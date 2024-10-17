@@ -274,6 +274,40 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
+  // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
+  // instructions to pack & unpack sub-word integers.  A workaround is to
+  // store the results of tensors with dot operand encodings in i32 to
+  // facilitate instructions such as `ldmatrix`.
+  //
+  // TODO: Confirm if the problem is still there.
+  SmallVector<Value> unpackSrc(const SmallVector<Value> &inValues,
+                               RankedTensorType srcTy,
+                               ConversionPatternRewriter &rewriter,
+                               Location loc) const {
+    auto srcLayout = srcTy.getEncoding();
+    if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(srcLayout)) {
+      auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
+      if (mmaEnc && mmaEnc.getVersionMajor() < 3) {
+        return unpackI32(inValues, srcTy.getElementType(), rewriter, loc);
+      }
+    }
+    return inValues;
+  }
+
+  SmallVector<Value> packDst(const SmallVector<Value> &inValues,
+                             RankedTensorType dstTy,
+                             ConversionPatternRewriter &rewriter,
+                             Location loc) const {
+    auto dstLayout = dstTy.getEncoding();
+    if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
+      auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
+      if (mmaEnc && mmaEnc.getVersionMajor() < 3) {
+        return packI32(inValues, dstTy.getElementType(), rewriter, loc);
+      }
+    }
+    return inValues;
+  }
+
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -342,9 +376,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kRegister = str_attr("register");
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals(numRegs);
-    for (int i = 0; i < outVals.size(); i++) {
+    inVals = unpackSrc(inVals, srcTy, rewriter, loc);
+    SmallVector<Value> outVals;
+    outVals.resize(dstLayout.getInDimSize(kRegister));
+    auto masks = dstLayout.getFreeVariableMasks()[kRegister];
+    for (int i = 0; i < dstLayout.getInDimSize(kRegister); i++) {
       // Remove free masks from the register index
       // For example, if idx = 0b00111, and masks = 0b00100, then we get
       // 0b00011. It means that register 7 (0b111) has the same value as
@@ -355,6 +394,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
+    outVals = packDst(outVals, dstTy, rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -439,10 +479,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
+    inVals = unpackSrc(inVals, srcTy, rewriter, loc);
 
-    // Pretty sure this is the identity function ATM
-    // It'd be better to simply call `quotient({kBlock})` and
-    // remove kBlock from transferWithinBlockImpl
     auto srcLayoutWithinBlock = getLayoutWithinBlock(srcLayout);
     auto dstLayoutWithinBlock = getLayoutWithinBlock(dstLayout);
     SmallVector<Value> outVals =
@@ -458,22 +496,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    // FIXME [Dot LL]
-    // We know it's just for largeKWidth case in Ampere
-    // In this case, we need to pack the outputs into i32
-    if (isa<DotOperandEncodingAttr>(dstTy.getEncoding())) {
-      auto concat = [&](Value a, Value b) {
-        return or_(zext(i32_ty, bitcast(a, i16_ty)),
-                   shl(zext(i32_ty, bitcast(b, i16_ty)), i32_val(16)));
-      };
-
-      SmallVector<Value> outVals32(outVals.size() / 2);
-      for (int i = 0; i < outVals32.size(); ++i) {
-        outVals32[i] = concat(outVals[2 * i], outVals[2 * i + 1]);
-      }
-      outVals = outVals32;
-    }
-
+    outVals = packDst(outVals, dstTy, rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);

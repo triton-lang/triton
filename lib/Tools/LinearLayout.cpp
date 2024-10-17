@@ -989,6 +989,21 @@ LinearLayout::getFreeVariableMasks() const {
   return ret;
 }
 
+LinearLayout LinearLayout::resize(StringAttr inDim,
+                                  int32_t newInDimSize) const {
+  BasesT bases = getBases();
+  assert(bases.contains(inDim) && "inDim not in layout");
+  assert(llvm::isPowerOf2_32(newInDimSize) &&
+         "newInDimSize must be a power of 2");
+  assert(newInDimSize >= getInDimSize(inDim) &&
+         "newInDimSize must be >= old size");
+  auto numFreeVariables = llvm::Log2_32(newInDimSize) - getInDimSizeLog2(inDim);
+  for (int i = 0; i < numFreeVariables; i++) {
+    bases[inDim].push_back(std::vector<int32_t>(getNumOutDims(), 0));
+  }
+  return LinearLayout(std::move(bases), llvm::to_vector(getOutDimNames()));
+}
+
 bool operator==(LinearLayout lhs, LinearLayout rhs) {
   if (!lhs.equalIgnoringOutDimSizes(rhs))
     return false;

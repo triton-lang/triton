@@ -631,46 +631,6 @@ private:
       convertMMAV3To8BitsDotOperand(op, adaptor, rewriter);
       return success();
     }
-
-    if (isMmaToDotShortcut(srcTy, dstTy)) {
-      // get source values
-      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      unsigned elems = getTotalElemsPerThread(srcTy);
-      Type elemTy =
-          this->getTypeConverter()->convertType(srcTy.getElementType());
-      // for the destination type, we need to pack values together
-      // so they can be consumed by tensor core operations
-      SmallVector<Value> vecVals;
-      // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
-      // instructions to pack & unpack sub-word integers. A workaround is to
-      // store the results of ldmatrix in i32
-      auto elemSize = elemTy.getIntOrFloatBitWidth();
-      if (auto intTy = dyn_cast<IntegerType>(elemTy) && elemSize <= 16) {
-        auto fold = 32 / elemSize;
-        for (unsigned i = 0; i < elems; i += fold) {
-          Value val = i32_val(0);
-          for (unsigned j = 0; j < fold; j++) {
-            auto ext =
-                shl(i32_ty, zext(i32_ty, vals[i + j]), i32_val(elemSize * j));
-            val = or_(i32_ty, val, ext);
-          }
-          vecVals.push_back(bitcast(val, i32_ty));
-        }
-      } else {
-        unsigned vecSize = std::max<unsigned>(32 / elemSize, 1);
-        Type vecTy = vec_ty(elemTy, vecSize);
-        for (unsigned i = 0; i < elems; i += vecSize) {
-          Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-          for (unsigned j = 0; j < vecSize; j++)
-            packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
-          vecVals.push_back(bitcast(packed, i32_ty));
-        }
-      }
-      Value view =
-          packLLElements(loc, getTypeConverter(), vecVals, rewriter, dstTy);
-      rewriter.replaceOp(op, view);
-      return success();
-    }
     return failure();
   }
 

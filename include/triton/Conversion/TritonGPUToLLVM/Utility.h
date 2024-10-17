@@ -1468,6 +1468,37 @@ inline Value packLLVector(Location loc, ValueRange vals,
   return vec;
 }
 
+inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
+                                  Type eltTy, RewriterBase &rewriter,
+                                  Location loc) {
+  SmallVector<Value> outValues;
+  int vecWidth = 32 / eltTy.getIntOrFloatBitWidth();
+  auto vecTy = vec_ty(eltTy, vecWidth);
+  for (int i = 0; i < inValues.size(); i += vecWidth) {
+    Value vec = undef(vecTy);
+    for (int j = 0; j < vecWidth; j++) {
+      vec = insert_element(vec, inValues[i + j], i32_val(j));
+    }
+    outValues.push_back(bitcast(vec, i32_ty));
+  }
+  return outValues;
+}
+
+inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
+                                    Type eltTy, RewriterBase &rewriter,
+                                    Location loc) {
+  SmallVector<Value> outValues;
+  for (auto v : inValues) {
+    // cast i32 to appropriate eltType vector and extract elements
+    auto vecTy = vec_ty(eltTy, 32 / eltTy.getIntOrFloatBitWidth());
+    auto vec = bitcast(v, vecTy);
+    for (int i = 0; i < 32 / eltTy.getIntOrFloatBitWidth(); i++) {
+      outValues.push_back(extract_element(vec, i32_val(i)));
+    }
+  }
+  return outValues;
+}
+
 inline bool isLayoutMmaV1(Attribute layout) {
   bool isMmaV1 = false;
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
