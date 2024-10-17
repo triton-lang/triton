@@ -366,42 +366,33 @@ struct TritonAMDGPUInsertInstructionSchedHints
     });
   }
 
-  template <typename Type> bool isOf(Operation *op) const {
-    return llvm::isa<Type>(op);
-  }
-
-  template <typename... Types>
-  llvm::SmallVector<Operation *> getUsersOfTypes(Value value) const {
-    llvm::SmallVector<Operation *> concreteUsers;
-    for (auto user : value.getUsers()) {
-      std::vector<bool> values = {(isOf<Types>(user), ...)};
-      if (llvm::any_of(values, [](bool value) { return value; }))
-        concreteUsers.push_back(user);
-    }
-    return concreteUsers;
-  }
-
   template <typename Type>
   llvm::SmallVector<Type> getUsersOfType(Value value) const {
-    auto users = getUsersOfTypes<Type>(value);
     llvm::SmallVector<Type> concreteUsers;
-    for (auto user : getUsersOfTypes<Type>(value)) {
-      concreteUsers.push_back(cast<Type>(user));
+    for (auto user : value.getUsers()) {
+      if (auto concreteUser = llvm::dyn_cast<Type>(user))
+        concreteUsers.push_back(concreteUser);
     }
     return concreteUsers;
   }
 
-  // Go through a single use chain of `convert_layout` and/or `fp_to_fp` Ops to
-  // get the final value after all conversions
-  Value rewindUnaryOps(Value value) const {
-    auto unaryOps =
-        getUsersOfTypes<triton::gpu::ConvertLayoutOp, triton::FpToFpOp>(value);
+  // Go through a single use chain to get the final value after all unary
+  // ops - e.g., `convert_layout`, `fp_to_fp`, etc.
+  FailureOr<Value> rewindUnaryOps(Value value) const {
+    auto findUnaryOps = [](Value value) {
+      llvm::SmallVector<Operation *> unaryOps;
+      for (Operation *op : value.getUsers()) {
+        if (op->getNumOperands() == 1)
+          unaryOps.push_back(op);
+      }
+      return unaryOps;
+    };
+    auto unaryOps = findUnaryOps(value);
     while (!unaryOps.empty()) {
-      assert(unaryOps.size() == 1);
+      if (unaryOps.size() != 1)
+        return failure();
       value = unaryOps[0]->getResult(0);
-      unaryOps =
-          getUsersOfTypes<triton::gpu::ConvertLayoutOp, triton::FpToFpOp>(
-              value);
+      unaryOps = findUnaryOps(value);
     }
     return value;
   }
@@ -469,7 +460,9 @@ struct TritonAMDGPUInsertInstructionSchedHints
         }
       }
 
-      loopCarriedLoadValue = rewindUnaryOps(loopCarriedLoadValue);
+      auto maybeRewoundResults = rewindUnaryOps(loopCarriedLoadValue);
+      assert(succeeded(maybeRewoundResults));
+      loopCarriedLoadValue = *maybeRewoundResults;
       assert(loopCarriedLoadValue.hasOneUse());
 
       // Handle pipelining - i.e., `local_store`, `memdesc_subview`,
@@ -502,7 +495,9 @@ struct TritonAMDGPUInsertInstructionSchedHints
           size_t idx = std::distance(yieldedValues.begin(), it);
           loopCarriedLoadValue = initArgs[idx];
         }
-        loopCarriedLoadValue = rewindUnaryOps(loopCarriedLoadValue);
+        maybeRewoundResults = rewindUnaryOps(loopCarriedLoadValue);
+        assert(succeeded(maybeRewoundResults));
+        loopCarriedLoadValue = *maybeRewoundResults;
       }
 
       // Find the corresponding `DotOp`.
