@@ -98,4 +98,31 @@ def ConvertDotProduct : Pass<"triton-cpu-convert-dot-product", "mlir::ModuleOp">
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def ConvertDotToAMX : Pass<"triton-cpu-convert-dot-to-amx", "mlir::ModuleOp"> {
+    let summary = "Convert dot product op to AMX dialect.";
+    let description = [{
+        This pass is used to lower matmul operations to amx dialect.
+    }];
+
+    let options = [
+        Option<"convertInt8", "convert-i8",
+               "bool", /*default*/"false",
+               "Use AMX extensions for int8 type.">,
+        Option<"convertFp16", "convert-fp16",
+               "bool", /*default*/"false",
+               "Use AMX extensions for ifp16 type.">,
+        Option<"convertBf16", "convert-bf16",
+               "bool", /*default*/"false",
+               "Use AMX extensions for bf16 type.">,
+    ];
+
+    let constructor = "mlir::triton::cpu::createConvertDotToAMX()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::vector::VectorDialect",
+                             "mlir::amx::AMXDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 #endif

@@ -12,12 +12,17 @@
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/Dialect/AMX/AMXToLLVMIRTranslation.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+
+#include <asm/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 namespace py = pybind11;
 
@@ -76,6 +81,11 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
                                       bool useHorizontalSum) {
     pm.addPass(mlir::triton::cpu::createConvertDotProduct(useHorizontalSum));
   });
+  m.def("add_convert_dot_to_amx", [](mlir::PassManager &pm, bool convertInt8,
+                                     bool convertFp16, bool convertBf16) {
+    pm.addPass(mlir::triton::cpu::createConvertDotToAMX(
+        convertInt8, convertFp16, convertBf16));
+  });
   m.def("add_convert_unsupported_ops",
         [](mlir::PassManager &pm, bool promote_bf16_to_fp32,
            bool convert_mixed_precision_matmul, bool promote_lib_math_to_fp32) {
@@ -121,10 +131,10 @@ void init_triton_cpu_passes_ttcpuir(py::module &&m) {
           mlir::ConvertVectorToLLVMPassOptions opts;
           opts.reassociateFPReductions = reassoc_fp_reduction;
           // opts.force32BitVectorIndices = true;
-          // opts.amx = false;
+          opts.amx = true;
           // opts.armNeon = false;
           // opts.armSVE = false;
-          // opts.x86Vector = false;
+          opts.x86Vector = true;
           pm.addPass(mlir::createConvertVectorToLLVMPass(opts));
         });
   m.def("add_lower_affine", [](mlir::PassManager &pm) {
@@ -148,11 +158,24 @@ void init_triton_cpu(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_cpu_passes_ttcpuir(passes.def_submodule("ttcpuir"));
 
+  m.def("enable_amx", []() -> bool {
+    // AMX usage requires extended XSTATE which is disabled by default. We
+    // need to request access to AMX so that XSTATE was dynamically extended
+    // on the first AMX usage instead of issuing SIGILL.
+    // See https://www.kernel.org/doc/Documentation/x86/xstate.rst for more
+    // details.
+    constexpr int XFEATURE_XTILEDATA = 18;
+    if (syscall(SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA))
+      return false;
+    return true;
+  });
+
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::cpu::TritonCPUDialect,
                     mlir::vector::VectorDialect>();
     mlir::triton::cpu::registerTritonOpScalarizeExternalModels(registry);
+    mlir::registerAMXDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });

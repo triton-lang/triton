@@ -78,6 +78,14 @@ class CPUBackend(BaseBackend):
         self.cpu_arch = llvm.get_cpu_tripple().split("-")[0]
         self.cpu_name = llvm.get_cpu_name()
         self.cpu_features = llvm.get_cpu_features()
+        if 'amx-tile' in self.cpu_features:
+            if not cpu.enable_amx():
+                import warnings
+                warnings.warn("Warning! Couldn't enable AMX for the process. AMX optimizations are disabled.")
+                self.cpu_features.discard('amx-tile')
+                self.cpu_features.discard('amx-int8')
+                self.cpu_features.discard('amx-fp16')
+                self.cpu_features.discard('amx-bf16')
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts}
@@ -151,6 +159,13 @@ class CPUBackend(BaseBackend):
         if convert_bf16_dot_product:
             use_horizontal_sum = os.getenv("TRITON_CPU_DOT_PROD_HORIZ_SUM", "1") == "1"
             cpu.passes.ttcpuir.add_convert_dot_product(pm, use_horizontal_sum)
+        if 'amx-tile' in self.cpu_features:
+            amx_int8 = 'amx-int8' in self.cpu_features
+            # amx_fp16 = 'amx-fp16' in self.cpu_features
+            # FP16 support is not in AMX dialect yet
+            amx_fp16 = False
+            amx_bf16 = 'amx-bf16' in self.cpu_features
+            cpu.passes.ttcpuir.add_convert_dot_to_amx(pm, amx_int8, amx_fp16, amx_bf16)
         promote_bf16_to_fp32 = self.cpu_arch == "x86_64" and "avx512bf16" not in self.cpu_features
         # We don't have any lowering for mixed precision matmuls, so always use casts for now
         convert_mixed_precision_matmul = True
