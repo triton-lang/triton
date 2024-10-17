@@ -1,6 +1,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 
 #include "mlir/IR/DialectImplementation.h" // required by `Types.cpp.inc`
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
@@ -155,6 +156,12 @@ Type getPointerTypeSameShape(Type type) {
   } else {
     return PointerType::get(type, 1);
   }
+}
+
+Type getPointerTypeScalar(Type type) {
+  Type elementType = getElementTypeOrSelf(type);
+  PointerType ptrType = PointerType::get(elementType, 1);
+  return ptrType;
 }
 
 // upstream Triton only uses address space 1 for Pointer Type
