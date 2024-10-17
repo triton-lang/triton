@@ -57,7 +57,27 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
     interleave for better instruction level parallelism.
   }];
 
-  let assemblyFormat = [{attr-dict}];
+  let arguments = (ins
+    TritonAMDGPU_InstCounter:$numDsReadsA,
+    TritonAMDGPU_InstCounter:$numDsReadsB,
+    TritonAMDGPU_InstCounter:$numDsWritesA,
+    TritonAMDGPU_InstCounter:$numDsWritesB,
+    TritonAMDGPU_InstCounter:$numGlobalLoadsA,
+    TritonAMDGPU_InstCounter:$numGlobalLoadsB,
+    TritonAMDGPU_InstCounter:$numMMAs
+  );
+
+  let builders = [
+    OpBuilder<(ins), [{
+      auto ctx = $_state.getContext();
+      auto type = IntegerType::get(ctx, 32);
+      auto emptyAttr = amdgpu::InstCounterAttr::get(ctx, 0, type);
+      build($_builder, $_state, emptyAttr, emptyAttr, emptyAttr, emptyAttr,
+            emptyAttr, emptyAttr, emptyAttr);
+    }]>
+  ];
+
+  let assemblyFormat = [{ attr-dict }];
 }
 
 //
