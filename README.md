@@ -213,6 +213,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
 - `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
+- `MLIR_DUMP_DIR` dumps the IR before and after every MLIR pass Triton runs, for all kernels, into files in the given directory. Works independently of `MLIR_ENABLE_DUMP`.
 
 # Changelog
 
