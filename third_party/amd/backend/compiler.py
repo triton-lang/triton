@@ -171,7 +171,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if amd.has_matrix_core_feature(options.arch):
-            # stream_pipelinev2 will no longer pipeline when num_stages == 0
+            # Triton AMD stream_pipelinev2 will no longer pipeline when num_stages=0, please use num_stages=2
             # - assert to avoid silent perf regression
             assert options.num_stages != 0
             amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
