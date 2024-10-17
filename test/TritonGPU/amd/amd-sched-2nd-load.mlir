@@ -163,3 +163,34 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// Should NOT apply: tile size 128x128x128 with two loads
+// CHECK-LABEL: sink_2nd_load_128x128x128_two_loads
+//       CHECK: %[[tileA:.*]] = tt.load
+//  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
+//  CHECK-NEXT: local_load
+//  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
+//  CHECK-NEXT: triton_gpu.local_store %[[tileB]]
+module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+tt.func public @sink_2nd_load_128x128x128_two_loads(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #dotOp1>, %B_val: tensor<128x128xf16, #dotOp1>, %C_ptr: tensor<128x128x!tt.ptr<f32>, #mma>, %A_LDS: !tt.memdesc<128x128xf16, #shared, #triton_gpu.shared_memory, mutable>, %B_LDS: !tt.memdesc<128x128xf16, #shared1, #triton_gpu.shared_memory, mutable>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<128x128xf32, #mma>)  : i32 {
+      %1 = triton_gpu.local_load %A_LDS : !tt.memdesc<128x128xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<128x128xf16, #dotOp0>
+      //%2 = triton_gpu.local_load %B_LDS : !tt.memdesc<128x128xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<128x128xf16, #dotOp1>
+      %3 = tt.dot %1, %B_val, %arg1 : tensor<128x128xf16, #dotOp0> * tensor<128x128xf16, #dotOp1> -> tensor<128x128xf32, #mma>
+      %4 = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked>
+      %5 = tt.load %B_ptr : tensor<128x128x!tt.ptr<f16>, #dotOp1>
+      %6 = arith.addf %5, %B_val : tensor<128x128xf16, #dotOp1>
+      triton_gpu.local_store %4, %A_LDS : tensor<128x128xf16, #blocked> -> !tt.memdesc<128x128xf16, #shared, #triton_gpu.shared_memory, mutable>
+      //triton_gpu.local_store %5, %B_LDS : tensor<128x128xf16, #blocked1> -> !tt.memdesc<128x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
+      scf.yield %3 : tensor<128x128xf32, #mma>
+    }
+    tt.store %C_ptr, %0#0: tensor<128x128x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}
