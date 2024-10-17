@@ -10,13 +10,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
         %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
         %3 = tt.splat %1 : i32 -> tensor<256xi32, #blocked0>
         %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
-        // Load 8 elements from A with two vectorized load instruction
+        // Load 8 elements from A with two vectorized load instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xf32>
         %9 = amdgpu.buffer_load %arg0[%4] : tensor<256xf32, #blocked0>
-        // Load 8 elements from B with two vectorized load instruction
+        // Load 8 elements from B with two vectorized load instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xf32>
         %10 = amdgpu.buffer_load %arg1[%4] : tensor<256xf32, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
+        // Store 8 elements into C with two vectorized store instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.store {{.*}} : vector<4xf32>
         amdgpu.buffer_store %11, %arg2[%4]: tensor<256xf32, #blocked0>
         tt.return
@@ -37,14 +38,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
         %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
         %5 = tt.splat %arg3 : i32 -> tensor<256xi32, #blocked0>
         %7 = arith.cmpi slt, %4, %5: tensor<256xi32, #blocked0>
-        // Load 8 elements from A with two vectorized load instruction
+        // Load 8 elements from A with eight scalar load instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}} : f32
         %9 = amdgpu.buffer_load %arg0[%4], %7 : tensor<256xf32, #blocked0>
-        // Load 8 elements from A with two vectorized load instruction
+        // Load 8 elements from B with two scalar load instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}} : f32
         %10 = amdgpu.buffer_load %arg1[%4], %7 : tensor<256xf32, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
-        // Load 8 elements from A with two vectorized load instruction
+        // Store 8 elements into C with two scalar store instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.store {{.*}} : f32
         amdgpu.buffer_store %11, %arg2[%4], %7 : tensor<256xf32, #blocked0>
         tt.return
@@ -65,14 +66,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
         %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
         %5 = tt.splat %arg3 : i32 -> tensor<256xi32, #blocked0>
         %7 = arith.cmpi slt, %4, %5: tensor<256xi32, #blocked0>
-        // Load 8 elements from A with two vectorized load instruction
+        // Load 8 fp16 elements from A with four i32 scalar load instructions
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : i32
         %9 = amdgpu.buffer_load %arg0[%4], %7 : tensor<256xf16, #blocked0>
-        // Load 8 elements from A with two vectorized load instruction
+        // Load 8 fp16 elements from B with four i32 scalar load instructions
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : i32
         %10 = amdgpu.buffer_load %arg1[%4], %7 : tensor<256xf16, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf16, #blocked0>
-        // Load 8 elements from A with two vectorized load instruction
+        // Store 8 fp16 elements into C with four i32 scalar store instructionss
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.store {{.*}} : i32
         amdgpu.buffer_store %11, %arg2[%4], %7 : tensor<256xf16, #blocked0>
         tt.return
