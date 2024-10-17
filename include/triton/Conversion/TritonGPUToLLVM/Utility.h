@@ -389,6 +389,12 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
 
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
+  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
+      "triton_nvidia_gpu.global_scratch_memory_size");
+  if (!allocSizeAttr) {
+    return gmemBase;
+  }
+
   Value gridIdx[3];
   Value gridDim[2];
   for (int k = 0; k < 3; ++k) {
@@ -403,9 +409,6 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
     linearId = add(gridIdx[1 - k], mul(linearId, gridDim[1 - k]));
   }
 
-  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-      "triton_nvidia_gpu.global_scratch_memory_size");
-  assert(allocSizeAttr);
   auto allocSize = allocSizeAttr.getValue().getZExtValue();
 
   Value offset = mul(linearId, i32_val(allocSize));
