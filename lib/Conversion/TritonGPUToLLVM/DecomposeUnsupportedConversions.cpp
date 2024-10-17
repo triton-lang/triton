@@ -100,14 +100,26 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
         }
       }
 
+     auto srcOrder = triton::gpu::getOrder(srcBlocked);
+     auto rank = srcOrder.size();
+     SmallVector<unsigned> sharedOrder;
+     if (rank == 3) {
+       // add all elements except the element that is zero
+       for (unsigned i = 0; i < rank; ++i)
+         if (srcOrder[i] != 0)
+           sharedOrder.emplace_back(srcOrder[i]);
+       sharedOrder.emplace_back(0);
+     } else {
+       sharedOrder = srcOrder;
+     }
+
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
       auto tmpType = MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
-              module.getContext(), dstDotOp, srcType.getShape(),
-              srcBlocked.getOrder(), srcBlocked.getCTALayout(),
-              srcType.getElementType()),
+              module.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
+              srcBlocked.getCTALayout(), srcType.getElementType()),
           sharedMemorySpace);
       auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
