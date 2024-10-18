@@ -264,13 +264,13 @@ def compile(src, target=None, options=None):
     if ir_source:
         first_stage += 1
 
-    # We initialize these
     if not isinstance(src, IRSource):
         context = ir.context()
         ir.load_dialects(context)
         backend.load_dialects(context)
     else:
-        # we have already grabbed the context + called ir.load_dialects
+        # For IRSource, we have already grabbed the context + called ir.load_dialects
+        # just need to load the dialects.
         backend.load_dialects(context)
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
