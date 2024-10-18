@@ -1366,11 +1366,11 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target);
 
-void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
-                              Type elemLlvmTy, ArrayRef<Value> srcVals,
-                              Value smemBase, ArrayRef<Value> dstStrides,
-                              Location loc, RewriterBase &rewriter,
-                              const TargetInfoBase &target);
+void storeDistributedToShared(
+    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
+    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 inline Value getStructFromSharedMemoryObject(Location loc,
                                              const SharedMemoryObject &smemObj,
