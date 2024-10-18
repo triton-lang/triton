@@ -536,7 +536,7 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (blockedLayout == nullptr || dotOperandLayout == nullptr)
@@ -647,11 +647,21 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   std::optional<LinearLayout> dstLayout =
       toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
   if (srcLayout.has_value() && dstLayout.has_value()) {
-    // comp describes the layout function for converting from src to dst.
-    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
+    StringAttr kReg = StringAttr::get(ctx, "register");
     StringAttr kLane = StringAttr::get(ctx, "lane");
     StringAttr kWarp = StringAttr::get(ctx, "warp");
     StringAttr kBlock = StringAttr::get(ctx, "block");
+    if (srcLayout->getInDimSize(kLane) != dstLayout->getInDimSize(kLane) ||
+        srcLayout->getInDimSize(kWarp) != dstLayout->getInDimSize(kWarp) ||
+        srcLayout->getInDimSize(kBlock) != dstLayout->getInDimSize(kBlock)) {
+      return false;
+    }
+    // comp describes the layout function for converting from src to dst.
+    auto regSize =
+        std::max(srcLayout->getInDimSize(kReg), dstLayout->getInDimSize(kReg));
+    auto srcWithFree = srcLayout->resize(kReg, regSize);
+    auto dstWithFree = dstLayout->resize(kReg, regSize);
+    LinearLayout comp = srcWithFree.invertAndCompose(dstWithFree);
     // TODO(jlebar): These checks are overly-restrictive.  For example, we can
     // transfer by shuffling registers (case 1) if and only if all of the bases
     // for `register` have 0s for lane, warp, and block.  But the check below is
@@ -694,14 +704,14 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut`,
-  // `isBlockedToDotShortcut` and `isMfmaToDotShortcut`) once they're fully
-  // subsumed by the linear-layout checks.
+  // TODO(jlebar): Remove these special cases (`isBlockedToDotShortcut` and
+  // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
+  // checks.
   // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
-         !isMmaToDotShortcut(srcTy, dstTy) &&
+         !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
 }
 
@@ -710,20 +720,6 @@ bool atomicNeedsSharedMemory(Value value) {
   if (isa<RankedTensorType>(type) || value.use_empty())
     return false;
   return true;
-}
-
-bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  if (matchMmaV3AndDotOperandLayout(srcTy, dstTy))
-    return true;
-  // dot_op<opIdx=0, parent=#mma> = #mma
-  // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
-  auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  return mmaLayout && dotOperandLayout && mmaLayout.getVersionMajor() == 2 &&
-         mmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getParent() == mmaLayout &&
-         !srcTy.getElementType().isF32();
 }
 
 namespace {

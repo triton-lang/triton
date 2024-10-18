@@ -70,10 +70,16 @@ struct DecomposeUnsupportedConversions
     : public mlir::triton::impl::DecomposeUnsupportedNVIDIAConversionsBase<
           DecomposeUnsupportedConversions> {
   void runOnOperation() override {
+    // Temporary workaround
+    auto nvidiaShortCutFn = [&](RankedTensorType srcTy,
+                                RankedTensorType dstTy) {
+      return matchMmaV3AndDotOperandLayout(srcTy, dstTy) ||
+             cvtReordersRegisters(srcTy, dstTy);
+    };
     ModuleOp mod = getOperation();
     triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
     triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
-                                                          isMmaToDotShortcut);
+                                                          nvidiaShortCutFn);
     triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
 
     mlir::RewritePatternSet patterns(&getContext());

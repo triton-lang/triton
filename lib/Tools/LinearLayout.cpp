@@ -1053,6 +1053,16 @@ LinearLayout::getFreeVariableMasks() const {
   return ret;
 }
 
+LinearLayout LinearLayout::resize(StringAttr inDim, int32_t size) const {
+  BasesT bases = getBases();
+  assert(bases.contains(inDim));
+  auto inDimSize = getInDimSizeLog2(inDim);
+  for (int i = inDimSize; i < llvm::Log2_32(size); i++) {
+    bases[inDim].push_back(std::vector<int32_t>(getNumOutDims(), 0));
+  }
+  return LinearLayout(std::move(bases), llvm::to_vector(getOutDimNames()));
+}
+
 bool operator==(LinearLayout lhs, LinearLayout rhs) {
   if (!lhs.equalIgnoringOutDimSizes(rhs))
     return false;

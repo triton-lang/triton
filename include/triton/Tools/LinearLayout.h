@@ -688,6 +688,8 @@ public:
   // (i.e. every input bit affects the output).
   llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
 
+  LinearLayout resize(StringAttr inDim, int32_t size) const;
+
   std::string toString() const;
 
   friend bool operator==(LinearLayout lhs, LinearLayout rhs);
