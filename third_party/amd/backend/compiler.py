@@ -172,8 +172,11 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if amd.has_matrix_core_feature(options.arch):
             if options.num_stages == 0:
-                print("Triton AMD stream-pipeline-v2 has deprecated num_stages=0. Use num_stages=2 for similar results.")
-                assert options.num_stages != 0
+                assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
+                                                 "We used to trigger software pipelining with "
+                                                 "num_stages == 0. Now it will not happen anymore; "
+                                                 "please update to use num_stages == 2 for "
+                                                 "equivalent behaviors in the past.")
             amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
