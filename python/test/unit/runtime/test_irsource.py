@@ -1,6 +1,7 @@
 import tempfile
 import triton
 from triton.compiler import IRSource
+from triton._C.libtriton import ir
 
 target = triton.runtime.driver.active.get_current_target()
 
@@ -39,7 +40,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(sample_ttgir)
         f.flush()
-        src = IRSource(f.name)
+        context = ir.context()
+        src = IRSource(f.name, context)
 
         # check name and type signature
         # should match ty_to_cpp(...)
@@ -84,7 +86,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(sample_ttgir_vector_add)
         f.flush()
-        src = IRSource(f.name)
+        context = ir.context()
+        src = IRSource(f.name, context)
 
         # now test compilation
         triton.compile(f.name, target=target)

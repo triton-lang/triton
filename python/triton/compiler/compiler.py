@@ -90,13 +90,12 @@ class ASTSource:
 
 class IRSource:
 
-    def __init__(self, path):
+    def __init__(self, path, context):
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
-        self.context = ir.context()
-        ir.load_dialects(self.context)
+        ir.load_dialects(context)
 
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
@@ -107,7 +106,7 @@ class IRSource:
             types = re.findall(arg_type_pattern[self.ext], signature)
             self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
         else:
-            self.module = ir.parse_mlir_module(self.path, self.context)
+            self.module = ir.parse_mlir_module(self.path, context)
             fn_name = self.module.get_first_func_name()
             self.name = "@" + fn_name
             funcOp = self.module.get_function(fn_name)
@@ -118,13 +117,13 @@ class IRSource:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        self.module.context = self.context
+        self.module.context = context
         return self.module
 
     def parse_options(self):
         if self.ext == "ttgir":
             num_warps = self.module.get_int_attr("triton_gpu.num-warps")
-            assert num_warps != None, "Unable to parse triton_gpu.num-warps attribute"
+            assert num_warps is not None, "Unable to parse triton_gpu.num-warps attribute"
             return {'num_warps': num_warps}
         return dict()
 
@@ -221,7 +220,8 @@ def compile(src, target=None, options=None):
     # create backend
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
-        src = IRSource(src)
+        context = ir.context()
+        src = IRSource(src, context)
 
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
@@ -270,7 +270,7 @@ def compile(src, target=None, options=None):
         ir.load_dialects(context)
         backend.load_dialects(context)
     else:
-        context = src.context
+        # we have already grabbed the context + called ir.load_dialects
         backend.load_dialects(context)
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
