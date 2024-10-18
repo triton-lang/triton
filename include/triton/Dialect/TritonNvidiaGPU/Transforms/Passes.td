@@ -77,4 +77,18 @@ def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::M
   ];
 }
 
+def TritonNvidiaGPUGlobalScratchAllocationPass : Pass<"triton-tensor-memory-allocation", "mlir::ModuleOp"> {
+  let summary = "Assign tensor memory allocation";
+
+  let description = [{
+    Decide on global scratch space memory allocation and assign attributes to each allocation.
+  }];
+
+  let constructor = "mlir::createTritonNvidiaGPUGlobalScratchAllocationPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 #endif
