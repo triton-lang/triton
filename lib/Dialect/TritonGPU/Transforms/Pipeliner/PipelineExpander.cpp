@@ -127,7 +127,6 @@ bool LoopPipelinerInternal::initializeLoopInfo(
       // Not defined by a ConstantOp
       return std::nullopt;
     }
-    // return constantOp.getValue().dyn_cast<mlir::IntegerAttr>();
     return mlir::cast<mlir::IntegerAttr>(constantOp.getValue());
   };
   auto upperBoundCst = getIntegerAttrFromValue(ub);
