@@ -432,7 +432,7 @@ def test_jit_debug(device) -> None:
         tl.device_assert(tl.load(tmp) == 1, "tmp == 1")
 
     device = getattr(torch, device).current_device()
-    tmp = torch.tensor([1], dtype=torch.int32, device="cuda")
+    tmp = torch.tensor([1], dtype=torch.int32, device=device)
     assert len(kernel.cache[device]) == 0
     kernel[(1, )](tmp, debug=False)
     assert len(kernel.cache[device]) == 1
