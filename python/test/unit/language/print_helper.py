@@ -131,14 +131,14 @@ def test_print(func: str, data_type: str, device: str):
     else:
         assert f"Unknown kernel: {func}"
 
+    # Wait until driver complete all the jobs for the device_print, especially test_subprocess
+    # require this which captures stdout when child exits.
+    getattr(torch, device).synchronize()
+
     if func != "print_no_arg" and func != "no_arg_print" and func != "device_print_large" and \
        func != "print_multiple_args" and func != "device_print_multiple_args" and \
        func != "device_print_pointer" and func != "device_print_scalar":
         assert_close(y, x)
-
-    # Wait until driver complete all the jobs for the device_print, especially test_subprocess
-    # require this which captures stdout when child exits.
-    getattr(torch, device).synchronize()
 
 
 if __name__ == "__main__":
