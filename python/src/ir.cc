@@ -518,17 +518,6 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, FuncOp &func) -> std::vector<std::string> {
              std::vector<std::string> strVec;
 
-             auto findTMA = [](ArrayRef<NamedAttribute> dictVals) {
-               for (auto attr : dictVals) {
-                 if (auto intAttr = dyn_cast<IntegerAttr>(attr.getValue())) {
-                   if (attr.getName() == "tt.nv_tma_desc" &&
-                       intAttr.getInt() == 1)
-                     return true;
-                 }
-               }
-               return false;
-             };
-
              auto type = func.getFunctionType();
              unsigned numArgs = type.getNumInputs();
              for (unsigned i = 0; i != numArgs; ++i) {
@@ -541,7 +530,7 @@ void init_triton_ir(py::module &&m) {
                  // Check for tt.nv_tma_desc = 1
                  if (auto dAttr = dyn_cast<DictionaryAttr>(attr)) {
                    ArrayRef<NamedAttribute> dictVals = dAttr.getValue();
-                   if (findTMA(dictVals)) {
+                   if (dAttr.contains("tt.nv_tma_desc")) {
                      strVec.push_back("nvTmaDesc");
                      continue;
                    }

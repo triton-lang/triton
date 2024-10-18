@@ -47,7 +47,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
         # should match ty_to_cpp(...)
         assert  src.signature == \
                     {0: "*f32", 1: "*f32", 2: "*f32", 3: "i32", \
-                           4: "i32", 5: "i32", 6: "i32", 7: "i32", 8: "i32", 9: "nvTmaDesc"}
+                           4: "i32", 5: "i32", 6: "i32", 7: "i32", 8: "nvTmaDesc", 9: "nvTmaDesc"}
         assert src.name == "@matmul_kernel"
 
         # check num warps
