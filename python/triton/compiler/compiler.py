@@ -270,7 +270,7 @@ def compile(src, target=None, options=None):
         backend.load_dialects(context)
     else:
         # For IRSource, we have already grabbed the context + called ir.load_dialects
-        # just need to load the dialects.
+        # just need to load the dialects for the backend.
         backend.load_dialects(context)
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
