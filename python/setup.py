@@ -284,7 +284,7 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
         arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
     except KeyError:
         arch = platform.machine()
-    supported = {"Linux": "linux"}
+    supported = {"Linux": "linux", "Darwin": "linux"}
     url = url_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
