@@ -227,7 +227,8 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        amd.passes.ttgpuir.add_reorder_instructions(pm)
+        if amd.has_matrix_core_feature(options.arch):
+            amd.passes.ttgpuir.add_reorder_instructions(pm)
         amd.passes.ttgpuir.add_canonicalize_pointers(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
