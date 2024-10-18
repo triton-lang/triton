@@ -171,9 +171,9 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if amd.has_matrix_core_feature(options.arch):
-            # Triton AMD stream_pipelinev2 will no longer pipeline when num_stages=0, please use num_stages=2
-            # - assert to avoid silent perf regression
-            assert options.num_stages != 0
+            if options.num_stages == 0:
+                print("Triton AMD stream-pipeline-v2 has deprecated num_stages=0. Use num_stages=2 for similar results.")
+                assert options.num_stages != 0
             amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
