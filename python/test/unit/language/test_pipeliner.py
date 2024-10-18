@@ -203,7 +203,7 @@ def test_pipeline_epilogue(ROW_COUNT, NUM_STAGES, device):
 
     width = ROW_COUNT
     depth = 78
-    x = torch.zeros(width, depth, device='cuda')
+    x = torch.zeros(width, depth, device=device)
     y0 = torch.rand_like(x)
     n_rows, n_cols = x.shape
     BLOCK_SIZE = triton.next_power_of_2(n_cols)

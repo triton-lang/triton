@@ -9,6 +9,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction
+from triton._internal_testing import is_hip
 
 
 @triton.jit
@@ -431,7 +432,7 @@ def test_jit_debug(device) -> None:
         tl.device_assert(tl.load(tmp) == 1, "tmp == 1")
 
     device = getattr(torch, device).current_device()
-    tmp = torch.tensor([1], dtype=torch.int32, device="cuda")
+    tmp = torch.tensor([1], dtype=torch.int32, device=device)
     assert len(kernel.cache[device]) == 0
     kernel[(1, )](tmp, debug=False)
     assert len(kernel.cache[device]) == 1
@@ -572,3 +573,29 @@ def test_hooks(device, fresh_triton_cache) -> None:
     assert specialization_data is not None and specialization_data_compiled == specialization_data
     assert is_warmup is True
     assert key in kernel_add.cache[getattr(torch, device).current_device()]
+
+
+@pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
+def test_within_2gb(device, fresh_triton_cache) -> None:
+
+    @triton.jit
+    def kernel_add(a):
+        tl.load(a)
+
+    # This is the attribute we want to test
+    pointer_range_32 = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal pointer_range_32
+        pointer_range_32 = kwargs["compile"]["configs"][0].pointer_range_32
+
+    JITFunction.cache_hook = cache_hook
+    # In warmup we assume that the pointer range is 32 bits
+    kernel_add.warmup(torch.float32, grid=(1, ))
+    assert pointer_range_32 == [0]
+    # Torch tensor > 2GB
+    kernel_add[(1, 0)](torch.empty(2**31, dtype=torch.int8, device=device))
+    assert len(pointer_range_32) == 0
+    # Torch tensor <= 2GB
+    kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
+    assert pointer_range_32 == [0]
