@@ -613,8 +613,9 @@ assignMemoryLayouts(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
         } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
+          bool incompatible = false;
           loadInfo.sharedEncoding =
-              getSharedEncIfAllUsersAreDotEnc(op.getResult(0))
+              getSharedEncIfAllUsersAreDotEnc(op.getResult(0), incompatible)
                   .value_or(nullptr);
         }
       }
