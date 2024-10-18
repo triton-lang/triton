@@ -36,30 +36,29 @@ public:
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
       auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcEncoding = srcType.getEncoding();
+      auto dstEncoding = dstType.getEncoding();
       if (isa<triton::gpu::SharedEncodingAttr>(srcEncoding))
         return;
       auto dstDotOp =
-          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
+          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstEncoding);
       if (!dstDotOp)
         return;
       if (!cvtNeedsSharedMemory(srcType, dstType))
         return;
       // FIXME [Dot LL]
       // We support this one via LLs, as the LocalLoad path is buggy
-      bool largeKWidth =
-          dstDotOp.getKWidth() * dstType.getElementTypeBitWidth() > 64;
-      if (largeKWidth) {
-        return;
+      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dstDotOp.getParent())) {
+        bool largeKWidth =
+            dstDotOp.getKWidth() * dstType.getElementTypeBitWidth() > 64;
+        if (mma.isAmpere() && largeKWidth) {
+          return;
+        }
       }
       auto srcOrder = triton::gpu::getOrder(srcEncoding);
       auto rank = srcOrder.size();
       SmallVector<unsigned> sharedOrder;
       if (rank == 3) {
-        // add all elements except the element that is zero
-        for (unsigned i = 0; i < rank; ++i)
-          if (srcOrder[i] != 0)
-            sharedOrder.emplace_back(srcOrder[i]);
-        sharedOrder.emplace_back(0);
+        sharedOrder = gpu::getThreadOrder(dstEncoding);
       } else {
         sharedOrder = srcOrder;
       }
