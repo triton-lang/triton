@@ -544,26 +544,35 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
   llvm::SmallVector<Operation *> users;
   DenseSet<Operation *> seen;
   bool loopHasAttribute = forOp->hasAttr(tt::kNumStagesAttrName);
-  std::function<void(Operation *, Operation *)> dfs = [&](Operation *op,
-                                                          Operation *baseOp) {
-    if (!seen.insert(op).second)
-      return;
-    if (op != baseOp) {
-      users.push_back(op);
-      if (loopHasAttribute)
-        // Only track the first op in the dependence chain.
-        return;
-      if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op) ||
-          op->hasTrait<OpTrait::DotLike>()) {
-        // Stop recursion when hitting a LoadOp or a DotOp.
-        return;
-      }
-    }
-    for (Operation *user : op->getUsers())
-      if (user->getBlock() == op->getBlock())
-        dfs(user, baseOp);
-  };
-  dfs(baseOp, baseOp);
+  std::function<void(Operation *, Operation *, bool)> dfs =
+      [&](Operation *op, Operation *baseOp, bool anyOp) {
+        if (!seen.insert(op).second)
+          return;
+        if (op != baseOp) {
+          if (anyOp) {
+            // Only track the first op in the dependence chain.
+            users.push_back(op);
+            return;
+          }
+          if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op) ||
+              op->hasTrait<OpTrait::DotLike>()) {
+            // Stop recursion when hitting a LoadOp or a DotOp.
+            users.push_back(op);
+            return;
+          }
+        }
+        for (Operation *user : op->getUsers())
+          if (user->getBlock() == op->getBlock())
+            dfs(user, baseOp, anyOp);
+      };
+  dfs(baseOp, baseOp, false /*anyOp*/);
+  // For now, this needs to be aligned with loadOpsToIndirectionLevelAndUse
+  // since only those uses are in the schedule. Once we move all scheduling to
+  // happen before lowering, any direct use will have a stage assigned.
+  if (loopHasAttribute) {
+    seen.clear();
+    dfs(baseOp, baseOp, true /*anyOp*/);
+  }
   return users;
 }
 
@@ -586,6 +595,13 @@ assignMemoryLayouts(scf::ForOp &forOp, tt::CoarseSchedule &schedule,
     // Check stage for uses. If any use is in a different stage, treat it
     // as a pipelined load.
     auto users = getTransitiveUserInBlock(&op, forOp);
+    LLVM_DEBUG({
+      LDBG("TransitiveUser for load " << op);
+      for (const auto user : users) {
+        LDBG("  - use: " << *user);
+      }
+    });
+
     bool isPipelined = false;
     auto [sLoad, _cLoad] = schedule[&op];
     for (auto user : users) {
