@@ -556,8 +556,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     RankedTensorType newDstType =
         RankedTensorType::get(reshapeDstType.getShape(),
                               reshapeDstType.getElementType(), targetEncoding);
-    return reshape.getAllowReorder() &&
-           !reshape.getEfficientLayout().has_value() &&
+    return reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
            !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
                                          newDstType);
   }
