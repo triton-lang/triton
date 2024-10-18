@@ -34,7 +34,7 @@ def check_capabilities():
 @triton.jit
 def matmul_kernel(  #
         a_ptr, scale_ptr, b_ptr, output_ptr,  #
-        M, N, K,  #
+        M, N, K_MXFP,  # K_MXFP is the number of mxfp vectors in a row of a. Otherwise it's just K
         stride_am, stride_ak,  #
         stride_sm, stride_sk,  #
         stride_bk, stride_bn,  #
@@ -49,7 +49,10 @@ def matmul_kernel(  #
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     IS_SCALED: tl.constexpr = a_type is not None and b_type is not None
     DIV_FACTOR: tl.constexpr = 2 if IS_SCALED and a_type == "e2m1" else 1
-    KA: tl.constexpr = BLOCK_K // DIV_FACTOR
+    # We pass K_MXFP to make explicit that KB is multiple of 32 and KA is multiple of 16 or 32
+    # for the pipeliner divisibility condition
+    KA = K_MXFP if not IS_SCALED else K_MXFP * (32 // DIV_FACTOR)
+    KB = K_MXFP if not IS_SCALED else K_MXFP * 32
     BLOCK_AK: tl.constexpr = BLOCK_K // DIV_FACTOR
     offs_k = tl.arange(0, BLOCK_K)
     offs_ak = tl.arange(0, BLOCK_AK)
@@ -60,14 +63,14 @@ def matmul_kernel(  #
         offs_sk = tl.arange(0, BLOCK_SK)
         scale_ptrs = scale_ptr + (offs_am[:, None] * stride_sm + offs_sk[None, :] * stride_sk)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+    for k in tl.range(0, tl.cdiv(KB, BLOCK_K), num_stages=NUM_STAGES):
         mask_a = (offs_am[:, None] < M) & (offs_ak[None, :] + k * BLOCK_AK < KA)
-        mask_b = ((offs_k[:, None] + k * BLOCK_K) < K) & (offs_bn[None, :] < N)
+        mask_b = ((offs_k[:, None] + k * BLOCK_K) < KB) & (offs_bn[None, :] < N)
         a = tl.load(a_ptrs, mask=mask_a, other=0)
         b = tl.load(b_ptrs, mask=mask_b, other=0)
         if IS_SCALED:
             # Adapted scale indexing and dot_scaled operation
-            mask_scale = (offs_am[:, None] < M) & (offs_sk[None, :] + k * BLOCK_SK < K // 32)
+            mask_scale = (offs_am[:, None] < M) & (offs_sk[None, :] + k * BLOCK_SK < K_MXFP)
             a_scale = tl.load(scale_ptrs, mask=mask_scale, other=0)
             accumulator = tl.dot_scaled(a, a_scale, a_type, b, None, b_type, acc=accumulator)
         else:
@@ -269,6 +272,9 @@ def test_pipeline_matmul(scale, device):
         handler = matmul_kernel_tma[grid](a_tma, b_tma, output_tma, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
                                           NUM_STAGES=NUM_STAGES)
     else:
+        # Pass K_MXFP to make explicit that KB is multiple of 32 and KA is multiple of 16 or 32º
+        if scale:
+            K = scale_a.shape[-1]
         stride_sm, stride_sk = scale_a.stride() if scale else (0, 0)
         handler = matmul_kernel[grid](a, scale_a, b, output, M, N, K, a.stride(0), a.stride(1), stride_sm, stride_sk,
                                       b.stride(0), b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N,
