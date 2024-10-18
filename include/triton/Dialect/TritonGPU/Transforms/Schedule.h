@@ -100,6 +100,7 @@ public:
   std::vector<std::pair<Operation *, unsigned>>
   createFinalSchedule(scf::ForOp forOp);
   void dump();
+  bool empty() { return opToStageAndCluster.size() == 0; }
 };
 
 } // namespace triton
