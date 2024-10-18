@@ -220,7 +220,7 @@ class HIPBackend(BaseBackend):
                                              "We used to trigger software pipelining with "
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
-                                             "equivalent behaviors in the past.")
+                                             "equivalent behavior in the past.")
             amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
