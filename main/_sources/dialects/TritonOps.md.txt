@@ -1425,7 +1425,7 @@ _Reinterpret a tensor to a different shape. It may change elements order if the 
 Syntax:
 
 ```
-operation ::= `tt.reshape` $src attr-dict `:` type($src) `->` type($result)
+operation ::= `tt.reshape` $src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)
 ```
 
 reinterpret a tensor to a different shape.
@@ -1446,7 +1446,7 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>allow_reorder</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>allow_reorder</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 <tr><td><code>efficient_layout</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 
