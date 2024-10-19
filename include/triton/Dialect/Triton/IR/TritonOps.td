@@ -710,6 +710,7 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 //
 def TT_ReduceOp: TT_Op<"reduce",
                        [Pure,
+                        SameOperandsShape,
                         SameOperandsEncoding,
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
