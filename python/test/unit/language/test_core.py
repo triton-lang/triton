@@ -390,7 +390,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
         ('int64', 'float16'),
         ('int64', 'float32'),
         ('int64', 'float64'),
-        ('uint16', 'float32'),
+        ('uint16', 'float64'),
         ('uint32', 'bfloat16'),
         ('uint32', 'float16'),
         ('uint32', 'float32'),
