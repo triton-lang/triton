@@ -108,6 +108,19 @@ tt.func public @fn(%v: tensor<4x128xf64>) {
 
 // -----
 
+tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>) {
+    // expected-error @below {{op requires the same shape for all operands}}
+    %0:2 = "tt.reduce" (%arg0, %arg1) <{axis = 1 : i32}> ({
+    ^bb0(%acc0: f32, %acc1: f32, %cur0: f32, %cur1: f32):
+      %1 = arith.addf %acc0, %cur0 : f32
+      %2 = arith.addf %acc1, %cur1 : f32
+      tt.reduce.return %1, %2 : f32, f32
+    }) : (tensor<32x32x64xf32>, tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>)
+    tt.return %0#0, %0#1 : tensor<32x64xf32>, tensor<16x64xf32>
+}
+
+// -----
+
 tt.func public @fn(%v: tensor<4x128xf32>) {
     // expected-error @+1 {{requires the same shape}}
     %a = "tt.scan" (%v) ({
