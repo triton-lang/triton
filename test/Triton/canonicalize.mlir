@@ -50,3 +50,21 @@ tt.func @fn(%arg0: tensor<1xf32, #sliced0>) -> (tensor<32x1xf32, #blocked0>){
   tt.return %b : tensor<32x1xf32, #blocked0>
 }
 }  // end module
+
+// -----
+
+// CHECK-LABEL: tt.func @reduce(
+// CHECK-SAME:                  %[[ARG0:.*]]: tensor<2x1x16xf32>,
+// CHECK-SAME:                  %[[ARG1:.*]]: tensor<2x1x16xf16>
+tt.func @reduce(%arg0: tensor<2x1x16xf32>, %arg1: tensor<2x1x16xf16>) -> (tensor<2x16xf32>, tensor<2x16xf16>) {
+  // CHECK: %[[VAL0:.*]] = tt.reshape %[[ARG0]] allow_reorder : tensor<2x1x16xf32> -> tensor<2x16xf32>
+  // CHECK: %[[VAL1:.*]] = tt.reshape %[[ARG1]] allow_reorder : tensor<2x1x16xf16> -> tensor<2x16xf16>
+  %0:2 = "tt.reduce"(%arg0, %arg1) <{axis=1 : i32}> ({
+  ^bb0(%acc0: f32, %acc1: f16, %curr0: f32, %curr1: f16):
+    %1 = arith.addf %acc0, %curr0 : f32
+    %2 = arith.mulf %acc1, %curr1 : f16
+    tt.reduce.return %1, %2 : f32, f16
+  }) : (tensor<2x1x16xf32>, tensor<2x1x16xf16>) -> (tensor<2x16xf32>, tensor<2x16xf16>)
+  // CHECK: tt.return %[[VAL0]], %[[VAL1]] : tensor<2x16xf32>, tensor<2x16xf16>
+  tt.return %0#0, %0#1 : tensor<2x16xf32>, tensor<2x16xf16>
+}

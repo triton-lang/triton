@@ -505,6 +505,57 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
 
 unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 
+namespace {
+/// Replace reduction operations with equivalent reshape operations.
+///
+/// This pattern replaces reductions whose input tensor size is 1 in the
+/// reduction dimension:
+/// ```mlir
+/// "tt.reduce"(%0, ...) <{axis = N}> ({...})
+///     : (tensor<S0 x ... x SN-1 x 1 x SN+1 x ...>, ...) ->
+///       (tensor<S0 x ... x SN-1 x SN+1 x ...>, ...)
+/// ```
+/// With equivalent reshape operations (one per operand):
+/// ```mlir
+/// tt.reshape %0 allow_reorder
+///     : tensor<S0 x ... x SN-1 x 1 x SN+1 x ...> ->
+///       tensor<S0 x ... x SN-1 x SN+1 x ...>
+/// ```
+struct CanonicalizeReshapeReducePattern final : OpRewritePattern<ReduceOp> {
+  using OpRewritePattern<ReduceOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ReduceOp reduceOp,
+                                PatternRewriter &rewriter) const final {
+    Type resultType = reduceOp->getResultTypes().front();
+    // `tensor<NxTy>->Ty` case. `tt.reshape` does not support scalar result
+    // types, so we simply skip this case.
+    if (!isa<RankedTensorType>(resultType))
+      return failure();
+    RankedTensorType inputType = reduceOp.getInputTypes().front();
+    int32_t axis = reduceOp.getAxis();
+    if (inputType.getShape()[axis] != 1)
+      return failure();
+    SmallVector<Value> reshapes(reduceOp.getNumOperands());
+    llvm::transform(
+        llvm::zip_equal(reduceOp.getSrcs(), reduceOp->getResultTypes()),
+        reshapes.begin(),
+        [loc = reduceOp.getLoc(), &rewriter](auto pair) -> Value {
+          auto &[value, resultType] = pair;
+          // Set allow_reorder to support different tensor layouts.
+          return rewriter.create<ReshapeOp>(loc, resultType, value,
+                                            /*allow_reorder=*/true);
+        });
+    rewriter.replaceOp(reduceOp, reshapes);
+    return success();
+  }
+};
+} // namespace
+
+void ReduceOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                           MLIRContext *context) {
+  results.add<CanonicalizeReshapeReducePattern>(context);
+}
+
 //-- ScanOp --
 void ScanOp::build(OpBuilder &builder, OperationState &state,
                    ValueRange operands, int axis, bool reverse) {
