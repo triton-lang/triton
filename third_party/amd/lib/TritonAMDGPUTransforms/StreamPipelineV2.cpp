@@ -74,20 +74,6 @@ public:
       : forOp(_forOp), prefetch(_prefetch ? 1 : 0),
         numStages(_numStages + prefetch), schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
-    SmallVector<tt::CoarseSchedule::Cluster, 4> clusters;
-    for (int i = 0; i < 4 + prefetch; ++i)
-      clusters.push_back(schedule.clusters.newAtBack());
-
-    int lastStage = numStages - 1;
-    int prefetchOrMultibuf = prefetch || numStages > 2;
-    config.resize(5);
-    config[SCHED_GLOBAL_LOAD] = {0, clusters[prefetchOrMultibuf]};
-    config[SCHED_LOCAL_STORE] = {lastStage - 1,
-                                 clusters[prefetchOrMultibuf ? 0 : 2]};
-    config[SCHED_LOCAL_LOAD] = {lastStage - prefetch, clusters[prefetch + 1]};
-    config[SCHED_COMPUTE] = {lastStage, clusters[prefetchOrMultibuf]};
-    config[SCHED_TAIL] = {lastStage, clusters.back()};
-
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
     options.predicateFn = streamPredication;
@@ -101,12 +87,12 @@ public:
 
   void computeLoadOpsToIndirectionLevelAndUse();
   void assignMemoryLayouts();
-  void scheduleLoads(DenseSet<Operation *> &rootUsers);
+  LogicalResult scheduleLoads(DenseSet<Operation *> &rootUsers);
   void scheduleDependencies();
   void scheduleDistanceOneDependencies();
   void scheduleRemainingToLastStage();
 
-  bool preprocessLoopAndBuildSchedule();
+  LogicalResult preprocessLoopAndBuildSchedule();
   bool pipelineLoop();
 
   Value createAlloc(Operation *loadOp, ttg::SharedEncodingAttr sharedEnc,
@@ -114,7 +100,10 @@ public:
   void createStreamCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamOps();
 
+  void initSchedule(int maxIndirectionLevel);
+
 private:
+
   scf::ForOp forOp;
   int prefetch;
   int numStages;
@@ -148,6 +137,23 @@ private:
 };
 
 } // namespace
+
+void StreamPipeliner::initSchedule(int maxIndirectionLevel) {
+  SmallVector<tt::CoarseSchedule::Cluster, 4> clusters;
+  for (int i = 0; i < 4 + prefetch; ++i)
+    clusters.push_back(schedule.clusters.newAtBack());
+
+  int lastStage = numStages - 1;
+  int prefetchOrMultibuf = prefetch || numStages > (2 + maxIndirectionLevel);
+
+  config.resize(5);
+  config[SCHED_GLOBAL_LOAD] = {0, clusters[prefetchOrMultibuf]};
+  config[SCHED_LOCAL_STORE] = {lastStage - 1,
+                               clusters[prefetchOrMultibuf ? 0 : 2]};
+  config[SCHED_LOCAL_LOAD] = {lastStage - prefetch, clusters[prefetch + 1]};
+  config[SCHED_COMPUTE] = {lastStage, clusters[prefetchOrMultibuf]};
+  config[SCHED_TAIL] = {lastStage, clusters.back()};
+}
 
 void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
                                        Value extractIdx) {
@@ -189,6 +195,13 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   for (auto alloc : allocsToErase)
     alloc.erase();
 
+  // Prefetch load ahead of the dot stage if is used by the dot.
+  auto storeOp =
+      builder.create<ttg::LocalStoreOp>(loc, copy->getResult(0), viewLoad);
+  scheduleOp(viewLoad, SCHED_LOCAL_STORE);
+  scheduleOp(storeOp, SCHED_LOCAL_STORE);
+
+  // Create local load 
   auto sharedLoad =
       builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
   Value result = sharedLoad.getResult();
@@ -210,12 +223,6 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
     if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(*result.getUsers().begin()))
       scheduleOp(cvt, SCHED_LOCAL_LOAD);
   }
-
-  // Prefetch load ahead of the dot stage if is used by the dot.
-  auto storeOp =
-      builder.create<ttg::LocalStoreOp>(loc, copy->getResult(0), viewLoad);
-  scheduleOp(viewLoad, SCHED_LOCAL_STORE);
-  scheduleOp(storeOp, SCHED_LOCAL_STORE);
 
   loadOp.erase();
 }
@@ -374,7 +381,7 @@ void StreamPipeliner::assignMemoryLayouts() {
   }
 }
 
-void StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
+LogicalResult StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
   // Get all loads that are (transitively) used by dot ops and their distance
   // to the dot op.
   computeLoadOpsToIndirectionLevelAndUse();
@@ -387,12 +394,12 @@ void StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
     }
   });
   if (loadOpToIndLevelAndUse.empty())
-    return;
+    return failure();
 
   // Check which loads are good for pipelining, and assign them memory layouts.
   assignMemoryLayouts();
   if (loadToInfo.empty())
-    return;
+    return failure();
 
   // Filter out load ops that cannot be pipelined.
   int resize = 0;
@@ -407,6 +414,12 @@ void StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
   int maxIndirectionLevel = -1;
   for (auto [loadOp, dist, use] : loadOpToIndLevelAndUse)
     maxIndirectionLevel = std::max(maxIndirectionLevel, dist);
+
+  LDBG("maxIndirectionLevel = " << maxIndirectionLevel);
+  if (maxIndirectionLevel >= numStages)
+    return failure();
+
+  initSchedule(maxIndirectionLevel);
 
   // The stage gap between chained loads--this allows us to "spread" loads
   // with a non-one step in case the number of stages given by the user is
@@ -424,8 +437,6 @@ void StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
       rootUsers.insert(use);
     }
   }
-
-  assert(maxIndirectionLevel < numStages);
 
   // Assign stages to the loads.
   for (auto [loadOp, indLevel, _] : loadOpToIndLevelAndUse) {
@@ -446,6 +457,8 @@ void StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
       LDBG("    usedByDot: " << info.usedByDot);
     }
   });
+
+  return success();
 }
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
@@ -631,13 +644,14 @@ void StreamPipeliner::createStreamOps() {
   appendToForOpYield(forOp, {extractIdx});
 }
 
-bool StreamPipeliner::preprocessLoopAndBuildSchedule() {
+LogicalResult StreamPipeliner::preprocessLoopAndBuildSchedule() {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
   // a scaffold for the final schedule.
   DenseSet<Operation *> rootUsers;
-  scheduleLoads(rootUsers);
+  if (failed(scheduleLoads(rootUsers)))
+    return failure();
   if (loadToInfo.empty())
-    return false;
+    return failure();
 
   LLVM_DEBUG({
     LDBG("Coarse schedule loads only:");
@@ -682,7 +696,8 @@ bool StreamPipeliner::preprocessLoopAndBuildSchedule() {
   // Explicitly deallocate created allocations.
   for (auto alloc : sharedMemAllocs)
     builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
-  return true;
+
+  return success();
 }
 
 // Return true if the preconditions for pipelining the loop are met.
@@ -706,8 +721,7 @@ bool StreamPipeliner::pipelineLoop() {
   if (!checkPrecondition(forOp))
     return false;
 
-  // numStages++;
-  if (!preprocessLoopAndBuildSchedule())
+  if (failed(preprocessLoopAndBuildSchedule()))
     return false;
   LDBG("Loop before sending to expander:\n" << *forOp);
 
