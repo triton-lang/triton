@@ -4,7 +4,7 @@
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_size_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
   // expected-error @+1 {{sizes [256, 2] must be a multiple of shapePerCTA [256, 16]}}
-  %1 = amdgpu.view_slice %arg0[0,0] [256, 2] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+  %1 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x2xi32, #blocked1>
   tt.return
 }
 
@@ -14,7 +14,7 @@ tt.func @invalid_size_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibili
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_offset_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
   // expected-error @+1 {{offset [0, 5] must be a multiple of shapePerCTA [256, 16]}}
-  %1 = amdgpu.view_slice %arg0[0,5] [256, 16] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+  %1 = amdgpu.extract_slice %arg0 [0,5] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
   tt.return
 }
 
@@ -25,7 +25,7 @@ tt.func @invalid_offset_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibi
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_result_layout(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
   // expected-error @+1 {{result layout must match source layout}}
-  %1 = amdgpu.view_slice %arg0[0,0] [256, 16] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked2>
+  %1 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked2>
   tt.return
 }
 
@@ -35,7 +35,7 @@ tt.func @invalid_result_layout(%arg0: tensor<256x128xi32, #blocked1> {tt.divisib
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_result_element_type(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
   // expected-error @+1 {{result element type must match source element type}}
-  %1 = amdgpu.view_slice %arg0[0,0] [256, 16] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi64, #blocked1>
+  %1 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x16xi64, #blocked1>
   tt.return
 }
 
@@ -45,7 +45,17 @@ tt.func @invalid_result_element_type(%arg0: tensor<256x128xi32, #blocked1> {tt.d
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_result_rank(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
   // expected-error @+1 {{result rank must be equal to source rank}}
-  %1 = amdgpu.view_slice %arg0[0,0] [256, 16] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16x2xi32, #blocked1>
+  %1 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x16x2xi32, #blocked1>
+  tt.return
+}
+
+// -----
+
+// Invalid result shape
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+tt.func @invalid_result_rank(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
+  // expected-error @+1 {{result shape cannot be larger than input shape at dimension 1}}
+  %1 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x256xi32, #blocked1>
   tt.return
 }
 
@@ -55,17 +65,7 @@ tt.func @invalid_result_rank(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibil
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_rank(%arg0: tensor<256x128x2xi32, #blocked1> {tt.divisibility = 16 : i32}) {
   // expected-error @+1 {{currently only 2D tensors are supported}}
-  %1 = amdgpu.view_slice %arg0[0,0,0] [256,16,2] [1,1,1] : tensor<256x128x2xi32, #blocked1> to tensor<256x16x2xi32, #blocked1>
-  tt.return
-}
-
-// -----
-
-// Invalid stride
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-tt.func @invalid_stride(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
-  // expected-error @+1 {{expected unit strides but found unsupported stride [1, 2]}}
-  %1 = amdgpu.view_slice %arg0[0,0] [256, 16] [1,2] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+  %1 = amdgpu.extract_slice %arg0 [0,0,0] : tensor<256x128x2xi32, #blocked1> to tensor<256x16x2xi32, #blocked1>
   tt.return
 }
 
@@ -74,27 +74,8 @@ tt.func @invalid_stride(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility =
 // Invalid non static offset
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_non_static_offset(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}, %arg1: i32) {
-  // expected-error @+1 {{currently only static offsets are supported}}
-  %2 = amdgpu.view_slice %arg0[0,%arg1] [256, 16] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
-  tt.return
-}
-
-// -----
-
-// Invalid non static size
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-tt.func @invalid_non_static_size(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}, %arg1: i32) {
-  // expected-error @+1 {{currently only static sizes are supported}}
-  %2 = amdgpu.view_slice %arg0[0,0] [256, %arg1] [1,1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
-  tt.return
-}
-
-// -----
-
-// Invalid non static stride
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-tt.func @invalid_non_static_stride(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}, %arg1: i32) {
-  // expected-error @+1 {{currently only static strides are supported}}
-  %2 = amdgpu.view_slice %arg0[0,0] [256, 16] [1,%arg1] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+  // expected-error @+2 {{expected ']'}}
+  // expected-error @+1 {{expected integer value}}
+  %2 = amdgpu.extract_slice %arg0 [%arg1, 0] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
   tt.return
 }

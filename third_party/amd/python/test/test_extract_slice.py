@@ -38,7 +38,7 @@ class BlockedLayout:
 # test view slice
 # -----------------------
 
-view_layout = [
+extract_layout = [
     BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([2, 2], [64, 1], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([2, 2], [16, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
@@ -57,12 +57,12 @@ blocked_layout = [
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset",
                          [[256, 256, 256, 32, 0, 32], [128, 128, 128, 64, 0, 64]])
 @pytest.mark.parametrize("dtype", [torch.float16])
-@pytest.mark.parametrize("view_layout", view_layout)
+@pytest.mark.parametrize("view_layout", extract_layout)
 @pytest.mark.parametrize("blocked_layout", blocked_layout)
-def test_view_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset, blocked_layout, view_layout,
-                    device='cuda'):
+def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile_offset, blocked_layout, view_layout,
+                       device='cuda'):
     if not is_hip():
-        pytest.skip("view_slice is AMD specific instruction.")
+        pytest.skip("extract_slice is AMD specific instruction.")
 
     ir = f"""
     #blocked = {blocked_layout}
@@ -92,7 +92,7 @@ def test_view_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_tile
         %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
         %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
         %12 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #view_layout>
-        %13 = amdgpu.view_slice %12[{M_tile_offset}, {N_tile_offset}] [{M_tile_size}, {N_tile_size}] [1, 1] : tensor<{M}x{N}xf16, #view_layout> to tensor<{M_tile_size}x{N_tile_size}xf16, #view_layout>
+        %13 = amdgpu.extract_slice %12 [{M_tile_offset}, {N_tile_offset}] : tensor<{M}x{N}xf16, #view_layout> to tensor<{M_tile_size}x{N_tile_size}xf16, #view_layout>
         %14 = triton_gpu.convert_layout %13 : tensor<{M_tile_size}x{N_tile_size}xf16, #view_layout> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %15 = tt.addptr %34, %40 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>, tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         tt.store %15, %14 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>

@@ -5,9 +5,9 @@
 
 namespace mlir::triton::AMD {
 
-void populateViewSliceOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
-                                       mlir::RewritePatternSet &patterns,
-                                       mlir::PatternBenefit benefit);
+void populateExtractSliceOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter, mlir::RewritePatternSet &patterns,
+    mlir::PatternBenefit benefit);
 
 }
 
