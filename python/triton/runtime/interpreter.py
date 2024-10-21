@@ -419,7 +419,7 @@ class InterpreterBuilder:
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_fdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
-    create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
+    create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
     create_fsub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_precise_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
