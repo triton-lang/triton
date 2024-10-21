@@ -19,6 +19,27 @@ class TTC_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [])> {
 }
 
+//
+// External Elementwise op
+//
+def TTC_ExternElementwiseOp : TTC_Op<"extern_elementwise", [Elementwise,
+                                                            SameOperandsAndResultEncoding,
+                                                            SameVariadicOperandSize,
+                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+
+    let description = [{
+        Similar to TT_ExternElementwiseOp, but only supports calls to libsleef at the moment.
+        The string "%s(numel)" in $symbol will be interpolated with the number of elements of
+        the vector argument(s).
+    }];
+
+    let arguments = (ins Variadic<TTC_Type>:$srcs, StrAttr:$symbol, BoolAttr:$pure);
+
+    let results = (outs TTC_Type:$result);
+
+    let assemblyFormat = "operands attr-dict `:` functional-type(operands, $result)";
+}
+
 def TTC_ExtractMemRefOp : TTC_Op<"extract_memref", [NoMemoryEffect]> {
   let summary = "Extract base memref from a block pointer";
 

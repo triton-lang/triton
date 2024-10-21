@@ -59,6 +59,7 @@ public:
     addIllegalOp<triton::MulhiUIOp>();
     addIllegalOp<triton::ClampFOp>();
     addIllegalOp<triton::FpToFpOp>();
+    addIllegalOp<triton::ExternElementwiseOp>();
   }
 };
 
@@ -248,6 +249,9 @@ struct ConvertElementwiseOps
     patterns.add<OpTypeConversion<triton::PreciseDivFOp, arith::DivFOp>>(
         typeConverter, context);
     patterns.add<OpTypeConversion<triton::PreciseSqrtOp, math::SqrtOp>>(
+        typeConverter, context);
+    patterns.add<OpTypeConversion<triton::ExternElementwiseOp,
+                                  triton::cpu::ExternElementwiseOp>>(
         typeConverter, context);
     patterns.add<MulhiUIOpConversion>(typeConverter, context);
     patterns.add<ClampFOpConversion>(typeConverter, context);

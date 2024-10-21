@@ -129,6 +129,33 @@ def trunc(arg0, _builder=None):
     return core.tensor(_builder.create_trunc(arg0.handle), arg0.type)
 
 
+@core.extern
+def ceil(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("Sleef_ceilf%(numel)", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("Sleef_ceild%(numel)", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def pow(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("Sleef_powf%(numel)_u10", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("Sleef_powd%(numel)_u10", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fmod(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("Sleef_fmodf%(numel)", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("Sleef_fmodd%(numel)", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
 @jit
 def _const(v, dtype):
     """

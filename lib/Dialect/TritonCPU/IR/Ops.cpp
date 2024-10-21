@@ -15,4 +15,15 @@ LogicalResult PrintOp::verify() {
   return success();
 }
 
+void ExternElementwiseOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  if (getPure())
+    return;
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       SideEffects::DefaultResource::get());
+}
+
 } // namespace mlir::triton::cpu

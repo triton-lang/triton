@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -124,7 +125,8 @@ public:
                        return rewriter.create<vector::ExtractOp>(loc, val,
                                                                  indices);
                      });
-      Value subRes = rewriter.create<OpT>(loc, subResTy, subInputs);
+      Value subRes =
+          rewriter.create<OpT>(loc, subResTy, subInputs, op->getAttrs());
       newRes = rewriter.create<vector::InsertOp>(loc, subRes, newRes, indices);
     }
 
@@ -192,20 +194,21 @@ private:
   std::string ulpSuffix;
 };
 
-template <typename OpT> struct VecOpToVecLib : public OpRewritePattern<OpT> {
+template <typename OpT>
+struct OpToVecLibConversion : public OpRewritePattern<OpT> {
 public:
   using OpRewritePattern<OpT>::OpRewritePattern;
 
-  VecOpToVecLib(MLIRContext *context, GetVecFnNameFn getVecFnName)
-      : OpRewritePattern<OpT>(context), getVecFnName(getVecFnName) {}
+  virtual std::string getVecFnName(OpT op, unsigned bitwidth,
+                                   unsigned numel) const = 0;
 
   LogicalResult matchAndRewrite(OpT op, PatternRewriter &rewriter) const {
     VectorType vecTy = dyn_cast<VectorType>(op.getType());
     if (!vecTy || vecTy.getRank() > 1)
       return failure();
 
-    auto fnName = getVecFnName(vecTy.getElementTypeBitWidth(),
-                               vecTy.getNumElements(), op->getOperands());
+    auto fnName = getVecFnName(op, vecTy.getElementTypeBitWidth(),
+                               vecTy.getNumElements());
     if (fnName.empty())
       return failure();
 
@@ -229,9 +232,37 @@ public:
                                               op->getOperands());
     return success();
   }
+};
+
+template <typename OpT>
+struct VecOpToVecLibConversion : public OpToVecLibConversion<OpT> {
+public:
+  VecOpToVecLibConversion(MLIRContext *context, GetVecFnNameFn getVecFnName)
+      : OpToVecLibConversion<OpT>(context), getVecFnNameImpl(getVecFnName) {}
+
+  std::string getVecFnName(OpT op, unsigned bitwidth,
+                           unsigned numel) const override {
+    return getVecFnNameImpl(bitwidth, numel, op->getOperands());
+  }
 
 private:
-  GetVecFnNameFn getVecFnName;
+  GetVecFnNameFn getVecFnNameImpl;
+};
+
+struct ExternElementwiseOpConversion
+    : public OpToVecLibConversion<triton::cpu::ExternElementwiseOp> {
+  using OpToVecLibConversion::OpToVecLibConversion;
+
+  std::string getVecFnName(triton::cpu::ExternElementwiseOp op,
+                           unsigned bitwidth, unsigned numel) const override {
+    auto fnName = op.getSymbol();
+    auto numelIdx = fnName.find("%(numel)");
+    if (numelIdx == StringRef::npos)
+      return fnName.str();
+    return (fnName.take_front(numelIdx) + Twine(numel) +
+            fnName.drop_front(numelIdx + 8))
+        .str();
+  }
 };
 
 template <typename OpTy>
@@ -239,7 +270,8 @@ void populatePatternsForOp(RewritePatternSet &patterns,
                            GetVecFnNameFn getVecFnName) {
   patterns.add<VecOpToFp32<OpTy>>(patterns.getContext());
   patterns.add<DecomposeToNativeVecs<OpTy>>(patterns.getContext());
-  patterns.add<VecOpToVecLib<OpTy>>(patterns.getContext(), getVecFnName);
+  patterns.add<VecOpToVecLibConversion<OpTy>>(patterns.getContext(),
+                                              getVecFnName);
 }
 
 struct MathToVecLibPass
@@ -272,6 +304,10 @@ struct MathToVecLibPass
       break;
     }
     }
+
+    patterns.add<DecomposeToNativeVecs<triton::cpu::ExternElementwiseOp>>(
+        patterns.getContext());
+    patterns.add<ExternElementwiseOpConversion>(patterns.getContext());
 
     if (failed(applyPatternsAndFoldGreedily(op, std::move(patterns))))
       signalPassFailure();

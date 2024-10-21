@@ -26,4 +26,6 @@ def TTC_TokenType : TTC_TypeDef<"Token", "token"> {
 
 def TTC_Vector : VectorOf<[TT_Float, TT_Int]>;
 
+def TTC_Type : AnyTypeOf<[TT_Float, TT_Int, TTC_Vector]>;
+
 #endif
