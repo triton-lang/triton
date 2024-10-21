@@ -1368,7 +1368,7 @@ Effects: `MemoryEffects::Effect{}`
 _Reduction using generic combination algorithm_
 
 
-Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsEncoding`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsEncoding`, `SameOperandsShape`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
