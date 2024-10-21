@@ -1,11 +1,10 @@
+#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_TRITONAMDGPUINSERTINSTRUCTIONSCHEDHINTS
@@ -28,22 +27,28 @@ void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
   });
 }
 
-void setNumGeneratedGlobalLoads(triton::LoadOp op, size_t globalLoadsCount,
+template <typename LoadOpType>
+void setNumGeneratedGlobalLoads(LoadOpType op, size_t globalLoadsCount,
                                 Type type) {
   MLIRContext *ctx = op->getContext();
   auto counterAttr =
       triton::amdgpu::InstCounterAttr::get(ctx, globalLoadsCount, type);
 
   op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
-    auto opIdxAttr = cast<triton::amdgpu::OpIdxAttr>(
-        op->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic()));
-    assert(opIdxAttr.getValue() < 2);
-    if (opIdxAttr.getValue() == 0)
-      schedHint.setNumGlobalLoadsAAttr(counterAttr);
-    else
-      schedHint.setNumGlobalLoadsBAttr(counterAttr);
+    if (auto opIdxAttr = op->template getAttrOfType<triton::amdgpu::OpIdxAttr>(
+            triton::amdgpu::OpIdxAttr::getMnemonic())) {
+      assert(opIdxAttr.getValue() < 2);
+      if (opIdxAttr.getValue() == 0)
+        schedHint.setNumGlobalLoadsAAttr(counterAttr);
+      else
+        schedHint.setNumGlobalLoadsBAttr(counterAttr);
+    }
   });
 }
+template void setNumGeneratedGlobalLoads(triton::amdgpu::BufferLoadOp op,
+                                         size_t globalLoadsCount, Type type);
+template void setNumGeneratedGlobalLoads(triton::LoadOp op,
+                                         size_t globalLoadsCount, Type type);
 
 void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t dsReadsCount,
                             Type type) {
@@ -72,14 +77,27 @@ void storeOpConversionCallback(triton::gpu::LocalStoreOp op,
       triton::amdgpu::InstCounterAttr::get(ctx, localStoreOpCount, type);
 
   op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
-    auto opIdxAttr = op->getAttrOfType<triton::amdgpu::OpIdxAttr>(
-        triton::amdgpu::OpIdxAttr::getMnemonic());
-    assert(opIdxAttr.getValue() < 2);
-    if (opIdxAttr.getValue() == 0)
-      schedHint.setNumDsWritesAAttr(counterAttr);
-    else
-      schedHint.setNumDsWritesBAttr(counterAttr);
+    if (auto opIdxAttr = op->getAttrOfType<triton::amdgpu::OpIdxAttr>(
+            triton::amdgpu::OpIdxAttr::getMnemonic())) {
+      assert(opIdxAttr.getValue() < 2);
+      if (opIdxAttr.getValue() == 0)
+        schedHint.setNumDsWritesAAttr(counterAttr);
+      else
+        schedHint.setNumDsWritesBAttr(counterAttr);
+    }
   });
+}
+
+llvm::FailureOr<triton::DotOp> hasSingleDotOp(scf::ForOp forOp) {
+  triton::DotOp dotOp = nullptr;
+  size_t dotCounter = 0;
+  forOp->walk(
+      [&dotOp, &dotCounter](triton::DotOp op) { dotOp = op, ++dotCounter; });
+
+  if (dotCounter == 1)
+    return dotOp;
+
+  return llvm::failure();
 }
 } // namespace mlir::triton
 
@@ -119,8 +137,9 @@ Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
 struct InstructionSchedHintsRewriter
     : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
-  InstructionSchedHintsRewriter(mlir::MLIRContext *ctx, std::string variant)
-      : OpRewritePattern(ctx) {
+  InstructionSchedHintsRewriter(mlir::MLIRContext *ctx, int32_t numStages,
+                                std::string variant)
+      : OpRewritePattern(ctx), numStages(numStages) {
     std::transform(variant.begin(), variant.end(), variant.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
@@ -130,6 +149,13 @@ struct InstructionSchedHintsRewriter
                                .Case("iglp1", SchedulingType::IGLP1)
                                .Case("ck_v3", SchedulingType::CK_V3)
                                .Default(SchedulingType::UNKNOWN);
+
+    if (this->numStages < 2) {
+      this->schedulingType = SchedulingType::NONE;
+      llvm::dbgs() << "[" << getDebugName() << "]: "
+                   << "ignoring instruction scheduling due to a very low num. "
+                      "stages value. Must be >= 2\n";
+    }
   }
 
   enum class SchedulingType : uint32_t {
@@ -160,6 +186,11 @@ struct InstructionSchedHintsRewriter
     const uint32_t numBufferLoadInstB =
         schedHint.getNumGlobalLoadsB().getValue();
 
+    assert(numBufferLoadInstA &&
+           "buffer load count for tile A must be initialized");
+    assert(numBufferLoadInstB &&
+           "buffer load count for tile B must be initialized");
+
     const uint32_t numMfmaInst = schedHint.getNumMMAs().getValue();
 
     auto mfmaType = cast<RankedTensorType>(schedHint.getNumMMAs().getType());
@@ -184,7 +215,7 @@ struct InstructionSchedHintsRewriter
 
     // stage 1
     const auto numMfmaStage1 = numMfmaInst - (numDsreadAMfma + numDsreadBMfma);
-    const auto num_mfma_per_issue =
+    const auto numMfmaPerIssue =
         numMfmaStage1 / (numBufferLoadInstA + numBufferLoadInstB);
 
     const auto numDswritePerIssueA = numDsWriteInstA / numBufferLoadInstA;
@@ -203,7 +234,7 @@ struct InstructionSchedHintsRewriter
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
       createSchedGroupBarrier(rewriter, loc,
                               mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
-                              num_mfma_per_issue - numDswritePerIssueA, 0);
+                              numMfmaPerIssue - numDswritePerIssueA, 0);
     }
 
     for (size_t i = 0; i < numBufferLoadInstB; ++i) {
@@ -219,7 +250,7 @@ struct InstructionSchedHintsRewriter
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
       createSchedGroupBarrier(rewriter, loc,
                               mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
-                              num_mfma_per_issue - numDswritePerIssueB, 0);
+                              numMfmaPerIssue - numDswritePerIssueB, 0);
     }
 
     // stage 2
@@ -308,6 +339,7 @@ struct InstructionSchedHintsRewriter
   }
 
 private:
+  int32_t numStages;
   SchedulingType schedulingType;
 };
 
@@ -315,7 +347,9 @@ struct TritonAMDGPULowerInstructionSchedHints
     : public triton::impl::TritonAMDGPULowerInstructionSchedHintsBase<
           TritonAMDGPULowerInstructionSchedHints> {
 
-  explicit TritonAMDGPULowerInstructionSchedHints(std::string variant) {
+  explicit TritonAMDGPULowerInstructionSchedHints(int32_t numStages,
+                                                  std::string variant) {
+    this->numStages = numStages;
     this->variant = variant;
   }
 
@@ -331,7 +365,8 @@ struct TritonAMDGPULowerInstructionSchedHints
     target.addLegalOp<ROCDL::SchedGroupBarrier>();
 
     RewritePatternSet patterns(ctx);
-    patterns.add<InstructionSchedHintsRewriter>(ctx, this->variant);
+    patterns.add<InstructionSchedHintsRewriter>(ctx, this->numStages,
+                                                this->variant);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns)))) {
@@ -343,24 +378,22 @@ struct TritonAMDGPULowerInstructionSchedHints
 struct TritonAMDGPUInsertInstructionSchedHints
     : public triton::impl::TritonAMDGPUInsertInstructionSchedHintsBase<
           TritonAMDGPUInsertInstructionSchedHints> {
+
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
 
     mod.walk([this, ctx](scf::ForOp forOp) {
-      triton::DotOp dot = nullptr;
-      size_t dotCounter = 0;
-      forOp->walk([&dot, &dotCounter](triton::DotOp op) {
-        dot = op;
-        ++dotCounter;
-      });
+      auto maybeSingleDotOp = hasSingleDotOp(forOp);
+
       // Note, instruction schedule barriers are inserted only in the case of
       // a single `tt.dot` op in a `scf::ForOp` scope in the current
       // implementation.
-      if (dotCounter == 1) {
+      if (llvm::succeeded(maybeSingleDotOp)) {
+        triton::DotOp dotOp = maybeSingleDotOp.value();
         mlir::OpBuilder rewriter(ctx);
-        rewriter.setInsertionPointAfter(dot);
-        rewriter.create<triton::amdgpu::InstructionSchedHint>(dot->getLoc());
+        rewriter.setInsertionPointAfter(dotOp);
+        rewriter.create<triton::amdgpu::InstructionSchedHint>(dotOp->getLoc());
       }
     });
   }
@@ -369,8 +402,10 @@ struct TritonAMDGPUInsertInstructionSchedHints
 
 namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPULowerInstructionSchedHintsPass(std::string variant) {
-  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(variant);
+createTritonAMDGPULowerInstructionSchedHintsPass(int32_t numStages,
+                                                 std::string variant) {
+  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(numStages,
+                                                                  variant);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

@@ -2,6 +2,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -172,7 +173,6 @@ void StreamPipeliner::createStreamCopy(
 
   if (auto attr = loadOp->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic())) {
     storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
-    // sharedLoad->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
   }
 
   loadOp->replaceAllUsesWith(result);
@@ -368,17 +368,15 @@ FailureOr<Operation *> rewindUnaryOps(Value value) {
   return failure();
 }
 
+// Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
+// index. Note, this is a part of the instruction scheduling routine. Currently,
+// we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
 void StreamPipeliner::labelLoadOpsForTritonDot() {
   mlir::MLIRContext *ctx = forOp->getContext();
+  auto maybeSingleDotOp = triton::hasSingleDotOp(forOp);
 
-  triton::DotOp dotOp;
-  size_t dotCounter = 0;
-  forOp->walk([&dotCounter, &dotOp](triton::DotOp op) {
-    dotOp = op;
-    ++dotCounter;
-  });
-
-  if (dotCounter == 1) {
+  if (llvm::succeeded(maybeSingleDotOp)) {
+    triton::DotOp dotOp = maybeSingleDotOp.value();
     for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
       auto maybeLoadOp = rewindUnaryOps<triton::LoadOp>(dotOperand);
       if (llvm::succeeded(maybeLoadOp)) {
