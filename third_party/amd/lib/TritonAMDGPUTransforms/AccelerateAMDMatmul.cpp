@@ -630,14 +630,18 @@ public:
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
 
-    auto newAType = RankedTensorType::get(
-        aShape, operandTypes[0],
-        ttg::DotOperandEncodingAttr::get(
-            ctx, 0, wmmaEnc, wmmaEnc.getSizePerThreadForOperands(0)[rank - 1]));
-    auto newBType = RankedTensorType::get(
-        bShape, operandTypes[1],
-        ttg::DotOperandEncodingAttr::get(
-            ctx, 1, wmmaEnc, wmmaEnc.getSizePerThreadForOperands(1)[rank - 2]));
+    auto newAType =
+        RankedTensorType::get(aShape, operandTypes[0],
+                              ttg::DotOperandEncodingAttr::get(
+                                  ctx, 0, wmmaEnc,
+                                  wmmaEnc.getSizePerThreadForOperand(
+                                      /*kWidth=*/0, /*opIdx=*/0)[rank - 1]));
+    auto newBType =
+        RankedTensorType::get(bShape, operandTypes[1],
+                              ttg::DotOperandEncodingAttr::get(
+                                  ctx, 1, wmmaEnc,
+                                  wmmaEnc.getSizePerThreadForOperand(
+                                      /*kWidth=*/0, /*opIdx=*/1)[rank - 2]));
 
     Value castedA = convertAndCastTensor(rewriter, a, newAType.getEncoding(),
                                          operandTypes[0]);

@@ -22,7 +22,7 @@ repos:
       - id: ruff
         files: '^python/.*'
         args: ["--fix", "--line-length", "120"]
-        stages: [commit, push, manual]
+        stages: [pre-commit, pre-push, manual]
         exclude: |
           (?x)(
             ^python/triton/runtime/.*|
@@ -35,14 +35,14 @@ repos:
     hooks:
       - id: yapf
         args: ["-p", "-i"]
-        stages: [commit, push, manual]
+        stages: [pre-commit, pre-push, manual]
         exclude: "python/test/unit/language/test_line_info.py"
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v16.0.6
     hooks:
       - id: clang-format
-        stages: [commit, push, manual]
+        stages: [pre-commit, pre-push, manual]
 
   # Expand YAML anchors in files used by github workflows, because github can't
   # do this itself.  This lets us use anchors, which avoids code duplication.

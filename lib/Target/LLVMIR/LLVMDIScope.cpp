@@ -104,7 +104,8 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
     auto subprogramAttr = LLVM::DISubprogramAttr::get(
         context, distinctId, compileUnitAttr, fileAttr, funcNameAttr,
         funcNameAttr, fileAttr, /*line=*/line, /*scopeline=*/line,
-        subprogramFlags, subroutineTypeAttr, /*retainNodes=*/{});
+        subprogramFlags, subroutineTypeAttr, /*retainNodes=*/{},
+        /*annotations=*/{});
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 
