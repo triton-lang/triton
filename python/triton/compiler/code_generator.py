@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor, str_to_ty
-from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type
+from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, _value
 from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
@@ -45,6 +45,10 @@ def mangle_fn(name, arg_tys, constants):
     mangled_constants = mangled_constants.replace('[', '_').replace(']', '_')
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
+
+
+def _is_triton_value(o: Any) -> bool:
+    return isinstance(o, _value)
 
 
 def _is_triton_tensor(o: Any) -> bool:
@@ -188,8 +192,8 @@ class ContainsReturnChecker(ast.NodeVisitor):
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, attributes, constants, function_name, jit_fn: JITFunction, options,
-                 codegen_fns, module_map, debug=None, module=None, is_kernel=False,
-                 function_types: Optional[Dict] = None, noinline=False, file_name: Optional[str] = None, begin_line=0):
+                 codegen_fns, module_map, module=None, is_kernel=False, function_types: Optional[Dict] = None,
+                 noinline=False, file_name: Optional[str] = None, begin_line=0):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
@@ -225,7 +229,6 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.cur_node = None
-        self.debug = options.debug if debug is None else debug
         self.noinline = noinline
         self.scf_stack = []
         self.ret_type = None
@@ -357,10 +360,6 @@ class CodeGenerator(ast.NodeVisitor):
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
-        # ret_block = self.builder.create_block()
-        # post_ret_block = self.builder.create_block()
-        # self.builder.create_branch(ret_block)
-        # self.builder.set_insertion_point_to_end(ret_block)
         if ret_value is None:
             self.builder.ret([])
             ret_ty = language.void
@@ -373,13 +372,16 @@ class CodeGenerator(ast.NodeVisitor):
             ret = language.semantic.to_tensor(ret_value, self.builder)
             self.builder.ret([ret.handle])
             ret_ty = ret.type
-        # self.builder.create_branch(post_ret_block)
-        # self.builder.set_insertion_point_to_end(post_ret_block)
 
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
             raise TypeError(f'Inconsistent return types: {self.ret_type} and {ret_ty}')
+
+        # A return op must always terminate the basic block, so we create a dead
+        # basic block in case there are any ops after the return.
+        post_ret_block = self.builder.create_block()
+        self.builder.set_insertion_point_to_end(post_ret_block)
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -436,22 +438,24 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.set_insertion_point_to_start(entry)
         # visit function body
         self.visit_compound_statement(node.body)
+
         # finalize function
+        assert not self.builder.get_insertion_block().has_terminator()
         if self.ret_type is None or self.ret_type == language.void:
             self.ret_type = language.void
             self.builder.ret([])
         else:
-            # update return type
-            if isinstance(self.ret_type, tuple):
-                self.prototype.ret_types = list(self.ret_type)
-                self.fn.reset_type(self.prototype.to_ir(self.builder))
-            else:
-                self.prototype.ret_types = [self.ret_type]
-                self.fn.reset_type(self.prototype.to_ir(self.builder))
+            self.prototype.ret_types = list(self.ret_type) if isinstance(self.ret_type, tuple) else [self.ret_type]
+            self.fn.reset_type(self.prototype.to_ir(self.builder))
+            self.builder.ret([
+                self.builder.create_poison(ty.to_ir(self.builder))
+                for ty in self.prototype.ret_types
+                if self.ret_type is not None
+            ])
+        self.fn.finalize()
+
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
-        # Remove dead code
-        self.fn.finalize()
 
     def visit_arguments(self, node):
         arg_names = []
@@ -501,7 +505,7 @@ class CodeGenerator(ast.NodeVisitor):
             # by default, constexpr are assigned into python variable
             value = _unwrap_if_constexpr(value)
             if value is not None and \
-               not _is_triton_tensor(value) and \
+               not _is_triton_value(value) and \
                not isinstance(value, native_nontensor_types):
                 value = language.semantic.to_tensor(value, self.builder)
             self.set_value(name, value)
@@ -618,40 +622,35 @@ class CodeGenerator(ast.NodeVisitor):
         return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
 
     def visit_if_top_level(self, cond, node):
-        has_endif_block = True
         with enter_sub_region(self) as sr:
             liveins, ip_block = sr
             then_block = self.builder.create_block()
             else_block = self.builder.create_block()
-            # create basic-block after conditional
-            endif_block = self.builder.create_block()
             # create branch
             self.builder.set_insertion_point_to_end(ip_block)
             self.builder.create_cond_branch(cond.handle, then_block, else_block)
             # visit then and else blocks
             then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types = \
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            # create basic-block after conditional
+            endif_block = self.builder.create_block()
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
-            if then_block.has_return() and else_block.has_return():
-                has_endif_block = False
-                endif_block.erase()
-            if not then_block.has_terminator() and has_endif_block:
-                self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
+            assert not then_block.has_terminator(), f"{then_block}"
+            self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
             # else terminator
             self.builder.set_insertion_point_to_end(else_block)
-            if not else_block.has_terminator() and has_endif_block:
-                self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
-            if has_endif_block:
-                for ty in ir_ret_types:
-                    endif_block.add_argument(ty)
-        if has_endif_block:
-            # change block
-            self.builder.set_insertion_point_to_start(endif_block)
-            # update value
-            for i, name in enumerate(names):
-                new_tensor = language.core.tensor(endif_block.arg(i), ret_types[i])
-                self.set_value(name, new_tensor)
+            assert not else_block.has_terminator(), f"{else_block}"
+            self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+            for ty in ir_ret_types:
+                endif_block.add_argument(ty)
+
+        # change block
+        self.builder.set_insertion_point_to_start(endif_block)
+        # update value
+        for i, name in enumerate(names):
+            new_tensor = language.core.tensor(endif_block.arg(i), ret_types[i])
+            self.set_value(name, new_tensor)
 
     # TODO: refactor
     def visit_if_scf(self, cond, node):
@@ -683,18 +682,19 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = self.visit(node.test)
+
         if _is_triton_tensor(cond):
             cond = cond.to(language.int1, _builder=self.builder)
             contains_return = ContainsReturnChecker(self.gscope).visit(node)
-            if self.scf_stack and contains_return:
-                raise self._unsupported(
-                    node, "Cannot have `return` statements inside `while` or `for` statements in triton "
-                    "(note that this also applies to `return` statements that are inside functions "
-                    "transitively called from within `while`/`for` statements)")
-            elif self.scf_stack or not contains_return:
-                self.visit_if_scf(cond, node)
-            else:
+            if contains_return:
+                if self.scf_stack:
+                    raise self._unsupported(
+                        node, "Cannot have `return` statements inside `while` or `for` statements in triton "
+                        "(note that this also applies to `return` statements that are inside functions "
+                        "transitively called from within `while`/`for` statements)")
                 self.visit_if_top_level(cond, node)
+            else:
+                self.visit_if_scf(cond, node)
         else:
             cond = _unwrap_if_constexpr(cond)
             # not isinstance - we insist the real thing, no subclasses and no ducks
@@ -703,10 +703,9 @@ class CodeGenerator(ast.NodeVisitor):
                     node, "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
                         ', '.join(_.__name__ for _ in _condition_types),
                         type(cond).__name__))
-            if cond:
-                self.visit_compound_statement(node.body)
-            else:
-                self.visit_compound_statement(node.orelse)
+
+            active_block = node.body if cond else node.orelse
+            self.visit_compound_statement(active_block)
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
@@ -802,6 +801,15 @@ class CodeGenerator(ast.NodeVisitor):
         ast.USub: '__neg__', ast.UAdd: '__pos__', ast.Not: '__not__', ast.Invert: '__invert__'
     }
 
+    def _verify_loop_carried_variable(self, name, loop_val, live_val):
+        assert _is_triton_value(loop_val), f'cannot reassign constxpr {name} in the loop'
+        assert _is_triton_value(live_val), f'cannot reasign constexpr {name} in the loop'
+        assert type(loop_val) == type(live_val), f'Loop carried variable {name} changed type'
+        assert not _is_triton_tensor(loop_val) or loop_val.type == live_val.type, \
+            f'Loop-carried variable {name} has initial type {live_val.type} '\
+            f'but is re-assigned to {loop_val.type} in loop! '\
+            f'Please make sure that the type stays consistent.'
+
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -824,17 +832,14 @@ class CodeGenerator(ast.NodeVisitor):
             for name in loop_defs:
                 if name in liveins:
                     # We should not def new constexpr
-                    assert _is_triton_tensor(loop_defs[name]), f'cannot reassign constxpr {name} in the loop'
-                    assert _is_triton_tensor(liveins[name]), f'cannot reasign constexpr {name} in the loop'
-                    assert loop_defs[name].type == liveins[name].type, \
-                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
-                        f'but is re-assigned to {loop_defs[name].type} in loop! '\
-                        f'Please make sure that the type stays consistent.'
+                    loop_val = loop_defs[name]
+                    live_val = liveins[name]
+                    self._verify_loop_carried_variable(name, loop_val, live_val)
 
                     # these are loop-carried values
                     names.append(name)
-                    ret_types.append(loop_defs[name].type)
-                    init_args.append(liveins[name])
+                    ret_types.append(loop_val.type)
+                    init_args.append(live_val)
 
             self._set_insertion_point_and_loc(ip, last_loc)
             while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
@@ -949,7 +954,7 @@ class CodeGenerator(ast.NodeVisitor):
         ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
         step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
         # Create placeholder for the loop induction variable
-        iv = self.builder.create_undef(iv_ir_type)
+        iv = self.builder.create_poison(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv, iv_type))
 
         with enter_sub_region(self) as sr:
@@ -972,16 +977,13 @@ class CodeGenerator(ast.NodeVisitor):
             names = []
             for name in self.local_defs:
                 if name in liveins:
-                    assert _is_triton_tensor(self.local_defs[name]), f'cannot reassign constxpr {name} in the loop'
-                    assert _is_triton_tensor(liveins[name]), f'cannot reassign constxpr {name} in the loop'
-                    assert self.local_defs[name].type == liveins[name].type, \
-                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
-                        f'but is re-assigned to {self.local_defs[name].type} in loop! '\
-                        f'Please make sure that the type stays consistent.'
+                    loop_val = self.local_defs[name]
+                    live_val = liveins[name]
+                    self._verify_loop_carried_variable(name, loop_val, live_val)
 
                     names.append(name)
-                    init_args.append(language.semantic.to_tensor(liveins[name], self.builder))
-                    yields.append(language.semantic.to_tensor(self.local_defs[name], self.builder))
+                    init_args.append(live_val)
+                    yields.append(loop_val)
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1041,17 +1043,14 @@ class CodeGenerator(ast.NodeVisitor):
         return node.arg, self.visit(node.value)
 
     def visit_Assert(self, node) -> Any:
-        if not self.debug:
-            return
         test = self.visit(node.test)
         msg = self.visit(node.msg) if node.msg is not None else ""
-        # Convert assert to triton's device_assert which happens on the device
         return language.core.device_assert(test, msg, _builder=self.builder)
 
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
-        args = [arg if _is_triton_tensor(arg) else constexpr(arg) for arg in args]
+        args = [arg if _is_triton_value(arg) else constexpr(arg) for arg in args]
         # generate function def
         attributes = {}
         constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
@@ -1067,12 +1066,11 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            debug = self.debug if fn.debug is None else fn.debug
             generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map, debug=debug)
+                                      module_map=self.builder.module_map)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1104,13 +1102,10 @@ class CodeGenerator(ast.NodeVisitor):
 
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
-        # TODO: this should not be so hardcoded
-        if fn is language.core.device_assert and not self.debug:
-            return
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
-        if (hasattr(fn, '__self__') and _is_triton_tensor(fn.__self__)) or language.core.is_builtin(fn):
+        if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
             extra_kwargs = {"_builder": self.builder}
             sig = inspect.signature(fn)
             if '_generator' in sig.parameters:

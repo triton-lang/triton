@@ -26,15 +26,23 @@
 #define TRITON_AMDGPU_OPS
 
 include "mlir/IR/OpBase.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/EnumAttr.td"
+include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
 
 class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])> {
 }
+
+//
+// Interfaces
+//
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 
 def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   let summary = "A placeholder op for instruction scheduling hints within a basic block";
@@ -50,6 +58,75 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   }];
 
   let assemblyFormat = [{attr-dict}];
+}
+
+//
+// AMD Buffer operations.
+//
+def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
+  SameLoadStoreOperandsAndResultEncoding,
+  AttrSizedOperandSegments,
+  MemoryEffects<[MemRead<GlobalMemory>]>,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">,
+  TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+]>{
+    let summary = "Load from a scalar base pointer and a tensor offset";
+    let description = [{
+      AMD Buffer load operation. Buffer store is similar to
+      a normal store but it accesses global memory via a scalar base pointer
+      and a tensor of offsets instead of a tensor of pointers. The other fields
+      are similar to a normal load, i.e., the `mask` is a boolean vector that
+      determines if a given element should be read from memory, and `other` is the
+      element that should be returned on lane `i` when `mask[i] == 0`.
+    }];
+    let arguments = (
+      ins
+      TT_Ptr:$ptr,
+      I32Tensor:$offsets,
+      Optional<TT_BoolTensor>:$mask,
+      Optional<TT_Tensor>:$other
+    );
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = [{
+      $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
+      attr-dict `:` type($result)
+    }];
+}
+
+def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
+  SameLoadStoreOperandsEncoding,
+  MemoryEffects<[MemWrite<GlobalMemory>]>,
+  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+]>{
+    let summary = "Store into scalar base pointer and a tensor offset";
+    let description = [{
+      AMD Buffer store operation. Buffer store is similar to
+      normal store but it accesses global memory via a scalar base pointer
+      and a tensor of offsets instead of a tensor of pointers. The other fields
+      are similar to a normal store , i.e., the `mask` is a boolean vector that
+      determines if a given element should be written to memory, and `value` is the
+      tensor of elements that should be written on lane `i` when `mask[i] == 1`.
+    }];
+    let arguments = (
+      ins
+      TT_Tensor:$value,
+      TT_Ptr:$ptr,
+      I32Tensor:$offsets,
+      Optional<TT_BoolTensor>:$mask
+    );
+
+    let assemblyFormat = [{
+      $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+      attr-dict `:` type($value)
+    }];
 }
 
 #endif

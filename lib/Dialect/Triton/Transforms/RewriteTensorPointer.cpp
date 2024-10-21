@@ -370,9 +370,11 @@ public:
     }
 
     // update rewritedInfo
+    auto opResults = op.getResults();
     unsigned oldResIdx = 0, newResIdx = 0;
     while (oldResIdx < results.size()) {
       if (!triton::isTensorPointerType(results[oldResIdx].getType())) {
+        opResults[oldResIdx].replaceAllUsesWith(newOp.getResult(newResIdx));
         oldResIdx++;
         newResIdx++;
       } else {

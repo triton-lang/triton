@@ -97,10 +97,12 @@ tt.func @sub() {
   %1 = arith.constant dense<1> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [128], divisibility = [1], constancy = [1], constant_value = <none>
   %2 = arith.subi %0, %1 : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %3 = arith.subi %1, %0 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = 129
-  %3 = arith.constant dense<129> : tensor<128xi32>
+  %4 = arith.constant dense<129> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [128], constancy = [128], constant_value = 128
-  %4 = arith.subi %3, %1 : tensor<128xi32>
+  %5 = arith.subi %4, %1 : tensor<128xi32>
   tt.return
 }
 

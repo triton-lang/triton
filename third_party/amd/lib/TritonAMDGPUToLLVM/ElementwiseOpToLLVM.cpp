@@ -1243,7 +1243,7 @@ struct ExpOpConversionApprox
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
 
-    return {rewriter.create<LLVM::CallOp>(loc, funcOp, prod).getResult()};
+    return {LLVM::createLLVMCallOp(rewriter, loc, funcOp, prod).getResult()};
   }
 };
 
@@ -1276,7 +1276,7 @@ struct Exp2OpConversion
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
 
     return {
-        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
   }
 
 private:

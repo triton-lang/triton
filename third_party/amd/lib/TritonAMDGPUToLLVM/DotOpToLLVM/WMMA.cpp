@@ -24,6 +24,7 @@
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton::AMD {
 namespace {
@@ -219,10 +220,8 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   if (32 / dElType.getIntOrFloatBitWidth() > 1 || dElType.isInteger(32)) {
     operands.push_back(int_val(1, false));
   }
-  auto wmmaIntrinsic = rewriter.create<mlir::LLVM::CallIntrinsicOp>(
-      loc, TypeRange{valC.getType()}, StringAttr::get(loc.getContext(), name),
-      operands, defaultFlags);
-
+  auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
+      rewriter, loc, name, valC.getType(), operands);
   return wmmaIntrinsic.getResult(0);
 }
 
@@ -264,9 +263,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   int kWidth = aEncoding.getKWidth();
 
   auto repA =
-      wmmaLayout.getRepForOperands(aTensorTy.getShape(), elemTy, kWidth, 0);
+      wmmaLayout.getRepForOperand(aTensorTy.getShape(), elemTy, kWidth, 0);
   auto repB =
-      wmmaLayout.getRepForOperands(bTensorTy.getShape(), elemTy, kWidth, 1);
+      wmmaLayout.getRepForOperand(bTensorTy.getShape(), elemTy, kWidth, 1);
 
   assert(repA[2] == repB[1]);
 

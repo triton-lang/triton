@@ -3,7 +3,6 @@ add_triton_library(TritonAMDGPUTransforms
   CanonicalizePointers.cpp
   OptimizeEpilogue.cpp
   ReorderInstructions.cpp
-  StreamPipeline.cpp
   StreamPipelineV2.cpp
   MfmaGroup.cpp
 
