@@ -186,8 +186,8 @@ private:
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
     for (Value result : op->getResults()) {
-      auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>();
-      if (alloc && alloc.isSharedMemoryAlloc()) {
+      if (auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>();
+          alloc && alloc.isSharedMemoryAlloc()) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto allocType = alloc.getType();

@@ -1,4 +1,6 @@
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/TypeUtilities.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -9,6 +11,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -282,13 +285,44 @@ struct ExperimentalTensormapCreateOpConversion
   }
 };
 
+struct GlobalScratchAllocOpConversion
+    : public ConvertOpToLLVMPattern<nvidia_gpu::GlobalScratchAllocOp> {
+  const NVIDIA::TargetInfo &targetInfo;
+  GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 const NVIDIA::TargetInfo &targetInfo,
+                                 PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(nvidia_gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    auto opOffsetAttr = op.getOperation()->getAttrOfType<mlir::IntegerAttr>(
+        "triton_nvidia_gpu.global_scratch_memory_offset");
+    assert(opOffsetAttr);
+    auto opOffset = opOffsetAttr.getValue().getZExtValue();
+
+    auto funcOp = op.getOperation()->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!funcOp) {
+      return failure();
+    }
+    Value ptr =
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+
+    rewriter.replaceOp(op, ptr);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ExperimentalTensormapCreateOpConversion>(typeConverter,
-                                                        targetInfo, benefit);
+  patterns.add<ExperimentalTensormapCreateOpConversion,
+               GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
+                                               benefit);
   patterns.add<ExperimentalTensormapFenceproxyAcquireOpConversion>(
       typeConverter, benefit);
 }
