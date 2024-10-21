@@ -1,3 +1,4 @@
+#include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
@@ -104,12 +105,12 @@ struct LoadStoreConversionBase {
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   // Createa a LLVM vector of type `vecTy` containing all zeros
-  Value createZeroVector(ConversionPatternRewriter &rewriter, Location loc,
+  Value createZeroVector(OpBuilder &builder, Location loc,
                          VectorType vecTy) const {
-    mlir::Attribute zeroAttr = rewriter.getZeroAttr(vecTy.getElementType());
+    mlir::Attribute zeroAttr = builder.getZeroAttr(vecTy.getElementType());
     auto denseValue =
         DenseElementsAttr::get(cast<mlir::ShapedType>(vecTy), zeroAttr);
-    Value zeroVal = rewriter.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
+    Value zeroVal = builder.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
     return zeroVal;
   }
 
@@ -137,8 +138,7 @@ struct LoadStoreConversionBase {
   Type getPointerTypeWithShape(Value basePtr, Value offset) const {
     Type basePtrType = basePtr.getType();
     auto offsetType = cast<RankedTensorType>(offset.getType());
-    return RankedTensorType::get(offsetType.getShape(), basePtrType,
-                                 offsetType.getEncoding());
+    return offsetType.cloneWith(std::nullopt, basePtrType);
   }
 
   // Get contiguity for a tensor pointer `ptr`

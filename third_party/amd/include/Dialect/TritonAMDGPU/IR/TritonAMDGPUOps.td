@@ -61,15 +61,13 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
 }
 
 //
-// AMD Buffer operations. Buffer operations are similar to normal memory
-// operations but access global memory via a scalar base pointer and a tensor of
-// offsets instead of a tensor of pointers.
+// AMD Buffer operations.
 //
 def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
   MemoryEffects<[MemRead<GlobalMemory>]>,
-  TypesMatchWith<"scalar type of result matches the pointed type", "result", "ptr", "getPointerTypeScalar($_self)">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "($_op.getOperands().size() <= 2) || std::equal_to<>()">,
@@ -77,6 +75,14 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
                  "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
 ]>{
     let summary = "Load from a scalar base pointer and a tensor offset";
+    let description = [{
+      AMD Buffer load operation. Buffer store is similar to
+      a normal store but it accesses global memory via a scalar base pointer
+      and a tensor of offsets instead of a tensor of pointers. The other fields
+      are similar to a normal load, i.e., the `mask` is a boolean vector that
+      determines if a given element should be read from memory, and `other` is the
+      element that should be returned on lane `i` when `mask[i] == 0`.
+    }];
     let arguments = (
       ins
       TT_Ptr:$ptr,
@@ -95,12 +101,20 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   SameLoadStoreOperandsEncoding,
   MemoryEffects<[MemWrite<GlobalMemory>]>,
-  TypesMatchWith<"the scalar type of value matches the pointed type", "value", "ptr", "getPointerTypeScalar($_self)">,
+  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
 ]>{
     let summary = "Store into scalar base pointer and a tensor offset";
+    let description = [{
+      AMD Buffer store operation. Buffer store is similar to
+      normal load but it accesses global memory via a scalar base pointer
+      and a tensor of offsets instead of a tensor of pointers. The other fields
+      are similar to a normal load, i.e., the `mask` is a boolean vector that
+      determines if a given element should be writting to memory, and `value` is the
+      element that should be written on lane `i` when `mask[i] == 1`.
+    }];
     let arguments = (
       ins
       TT_Tensor:$value,

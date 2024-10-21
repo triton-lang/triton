@@ -158,7 +158,7 @@ Type getPointerTypeSameShape(Type type) {
   }
 }
 
-Type getPointerTypeScalar(Type type) {
+Type getPointerTypeToElement(Type type) {
   Type elementType = getElementTypeOrSelf(type);
   PointerType ptrType = PointerType::get(elementType, 1);
   return ptrType;
