@@ -24,12 +24,12 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/SourceMgr.h"
 
 namespace {
@@ -494,10 +494,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_entry_func_name",
            [](ModuleOp &self) -> std::string {
              for (auto &op : self.getOps()) {
-              if (auto func = dyn_cast<FuncOp>(op)) {
-                if (LLVM::isKernel(func))
-                  return func.getName().str();
-              }
+               if (auto func = dyn_cast<FuncOp>(op)) {
+                 if (LLVM::isKernel(func))
+                   return func.getName().str();
+               }
              }
              return "";
            })
