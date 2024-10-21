@@ -16,7 +16,7 @@ add_triton_library(TritonToTritonCPU
 
     DEPENDS
     TritonToTritonCPUPassIncGen
-    MLIRScalarizeInterfaceIncGen
+    ScalarizeInterfaceIncGen
     MLIRDialectUtils
 
     LINK_LIBS PUBLIC
