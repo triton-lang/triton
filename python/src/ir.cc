@@ -29,6 +29,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/SourceMgr.h"
 
 namespace {
@@ -490,12 +491,13 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, FuncOp &funcOp) -> void {
              self.push_back(funcOp);
            })
-      .def("get_first_func_name",
+      .def("get_entry_func_name",
            [](ModuleOp &self) -> std::string {
              for (auto &op : self.getOps()) {
-               if (auto func = dyn_cast<FuncOp>(op)) {
-                 return func.getName().str();
-               }
+              if (auto func = dyn_cast<FuncOp>(op)) {
+                if (LLVM::isKernel(func))
+                  return func.getName().str();
+              }
              }
              return "";
            })
@@ -529,7 +531,6 @@ void init_triton_ir(py::module &&m) {
                  Attribute attr = attributes[i];
                  // Check for tt.nv_tma_desc = 1
                  if (auto dAttr = dyn_cast<DictionaryAttr>(attr)) {
-                   ArrayRef<NamedAttribute> dictVals = dAttr.getValue();
                    if (dAttr.contains("tt.nv_tma_desc")) {
                      strVec.push_back("nvTmaDesc");
                      continue;

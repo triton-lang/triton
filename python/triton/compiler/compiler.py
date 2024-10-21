@@ -107,7 +107,7 @@ class IRSource:
             self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
         else:
             self.module = ir.parse_mlir_module(self.path, context)
-            fn_name = self.module.get_first_func_name()
+            fn_name = self.module.get_entry_func_name()
             self.name = "@" + fn_name
             funcOp = self.module.get_function(fn_name)
             func_ty = self.module.get_function_signature(funcOp)
