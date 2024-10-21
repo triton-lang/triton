@@ -44,6 +44,13 @@ public:
         return;
       if (!cvtNeedsSharedMemory(srcType, dstType))
         return;
+      // FIXME [Dot LL]
+      // We support this one via LLs, as the LocalLoad path is buggy
+      bool largeKWidth =
+          dstDotOp.getKWidth() * dstType.getElementTypeBitWidth() > 64;
+      if (largeKWidth) {
+        return;
+      }
       auto srcOrder = triton::gpu::getOrder(srcEncoding);
       auto rank = srcOrder.size();
       SmallVector<unsigned> sharedOrder;
