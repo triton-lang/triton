@@ -56,13 +56,13 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
       //
       //   [0], [2], [1], [3], [4], [6], [5], [7]
       ret.push_back(values[i]);
-      ret.push_back(values[i + 3]);
       ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 3]);
       ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 6]);
       ret.push_back(values[i + 5]);
       ret.push_back(values[i + 7]);
-      ret.push_back(values[i + 6]);
-      ret.push_back(values[i + 8]);
     }
     return ret;
   }
