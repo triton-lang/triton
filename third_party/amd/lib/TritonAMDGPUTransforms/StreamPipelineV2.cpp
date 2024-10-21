@@ -1,6 +1,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -72,6 +73,7 @@ public:
   void scheduleDependencies();
   void scheduleDistanceOneDependencies();
   void scheduleRemainingToLastStage(tt::CoarseSchedule::Cluster afterPrologue);
+  void labelLoadOpsForTritonDot();
 
   bool preprocessLoopAndBuildSchedule();
   bool pipelineLoop();
@@ -166,6 +168,11 @@ void StreamPipeliner::createStreamCopy(
     auto select = builder.create<arith::SelectOp>(
         loc, loadOp.getType(), mask, sharedLoad.getResult(), other);
     result = select->getResults();
+  }
+
+  if (auto attr = loadOp->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic())) {
+    storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
+    // sharedLoad->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
   }
 
   loadOp->replaceAllUsesWith(result);
@@ -334,6 +341,52 @@ void StreamPipeliner::assignMemoryLayouts() {
     }
 
     loadToInfo[op] = loadInfo;
+  }
+}
+
+// Go through a single use chain to get the result of the target op after all
+// unary ops - e.g., `convert_layout`, `fp_to_fp`, etc.
+template <typename TargetOpType>
+FailureOr<Operation *> rewindUnaryOps(Value value) {
+  auto getNextUnaryOps = [](Value value) -> FailureOr<Operation *> {
+    auto defOp = value.getDefiningOp();
+    if (isa<BlockArgument>(value))
+      return failure();
+    if (defOp->getNumOperands() == 1)
+      return defOp;
+    return failure();
+  };
+
+  auto maybeUnaryOp = getNextUnaryOps(value);
+  while (llvm::succeeded(maybeUnaryOp)) {
+    auto unaryOp = maybeUnaryOp.value();
+    if (llvm::dyn_cast<TargetOpType>(unaryOp))
+      return unaryOp;
+
+    maybeUnaryOp = getNextUnaryOps(unaryOp->getOperand(0));
+  }
+  return failure();
+}
+
+void StreamPipeliner::labelLoadOpsForTritonDot() {
+  mlir::MLIRContext *ctx = forOp->getContext();
+
+  triton::DotOp dotOp;
+  size_t dotCounter = 0;
+  forOp->walk([&dotCounter, &dotOp](triton::DotOp op) {
+    dotOp = op;
+    ++dotCounter;
+  });
+
+  if (dotCounter == 1) {
+    for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
+      auto maybeLoadOp = rewindUnaryOps<triton::LoadOp>(dotOperand);
+      if (llvm::succeeded(maybeLoadOp)) {
+        auto loadOp = maybeLoadOp.value();
+        auto opIdxAttr = triton::amdgpu::OpIdxAttr::get(ctx, opIdx);
+        loadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
+      }
+    }
   }
 }
 
@@ -594,6 +647,8 @@ void StreamPipeliner::createStreamOps() {
 }
 
 bool StreamPipeliner::preprocessLoopAndBuildSchedule() {
+  labelLoadOpsForTritonDot();
+
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
   // a scaffold for the final schedule.
   DenseSet<Operation *> rootUsers;
