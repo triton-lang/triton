@@ -87,8 +87,8 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
       return;
     auto srcBlocked =
         dyn_cast<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding());
-    auto dstDotOp =
-        dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
+    auto dstEncoding = dstType.getEncoding();
+    auto dstDotOp = dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstEncoding);
     if (srcBlocked && dstDotOp) {
       // FIXME [Dot LL]
       // We support this one via LLs, as the LocalLoad path is buggy
@@ -99,15 +99,21 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
           return;
         }
       }
-
+      auto srcOrder = triton::gpu::getOrder(srcBlocked);
+      auto rank = srcOrder.size();
+      SmallVector<unsigned> sharedOrder;
+      if (rank == 3) {
+        sharedOrder = gpu::getThreadOrder(dstEncoding);
+      } else {
+        sharedOrder = srcOrder;
+      }
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
       auto tmpType = MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
-              module.getContext(), dstDotOp, srcType.getShape(),
-              srcBlocked.getOrder(), srcBlocked.getCTALayout(),
-              srcType.getElementType()),
+              module.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
+              srcBlocked.getCTALayout(), srcType.getElementType()),
           sharedMemorySpace);
       auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
