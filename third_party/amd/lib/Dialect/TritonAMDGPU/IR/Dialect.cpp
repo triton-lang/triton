@@ -23,7 +23,6 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
-#include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/OpImplementation.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -57,7 +56,7 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 namespace mlir::triton::amdgpu {
 
-LogicalResult ViewSliceOp::verify() {
+LogicalResult ExtractSliceOp::verify() {
   auto srcTy = getSource().getType();
   auto srcLayout = srcTy.getEncoding();
   auto srcElementType = getElementTypeOrSelf(srcTy);
@@ -83,31 +82,18 @@ LogicalResult ViewSliceOp::verify() {
   shapePerCTA[0] = std::min(static_cast<unsigned>(srcShape[0]), shapePerCTA[0]);
   shapePerCTA[1] = std::min(static_cast<unsigned>(srcShape[1]), shapePerCTA[1]);
 
-  auto checkForConstInts = [](OpFoldResult ofr) {
-    return getConstantIntValue(ofr).has_value();
-  };
-
-  if (!llvm::all_of(getMixedOffsets(), checkForConstInts)) {
-    return emitError("currently only static offsets are supported");
-  }
-  if (!llvm::all_of(getMixedSizes(), checkForConstInts)) {
-    return emitError("currently only static sizes are supported");
-  }
-  if (!llvm::all_of(getMixedStrides(), checkForConstInts)) {
-    return emitError("currently only static strides are supported");
-  }
-
-  auto offsets = getStaticOffsets();
-  auto sizes = getStaticSizes();
-
-  // ViewSlice only supports slicing where offsets and sizes are multiples of
+  // ExtractSlice only supports slicing where offsets and sizes are multiples of
   // shapePerCTA. This condition ensures that slice has the same layout as the
   // original tensor.
 
-  if (offsets[0] % shapePerCTA[0] != 0 || offsets[1] % shapePerCTA[1] != 0) {
-    return emitError() << "offset [" << offsets
-                       << "] must be a multiple of shapePerCTA [" << shapePerCTA
-                       << "]";
+  SmallVector<int64_t, 2> sizes;
+  for (auto i = 0; i < 2; ++i) {
+    if (resultTy.getDimSize(i) > srcTy.getDimSize(i)) {
+      return emitError(
+                 "result shape cannot be larger than input shape at dimension ")
+             << i;
+    }
+    sizes.push_back(resultTy.getDimSize(i));
   }
 
   if (sizes[0] % shapePerCTA[0] != 0 || sizes[1] % shapePerCTA[1] != 0) {
@@ -116,9 +102,12 @@ LogicalResult ViewSliceOp::verify() {
                        << "]";
   }
 
-  if (!hasUnitStride()) {
-    return emitError("expected unit strides but found unsupported stride [")
-           << getStaticStrides() << "]";
+  auto offsets = getStaticOffsets();
+
+  if (offsets[0] % shapePerCTA[0] != 0 || offsets[1] % shapePerCTA[1] != 0) {
+    return emitError() << "offset [" << offsets
+                       << "] must be a multiple of shapePerCTA [" << shapePerCTA
+                       << "]";
   }
 
   return success();
