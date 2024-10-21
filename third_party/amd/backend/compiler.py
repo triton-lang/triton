@@ -279,7 +279,7 @@ class HIPBackend(BaseBackend):
         # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
         # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
         # for conditional branching around memory accesses.
-        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm)
+        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
