@@ -67,7 +67,7 @@ SmallVector<Value> swizzleIndices(ConversionPatternRewriter &rewriter,
   return swizzledIndices;
 }
 
-struct DimNumbers {
+struct DimIdx {
   unsigned batch;
   unsigned k;
   unsigned nonK;
@@ -82,7 +82,7 @@ void storeValuesInLinearVector(PatternRewriter &rewriter, Location loc,
                                SmallVector<Value> &opValues, Value vec,
                                ArrayRef<unsigned> perThreadTileShape,
                                unsigned kIdx, unsigned nonKIdx, unsigned bIdx,
-                               const DimNumbers &dim, int vecDim,
+                               const DimIdx &dim, int vecDim,
                                ArrayRef<unsigned> opOrder) {
   auto vecTy = cast<VectorType>(vec.getType());
   auto vectorSize = vecTy.getNumElements();
@@ -151,7 +151,7 @@ struct Indexes {
 /// Computes a linear memory offset of a given element relative to
 /// beginning of shared memory object.
 Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
-                            const Indexes &i, const DimNumbers &dim,
+                            const Indexes &i, const DimIdx &dim,
                             Value bTileOffset, Value nonKTileOffset,
                             unsigned shapePerCTABTile,
                             unsigned shapePerCTANonKTile,
@@ -185,8 +185,7 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
 /// first element loaded by a thread.
 Value computeNonSwizzledOffset(ConversionPatternRewriter &rewriter,
                                Location loc, const Indexes &i,
-                               const DimNumbers &dim,
-                               ArrayRef<int64_t> tensorShape,
+                               const DimIdx &dim, ArrayRef<int64_t> tensorShape,
                                unsigned shapePerCTABTile,
                                unsigned shapePerCTANonKTile,
                                ArrayRef<Value> strides) {
@@ -203,24 +202,35 @@ Value computeNonSwizzledOffset(ConversionPatternRewriter &rewriter,
   return offset;
 }
 
-Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
+/// Generates llvm IR for loading FMA dot operand from shared memory.
+///
+/// \param srcVal triton_gpu MemDescType value
+/// \param llVal llvm IR values corresponding to srcVal
+/// \param dLayout parent dot operand layout
+/// \param thread thread id
+/// \param loc
+/// \param typeConverter
+/// \param rewriter
+/// \param dotOpNo
+/// \returns llvm value with loaded elements
+Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
                 Value thread, Location loc,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, const int dotOpNo) {
   verifyCTALayout(dLayout.getCTALayout());
 
-  DimNumbers dim;
+  DimIdx dim;
   dim.batch = 0;
   dim.k = dotOpNo == 0 ? 2 : 1;
   dim.nonK = dotOpNo == 0 ? 1 : 2;
-  auto opTensorTy = cast<MemDescType>(dotOp.getType());
+  auto opTensorTy = cast<MemDescType>(srcVal.getType());
   auto opTensorShape = expandMatrixShapeWithBatch(opTensorTy.getShape());
   auto sharedLayout = cast<SharedEncodingAttr>(opTensorTy.getEncoding());
 
   auto opOrder = expandMatrixOrderWithBatch(dLayout.getOrder());
 
   auto origSmem = getSharedMemoryObjectFromStruct(
-      loc, llA, typeConverter->convertType(opTensorTy.getElementType()),
+      loc, llVal, typeConverter->convertType(opTensorTy.getElementType()),
       rewriter);
   auto smem = getExpandedSharedMemoryObject(rewriter, loc, origSmem,
                                             opTensorTy.getShape());
@@ -265,7 +275,11 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
   auto sharedOrder = expandMatrixOrderWithBatch(sharedLayout.getOrder());
   // compute contiguity of fastest dimension in shared layout.
   unsigned vectorSize = sizePerThread[sharedOrder[0]];
-  if (sharedLayout.getMaxPhase() > 1)
+  vectorSize = std::min(vectorSize, 128 / elemTy.getIntOrFloatBitWidth());
+
+  bool swizzlePath = isSwizzled(sharedLayout);
+
+  if (swizzlePath)
     vectorSize = std::min(vectorSize, sharedLayout.getVec());
   auto vecTy = vec_ty(elemTy, vectorSize);
   // loop increments depend on fastest dim
@@ -285,14 +299,13 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
   SmallVector<Value> opValues(numBTiles * sizeBPerThread * K * numNonKTiles *
                               sizeNonKPerThread);
 
-  bool swizzlePath = isSwizzled(sharedLayout);
-
   // In swizzled memory case basePtr stores pointer to the beginning of shared
   // memmory object.
   //
   // If memory is not swizzled, algorithm breaks element offset pointer into
   // constant and non-constant part. Non-constant (depends on thread id) part is
-  // same for all elements, so it is computed only once. basePtr stores this
+  // the offset of the first element of the thread, which is same for all
+  // elements of the thread. It is computed only once. basePtr stores this
   // non-constant part
   Value basePtr;
   if (swizzlePath) {
@@ -307,7 +320,7 @@ Value loadFMAOp(Value dotOp, Value llA, BlockedEncodingAttr dLayout,
   // This loop nest iterates over all values loaded in one thread across batch,
   // k and nonK dimensions. Blocked dot operand layout allocates data in tiles
   // of size <sizePerThread>*<threadsPerWarp>*<numberWarps> for batch and nonK
-  // dimensions, if tensor shape is larger than tile, pattern repeats. To take
+  // dimensions. If tensor shape is larger than tile, pattern repeats. To take
   // these repeats into account iterations for batch and nonK are split into
   // "intra tile" + "inter tile" indexes: b + bTile, nonK + nonKTile
   for (unsigned bTile = 0; bTile < numBTiles; ++bTile)

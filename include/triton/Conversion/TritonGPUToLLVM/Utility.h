@@ -332,6 +332,9 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
                                Value linear, ArrayRef<unsigned> shape);
 
+SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
+                                  ArrayRef<unsigned> order);
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order);
 
@@ -428,6 +431,24 @@ inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
   }
   return ret;
 }
+
+/// Extend 2d shared object to 3d.
+///
+/// If tensor has 3 dimensions, returns original shared object.
+/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
+///
+/// This Function is used to simplify processing of 2d and 3d dot operands,
+/// particularly in the conversion of local_load operation.
+///
+/// \param rewriter
+/// \param loc
+/// \param smemObj
+/// \param shape shape of a tensor represented by smemObj
+/// \returns shared object describing 3d tensor
+SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape);
 
 // -----------------------------------------------------------------------
 // Blocked layout indices
@@ -1481,37 +1502,6 @@ inline bool isLayoutMmaV1(Attribute layout) {
               cast<NvidiaMmaEncodingAttr>(sliceLayout.getParent()).isVolta();
   }
   return isMmaV1;
-}
-
-/// Extend 2d shared object to 3d.
-///
-/// If tensor has 3 dimensions, returns original shared object.
-/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
-///
-/// This Function is used to simplify processing of 2d and 3d dot operands,
-/// particularly in the conversion of local_load operation.
-///
-/// \param rewriter
-/// \param loc
-/// \param smemObj
-/// \param shape shape of a tensor represented by smemObj
-/// \returns shared object describing 3d tensor
-inline SharedMemoryObject
-getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
-                              SharedMemoryObject smemObj,
-                              ArrayRef<int64_t> shape) {
-  assert(shape.size() == 2 || shape.size() == 3);
-  auto strides = smemObj.getStrides();
-  auto offsets = smemObj.getOffsets();
-  auto rank = strides.size();
-  assert(rank == shape.size());
-  if (rank == 3)
-    return smemObj;
-  strides.insert(strides.begin(), i32_val(shape[0] * shape[1]));
-  offsets.insert(offsets.begin(), i32_val(0));
-  auto expandedSmemObj = SharedMemoryObject(
-      smemObj.getBase(), smemObj.getBaseElemType(), strides, offsets);
-  return expandedSmemObj;
 }
 
 } // namespace mlir

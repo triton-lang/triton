@@ -29,13 +29,7 @@ getValueTableFromStructFMA(Value val, ArrayRef<unsigned> perTileShape,
   const unsigned bDim = 0;
 
   for (unsigned idx = 0; idx < elems.size(); ++idx) {
-    unsigned spatialIdx[3];
-    unsigned curIdx = idx;
-    for (auto dim : order) {
-      spatialIdx[dim] = curIdx % perTileShape[dim];
-      curIdx /= perTileShape[dim];
-    }
-    assert(curIdx == 0);
+    auto spatialIdx = mlir::LLVM::delinearize(idx, perTileShape, order);
     res[{spatialIdx[bDim], spatialIdx[nonKDim], spatialIdx[kDim]}] = elems[idx];
   }
   return res;
@@ -80,12 +74,12 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     perThreadShape[i] = numRep * sizePerThread[i];
   }
 
-  auto has =
-      getValueTableFromStructFMA(llA, {perThreadShape[0], perThreadShape[1], K},
-                                 2, 1, rewriter, loc, order);
-  auto hbs =
-      getValueTableFromStructFMA(llB, {perThreadShape[0], K, perThreadShape[2]},
-                                 1, 2, rewriter, loc, order);
+  auto has = getValueTableFromStructFMA(
+      llA, {perThreadShape[0], perThreadShape[1], K},
+      /*kDim*/ 2, /*nonKDim*/ 1, rewriter, loc, order);
+  auto hbs = getValueTableFromStructFMA(
+      llB, {perThreadShape[0], K, perThreadShape[2]},
+      /*kDim*/ 1, /*nonKDim*/ 2, rewriter, loc, order);
 
   SmallVector<Value> acc = cc;
 

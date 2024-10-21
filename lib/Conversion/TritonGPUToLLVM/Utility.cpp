@@ -632,6 +632,19 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
   return multiDim;
 }
 
+SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
+                                  ArrayRef<unsigned> order) {
+  auto rank = shape.size();
+  assert(order.size() == rank);
+  SmallVector<unsigned> multiDim(rank);
+  for (auto dim : order) {
+    multiDim[dim] = linear % shape[dim];
+    linear /= shape[dim];
+  }
+  assert(linear == 0);
+  return multiDim;
+}
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order) {
   return linearize(rewriter, loc, applyPermutation(multiDim, order),
@@ -865,4 +878,23 @@ SmallVector<Value> getWrappedMultiDimOffset(
 }
 
 } // namespace LLVM
+
+SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape) {
+  assert(shape.size() == 2 || shape.size() == 3);
+  auto strides = smemObj.getStrides();
+  auto offsets = smemObj.getOffsets();
+  auto rank = strides.size();
+  assert(rank == shape.size());
+  if (rank == 3)
+    return smemObj;
+  strides.insert(strides.begin(), i32_val(shape[0] * shape[1]));
+  offsets.insert(offsets.begin(), i32_val(0));
+  auto expandedSmemObj = SharedMemoryObject(
+      smemObj.getBase(), smemObj.getBaseElemType(), strides, offsets);
+  return expandedSmemObj;
+}
+
 } // namespace mlir
