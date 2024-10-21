@@ -109,11 +109,11 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
     let summary = "Store into scalar base pointer and a tensor offset";
     let description = [{
       AMD Buffer store operation. Buffer store is similar to
-      normal load but it accesses global memory via a scalar base pointer
+      normal store but it accesses global memory via a scalar base pointer
       and a tensor of offsets instead of a tensor of pointers. The other fields
-      are similar to a normal load, i.e., the `mask` is a boolean vector that
-      determines if a given element should be writting to memory, and `value` is the
-      element that should be written on lane `i` when `mask[i] == 1`.
+      are similar to a normal store , i.e., the `mask` is a boolean vector that
+      determines if a given element should be written to memory, and `value` is the
+      tensor of elements that should be written on lane `i` when `mask[i] == 1`.
     }];
     let arguments = (
       ins
