@@ -256,6 +256,11 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
 }
 
 SmallVector<unsigned> getWarpOrder(Attribute layout) {
+  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+    if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
+      return getWarpOrder(dotLayout.getParent());
+    }
+  }
   auto order = getOrder(layout);
   // FIXME: This mmaLayout if should just return
   // getOrderForDotOperand(0, order.size(), kMajor=false)

@@ -472,10 +472,6 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int nIndex = 1 + hasBatchDim;
   (void)mIndex, (void)nIndex;
 
-  assert(((shape[mIndex] == 1 || shape[mIndex] >= getMDim()) &&
-          (shape[nIndex] == 1 || shape[nIndex] >= getNDim())) &&
-         "Unsupported tensor shape for given mfma layout");
-
   assert(((getMDim() == 32 && getNDim() == 32) ||
           (getMDim() == 16 && getNDim() == 16)) &&
          "Unsupported mfma type");
@@ -579,55 +575,72 @@ dotOperandMfmaToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   // 4) warpsPerCTA[mDim] == 1: This guarantees that every B tensor element is
   //    held by exactly one thread, maintaining the same number of global loads
   //    as in a blocked layout.
+  //
+  // Other use of Linear layout is a support of rare corner cases,
+  // for example one instrcution tile is larger than tensor
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
 
-  if (dotMfmaLayout.getOpIdx() == 0) {
-    return std::nullopt;
-  }
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
   int mIndex = 0 + hasBatchDim;
 
-  auto kWidth = dotMfmaLayout.getKWidth();
+  int32_t kWidth = dotMfmaLayout.getKWidth();
+  auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  int32_t kSize = shape[kDim];
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-
-  if (kWidth != 8 || warpsPerCTA[mIndex] != 1) {
-    return std::nullopt;
-  }
 
   MLIRContext *ctx = dotMfmaLayout.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
 
+  // register order
+  // operand A: [1, 0] / [2, 1, 0]
+  // operand B: [0, 1] / [1, 2, 0]
+  // for both cases it is [k, nonk]/[k, nonk, batch]
   SmallVector<unsigned> order = triton::gpu::getOrder(dotMfmaLayout);
-  auto tileLayout = LinearLayout::empty();
+  // warp order
+  // common for both operand A and B: [0, 1] / [0, 1, 2]
+  // in both cases it is [M dim, N dim]/[batch, M dim, N dim]
+  SmallVector<unsigned> warpOrder = triton::gpu::getWarpOrder(dotMfmaLayout);
+
+  // Lane holds kWidth consecutive elements along k dimension, so
+  // base register vectors for one tile are initialized in following way:
+  // {1, 0}, {2, 0} ... {kWidth/2, 0}
+  std::vector<std::vector<int32_t>> registerBase;
+  for (int32_t elem = 1; elem < kWidth; elem *= 2)
+    registerBase.emplace_back(std::vector<int32_t>{elem, 0});
+
+  std::vector<std::vector<int32_t>> laneBase;
+  int32_t kTileSize = -1;
 
   if (mfmaLayout.getMDim() == 32) {
-    // Based on canonical MFMA linear layout, which handles 4 consecutive
-    // elements along the register dimension, kWidth=8 means we have 8
-    // consecutive elements, so we have an additional {4, 0} base vector here.
-    // For lane dim, since the MFMA thread arrangement is {K, N} = {2, 32}, this
-    // means that mapping of first 5 base (up to thread 16) vectors will be an
-    // identity along N dim. Thread 32 will be mapped to element 8 in K
-    // dimension, because kWidth == 8.
-    tileLayout = LinearLayout(
-        {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {8, 0}}}},
-        {outDimNames[order[0]], outDimNames[order[1]]});
+    // Canonical MFMA linear layout handles 4 consecutive elements along
+    // the register dimension. Dot operand handles varaible kWidth consecutive
+    // elements. For lane dim, since the MFMA thread arrangement is {K, N} = {2,
+    // 32}, this means that mapping of first 5 base (up to thread 16) vectors
+    // will be an identity along N dim. Thread 32 will be mapped to element
+    // kWidth in K dimension.
+    laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {kWidth, 0}};
+    kTileSize = kWidth * 2;
   } else {
     assert(mfmaLayout.getMDim() == 16);
     // For lane dim, since the MFMA thread arrangement is {K, N} = {4, 16}, this
     // means that mapping of first 4 base (up to thread 16) vectors will be an
-    // identity along N dim. Thread 16 will be mapped to element 8 in K
-    // dimension, because kWidth == 8. Thread 32 is mapped to element 16 as that
-    // is 2*kWidth in K dim.
-    tileLayout = LinearLayout(
-        {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}, {16, 0}}}},
-        {outDimNames[order[0]], outDimNames[order[1]]});
+    // identity along N dim. Thread 16 will be mapped to element kWisth in K
+    // dimension. Thread 32 is mapped to element 2*kWidth in K dim.
+    laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {kWidth, 0}, {kWidth * 2, 0}};
+    kTileSize = kWidth * 4;
   }
+  assert(kTileSize != -1);
+  // Add repeats of registers along K dimension to register base vectors
+  for (int32_t elem = kTileSize; elem < kSize; elem *= 2)
+    registerBase.emplace_back(std::vector<int32_t>{elem, 0});
+
+  LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
+                          {outDimNames[order[0]], outDimNames[order[1]]});
 
   if (hasBatchDim) {
     assert(order[2] == 0);
@@ -638,8 +651,10 @@ dotOperandMfmaToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   }
 
   LinearLayout warpLayout =
-      identityND(S("warp"), warpsPerCTA, order, outDimNames);
-  LinearLayout ctaLayout = tileLayout * warpLayout;
+      identityND(kWarp, warpsPerCTA, warpOrder, outDimNames);
+
+  LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
+                           warpLayout.transposeOuts(outDimNames);
 
   return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
 }

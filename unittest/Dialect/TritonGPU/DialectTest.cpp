@@ -543,6 +543,12 @@ public:
         /*isTransposed=*/true, ctaLayout);
   }
 
+  triton::gpu::DotOperandEncodingAttr
+  createDotOperand(int idx, triton::gpu::AMDMfmaEncodingAttr parent,
+                   int kWidth) {
+    return triton::gpu::DotOperandEncodingAttr::get(&ctx, idx, parent, kWidth);
+  }
+
 protected:
   MLIRContext ctx;
   const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
@@ -586,6 +592,32 @@ TEST_F(AMDMfmaLayoutTest, mfma16) {
   auto tmfma3d = createTransposedMFMA(16, 16, {2, 4, 1});
   ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
   ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+}
+
+TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
+  auto mfma2d = createMFMA(32, 32, {2, 4});
+  auto dot2dOp0 = createDotOperand(0, mfma2d, 4);
+  auto dot2dOp1 = createDotOperand(1, mfma2d, 4);
+  ASSERT_THAT(dot2dOp0.getWarpOrder(), mfma2d.getWarpOrder());
+  ASSERT_THAT(dot2dOp1.getWarpOrder(), mfma2d.getWarpOrder());
+
+  auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
+  auto tdot2dOp0 = createDotOperand(0, tmfma2d, 4);
+  auto tdot2dOp1 = createDotOperand(1, tmfma2d, 4);
+  ASSERT_THAT(tdot2dOp0.getWarpOrder(), tmfma2d.getWarpOrder());
+  ASSERT_THAT(tdot2dOp1.getWarpOrder(), tmfma2d.getWarpOrder());
+
+  auto mfma3d = createMFMA(32, 32, {2, 4, 1});
+  auto dot3dOp0 = createDotOperand(0, mfma3d, 4);
+  auto dot3dOp1 = createDotOperand(1, mfma3d, 4);
+  ASSERT_THAT(dot3dOp0.getWarpOrder(), mfma3d.getWarpOrder());
+  ASSERT_THAT(dot3dOp1.getWarpOrder(), mfma3d.getWarpOrder());
+
+  auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
+  auto tdot3dOp0 = createDotOperand(0, tmfma3d, 4);
+  auto tdot3dOp1 = createDotOperand(1, tmfma3d, 4);
+  ASSERT_THAT(tdot3dOp0.getWarpOrder(), tmfma3d.getWarpOrder());
+  ASSERT_THAT(tdot3dOp1.getWarpOrder(), tmfma3d.getWarpOrder());
 }
 
 } // anonymous namespace
