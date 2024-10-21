@@ -282,83 +282,66 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-    std::optional<LinearLayout> srcLayout =
-        toLinearLayout(shape, srcTy.getEncoding());
-    std::optional<LinearLayout> dstLayout =
-        toLinearLayout(shape, dstTy.getEncoding());
-    if (!srcLayout.has_value() || !dstLayout.has_value()) {
-      return failure();
+
+    auto conversion = minimalCvtLayout(srcTy, dstTy);
+    if (!conversion.has_value()) {
+      return rewriter.notifyMatchFailure(
+          op, "NYI. srcTy and/or dstTy don't implement LLs yet");
     }
 
-    // There are four cases to handle.
-    //
-    //  1. Transfer between values in the same thread, in which case we simply
-    //     reorder the elements of adaptor.getSrc().
-    //  2. Transfer between values in the same warp, in which case we try to
-    //     move values using warp shuffles, though if the pattern is complicated
-    //     enough we may fall back to using shared memory (case 3).
-    //  3. Transfer between values in the same CTA, in which case we move values
-    //     through shared memory.
-    //  4. Transfer between values in different CTAs, in which case we move
-    //     values through distributed shared memory.
-    //
-    // We can tell which case we're in by examining `conversion`.
-    // For example, if the block -> block mapping is an identity layout: {1, 2,
-    // 4, ...}, then there's no movement between data in different CTAs, and we
-    // know we're not in case 4.
-    if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1.
-      return transferWithinThread(op, *srcLayout, *dstLayout, adaptor,
-                                  rewriter);
+    assert(to_vector(conversion->getInDimNames()) ==
+           to_vector(conversion->getOutDimNames()));
+    auto dims = conversion->getInDimNames();
+    if (llvm::is_contained(dims, str_attr("block"))) {
+      // Case 1: Transfer between values in different CTAs.
+      //          This requires moving values through distributed shared memory.
+      return rewriter.notifyMatchFailure(
+          op, "NYI: Transfer between different CTAs");
+    } else if (llvm::is_contained(dims, str_attr("warp"))) {
+      // Case 2: Transfer between values in the same CTA, in which case we move
+      //         values through shared memory.
+      LinearLayout srcLayout =
+          *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+      LinearLayout dstLayout =
+          *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+      return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
+    } else if (llvm::is_contained(dims, str_attr("lane"))) {
+      // Case 3. Transfer between values in the same warp, in which case we try
+      //         to move values using warp shuffles, though if the pattern is
+      //         complicated enough we may fall back to using shared memory
+      // TODO(Keren): implement warp shuffle instead of using the general
+      // approach that uses shared memory
+      LinearLayout srcLayout =
+          *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+      LinearLayout dstLayout =
+          *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+      return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
+    } else if (llvm::is_contained(dims, str_attr("register"))) {
+      // Case 4. Transfer between values in the same thread, in which case we
+      //         simply reorder the elements of adaptor.getSrc().
+      return transferWithinThread(op, *conversion, adaptor, rewriter);
+    } else {
+      // Nothing to do. We should remove these ops in removeLayoutConversion.
+      rewriter.replaceOp(op, op.getSrc());
+      return success();
     }
-
-    if (cvtNeedsWarpShuffle(srcTy, dstTy)) { // Case 2.
-      return transferWithinLane(op, *srcLayout, *dstLayout, adaptor, rewriter);
-    }
-
-    return transferWithinBlockOrGroup(op, *srcLayout, *dstLayout, adaptor,
-                                      rewriter); // Case 3 and 4
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                       const LinearLayout &dstLayout, OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
+                       OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    // There are three possible cases:
-    //
-    // 1. `srcLayout` has the same number of registers as `dstLayout`.
-    // 2. `srcLayout` has fewer registers than `dstLayout`.
-    // 3. `srcLayout` has more registers than `dstLayout`.
-    //
-    // In the second case `srcLayout . dstLayout^-1` is not surjective
-    // because not all destination registers are covered.
-    // Since the goal is to cover all of the destination
-    // registers, we can instead use `dstLayout . srcLayout^-1`.
-    LinearLayout conversion = dstLayout.invertAndCompose(srcLayout);
-    auto dstToSrc = conversion.divideRight(
-        LinearLayout::identity1D(conversion.getInDimSize(kLane), kLane, kLane) *
-        LinearLayout::identity1D(conversion.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(conversion.getInDimSize(kBlock), kBlock,
-                                 kBlock));
-
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-    assert(ArrayRef(to_vector(dstToSrc->getInDimNames())) ==
-           ArrayRef{kRegister});
-    assert(ArrayRef(to_vector(dstToSrc->getOutDimNames())) ==
-           ArrayRef{kRegister});
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals;
-    outVals.resize(dstToSrc->getInDimSize(kRegister));
-    for (int i = 0; i < dstToSrc->getInDimSize(kRegister); i++) {
-      auto srcIdx = dstToSrc->apply({{kRegister, i}});
-      outVals[i] = inVals[srcIdx.begin()->second];
+    outVals.resize(conversion.getOutDimSize(kRegister));
+    for (int i = 0; i < conversion.getOutDimSize(kRegister); i++) {
+      auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
+      outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
@@ -366,27 +349,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  LogicalResult transferWithinLane(ConvertLayoutOp op,
-                                   const LinearLayout &srcLayout,
-                                   const LinearLayout &dstLayout,
-                                   OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter) const {
-    // TODO(Keren): implement warp shuffle instead of using the general approach
-    // that uses shared memory
-    return transferWithinBlockOrGroup(op, srcLayout, dstLayout, adaptor,
-                                      rewriter);
-  }
-
-  LogicalResult
-  transferWithinBlockOrGroup(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                             const LinearLayout &dstLayout, OpAdaptor adaptor,
-                             ConversionPatternRewriter &rewriter) const {
-    LinearLayout conversion = srcLayout.invertAndCompose(dstLayout);
-
-    // TODO(Keren): LLs support cross-CTA conversions, this function does not
-    if (isCrossCTAConversion(conversion))
-      return failure();
-
+  LogicalResult transferWithinBlock(ConvertLayoutOp op,
+                                    const LinearLayout &srcLayout,
+                                    const LinearLayout &dstLayout,
+                                    OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
@@ -461,11 +428,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
+    // Pretty sure this is the identity function ATM
+    // It'd be better to simply call `quotient({kBlock})` and
+    // remove kBlock from transferWithinBlockImpl
     auto srcLayoutWithinBlock = getLayoutWithinBlock(srcLayout);
     auto dstLayoutWithinBlock = getLayoutWithinBlock(dstLayout);
     SmallVector<Value> outVals =
-        transferWithinBlock(inVals, op, srcLayoutWithinBlock,
-                            dstLayoutWithinBlock, adaptor, rewriter);
+        transferWithinBlockImpl(inVals, op, srcLayoutWithinBlock,
+                                dstLayoutWithinBlock, adaptor, rewriter);
 
     // Unmunge output values
     for (const auto &it : llvm::enumerate(outVals)) {
@@ -499,10 +469,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   SmallVector<Value>
-  transferWithinBlock(ArrayRef<Value> inVals, ConvertLayoutOp op,
-                      const LinearLayout &srcLayout,
-                      const LinearLayout &dstLayout, OpAdaptor adaptor,
-                      ConversionPatternRewriter &rewriter) const {
+  transferWithinBlockImpl(ArrayRef<Value> inVals, ConvertLayoutOp op,
+                          const LinearLayout &srcLayout,
+                          const LinearLayout &dstLayout, OpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
 

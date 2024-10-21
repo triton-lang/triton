@@ -935,25 +935,6 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   return std::nullopt;
 }
 
-bool isCrossCTAConversion(const LinearLayout &layout) {
-  assert(!layout.getInDimNames().empty());
-  MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
-
-  StringAttr kBlock = S("block");
-  assert(layout.hasInDim(kBlock));
-  assert(layout.hasOutDim(kBlock));
-
-  SetVector<StringAttr> nonBlockInDims(layout.getInDimNames().begin(),
-                                       layout.getInDimNames().end());
-  nonBlockInDims.remove(kBlock);
-
-  // This layout moves data between CTAs if
-  // - the value for any input dim other than block affects the output block, or
-  // - input (0, ..., block=i) does not map to output (0, ..., block=i).
-  return !layout.sublayoutIsZero(nonBlockInDims.getArrayRef(), {kBlock}) ||
-         !layout.sublayoutIsIdentity({kBlock}, {kBlock});
-}
-
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
   assert(!layout.getInDimNames().empty());
   MLIRContext *ctx = layout.getInDimNames().begin()->getContext();

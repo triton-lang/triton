@@ -640,57 +640,56 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   return ans;
 }
 
-bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
+// We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
+// under kBlock, kWarp or kLane (in that order). The idea here is that if we
+// have a transformation that's the identity on kBlock, we don't need to use
+// distributed shared memory. If it's also the identity on kWarp, we can
+// transfer via warp-shuffles, and if it's the identity on kLane just have to
+// reorder the registers
+std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
+                                             RankedTensorType dstTy) {
   MLIRContext *ctx = srcTy.getContext();
   std::optional<LinearLayout> srcLayout =
       toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
   std::optional<LinearLayout> dstLayout =
       toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  if (srcLayout.has_value() && dstLayout.has_value()) {
-    // comp describes the layout function for converting from src to dst.
-    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
-    StringAttr kLane = StringAttr::get(ctx, "lane");
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
-    // TODO(jlebar): These checks are overly-restrictive.  For example, we can
-    // transfer by shuffling registers (case 1) if and only if all of the bases
-    // for `register` have 0s for lane, warp, and block.  But the check below is
-    // stronger than this, checking also that the choice of lane/warp/block does
-    // not affect the permutation of registers.  If we allow different
-    // lane/warp/blocks to have different permutations, we can generalize this.
-    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kLane),
-                                                  kLane, kLane) *
-                         LinearLayout::identity1D(comp.getInDimSize(kWarp),
-                                                  kWarp, kWarp) *
-                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
-                                                  kBlock, kBlock))
-            .has_value()) {
-      return true;
+  if (!(srcLayout.has_value() && dstLayout.has_value()))
+    return std::nullopt;
+  // comp describes the layout function to create dst from src.
+  LinearLayout comp = dstLayout->invertAndCompose(*srcLayout);
+  // We try to quotient by the largest subspace first
+  auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
+  for (auto dim : dims) {
+    auto quotient = comp.quotient(StringAttr::get(ctx, dim));
+    if (!quotient.has_value()) {
+      break;
     }
+    comp = *quotient;
   }
-  return false;
+  return comp;
+}
+
+bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto layout = minimalCvtLayout(srcTy, dstTy);
+  MLIRContext *ctx = srcTy.getContext();
+  if (!layout.has_value()) {
+    return false;
+  }
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto outDims = llvm::to_vector(layout->getOutDimNames());
+  return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
-  std::optional<LinearLayout> srcLayout =
-      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  std::optional<LinearLayout> dstLayout =
-      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  if (srcLayout.has_value() && dstLayout.has_value()) {
-    // comp describes the layout function for converting from src to dst.
-    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
-    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kWarp),
-                                                  kWarp, kWarp) *
-                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
-                                                  kBlock, kBlock))
-            .has_value()) {
-      return true;
-    }
+  if (!layout.has_value()) {
+    return false;
   }
-  return false;
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  return llvm::to_vector(layout->getOutDimNames()) ==
+         llvm::SmallVector<StringAttr, 2>{kRegister, kLane};
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
