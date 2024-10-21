@@ -233,3 +233,33 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+// Check that the stream pipeliner updates the resulting memory layout of transpose ops to mutable if immutable local buffers are replaced
+// CHECK-LABEL: loop_with_dot_and_transpose
+// CHECK: triton_gpu.local_alloc {{.*}}, mutable>
+// CHECK: tt.trans {{.*}}, mutable> -> {{.*}}, mutable>
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1], hasLeadingOffset = false}>
+#shared1 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], hasLeadingOffset = false}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "hip:gfx1201", "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @loop_with_dot_and_transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: i32, %arg4: tensor<32x32x!tt.ptr<f32>, #blocked1>, %arg5: tensor<32x32x!tt.ptr<f32>, #blocked>) attributes {noinline = false} {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %0 = scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32 iter_args(%arg3 = %cst) -> (tensor<32x32xf32, #blocked>)  : i32 {
+      %2 = tt.load %arg4 : tensor<32x32x!tt.ptr<f32>, #blocked1>
+      %3 = triton_gpu.local_alloc %2 : (tensor<32x32xf32, #blocked1>) -> !tt.memdesc<32x32xf32, #shared, #triton_gpu.shared_memory>
+      %4 = tt.trans %3 {order = array<i32: 1, 0>} : !tt.memdesc<32x32xf32, #shared, #triton_gpu.shared_memory> -> !tt.memdesc<32x32xf32, #shared1, #triton_gpu.shared_memory>
+      %5 = triton_gpu.local_load %4 : !tt.memdesc<32x32xf32, #shared1, #triton_gpu.shared_memory> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>
+      %6 = triton_gpu.convert_layout %2 : tensor<32x32xf32, #blocked1> -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>
+      %7 = tt.dot %6, %5, %cst : tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x32xf32, #blocked>
+      scf.yield %7 : tensor<32x32xf32, #blocked>
+    }
+    tt.store %arg5, %0 : tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
