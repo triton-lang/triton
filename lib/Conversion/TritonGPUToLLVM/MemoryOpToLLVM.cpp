@@ -116,9 +116,20 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
+    // FIXME [Dot LL]
+    // Do for all DotOperandEncodingAttr once we have LLs for all of them
+    auto isAmpereLargeKWidth = [](Attribute layout) {
+      if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
+        if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
+          return mma.isAmpere() && dot.getKWidth() == 8;
+        }
+      }
+      return false;
+    };
     if (isa<SharedEncodingAttr>(srcLayout) &&
-        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-            dstLayout)) {
+        (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+             dstLayout) ||
+         isAmpereLargeKWidth(dstLayout))) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -169,6 +180,37 @@ private:
 
     SmallVector<Value> outVals = loadSharedToDistributed(
         dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
+
+    // FIXME [Dot LL]
+    // Ampere case
+    // In this case, we need to pack the outputs into i32
+    if (isa<DotOperandEncodingAttr>(dstTy.getEncoding())) {
+      if (elemLlvmTy.isInteger(8)) {
+        auto concat = [&](Value a1, Value a2, Value a3, Value a4) {
+          return or_(or_(zext(i32_ty, a1), shl(zext(i32_ty, a2), i32_val(8))),
+                     or_(shl(zext(i32_ty, a3), i32_val(16)),
+                         shl(zext(i32_ty, a4), i32_val(24))));
+        };
+        SmallVector<Value> outVals32(outVals.size() / 4);
+        for (int i = 0; i < outVals32.size(); ++i) {
+          outVals32[i] = concat(outVals[4 * i], outVals[4 * i + 1],
+                                outVals[4 * i + 2], outVals[4 * i + 3]);
+        }
+        outVals = outVals32;
+      } else {
+        assert(elemLlvmTy.isBF16() && "Unexpected element type");
+        auto concat = [&](Value a, Value b) {
+          return or_(zext(i32_ty, bitcast(a, i16_ty)),
+                     shl(zext(i32_ty, bitcast(b, i16_ty)), i32_val(16)));
+        };
+
+        SmallVector<Value> outVals32(outVals.size() / 2);
+        for (int i = 0; i < outVals32.size(); ++i) {
+          outVals32[i] = concat(outVals[2 * i], outVals[2 * i + 1]);
+        }
+        outVals = outVals32;
+      }
+    }
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
