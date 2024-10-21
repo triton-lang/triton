@@ -314,8 +314,8 @@ private:
     IRMapping mapping;
     for (auto operand : reduce.getOperands()) {
       auto viewOp = builder.create<triton::ReshapeOp>(
-          reduce.getLoc(), viewOpTensorType, operand, /*allowReorder=*/true);
-      viewOp.setEfficientLayout(true);
+          reduce.getLoc(), viewOpTensorType, operand,
+          /*allowReorder=*/true, /*efficientLayout=*/true);
       mapping.map(operand, viewOp);
     }
 

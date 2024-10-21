@@ -678,7 +678,7 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
 }
 
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
-  if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
+  if (!op.getAllowReorder() || op.getEfficientLayout())
     return failure();
   return canonicalizeViewOrBroadcast(op, rewriter);
 }
