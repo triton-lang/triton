@@ -272,7 +272,7 @@ jobs:
           cd python
           LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+            echo "Could not find '${LIT_TEST_DIR}'" ; exit -1
           fi
           lit -v "${LIT_TEST_DIR}"
 
@@ -280,7 +280,7 @@ jobs:
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/instrumentation"
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
-            echo "Coult not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
+            echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
           cd python/test/unit
           python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
@@ -304,6 +304,12 @@ jobs:
            runtime/test_autotuner.py::test_kwargs[False]\
            ../../tutorials/06-fused-attention.py::test_op --device cpu
 
+      - &run-regression-tests-step
+        name: Run regression tests
+        run: |
+          cd python/test/regression
+          python3 -m pytest -s -n 8 .
+
       - &run-cpp-unittests-step
         name: Run C++ unittests
         run: |
@@ -311,12 +317,11 @@ jobs:
           cd "build/$(ls build | grep -i cmake)"
           ctest -j32
 
-      - name: Run Proton tests
-        env:
-          LD_LIBRARY_PATH: "/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
+      - &run-proton-tests-step
+        name: Run Proton tests
         run: |
           cd third_party/proton
-          python3 -m pytest -s test
+          python3 -m pytest test
 
       # If we're on branch `main`, save the ccache Triton compilation artifacts
       # to the cache so they can be used by other (non-main) CI runs.
@@ -398,7 +403,7 @@ jobs:
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
-            echo "Coult not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
+            echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
@@ -413,11 +418,8 @@ jobs:
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
 
-      - name: Run Proton tests
-        run: |
-          cd third_party/proton
-          python3 -m pytest test
-
+      - *run-regression-tests-step
+      - *run-proton-tests-step
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
       - *inspect-cache-directories-step
