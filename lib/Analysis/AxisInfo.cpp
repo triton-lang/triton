@@ -895,7 +895,7 @@ private:
       lhsDivisibility = 1;
     }
     auto numBits = log2Int(lhsDivisibility);
-    return multiplyDivisor(lhsDivisibility, static_cast<int64_t>(1) << shift);
+    return multiplyDivisor(lhsDivisibility, 1ll << shift);
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,

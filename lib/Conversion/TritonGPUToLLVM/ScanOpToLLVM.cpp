@@ -128,8 +128,8 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo,
                              ScanLoweringHelper &helper,
-                             const SmallVector<Value> &smemBases,
-                             const SmallVector<Type> &smemTypes, Value warpId,
+                             ArrayRef<Value> smemBases,
+                             ArrayRef<Type> smemTypes, Value warpId,
                              Value laneIdAxis, Value parallelLaneId) {
   Location loc = helper.getLoc();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
