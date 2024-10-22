@@ -45,6 +45,15 @@ public:
                                           ArrayRef<Value>{value})
           .getResult()[0];
     };
+    auto zeroLike = [&](Value c) -> Value {
+      return rewriter.create<SplatOp>(
+          dotOp->getLoc(), c.getType(),
+          rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
+                                             rewriter.getF32FloatAttr(0)));
+    };
+    auto add = [&](Value a, Value b) -> Value {
+      return rewriter.create<arith::AddFOp>(dotOp.getLoc(), a, b);
+    };
     auto sub = [&](Value a, Value b) -> Value {
       return rewriter.create<arith::SubFOp>(dotOp.getLoc(), a, b);
     };
@@ -60,11 +69,15 @@ public:
     auto bBig = f32ToTF32(dotOp.getB());
     auto bSmall = sub(dotOp.getB(), bBig);
 
-    auto dot1 = dot(aSmall, bBig, dotOp.getC());
+    auto zero = zeroLike(dotOp.getC());
+
+    auto dot1 = dot(aSmall, bBig, zero);
     auto dot2 = dot(aBig, bSmall, dot1);
     auto dot3 = dot(aBig, bBig, dot2);
 
-    rewriter.replaceOp(dotOp, dot3);
+    auto sum = add(dot3, dotOp.getC());
+
+    rewriter.replaceOp(dotOp, sum);
     return success();
   }
 };

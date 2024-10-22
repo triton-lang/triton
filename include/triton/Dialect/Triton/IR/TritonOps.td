@@ -460,17 +460,12 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
         If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
         The compiler is still free to change it for better performance.
     }];
-    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder, OptionalAttr<UnitAttr>:$efficient_layout);
+    let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
     let results = (outs TT_Tensor:$result);
-    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+    let assemblyFormat = "$src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
-    let builders = [
-      OpBuilder<(ins "Type":$type, "Value":$src, "bool":$allow_reorder),
-        [{
-        build($_builder, $_state, type, src, allow_reorder, /*efficient_layout=*/UnitAttr());
-        }]>];
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
@@ -673,11 +668,49 @@ def TT_DotOp : TT_Op<"dot", [Pure,
     let hasVerifier = 1;
 }
 
+
+//
+// DotScaled Op
+//
+def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
+                             DotLike,
+                             TypesMatchWith<"result's type matches accumulator's type",
+                                            "d", "c", "$_self">]> {
+    let summary = "dot_scaled";
+
+    let description = [{
+        $d = matrix_multiply(scale($lhs, $lhs_scale), scale($rhs, $rhs_scale)) + $c.
+        Where scale(x, s) is a function that applies the scale per block following microscaling spec.
+    }];
+
+    let arguments = (
+      ins
+      // inputs are integer types as they are packed types and we currently
+      // don't have a representation for those.
+      TT_IntTensor:$lhs,
+      TT_IntTensor:$rhs,
+      TT_FloatTensor:$c,
+      TT_IntTensor:$lhs_scale,
+      Optional<TT_IntTensor>:$rhs_scale,
+      TT_F8F6F4TypeAttr:$lhs_type,
+      TT_F8F6F4TypeAttr:$rhs_type
+    );
+
+    let results = (outs TT_FloatTensor:$d);
+
+    // Not sure why I need to fully specify the optional group, but otherwise it complains when loading the mlir file
+    let assemblyFormat = [{
+      $lhs `,` $lhs_scale `,` $rhs (`,`) : (`,` $rhs_scale^ `,`)? $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
+      `:` type($lhs) `,` type($lhs_scale) `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
+    }];
+}
+
 //
 // Reduce Op
 //
 def TT_ReduceOp: TT_Op<"reduce",
                        [Pure,
+                        SameOperandsShape,
                         SameOperandsEncoding,
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {

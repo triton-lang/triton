@@ -359,7 +359,7 @@ class CUDABackend(BaseBackend):
 
                 raise RuntimeError(f'{error}\n'
                                    f'`ptxas` stderr:\n{log}\n'
-                                   f'Repro command: {ptxas_cmd}\n')
+                                   f'Repro command: {" ".join(ptxas_cmd)}\n')
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()
