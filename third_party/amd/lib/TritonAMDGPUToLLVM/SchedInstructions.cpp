@@ -12,6 +12,11 @@ namespace mlir::triton {
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace mlir::triton
 
+#undef DEBUG_TYPE
+#define DEBUG_TYPE "lower-insert-instruction-sched-hints"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
 using namespace mlir;
 
 namespace mlir::triton {
@@ -38,10 +43,15 @@ void setNumGeneratedGlobalLoads(LoadOpType op, size_t globalLoadsCount,
     if (auto opIdxAttr = op->template getAttrOfType<triton::amdgpu::OpIdxAttr>(
             triton::amdgpu::OpIdxAttr::getMnemonic())) {
       assert(opIdxAttr.getValue() < 2);
-      if (opIdxAttr.getValue() == 0)
+      const bool isBufferLoadOp =
+          std::is_same_v<LoadOpType, triton::amdgpu::BufferLoadOp>;
+      if (opIdxAttr.getValue() == 0) {
         schedHint.setNumGlobalLoadsAAttr(counterAttr);
-      else
+        schedHint.setIsBufferLoadsAEnabled(isBufferLoadOp);
+      } else {
         schedHint.setNumGlobalLoadsBAttr(counterAttr);
+        schedHint.setIsBufferLoadsBEnabled(isBufferLoadOp);
+      }
     }
   });
 }
@@ -152,9 +162,8 @@ struct InstructionSchedHintsRewriter
 
     if (this->numStages < 2) {
       this->schedulingType = SchedulingType::NONE;
-      llvm::dbgs() << "[" << getDebugName() << "]: "
-                   << "ignoring instruction scheduling due to a very low num. "
-                      "stages value. Must be >= 2\n";
+      LDBG("ignoring instruction scheduling due to a very low num. "
+           "stages value. Must be >= 2");
     }
   }
 
@@ -175,6 +184,14 @@ struct InstructionSchedHintsRewriter
   void
   createCKV3Schedule(PatternRewriter &rewriter, Location loc,
                      triton::amdgpu::InstructionSchedHint schedHint) const {
+
+    if (!(schedHint.getIsBufferLoadsAEnabled() &&
+          schedHint.getIsBufferLoadsBEnabled())) {
+      LDBG("Skipping instruction scheduling because `ckv3` "
+           "scheduling can be used only with `buffer_load` instructions");
+      return;
+    }
+
     const uint32_t numDsReadInstA = schedHint.getNumDsReadsA().getValue();
     const uint32_t numDsReadInstB = schedHint.getNumDsReadsB().getValue();
 
@@ -288,9 +305,7 @@ struct InstructionSchedHintsRewriter
                   PatternRewriter &rewriter) const override {
 
     if (this->schedulingType == SchedulingType::UNKNOWN) {
-      llvm::dbgs()
-          << "[" << getDebugName() << "]: "
-          << "unknown instruction scheduling variant has been provided\n";
+      LDBG("unknown instruction scheduling variant has been provided");
       return mlir::failure();
     }
 

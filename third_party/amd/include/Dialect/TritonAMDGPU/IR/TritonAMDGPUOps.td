@@ -64,6 +64,8 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
     TritonAMDGPU_InstCounter:$numDsWritesB,
     TritonAMDGPU_InstCounter:$numGlobalLoadsA,
     TritonAMDGPU_InstCounter:$numGlobalLoadsB,
+    BoolAttr:$isBufferLoadsAEnabled,
+    BoolAttr:$isBufferLoadsBEnabled,
     TritonAMDGPU_InstCounter:$numMMAs
   );
 
@@ -73,7 +75,7 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
       auto type = IntegerType::get(ctx, 32);
       auto emptyAttr = amdgpu::InstCounterAttr::get(ctx, 0, type);
       build($_builder, $_state, emptyAttr, emptyAttr, emptyAttr, emptyAttr,
-            emptyAttr, emptyAttr, emptyAttr);
+            emptyAttr, emptyAttr, false, false, emptyAttr);
     }]>
   ];
 
