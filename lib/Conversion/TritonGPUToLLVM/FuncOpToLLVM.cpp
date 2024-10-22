@@ -14,6 +14,19 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 
+// NOTE: [Additional Function Arguments]
+// To support use of shared memory and global scratch memory inside of a
+// function, the caller allocates a single large block of the relevant memory
+// and calls the funciton with these extra arguments at the end.
+// Specifically, the last argument is the global scratch memory allocation and
+// the second to last is the shared memory allocation.
+//
+// For the kernel function itself, the shared memory base is a global symbol
+// so no additional function argument is required but global scratch memory
+// allocation is still passed in as the last argument. Though here the scratch
+// memory is shared between all programs, so a linear offset based on the
+// program id is required to get the local scratch base.
+
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
 /// information.

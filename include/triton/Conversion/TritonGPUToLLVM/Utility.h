@@ -368,6 +368,7 @@ inline bool isKernel(FunctionOpInterface funcOp) {
 
 inline Value getStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
     return funcOp.getArgument(funcOp.getNumArguments() - 2);
   }
@@ -381,6 +382,7 @@ inline Value getStackPointer(RewriterBase &rewriter,
 inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                                  FunctionOpInterface funcOp,
                                  Value allocOffset = {}) {
+  // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
     return funcOp.getArgument(funcOp.getNumArguments() - 1);
   }
