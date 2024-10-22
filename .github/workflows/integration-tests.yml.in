@@ -321,7 +321,7 @@ jobs:
         name: Run Proton tests
         run: |
           cd third_party/proton
-          python3 -m pytest test
+          python3 -m pytest -s test
 
       # If we're on branch `main`, save the ccache Triton compilation artifacts
       # to the cache so they can be used by other (non-main) CI runs.
