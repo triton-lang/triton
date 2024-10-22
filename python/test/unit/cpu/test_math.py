@@ -1,3 +1,4 @@
+import inspect
 import os
 import pytest
 import torch
@@ -28,9 +29,9 @@ vec_sizes = [1, 2, 4, 8, 16, 32, 64, 128]
 scalar_sizes = [1, 4, 16, 64]
 
 
-def check_num_vec_calls(meta, vec_lib, dtype_str, size):
+def check_num_vec_calls(meta, vec_lib, dtype_str, size, is_always_extern=False):
     # Check generated code calls vector math function
-    # FP16 and BF16 are casted to FP32 for math ops
+    # FP16 and BF16 are cast to FP32 for math ops
     elem_size = 8 if dtype_str == "float64" else 4
     data_size = size * elem_size
     if data_size > 64:
@@ -38,7 +39,7 @@ def check_num_vec_calls(meta, vec_lib, dtype_str, size):
     elif data_size >= 16:
         num_vec_calls = 1
     else:
-        num_vec_calls = 0
+        num_vec_calls = 1 if is_always_extern else 0
     assert meta.asm["asm"].count(lib_prefix[vec_lib]) == num_vec_calls
 
 
@@ -73,28 +74,45 @@ def test_tensor_math_fn(vec_lib, dtype_str, math_fn, size, device):
                          chain(product(["libsleef", "libmvec"], vec_sizes), product([None], scalar_sizes)))
 @pytest.mark.parametrize("dtype_str", float_dtypes)
 @pytest.mark.parametrize("math_fn", [
-    "acos", "acosh", "asin", "asinh", "atan", "atanh", "cbrt", "cos", "cosh", "erf", "exp", "exp2", "expm1", "floor",
-    "isnan", "isinf", "log", "log1p", "log2", "log10", "rsqrt", "signbit", "sin", "sinh", "sqrt", "tan", "tanh", "trunc"
+    "acos", "acosh", "asin", "asinh", "atan", "atanh", "cbrt", "ceil", "cos", "cosh", "erf", "exp", "exp2", "expm1",
+    "floor", "fmod", "isnan", "isinf", "log", "log1p", "log2", "log10", "pow", "rsqrt", "signbit", "sin", "sinh",
+    "sqrt", "tan", "tanh", "trunc"
 ])
 def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
     if not is_cpu():
         pytest.skip("This test is CPU-specific")
     if vec_lib == "libmvec" and arch != "x86_64":
         pytest.skip("Vectorized libm calls are supported for x86 target only.")
+    if math_fn in {"ceil", "fmod", "pow"}:
+        if vec_lib != "libsleef":
+            pytest.skip("extern_elementwise only supports libsleef")
+        if dtype_str not in {"float32", "torch.float64"}:
+            pytest.skip(f"{math_fn} only supports fp32, fp64")
 
     @triton.jit
-    def kernel(src, dst, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    def unary_kernel(src, dst, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr):
         idxs = tl.arange(0, BLOCK_SIZE)
         x = tl.load(src + idxs)
         y = getattr(libdevice, MATH_FN)(x)
         tl.store(dst + idxs, y)
 
-    src = torch.rand((size, ), dtype=getattr(torch, dtype_str), device=device)
+    @triton.jit
+    def binary_kernel(x_ptr, y_ptr, out_ptr, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+        idxs = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + idxs)
+        y = tl.load(y_ptr + idxs)
+        result = getattr(libdevice, MATH_FN)(x, y)
+        tl.store(out_ptr + idxs, result)
+
+    signature = inspect.signature(getattr(libdevice, math_fn))
+    num_params = len(signature.parameters)
+    inputs = [torch.rand((size, ), dtype=getattr(torch, dtype_str), device=device) for _ in range(num_params)]
     # Customize inputs
     if math_fn == "acosh":
-        src = src.abs() + 1
+        inputs[0] = inputs[0].abs() + 1
     if math_fn == "isnan" or math_fn == "isinf":
         indices = torch.randint(low=0, high=size, size=(size // 2, ), device=device)
+        src = inputs[0]
         for i in indices:
             if math_fn == "isnan":
                 src[i] = float("nan")
@@ -103,12 +121,13 @@ def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
 
     # Generate reference output
     if math_fn == "cbrt":
-        ref = src.pow(1 / 3)
+        ref = inputs[0].pow(1 / 3)
     else:
-        ref = getattr(src, math_fn)()
+        ref = getattr(inputs[0], math_fn)(*inputs[1:])
 
-    res = torch.empty(src.shape, dtype=ref.dtype, device=device)
-    meta = kernel[(1, )](src, res, MATH_FN=math_fn, BLOCK_SIZE=size, vec_lib=vec_lib)
+    res = torch.empty(inputs[0].shape, dtype=ref.dtype, device=device)
+    kernel = unary_kernel if num_params == 1 else binary_kernel
+    meta = kernel[(1, )](*inputs, res, MATH_FN=math_fn, BLOCK_SIZE=size, vec_lib=vec_lib)
     torch.testing.assert_close(ref, res)
 
     if vec_lib is None:
@@ -119,7 +138,9 @@ def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
         "libmvec": {"expm1", "floor", "isnan", "isinf", "rsqrt", "signbit", "sqrt", "trunc"},
         "libsleef": {"isnan", "isinf", "rsqrt", "signbit"},
     }
+    # These are always implemented with extern library calls
+    always_extern = {"ceil", "fmod", "pow"}
     if math_fn not in native_impls[vec_lib]:
-        check_num_vec_calls(meta, vec_lib, dtype_str, size)
+        check_num_vec_calls(meta, vec_lib, dtype_str, size, is_always_extern=math_fn in always_extern)
     else:
         assert meta.asm["asm"].count(lib_prefix[vec_lib]) == 0

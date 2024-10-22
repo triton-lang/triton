@@ -2,12 +2,14 @@
 
 #include "cpu/include/TritonCPUToLLVM/Passes.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonCPU/IR/Dialect.h"
 
@@ -132,6 +134,64 @@ public:
 
     // Reshape the result back to the original type.
     rewriter.replaceOpWithNewOp<vector::ShapeCastOp>(op, vecTy, newRes);
+    return success();
+  }
+};
+
+using ExternElementwiseOp = triton::cpu::ExternElementwiseOp;
+
+/*
+ * libsleef does not contain implementations for 2-element vectors, so we pad
+ * any such vectors to size 4 instead.
+ */
+struct PadSmallVecsForSleef : public OpRewritePattern<ExternElementwiseOp> {
+public:
+  using OpRewritePattern<ExternElementwiseOp>::OpRewritePattern;
+
+  PadSmallVecsForSleef(MLIRContext *context)
+      : OpRewritePattern<ExternElementwiseOp>(context) {}
+
+  LogicalResult matchAndRewrite(ExternElementwiseOp op,
+                                PatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    VectorType vecTy = dyn_cast<VectorType>(op.getType());
+    if (!vecTy)
+      return failure();
+
+    Type elemTy = vecTy.getElementType();
+    if (!elemTy.isF32() && !elemTy.isF64())
+      return failure();
+
+    int64_t numElems = vecTy.getNumElements();
+    if (numElems >= 4)
+      return failure();
+
+    // Create a single-element vector for shuffle to use
+    auto paddingVec = rewriter.create<vector::SplatOp>(
+        loc, undef(elemTy), VectorType::get({1}, elemTy));
+    // Assign indices such that shuffle will pad the original vector with
+    // elements from the paddingVec
+    SmallVector<int64_t> indices(4);
+    for (int i = 0; i < 4; ++i) {
+      if (i < numElems)
+        indices[i] = i;
+      else
+        indices[i] = numElems;
+    }
+    SmallVector<Value> newOperands;
+    for (auto argVal : op.getOperands()) {
+      auto shuf =
+          rewriter.create<vector::ShuffleOp>(loc, argVal, paddingVec, indices);
+      newOperands.push_back(shuf.getResult());
+    }
+    // Update return type of extern call
+    auto newVecTy = VectorType::get({4}, elemTy);
+    auto extern_elem = rewriter.create<ExternElementwiseOp>(
+        loc, newVecTy, newOperands, op.getSymbol(), op.getPure());
+    indices.resize(numElems);
+    // Truncate result to original size
+    rewriter.replaceOpWithNewOp<vector::ShuffleOp>(op, extern_elem.getResult(),
+                                                   paddingVec, indices);
     return success();
   }
 };
@@ -305,8 +365,9 @@ struct MathToVecLibPass
     }
     }
 
-    patterns.add<DecomposeToNativeVecs<triton::cpu::ExternElementwiseOp>>(
+    patterns.add<DecomposeToNativeVecs<ExternElementwiseOp>>(
         patterns.getContext());
+    patterns.add<PadSmallVecsForSleef>(patterns.getContext());
     patterns.add<ExternElementwiseOpConversion>(patterns.getContext());
 
     if (failed(applyPatternsAndFoldGreedily(op, std::move(patterns))))
