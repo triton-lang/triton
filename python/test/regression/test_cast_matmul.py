@@ -71,7 +71,7 @@ def matmul_kernel(A, B, C, M, N, K,  #
                           for o in out_dtypes])
 def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
     if x_dtype == w_dtype:
-        pytest.skip("skip input same dtype")
+        pytest.skip("skip the same input dtype")
     device = torch.cuda.current_device()
     x_dtype = getattr(torch, x_dtype)
     w_dtype = getattr(torch, w_dtype)
