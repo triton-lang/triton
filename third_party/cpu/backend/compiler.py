@@ -42,6 +42,8 @@ class CPUOptions:
     max_num_imprecise_acc_default: int = 0
     enable_fast_math: bool = True
     vec_lib: Optional[str] = 'libsleef'
+    # TODO: Try to enable it.
+    sanitize_overflow: bool = False
 
     # TODO: We may introduce CPU-specific options like # of cores.
 

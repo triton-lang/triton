@@ -86,9 +86,8 @@ struct AssertOpConversion : public OpConversionPattern<triton::AssertOp> {
         cast<VectorType>(condition.getType()).getRank(), true);
     condition = rewriter.create<vector::MultiDimReductionOp>(
         loc, condition, acc, dimsToReduce, vector::CombiningKind::AND);
-    rewriter.replaceOpWithNewOp<triton::cpu::AssertOp>(
-        op, condition, op.getMessage(), op.getFile(), op.getFunc(),
-        op.getLine());
+    rewriter.replaceOpWithNewOp<triton::cpu::AssertOp>(op, condition,
+                                                       op.getMessage());
     return success();
   }
 };

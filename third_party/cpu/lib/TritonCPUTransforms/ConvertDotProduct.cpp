@@ -204,7 +204,7 @@ struct ConvertMulSumToDotHorizontalSum
 
     SmallVector<Type> resultTypes = {outResTy};
     // TODO: this intrinsic is hard-coded for Arm Neon
-    llvm::StringRef bfdotIntrinsic("llvm.aarch64.neon.bfdot.v4f32.v8bf16");
+    auto bfdot = StringAttr::get(ctx, "llvm.aarch64.neon.bfdot.v4f32.v8bf16");
     SmallVector<Value> args;
 
     for (int64_t idx = 0; idx < numOfBfdotOps; idx += 1) {
@@ -221,7 +221,8 @@ struct ConvertMulSumToDotHorizontalSum
         // pair of adjacent bf16 elements in the source vectors (8 bf16), and
         // output 4 fp32 elements.
         auto callIntrOp = rewriter.create<LLVM::CallIntrinsicOp>(
-            loc, resultTypes, bfdotIntrinsic, args, LLVM::FastmathFlags::fast);
+            loc, resultTypes, bfdot, args,
+            LLVM::FastmathFlagsAttr::get(ctx, LLVM::FastmathFlags::fast));
         outRes[outIdx] = callIntrOp.getResult(0);
       }
     }
@@ -231,13 +232,14 @@ struct ConvertMulSumToDotHorizontalSum
 
     resultTypes = {resTy.getElementType()};
     // TODO: this intrinsic is hard-coded for Arm Neon
-    llvm::StringRef horizSumIntrinsic("llvm.aarch64.neon.faddv.f32.v4f32");
+    auto horzSum = StringAttr::get(ctx, "llvm.aarch64.neon.faddv.f32.v4f32");
     for (int64_t outIdx = 0; outIdx < numOfOutputChannels; outIdx += 1) {
       args = {outRes[outIdx]};
       // This horizontal sum intrinsic will sum all fp32 elements in the source
       // vector into a single fp32 element
       auto callIntrOp = rewriter.create<LLVM::CallIntrinsicOp>(
-          loc, resultTypes, horizSumIntrinsic, args, LLVM::FastmathFlags::fast);
+          loc, resultTypes, horzSum, args,
+          LLVM::FastmathFlagsAttr::get(ctx, LLVM::FastmathFlags::fast));
       res = rewriter.create<vector::InsertOp>(loc, callIntrOp.getResult(0), res,
                                               outIdx);
     }
@@ -398,7 +400,7 @@ struct ConvertMulSumToDotPack
         loc, fullResTy, rewriter.getZeroAttr(fullResTy));
     SmallVector<Type> resultTypes = {subResTy};
     // TODO: this intrinsic is hard-coded for Arm Neon
-    llvm::StringRef bfdotIntrinsic("llvm.aarch64.neon.bfdot.v4f32.v8bf16");
+    auto bfdot = StringAttr::get(ctx, "llvm.aarch64.neon.bfdot.v4f32.v8bf16");
     SmallVector<Value> args;
 
     SmallVector<Value> subRes(numOfOutputRegs);
@@ -429,8 +431,8 @@ struct ConvertMulSumToDotPack
           // each pair of adjacent bf16 elements in the source vectors
           // (8 bf16), and output 4 fp32 elements.
           auto callIntrOp = rewriter.create<LLVM::CallIntrinsicOp>(
-              loc, resultTypes, bfdotIntrinsic, args,
-              LLVM::FastmathFlags::fast);
+              loc, resultTypes, bfdot, args,
+              LLVM::FastmathFlagsAttr::get(ctx, LLVM::FastmathFlags::fast));
           subRes[outIdx] = callIntrOp.getResult(0);
         }
       }

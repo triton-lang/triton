@@ -256,20 +256,29 @@ struct AssertOpConversion
     Value message =
         LLVM::addStringToModule(loc, rewriter, "assertMessage_",
                                 makeNullTerminatedString(adaptor.getMessage()));
-    Value file =
-        LLVM::addStringToModule(loc, rewriter, "assertFile_",
-                                makeNullTerminatedString(adaptor.getFile()));
-    Value func =
-        LLVM::addStringToModule(loc, rewriter, "assertFunc_",
-                                makeNullTerminatedString(adaptor.getFunc()));
-    SmallVector<Value> args{getPid(op, 0),
-                            getPid(op, 1),
-                            getPid(op, 2),
-                            op.getCondition(),
-                            message,
-                            file,
-                            i32_val(adaptor.getLine()),
-                            func};
+
+    // Based on lib/Conversion/TritonGPUToLLVM/AssertOpToLLVM.cpp.
+    StringRef fileStr = "unknown";
+    StringRef funcStr = "unknown";
+    int line = 0;
+    int col = 0;
+
+    while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
+      loc = callLoc.getCallee();
+
+    if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
+      fileStr = fileLineColLoc.getFilename();
+      line = fileLineColLoc.getLine();
+      col = fileLineColLoc.getColumn();
+    }
+
+    Value file = LLVM::addStringToModule(loc, rewriter, "assertFile_",
+                                         makeNullTerminatedString(fileStr));
+    Value func = LLVM::addStringToModule(loc, rewriter, "assertFunc_",
+                                         makeNullTerminatedString(funcStr));
+    SmallVector<Value> args{getPid(op, 0),     getPid(op, 1), getPid(op, 2),
+                            op.getCondition(), message,       file,
+                            i32_val(line),     func};
     call(getAssertFuncDecl(rewriter), args);
     rewriter.eraseOp(op);
     return success();

@@ -375,3 +375,7 @@ class CPUDriver(DriverBase):
     @staticmethod
     def is_active():
         return True
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench

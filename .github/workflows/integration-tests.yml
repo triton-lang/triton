@@ -11,12 +11,14 @@ on:
   workflow_dispatch:
 # Disabled automatic triggers because tests in this workflow fail to run.
 #   pull_request:
+#     # You can name your branch dev-foo to get CI runs.
 #     branches-ignore: ['llvm-**']
 #   merge_group:
 #     branches: [main, 'dev-**']
 #     types: [checks_requested]
 #   push:
 #     branches: [main]
+
 concurrency:
   group: ${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
