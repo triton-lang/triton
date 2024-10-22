@@ -321,8 +321,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       //         simply reorder the elements of adaptor.getSrc().
       return transferWithinThread(op, *conversion, adaptor, rewriter);
     } else {
-      // Nothing to do. We should remove these ops in removeLayoutConversion.
-      rewriter.replaceOp(op, op.getSrc());
+      // The two layouts are equivalent. We should probably remove these in
+      // RemoveLayoutConversion.
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
   }
@@ -338,8 +339,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals;
-    outVals.resize(conversion.getOutDimSize(kRegister));
-    for (int i = 0; i < conversion.getOutDimSize(kRegister); i++) {
+    outVals.resize(conversion.getInDimSize(kRegister));
+    for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
       auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
       outVals[i] = inVals[srcIdx];
     }

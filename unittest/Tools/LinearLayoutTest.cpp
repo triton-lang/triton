@@ -613,51 +613,32 @@ TEST_F(LinearLayoutTest, SublayoutIsZero) {
 }
 
 TEST_F(LinearLayoutTest, SublayoutIsIdentity) {
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
-                  .sublayoutIsIdentity({S("in")}, {S("out")}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
-                  .sublayoutIsIdentity({}, {S("out")}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
-                  .sublayoutIsIdentity({S("in")}, {}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
-                  .sublayoutIsIdentity({}, {}));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
+                  .squareSublayoutIsIdentity({S("in")}));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
+                  .squareSublayoutIsIdentity({}));
 
   LinearLayout l1(
       {{S("in1"), {{1, 1}, {2, 2}, {4, 4}}}, {S("in2"), {{2, 1}, {1, 2}}}},
-      {{S("out1"), 8}, {S("out2"), 8}}, /*requireSurjective=*/false);
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out2")}));
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1")}, {S("out1"), S("out2")}));
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1")}, {S("out2"), S("out1")}));
-  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in1")}, {S("out1")}));
-  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in1")}, {S("out2")}));
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in2")}, {S("out1")}));
-  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in2")}, {S("out2")}));
+      {{S("in1"), 8}, {S("in2"), 8}}, /*requireSurjective=*/false);
+  EXPECT_TRUE(l1.squareSublayoutIsIdentity({S("in1")}));
+  EXPECT_FALSE(l1.squareSublayoutIsIdentity({S("in2")}));
 
-  LinearLayout l2 =
-      LinearLayout::identity1D(4, S("in1"), S("out1")) *
-      LinearLayout::identity1D(8, S("in2"), S("out2")) *
-      LinearLayout({{S("in3"), {{1, 1, 1}}}},
-                   {{S("out1"), 2}, {S("out2"), 2}, {S("out3"), 2}},
-                   /*requireSurjective=*/false);
-  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in1")}, {S("out1")}));
-  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in2")}, {S("out2")}));
-  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in3")}, {S("out3")}));
-  EXPECT_FALSE(
-      l2.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1"), S("out2")}));
-  EXPECT_FALSE(l2.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
-  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in1"), S("in3")}, {S("out1")}));
+  LinearLayout l2 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
+                    LinearLayout::identity1D(8, S("in2"), S("in2")) *
+                    LinearLayout({{S("in3"), {{1, 1, 1}}}},
+                                 {{S("in1"), 2}, {S("in2"), 2}, {S("in3"), 2}},
+                                 /*requireSurjective=*/false);
+  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1")}));
+  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in2")}));
+  EXPECT_TRUE(l2.squareSublayoutIsIdentity({S("in3")}));
+  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1"), S("in2")}));
 
-  LinearLayout l3 = LinearLayout::identity1D(4, S("in1"), S("out1")) *
-                    LinearLayout::identity1D(8, S("in2"), S("out2"));
-  EXPECT_TRUE(l3.sublayoutIsIdentity({S("in1")}, {S("out1")}));
-  EXPECT_TRUE(l3.sublayoutIsIdentity({S("in2")}, {S("out2")}));
-  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1")}, {S("out2")}));
-  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in2")}, {S("out1")}));
-  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
-  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out2")}));
-  EXPECT_TRUE(
-      l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1"), S("out2")}));
+  LinearLayout l3 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
+                    LinearLayout::identity1D(8, S("in2"), S("in2"));
+  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1")}));
+  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in2")}));
+  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1"), S("in2")}));
 }
 
 TEST_F(LinearLayoutTest, FreeVariableMasks) {

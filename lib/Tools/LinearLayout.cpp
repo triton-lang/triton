@@ -681,7 +681,7 @@ bool LinearLayout::canQuotient(ArrayRef<StringAttr> dimNames) const {
   // We can quotient out dimNames iff they don't affect the remainingInDimNames
   // in the result. In other words, we want to check that B is zero, and C is
   // zero, and D is the identity
-  return sublayoutIsIdentity(dimNames, dimNames) &&
+  return squareSublayoutIsIdentity(dimNames) &&
          sublayoutIsZero(remainingInDimNames, dimNames) &&
          sublayoutIsZero(dimNames, remainingOutDimNames);
 }
@@ -760,13 +760,22 @@ bool LinearLayout::sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
   return true;
 }
 
-bool LinearLayout::sublayoutIsIdentity(ArrayRef<StringAttr> inDimNames,
-                                       ArrayRef<StringAttr> outDimNames) const {
-  LinearLayout sl =
-      sublayout(inDimNames, outDimNames).flattenIns().flattenOuts();
-  if (sl.getNumInDims() == 0 || sl.getNumOutDims() == 0) {
+bool LinearLayout::squareSublayoutIsIdentity(
+    ArrayRef<StringAttr> dimNames) const {
+  // The empty layout is the identity
+  if (dimNames.size() == 0) {
     return true;
   }
+  // Check that the input-output sizes are the same
+  LinearLayout sl = sublayout(dimNames, dimNames);
+  for (StringAttr dim : dimNames) {
+    if (getInDimSize(dim) != getOutDimSize(dim)) {
+      return false;
+    }
+  }
+  // Once the inputs and output dimensions are the same, we can just check
+  // that the basis for the single remaining dimension is the identity.
+  sl = sl.flattenIns().flattenOuts();
   int b = 0;
   const auto &inDimBases = sl.bases.begin()->second;
   for (auto basis : inDimBases) {
