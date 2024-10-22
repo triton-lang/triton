@@ -1,21 +1,13 @@
 #include "mlir/Analysis/Liveness.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/Allocation.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "llvm/ADT/MapVector.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 
 using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
-using namespace triton::nvidia_gpu;
 
 namespace {
 
@@ -29,7 +21,7 @@ static void allocateGMem(Operation *parentOp,
   // Recursively visit any dependency functions
   parentOp->walk([&](triton::CallOp call) {
     auto callable = call.resolveCallable();
-    if (!callable->hasAttr("triton_nvidia_gpu.global_scratch_memory_size")) {
+    if (!callable->hasAttr("triton_gpu.global_scratch_memory_size")) {
       auto inserted = callStack.insert(parentOp);
       assert(inserted && "call cycle detected");
       allocateGMem(callable, callStack);
@@ -48,15 +40,15 @@ static void allocateGMem(Operation *parentOp,
   parentOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     uint32_t nbytes = 0;
     uint32_t align = 0;
-    if (auto alloc = dyn_cast<triton::nvidia_gpu::GlobalScratchAllocOp>(op)) {
+    if (auto alloc = dyn_cast<triton::gpu::GlobalScratchAllocOp>(op)) {
       nbytes = alloc.getNbytes();
       align = alloc.getAlignment();
     } else if (auto callOp = dyn_cast<triton::CallOp>(op)) {
       auto callable = callOp.resolveCallable();
       auto nbytes_attr = callable->getAttrOfType<IntegerAttr>(
-          "triton_nvidia_gpu.global_scratch_memory_size");
+          "triton_gpu.global_scratch_memory_size");
       auto align_attr = callable->getAttrOfType<IntegerAttr>(
-          "triton_nvidia_gpu.global_scratch_memory_alignment");
+          "triton_gpu.global_scratch_memory_alignment");
       assert(nbytes_attr);
       assert(align_attr);
 
@@ -65,22 +57,22 @@ static void allocateGMem(Operation *parentOp,
     }
     if (nbytes > 0) {
       offset = roundUp(offset, align);
-      op->setAttr("triton_nvidia_gpu.global_scratch_memory_offset",
+      op->setAttr("triton_gpu.global_scratch_memory_offset",
                   builder.getI32IntegerAttr(offset));
       offset += nbytes;
       largestAlignment = std::max(largestAlignment, align);
     }
   });
   int32_t totalMemorySize = roundUp(offset, largestAlignment);
-  parentOp->setAttr("triton_nvidia_gpu.global_scratch_memory_size",
+  parentOp->setAttr("triton_gpu.global_scratch_memory_size",
                     builder.getI32IntegerAttr(totalMemorySize));
-  parentOp->setAttr("triton_nvidia_gpu.global_scratch_memory_alignment",
+  parentOp->setAttr("triton_gpu.global_scratch_memory_alignment",
                     builder.getI32IntegerAttr(largestAlignment));
 }
 
-class TritonNvidiaGPUGlobalScratchAllocationPass
-    : public TritonNvidiaGPUGlobalScratchAllocationPassBase<
-          TritonNvidiaGPUGlobalScratchAllocationPass> {
+class TritonGPUGlobalScratchAllocationPass
+    : public TritonGPUGlobalScratchAllocationPassBase<
+          TritonGPUGlobalScratchAllocationPass> {
 public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
@@ -95,25 +87,22 @@ public:
         assert(!seenKernel);
         seenKernel = true;
         auto size = func->getAttrOfType<IntegerAttr>(
-            "triton_nvidia_gpu.global_scratch_memory_size");
+            "triton_gpu.global_scratch_memory_size");
         auto align = func->getAttrOfType<IntegerAttr>(
-            "triton_nvidia_gpu.global_scratch_memory_alignment");
+            "triton_gpu.global_scratch_memory_alignment");
         assert(size);
         assert(align);
-        mod->setAttr("triton_nvidia_gpu.global_scratch_memory_size", size);
-        mod->setAttr("triton_nvidia_gpu.global_scratch_memory_alignment",
-                     align);
+        mod->setAttr("triton_gpu.global_scratch_memory_size", size);
+        mod->setAttr("triton_gpu.global_scratch_memory_alignment", align);
       }
     });
+    assert(seenKernel);
   }
 };
 
 } // namespace
 
-namespace mlir {
-
-std::unique_ptr<Pass> createTritonNvidiaGPUGlobalScratchAllocationPass() {
-  return std::make_unique<TritonNvidiaGPUGlobalScratchAllocationPass>();
+std::unique_ptr<Pass>
+mlir::triton::gpu::createTritonGPUGlobalScratchAllocationPass() {
+  return std::make_unique<TritonGPUGlobalScratchAllocationPass>();
 }
-
-} // namespace mlir

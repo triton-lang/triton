@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -112,7 +113,7 @@ public:
     auto loc = op.getLoc();
     constexpr auto kTmaNbytes = 128;
     constexpr auto kTmaAlignment = 128;
-    auto alloc = rewriter.create<triton::nvidia_gpu::GlobalScratchAllocOp>(
+    auto alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
         loc, getPointerType(rewriter.getI8Type()), kTmaNbytes, kTmaAlignment);
     auto mkI32Constant = [&](int32_t val) {
       return rewriter.create<arith::ConstantOp>(

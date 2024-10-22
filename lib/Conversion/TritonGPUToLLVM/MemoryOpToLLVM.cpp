@@ -35,6 +35,34 @@ void lowerDistributedToShared(
                            loc, rewriter, targetInfo, llvmOpCount);
 }
 
+struct GlobalScratchAllocOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
+  GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
+        "triton_gpu.global_scratch_memory_offset");
+    assert(opOffsetAttr);
+    auto opOffset = opOffsetAttr.getValue().getZExtValue();
+
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!funcOp) {
+      return failure();
+    }
+    Value ptr =
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+
+    rewriter.replaceOp(op, ptr);
+    return success();
+  }
+};
+
 struct LocalAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
   LocalAllocOpConversion(const LLVMTypeConverter &converter,
@@ -241,6 +269,7 @@ void mlir::triton::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit,
     std::optional<BackendCallbacks> backendCallbacks) {
+  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
