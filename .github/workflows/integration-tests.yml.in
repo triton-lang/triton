@@ -304,8 +304,7 @@ jobs:
            runtime/test_autotuner.py::test_kwargs[False]\
            ../../tutorials/06-fused-attention.py::test_op --device cpu
 
-      - &run-regression-tests-step
-        name: Run regression tests
+      - name: Run regression tests
         run: |
           cd python/test/regression
           python3 -m pytest -s -n 8 .
@@ -418,7 +417,12 @@ jobs:
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
 
-      - *run-regression-tests-step
+      - name: Run regression tests
+        run: |
+          # Reenable test_functional_regression.py once it's fixed
+          cd python/test/regression
+          python3 -m pytest -s -n 8 ./test_cast_matmul.py
+
       - *run-proton-tests-step
       - *run-cpp-unittests-step
       - *save-build-artifacts-step

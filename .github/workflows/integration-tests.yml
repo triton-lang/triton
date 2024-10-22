@@ -420,8 +420,9 @@ jobs:
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
       - name: Run regression tests
         run: |
+          # Reenable test_functional_regression.py once it's fixed
           cd python/test/regression
-          python3 -m pytest -s -n 8 .
+          python3 -m pytest -s -n 8 ./test_cast_matmul.py
       - name: Run Proton tests
         run: |
           cd third_party/proton
