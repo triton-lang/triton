@@ -612,7 +612,7 @@ TEST_F(LinearLayoutTest, SublayoutIsZero) {
   EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out2")}));
 }
 
-TEST_F(LinearLayoutTest, SublayoutIsIdentity) {
+TEST_F(LinearLayoutTest, SquareSublayoutIsIdentity) {
   EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
                   .squareSublayoutIsIdentity({S("in")}));
   EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
