@@ -642,15 +642,25 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
 
 namespace {
 
+// Count the number of not free registers in a layout.
+// A register is free if it maps to duplicate values in the layout.
+// For example, in the following layout, the number of not free registers is 8
+//
+//   register=1 -> 0
+//   register=2 -> 1
+//   register=4 -> 0
+//   register=8 -> 2
+//   register=16 -> 4
+//
 int32_t countNotFreeRegs(int32_t numRegs, int32_t freeRegMasks) {
   auto numRegsLog2 = llvm::Log2_32(numRegs);
-  auto numFreeRegs = 0;
+  auto numNotFreeRegsLog2 = 0;
   for (auto i = 0; i < numRegsLog2; i++) {
-    if (freeRegMasks & (1 << i)) {
-      numFreeRegs += (1 << i);
+    if ((freeRegMasks & (1 << i)) == 0) {
+      numNotFreeRegsLog2++;
     }
   }
-  return numRegs - numFreeRegs;
+  return 1 << numNotFreeRegsLog2;
 }
 
 } // namespace
