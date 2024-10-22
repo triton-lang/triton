@@ -659,15 +659,8 @@ struct AtomicRMWOpConversion
       return false;
     }
 
-    switch (opType) {
-    case RMWOp::FADD:
-      return elementType.isF16() || elementType.isBF16() || elementType.isF32();
-    case RMWOp::MAX:
-    case RMWOp::MIN:
-      return elementType.isF16() || elementType.isBF16();
-    default:
-      return false;
-    }
+    return opType == RMWOp::FADD &&
+           (elementType.isF16() || elementType.isBF16() || elementType.isF32());
   }
 
   LogicalResult
