@@ -656,13 +656,27 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
         srcLayout->getInDimSize(kBlock) != dstLayout->getInDimSize(kBlock)) {
       return false;
     }
+    auto srcFreeVarMasks = srcLayout->getFreeVariableMasks()[kReg];
+    auto dstFreeVarMasks = dstLayout->getFreeVariableMasks()[kReg];
+    auto numSrcRegs = srcLayout->getInDimSize(kReg);
+    auto numDstRegs = dstLayout->getInDimSize(kReg);
+    auto numNonFreeSrcRegs = numSrcRegs - __builtin_popcount(srcFreeVarMasks);
+    auto numNonFreeDstRegs = numDstRegs - __builtin_popcount(dstFreeVarMasks);
+    // If we don't have the same number of non-free registers in the source and
+    // destination layouts, we can't transfer by shuffling registers.
+    // If source has more non-free registers than destination, we will lose
+    // some values when transferring.
+    // If destination has more non-free registers than source, we will have
+    // uninitialized values when transferring.
+    if (numNonFreeDstRegs != numNonFreeSrcRegs) {
+      return false;
+    }
     // We need to ensure that the number of registers is the same in the source
     // and destination layouts.  We do this by padding the smaller layout with
     // extra registers.
-    auto regSize =
-        std::max(srcLayout->getInDimSize(kReg), dstLayout->getInDimSize(kReg));
-    auto srcLayoutWithFreeReg = srcLayout->resize(kReg, regSize);
-    auto dstLayoutWithFreeReg = dstLayout->resize(kReg, regSize);
+    auto numRegs = std::max(numSrcRegs, numDstRegs);
+    auto srcLayoutWithFreeReg = srcLayout->resize(kReg, numRegs);
+    auto dstLayoutWithFreeReg = dstLayout->resize(kReg, numRegs);
     // comp describes the layout function for converting from src to dst.
     LinearLayout comp =
         srcLayoutWithFreeReg.invertAndCompose(dstLayoutWithFreeReg);
