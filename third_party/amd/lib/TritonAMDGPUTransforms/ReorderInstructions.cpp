@@ -1,4 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
@@ -247,6 +248,47 @@ public:
           dfgop->moveBefore(block, block->begin());
       }
     }
+
+    // FIXME: check if we have nw=4 and 2waves (let's limit it with 128x128x64 tile size for now)
+    m.walk([&](scf::ForOp forOp) {
+      OpBuilder builder(forOp);
+      MLIRContext *ctx = forOp.getContext();
+      Location loc = forOp.getLoc();
+      IntegerAttr schedMaskAttr = IntegerAttr::get(IntegerType::get(ctx, 32), 6);
+      IntegerAttr schedMaskAttr0 = IntegerAttr::get(IntegerType::get(ctx, 32), 0);
+      IntegerAttr zeroAttr = IntegerAttr::get(IntegerType::get(ctx, 16), 0);
+      SmallVector<Operation *> gLoadOps;
+      SmallVector<Operation *> lLoadOps;
+      SmallVector<Operation *> dotOps;
+
+      forOp.walk([&](triton::LoadOp op) { gLoadOps.push_back(op); });
+      forOp.walk([&](ttg::LocalLoadOp op) { lLoadOps.push_back(op); });
+      forOp.walk([&](triton::DotOp op) { dotOps.push_back(op); });
+      // FIXME: Check this is a gemm kernel
+      // get a dot, check if 2 x gLoad and 2 x lLoad feed the dot.
+
+      // start from low priority
+      auto setPrio0 = builder.create<ROCDL::SetPrioOp>(loc, zeroAttr);
+      setPrio0->moveAfter(lLoadOps[0]);
+
+      // Splitting loading A and B inorder to prevent global/local load units
+      // from the congestion.
+      // Locate global load at the end. Otherwise, local_load at the end of
+      // the sequence will be overlapped with the first local_stores from 
+      // the other warp. sched.barriers to keep the order.
+      gLoadOps[0]->moveAfter(lLoadOps[0]);
+      auto schedB0 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
+      schedB0->moveAfter(lLoadOps[0]);
+      auto schedB1 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
+      schedB1->moveAfter(gLoadOps[0]);
+      gLoadOps[1]->moveAfter(lLoadOps[1]);
+      auto schedB2 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
+      schedB2->moveAfter(lLoadOps[1]);
+      auto schedB3 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr0);
+      schedB3->moveAfter(gLoadOps[1]);
+      auto schedB4 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr0);
+      schedB4->moveAfter(dotOps[0]);
+    });
   }
 };
 
