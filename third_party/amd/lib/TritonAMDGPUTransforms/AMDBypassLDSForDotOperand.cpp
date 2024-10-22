@@ -57,7 +57,7 @@
 //
 // The required conditions are:
 //
-// 1. K-Major Tensor Layout:
+// 1. K-Major (K dimension is continuous) Tensor Layout :
 //    The operand we want to bypass LDS for must be K-major (i.e., row-major for
 //    operand 0 or column-major for operand 1). This supports vectorized global
 //    load instructions, as MFMA instructions require each thread to hold B
@@ -87,7 +87,10 @@
 using namespace mlir;
 namespace ttg = triton::gpu;
 
-SmallVector<triton::LoadOp> getLoadInsts(Operation *op, ModuleOp &mod) {
+// Find all tt.load instructions that are involved in computation of a tensor
+// for operand that is getting converted to dot layout.
+SmallVector<triton::LoadOp> getAllLoadOpsReachingOp(Operation *op,
+                                                    ModuleOp &mod) {
   SmallVector<triton::LoadOp> loadOpsVec;
 
   mod.walk([&](triton::LoadOp loadOp) {
@@ -102,21 +105,20 @@ SmallVector<triton::LoadOp> getLoadInsts(Operation *op, ModuleOp &mod) {
   return loadOpsVec;
 }
 
-class TritonAMDGPUBypassLDSForDotOperandPass
+struct TritonAMDGPUBypassLDSForDotOperandPass
     : public TritonAMDGPUBypassLDSForDotOperandBase<
           TritonAMDGPUBypassLDSForDotOperandPass> {
 
-public:
   TritonAMDGPUBypassLDSForDotOperandPass() = default;
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
     auto convertOps = collectConvertOps(module);
 
+    module.dump();
+
     for (ttg::ConvertLayoutOp &convertOp : convertOps) {
-      // Find tt.load instructions that are involved in computation of tensor
-      // for operand that is getting converted to dot layout.
-      auto loadInsts = getLoadInsts(convertOp, module);
+      auto loadInsts = getAllLoadOpsReachingOp(convertOp, module);
       assert(!loadInsts.empty());
 
       // Convert load instructions to dot layout.
@@ -134,8 +136,8 @@ public:
     }
   }
 
-  std::vector<ttg::ConvertLayoutOp> collectConvertOps(ModuleOp &module) {
-    std::vector<ttg::ConvertLayoutOp> convertOps;
+  SmallVector<ttg::ConvertLayoutOp> collectConvertOps(ModuleOp &module) {
+    SmallVector<ttg::ConvertLayoutOp> convertOps;
 
     module.walk([&](ttg::ConvertLayoutOp cvtOp) {
       if (isEligibleConvertOp(cvtOp))
