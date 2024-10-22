@@ -771,9 +771,8 @@ struct AtomicRMWOpConversion
       } else if (packed > 1) {
         Value rmwVal = undef(packedTy);
         for (int ii = 0; ii < packed; ++ii) {
-          Value iiVal = createIndexAttrConstant(
-              rewriter, loc, getTypeConverter()->getIndexType(), ii);
-          rmwVal = insert_element(packedTy, rmwVal, valElements[i + ii], iiVal);
+          rmwVal = insert_element(packedTy, rmwVal, valElements[i + ii],
+                                  int32_val(iiVal));
         }
         valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
       } else {
