@@ -586,7 +586,7 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
     canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
 
     // Upcast or downcast the offset accordingly
-    if (addPtrOffsetType.isInteger(32))
+    if (addPtrOffsetType.isInteger(32) && fatPtrOffsetType.isInteger(64))
       nonUniformOffset =
           extend32bitOffsetTo64Bits(rewriter, curLoc, nonUniformOffset);
     else if (addPtrOffsetType.isInteger(64) && fatPtrOffsetType.isInteger(32))

@@ -1,7 +1,9 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
@@ -10,11 +12,13 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <deque>
+#include <optional>
 
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -118,22 +122,29 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
 bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
   // 1. Check if the pointer is uniform: i.e., if it comes from a uniform
   // pointer(splatted) and non-uniform offset addition
+
+  LDBG("Buffer op checks for: " << ptr);
   auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
-  bool useBufferOps =
-      addPtrOp && isa<triton::SplatOp>(addPtrOp.getPtr().getDefiningOp());
-  LDBG("Pattern matched: " << useBufferOps);
+  if (!addPtrOp)
+    return false;
+
+  auto maybeSplatOp = addPtrOp.getPtr().getDefiningOp<triton::SplatOp>();
+  if (!maybeSplatOp)
+    return false;
+  LDBG("Pattern matched");
 
   // 2. Check if the offset is a 32-bit tensor
   Value offset = addPtrOp.getOffset();
-  useBufferOps =
-      useBufferOps &&
-      (cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth() == 32);
-  LDBG("32 bit offset: " << useBufferOps);
+  if (cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth() != 32)
+    return false;
+  LDBG("32 bit offset");
 
   // 3. Check if the offset is non-negative
-  useBufferOps = useBufferOps && verifyNonNegativeExpr(offset, assumptions);
-  LDBG("Non-negative: " << useBufferOps);
-  return useBufferOps;
+  if (!verifyNonNegativeExpr(offset, assumptions))
+    return false;
+
+  LDBG("Non-negative");
+  return true;
 }
 } // namespace
 
@@ -148,6 +159,7 @@ struct ConvertTritonLoadToBufferLoad
 
   mlir::LogicalResult
   matchAndRewrite(triton::LoadOp op, PatternRewriter &rewriter) const override {
+    LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
 
     if (op.getCache() != triton::CacheModifier::NONE)
@@ -159,10 +171,17 @@ struct ConvertTritonLoadToBufferLoad
       Value tensorOffset = addPtrOp.getOffset();
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
+      Value maybeOther{};
+      if (!isZeroConst(op.getOther()))
+        maybeOther = op.getOther();
+      Value maybeMask{};
+      if (!isZeroConst(op.getMask()))
+        maybeMask = op.getMask();
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferLoadOp>(
-          op, op.getType(), basePtr, tensorOffset, op.getMask(), op.getOther());
+          op, op.getType(), basePtr, tensorOffset, maybeMask, maybeOther);
       return success();
     }
+    LDBG("Failed to convert: " << op);
     return failure();
   }
 
@@ -183,6 +202,7 @@ struct ConvertTritonStoreToBufferStore
   mlir::LogicalResult
   matchAndRewrite(triton::StoreOp op,
                   PatternRewriter &rewriter) const override {
+    LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
 
     if (op.getCache() != triton::CacheModifier::NONE)
@@ -194,10 +214,14 @@ struct ConvertTritonStoreToBufferStore
       Value tensorOffset = addPtrOp.getOffset();
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
+      Value maybeMask{};
+      if (!isZeroConst(op.getMask()))
+        maybeMask = op.getMask();
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, op.getMask());
+          op, op.getValue(), basePtr, tensorOffset, maybeMask);
       return success();
     }
+    LDBG("Failed to convert: " << op);
     return failure();
   }
 
@@ -215,15 +239,18 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    triton::FuncOp f = getOperation();
+    ModuleOp m = getOperation();
     // Collect assumptions in the function
     DenseSet<Value> assumptions;
-    f.walk([&](LLVM::AssumeOp op) { assumptions.insert(op->getOperand(0)); });
+    m.walk([&](LLVM::AssumeOp op) {
+      if (op->getOperand(0).getDefiningOp<arith::CmpIOp>())
+        assumptions.insert(op->getOperand(0));
+    });
     LDBG("Number of assumptions found: " << assumptions.size());
 
     patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions);
     patterns.add<ConvertTritonStoreToBufferStore>(context, assumptions);
-    if (applyPatternsAndFoldGreedily(f, std::move(patterns)).failed())
+    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
 };

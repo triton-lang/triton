@@ -165,7 +165,7 @@ struct LoadStoreConversionBase {
     // Get alignment from the pointer. Since this is a scalar pointer
     // we should not take the pointer contiguity to consider alignment
     auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
-    auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
+    auto maxMultipleBytes = axisInfo->getDivisibility(0);
     auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
     auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
     auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
