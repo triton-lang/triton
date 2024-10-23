@@ -670,22 +670,8 @@ private:
           vecVals.push_back(packed);
         }
       }
-
-      // This needs to be ordered the same way that
-      // ldmatrix.x4 would order it
-      // TODO: this needs to be refactor so we don't
-      // implicitly depends on how emitOffsetsForMMAV2
-      // is implemented
-      SmallVector<Value> reorderedVals;
-      for (unsigned i = 0; i < vecVals.size(); i += 4) {
-        reorderedVals.push_back(bitcast(vecVals[i], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 2], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 1], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
-      }
-
-      Value view = packLLElements(loc, getTypeConverter(), reorderedVals,
-                                  rewriter, dstTy);
+      Value view =
+          packLLElements(loc, getTypeConverter(), vecVals, rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }
