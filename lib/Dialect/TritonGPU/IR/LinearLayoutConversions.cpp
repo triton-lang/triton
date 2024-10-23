@@ -577,7 +577,7 @@ dotOperandMfmaToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   //    as in a blocked layout.
   //
   // Other use of Linear layout is a support of rare corner cases,
-  // for example one instrcution tile is larger than tensor
+  // for example one instruction tile is larger than tensor
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
 
   auto rank = shape.size();
@@ -639,6 +639,10 @@ dotOperandMfmaToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   for (int32_t elem = kTileSize; elem < kSize; elem *= 2)
     registerBase.emplace_back(std::vector<int32_t>{elem, 0});
 
+  // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
+  // To assign them to actual matrix dimensions `order` array is used.
+  // For operand A: non-k-dim -> dim0, k-dim -> dim1
+  // For operand B: non-k-dim -> dim1, k-dim -> dim0
   LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
                           {outDimNames[order[0]], outDimNames[order[1]]});
 
