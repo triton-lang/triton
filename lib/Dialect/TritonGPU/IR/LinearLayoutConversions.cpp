@@ -997,6 +997,8 @@ bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
       mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   if (!mmaLayout || !mmaLayout.isHopper())
     return false;
+  if (isa<PointerType>(tensorTy.getElementType()))
+    return false;
   if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
     return false;
   if (order[0] != 1)
