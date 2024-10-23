@@ -172,10 +172,10 @@ struct ConvertTritonLoadToBufferLoad
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
       Value maybeOther{};
-      if (!isZeroConst(op.getOther()))
+      if (op.getOther() && !isZeroConst(op.getOther()))
         maybeOther = op.getOther();
       Value maybeMask{};
-      if (!isZeroConst(op.getMask()))
+      if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferLoadOp>(
           op, op.getType(), basePtr, tensorOffset, maybeMask, maybeOther);
@@ -215,7 +215,7 @@ struct ConvertTritonStoreToBufferStore
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
       Value maybeMask{};
-      if (!isZeroConst(op.getMask()))
+      if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
           op, op.getValue(), basePtr, tensorOffset, maybeMask);
