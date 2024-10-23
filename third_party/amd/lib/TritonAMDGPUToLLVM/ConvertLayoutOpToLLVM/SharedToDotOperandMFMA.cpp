@@ -231,12 +231,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     mfmaInstrK = elemsPerInstr[kDimIdx];
   }
 
-  if (mfmaInstrNonK > shape[nonKDimIdx] || mfmaInstrK > shape[kDimIdx]) {
-    // This pattern does not support cases tensor shape is smaller than
-    // one instruction size, it will be processed by LinearLayout converter
-    return Value();
-  }
-
   auto numReps = mfmaLayout.getRepForOperand(shape, kWidth, opIdx);
   auto numRepNonK = numReps[nonKDimIdx];
   auto numRepK = numReps[kDimIdx];

@@ -102,14 +102,6 @@ struct LocalDeallocOpConversion
 };
 
 struct LocalLoadOpConversion : public ConvertOpToLLVMPattern<LocalLoadOp> {
-
-  static bool isSupportedDotOpLayout(Attribute layout) {
-    auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout);
-    if (dotOpLayout && isa<AMDMfmaEncodingAttr>(dotOpLayout.getParent()))
-      return true;
-    return false;
-  }
-
 public:
   LocalLoadOpConversion(LLVMTypeConverter &typeConverter,
                         const TargetInfoBase &targetInfo,
@@ -137,7 +129,7 @@ public:
     if (isa<SharedEncodingAttr>(srcLayout) &&
         (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
              dstLayout) ||
-         isSupportedDotOpLayout(dstLayout) || isAmpereLargeKWidth(dstLayout))) {
+         isAmpereLargeKWidth(dstLayout))) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -175,10 +167,10 @@ private:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
     auto dstShape = dstTy.getShape();
+    assert(dstShape.size() <= 2 &&
+           "Unexpected rank of ConvertLayout(shared->blocked)");
     auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto dstLayout = dstTy.getEncoding();
-    assert((dstShape.size() <= 2 || isSupportedDotOpLayout(dstLayout)) &&
-           "Unexpected rank of ConvertLayout(shared->blocked)");
     auto inOrd = getOrder(srcSharedLayout);
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
