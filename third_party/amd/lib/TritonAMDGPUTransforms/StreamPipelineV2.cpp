@@ -74,7 +74,6 @@ public:
   void scheduleDependencies();
   void scheduleDistanceOneDependencies();
   void scheduleRemainingToLastStage(tt::CoarseSchedule::Cluster afterPrologue);
-  void labelLoadOpsForTritonDot();
 
   bool preprocessLoopAndBuildSchedule();
   bool pipelineLoop();
@@ -344,50 +343,6 @@ void StreamPipeliner::assignMemoryLayouts() {
   }
 }
 
-// Go through a single use chain to get the result of the target op after all
-// unary ops - e.g., `convert_layout`, `fp_to_fp`, etc.
-template <typename TargetOpType>
-FailureOr<Operation *> rewindUnaryOps(Value value) {
-  auto getNextUnaryOps = [](Value value) -> FailureOr<Operation *> {
-    auto defOp = value.getDefiningOp();
-    if (isa<BlockArgument>(value))
-      return failure();
-    if (defOp->getNumOperands() == 1)
-      return defOp;
-    return failure();
-  };
-
-  auto maybeUnaryOp = getNextUnaryOps(value);
-  while (llvm::succeeded(maybeUnaryOp)) {
-    auto unaryOp = maybeUnaryOp.value();
-    if (llvm::dyn_cast<TargetOpType>(unaryOp))
-      return unaryOp;
-
-    maybeUnaryOp = getNextUnaryOps(unaryOp->getOperand(0));
-  }
-  return failure();
-}
-
-// Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
-// index. Note, this is a part of the instruction scheduling routine. Currently,
-// we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
-void StreamPipeliner::labelLoadOpsForTritonDot() {
-  mlir::MLIRContext *ctx = forOp->getContext();
-  auto maybeSingleDotOp = triton::hasSingleDotOp(forOp);
-
-  if (llvm::succeeded(maybeSingleDotOp)) {
-    triton::DotOp dotOp = maybeSingleDotOp.value();
-    for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
-      auto maybeLoadOp = rewindUnaryOps<triton::LoadOp>(dotOperand);
-      if (llvm::succeeded(maybeLoadOp)) {
-        auto loadOp = maybeLoadOp.value();
-        auto opIdxAttr = triton::amdgpu::OpIdxAttr::get(ctx, opIdx);
-        loadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
-      }
-    }
-  }
-}
-
 void StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
   // Get all loads that are (transitively) used by dot ops and their distance
   // to the dot op.
@@ -645,8 +600,6 @@ void StreamPipeliner::createStreamOps() {
 }
 
 bool StreamPipeliner::preprocessLoopAndBuildSchedule() {
-  labelLoadOpsForTritonDot();
-
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
   // a scaffold for the final schedule.
   DenseSet<Operation *> rootUsers;
@@ -738,6 +691,50 @@ bool StreamPipeliner::pipelineLoop() {
 }
 
 namespace {
+// Go through a single use chain to get the result of the target op after all
+// unary ops - e.g., `convert_layout`, `fp_to_fp`, etc.
+template <typename TargetOpType>
+FailureOr<Operation *> rewindUnaryOps(Value value) {
+  auto getNextUnaryOps = [](Value value) -> FailureOr<Operation *> {
+    auto defOp = value.getDefiningOp();
+    if (isa<BlockArgument>(value))
+      return failure();
+    if ((defOp->getNumOperands() == 1) || llvm::dyn_cast<TargetOpType>(defOp))
+      return defOp;
+    return failure();
+  };
+
+  auto maybeUnaryOp = getNextUnaryOps(value);
+  while (llvm::succeeded(maybeUnaryOp)) {
+    auto unaryOp = maybeUnaryOp.value();
+    if (llvm::dyn_cast<TargetOpType>(unaryOp))
+      return unaryOp;
+
+    maybeUnaryOp = getNextUnaryOps(unaryOp->getOperand(0));
+  }
+  return failure();
+}
+
+// Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
+// index. Note, this is a part of the instruction scheduling routine. Currently,
+// we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
+void labelLoadOpsForTritonDot(scf::ForOp forOp) {
+  mlir::MLIRContext *ctx = forOp->getContext();
+  auto maybeSingleDotOp = triton::hasSingleDotOp(forOp);
+
+  if (llvm::succeeded(maybeSingleDotOp)) {
+    triton::DotOp dotOp = maybeSingleDotOp.value();
+    for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
+      auto maybeLoadOp = rewindUnaryOps<triton::LoadOp>(dotOperand);
+      if (llvm::succeeded(maybeLoadOp)) {
+        auto loadOp = maybeLoadOp.value();
+        auto opIdxAttr = triton::amdgpu::OpIdxAttr::get(ctx, opIdx);
+        loadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
+      }
+    }
+  }
+}
+
 struct PipelinePass : public TritonAMDGPUStreamPipelineV2Base<PipelinePass> {
   PipelinePass() = default;
   PipelinePass(int32_t numStages) { this->numStages = numStages; }
@@ -745,6 +742,7 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineV2Base<PipelinePass> {
   void runOnOperation() override {
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {
+      labelLoadOpsForTritonDot(forOp);
       // Bail out for loops with num_stage <= 1.
       if (getNumStagesOrDefault(forOp) > 1)
         loops.push_back(forOp);

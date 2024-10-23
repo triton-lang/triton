@@ -98,7 +98,7 @@ void storeOpConversionCallback(triton::gpu::LocalStoreOp op,
   });
 }
 
-llvm::FailureOr<triton::DotOp> hasSingleDotOp(scf::ForOp forOp) {
+mlir::FailureOr<triton::DotOp> hasSingleDotOp(scf::ForOp forOp) {
   triton::DotOp dotOp = nullptr;
   size_t dotCounter = 0;
   forOp->walk(
@@ -107,7 +107,7 @@ llvm::FailureOr<triton::DotOp> hasSingleDotOp(scf::ForOp forOp) {
   if (dotCounter == 1)
     return dotOp;
 
-  return llvm::failure();
+  return mlir::failure();
 }
 } // namespace mlir::triton
 
@@ -187,8 +187,9 @@ struct InstructionSchedHintsRewriter
 
     if (!(schedHint.getIsBufferLoadsAEnabled() &&
           schedHint.getIsBufferLoadsBEnabled())) {
-      LDBG("Skipping instruction scheduling because `ckv3` "
-           "scheduling can be used only with `buffer_load` instructions");
+      schedHint.emitError(
+          "Skipping instruction scheduling because `ck_v3` "
+          "scheduling can be used only with `buffer_load` instructions");
       return;
     }
 
@@ -203,10 +204,11 @@ struct InstructionSchedHintsRewriter
     const uint32_t numBufferLoadInstB =
         schedHint.getNumGlobalLoadsB().getValue();
 
-    assert(numBufferLoadInstA &&
-           "buffer load count for tile A must be initialized");
-    assert(numBufferLoadInstB &&
-           "buffer load count for tile B must be initialized");
+    if (numBufferLoadInstA == 0)
+      schedHint.emitError("buffer load count for tile A must be initialized");
+
+    if (numBufferLoadInstB == 0)
+      schedHint->emitError("buffer load count for tile B must be initialized");
 
     const uint32_t numMfmaInst = schedHint.getNumMMAs().getValue();
 
@@ -305,7 +307,8 @@ struct InstructionSchedHintsRewriter
                   PatternRewriter &rewriter) const override {
 
     if (this->schedulingType == SchedulingType::UNKNOWN) {
-      LDBG("unknown instruction scheduling variant has been provided");
+      instructionSchedHint.emitError(
+          "unknown instruction scheduling variant has been provided");
       return mlir::failure();
     }
 
@@ -380,11 +383,14 @@ struct TritonAMDGPULowerInstructionSchedHints
     target.addLegalOp<ROCDL::SchedGroupBarrier>();
 
     RewritePatternSet patterns(ctx);
+
     patterns.add<InstructionSchedHintsRewriter>(ctx, this->numStages,
+
                                                 this->variant);
 
-    if (failed(applyPartialConversion(getOperation(), target,
-                                      std::move(patterns)))) {
+    if (mlir::failed(applyPartialConversion(getOperation(), target,
+                                            std::move(patterns)))) {
+
       signalPassFailure();
     }
   }
@@ -404,7 +410,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
       // Note, instruction schedule barriers are inserted only in the case of
       // a single `tt.dot` op in a `scf::ForOp` scope in the current
       // implementation.
-      if (llvm::succeeded(maybeSingleDotOp)) {
+      if (mlir::succeeded(maybeSingleDotOp)) {
         triton::DotOp dotOp = maybeSingleDotOp.value();
         mlir::OpBuilder rewriter(ctx);
         rewriter.setInsertionPointAfter(dotOp);
