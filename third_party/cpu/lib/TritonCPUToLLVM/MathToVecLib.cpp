@@ -231,11 +231,12 @@ private:
 class SleefNameGenerator {
 public:
   SleefNameGenerator(StringRef baseName, unsigned ulp = 10)
-      : baseName(baseName), ulpSuffix(4, '\0') {
+      : baseName(baseName), ulpSuffix(5, '\0') {
     if (ulp == 0)
       ulpSuffix = "";
     else
-      sprintf(ulpSuffix.data(), "_u%02u", ulp);
+      // snprintf inserts '\0' at the end
+      snprintf(ulpSuffix.data(), ulpSuffix.size(), "_u%02u", ulp);
   }
 
   std::string operator()(unsigned bitwidth, unsigned numel,

@@ -20,7 +20,9 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#ifdef __linux__
 #include <asm/prctl.h>
+#endif // __linux__
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -159,7 +161,7 @@ void init_triton_cpu(py::module &&m) {
   init_triton_cpu_passes_ttcpuir(passes.def_submodule("ttcpuir"));
 
   m.def("enable_amx", []() -> bool {
-#ifdef ARCH_REQ_XCOMP_PERM
+#if defined(__linux__) && defined(ARCH_REQ_XCOMP_PERM)
     // AMX usage requires extended XSTATE which is disabled by default. We
     // need to request access to AMX so that XSTATE was dynamically extended
     // on the first AMX usage instead of issuing SIGILL.
@@ -171,7 +173,7 @@ void init_triton_cpu(py::module &&m) {
     return true;
 #else
     return false;
-#endif
+#endif // __linux__ && ARCH_REQ_XCOMP_PERM
   });
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
