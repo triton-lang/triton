@@ -98,6 +98,23 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   return mask;
 }
 
+std::string getRegisterSizeCode(int size, bool is_float) {
+  switch (size) {
+  case 1:
+    return "b";
+  case 16:
+    return "h";
+  case 32:
+    return is_float ? "f" : "r";
+  case 64:
+    return is_float ? "d" : "l";
+  case 128:
+    return "q";
+  default:
+    llvm_unreachable("Unsupported register size");
+  }
+}
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const NVIDIA::TargetInfo &targetInfo,
@@ -632,6 +649,20 @@ struct AtomicRMWOpConversion
       : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
+  bool supportsVectorized(Operation *moduleOp, RMWOp opType,
+                          Type elementType) const {
+    // vectorized atomics are only supported on hopper,
+    // and only for specific atomic ops (add, min, max).
+    // Note that "packed types" like f16x2 are supported sm60+.
+    auto computeCapability = getNVIDIAComputeCapability(moduleOp);
+    if (computeCapability < 90) {
+      return false;
+    }
+
+    return opType == RMWOp::FADD &&
+           (elementType.isF16() || elementType.isBF16() || elementType.isF32());
+  }
+
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -664,45 +695,82 @@ struct AtomicRMWOpConversion
                  : valueTy;
     const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
-    // vec = 1, numElements = 1 for scalar
-    auto vec = getVectorSize(ptr);
-    auto vecOrig = vec;
-    int numElems = 1;
-    // tensor
+    // packed: e.g. packed=2 for f16x2
+    // vec: e.g. .v2, .v4, .v8 version of atom instruction.
+    unsigned vec, vecOrig;
+    int numElems, packed;
     if (tensorTy) {
+      vec = getVectorSize(ptr);
+      if (llMask) {
+        vec = std::min<unsigned>(vec, getMaskAlignment(op.getMask()));
+      }
+      vecOrig = vec;
+      packed = 1;
       auto valTy = cast<RankedTensorType>(val.getType());
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
-      // mask
+      if (!supportsVectorized(moduleOp, atomicRmwAttr,
+                              valTy.getElementType())) {
+        packed =
+            std::min<unsigned>(vecOrig, valTy.getElementType().isF16() ? 2 : 1);
+        vec = 1;
+      }
       numElems = tensorTy.getNumElements();
+    } else {
+      // scalar
+      vec = 1;
+      vecOrig = 1;
+      numElems = 1;
+      packed = 1;
     }
+    assert((packed == 1 || vec == 1) && "packed or vec must be 1");
 
-    if (vec == 1 && numElems > 1)
+    if (vec * packed == 1 && numElems > 1)
       op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
+                       << " packed = " << packed << " origin vec = " << vecOrig
                        << " numElems = " << numElems;
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
 
-    auto vecTy = vec_ty(valueElemTy, vec);
+    auto packedTy = vec_ty(valueElemTy, packed);
     SmallVector<Value> resultVals(elemsPerThread);
-    for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value rmwVal = undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        Value iiVal = createIndexAttrConstant(
-            rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], iiVal);
-      }
-
+    for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
       Value rmwPtr = ptrElements[i];
       Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
       std::string sTy;
       PTXBuilder ptxBuilderAtomicRMW;
-      std::string tyId = valueElemNBits * vec == 64
-                             ? "l"
-                             : (valueElemNBits * vec == 32 ? "r" : "h");
-      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
+      // 16-bit -> "h", 32-bit -> "r", 64-bit -> "l"
+      std::string tyId =
+          getRegisterSizeCode(valueElemNBits * packed, /*is_float=*/false);
+
+      PTXBuilder::Operand *dstOpr;
+      if (vec > 1) {
+        dstOpr = ptxBuilderAtomicRMW.newListOperand();
+        for (unsigned ii = 0; ii < vec; ++ii) {
+          dstOpr->listAppend(
+              ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true));
+        }
+      } else {
+        dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
+      }
+
       auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
-      auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
+
+      PTXBuilder::Operand *valOpr;
+      if (vec > 1) {
+        valOpr = ptxBuilderAtomicRMW.newListOperand();
+        for (unsigned ii = 0; ii < vec; ++ii) {
+          valOpr->listAppend(
+              ptxBuilderAtomicRMW.newOperand(valElements[i + ii], tyId));
+        }
+      } else if (packed > 1) {
+        Value rmwVal = undef(packedTy);
+        for (int ii = 0; ii < packed; ++ii) {
+          rmwVal = insert_element(packedTy, rmwVal, valElements[i + ii],
+                                  i32_val(ii));
+        }
+        valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
+      } else {
+        valOpr = ptxBuilderAtomicRMW.newOperand(valElements[i], tyId);
+      }
 
       auto scope = stringifyMemSyncScope(op.getScope()).str();
       auto &atom = ptxBuilderAtomicRMW.create<>("atom")->global().o(scope);
@@ -725,7 +793,7 @@ struct AtomicRMWOpConversion
         rmwOp = "add";
         rmwOp += (valueElemNBits == 16 ? ".noftz" : "");
         sTy = "f" + sBits;
-        sTy += (vec == 2 && valueElemNBits == 16) ? "x2" : "";
+        sTy += (packed == 2 && valueElemNBits == 16) ? "x2" : "";
         break;
       case RMWOp::MAX:
         sTy = "s" + sBits;
@@ -750,15 +818,33 @@ struct AtomicRMWOpConversion
       std::string semStr;
       llvm::raw_string_ostream os(semStr);
       os << op.getSem();
-      atom.o(semStr).o(rmwOp).o(sTy);
+      atom.o(semStr).o(rmwOp).v(vec).o(sTy);
       if (tensorTy) {
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
-        auto retType = vec == 1 ? valueElemTy : vecTy;
-        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+        Type retType;
+        if (vec > 1) {
+          SmallVector<Type> retTys(vec, valueElemTy);
+          retType = struct_ty(retTys);
+        } else if (packed > 1) {
+          retType = packedTy;
+        } else {
+          retType = valueElemTy;
         }
+
+        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+
+        if (vec > 1) {
+          for (unsigned ii = 0; ii < vec; ++ii) {
+            resultVals[i + ii] = extract_val(valueElemTy, ret, ii);
+          }
+        } else if (packed > 1) {
+          for (unsigned ii = 0; ii < packed; ++ii) {
+            resultVals[i + ii] = extract_element(valueElemTy, ret, i32_val(ii));
+          }
+        } else {
+          resultVals[i] = ret;
+        }
+
       } else {
         auto ASMReturnTy = void_ty(ctx);
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
