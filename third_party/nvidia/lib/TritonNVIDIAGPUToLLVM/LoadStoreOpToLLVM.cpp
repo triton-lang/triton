@@ -765,7 +765,7 @@ struct AtomicRMWOpConversion
         Value rmwVal = undef(packedTy);
         for (int ii = 0; ii < packed; ++ii) {
           rmwVal = insert_element(packedTy, rmwVal, valElements[i + ii],
-                                  int32_val(iiVal));
+                                  i32_val(ii));
         }
         valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
       } else {
