@@ -391,6 +391,14 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
   Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
+
+// -----------------------------------------------------------------------
+// MXFP utilities
+// -----------------------------------------------------------------------
+
+// Split bf16x2 into 2 bf16, scale each of them, and pack them back
+Value mxfpScaleBf16x2(RewriterBase &rewriter, Location loc, Value v,
+                      Value scale);
 } // namespace LLVM
 
 /* ------------------------------------ */

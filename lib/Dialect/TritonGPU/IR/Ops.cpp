@@ -62,13 +62,6 @@ LogicalResult UpcastMXFPOp::verify() {
   }
   auto blockedScale = cast<BlockedEncodingAttr>(layoutScale);
 
-  // Necessary to keep all of the scales of a given block of values in the same
-  // warp
-  auto threadsPerWarp = blockedScale.getThreadsPerWarp();
-  if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
-    return emitOpError("Expected threads per warp to be {16, 2}");
-  }
-
   return success();
 }
 

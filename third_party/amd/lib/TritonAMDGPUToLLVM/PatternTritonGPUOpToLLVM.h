@@ -34,6 +34,11 @@ void populateTritonAMDGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
+void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                      RewritePatternSet &patterns,
+                                      const TargetInfo &targetInfo,
+                                      PatternBenefit benefit);
+
 } // namespace mlir::triton::AMD
 
 #endif

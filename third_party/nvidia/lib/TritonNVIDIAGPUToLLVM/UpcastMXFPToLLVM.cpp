@@ -107,24 +107,6 @@ public:
       xVals = unpackFP4Elements(loc, rewriter, xVals, laneId);
     }
 
-    auto scaleBf16x2 = [&loc, &rewriter](Value v, Value s) -> Value {
-      // Split bf16x2 into 2 bf16, scale each of them, and pack them back
-      // TODO Is it true that the bfloats are always packed as bf16x2?
-      auto bf16_0 = bitcast(trunc(i16_ty, v), bf16_ty);
-      auto bf16_1 = bitcast(trunc(i16_ty, lshr(v, i32_val(16))), bf16_ty);
-      auto scaleIsNan = icmp_eq(s, i8_val(0xff));
-      auto scaleBf16 = bitcast(shl(zext(i16_ty, s), i16_val(7)), bf16_ty);
-      auto scaledBf16_0 = fmul(bf16_0, scaleBf16);
-      auto scaledBf16_1 = fmul(bf16_1, scaleBf16);
-      auto i16_0 = bitcast(scaledBf16_0, i16_ty);
-      auto i16_1 = bitcast(scaledBf16_1, i16_ty);
-      auto packed =
-          or_(zext(i32_ty, i16_0), shl(zext(i32_ty, i16_1), i32_val(16)));
-      // Account for NaN in the scale as per the mxfp specification
-      auto packed_nan = select(scaleIsNan, i32_val(0x7fff7fff), packed);
-      return packed_nan;
-    };
-
     // Each thread owns elements of 4 mxfp vectors so we need 4 scales
     // Letting c = tid / 4 * 2, we need the elements from threads c, c + 1, c +
     // 16, c + 17
@@ -142,7 +124,8 @@ public:
       };
 
       for (int j = 0; j < 16; ++j) {
-        xVals[16 * i + j] = scaleBf16x2(xVals[16 * i + j], si[j / 4]);
+        xVals[16 * i + j] =
+            LLVM::mxfpScaleBf16x2(rewriter, loc, xVals[16 * i + j], si[j / 4]);
       }
     }
 
