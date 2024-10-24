@@ -740,14 +740,17 @@ tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
   tt.return %119#0 : tensor<32x32xf32, #C>
 }
 
-// COMMON-LABEL: tt.func @dep_arg_two_uses
-// COMMON: tt.expand_dims
-// COMMON: tt.expand_dims
-// COMMON: tt.expand_dims %arg5
-// COMMON-NEXT: tt.expand_dims %arg5
-// COMMON: %[[PTR0:.*]] = tt.splat %arg6
-// COMMON: %[[PTR1:.*]] = tt.addptr %[[PTR0]]
-// COMMON-NEXT: tt.load %[[PTR1]]
+// CHECK-LABEL: tt.func @dep_arg_two_uses
+// CHECK: tt.expand_dims
+// CHECK: tt.expand_dims
+// CHECK: tt.expand_dims %arg5
+// CHECK-NEXT: tt.expand_dims %arg5
+// CHECK: %[[PTR0:.*]] = tt.splat %arg6
+// CHECK: %[[PTR1:.*]] = tt.addptr %[[PTR0]]
+// CHECK-NEXT: tt.load %[[PTR1]]
+// AMD-LABEL: tt.func @dep_arg_two_uses
+// AMD-COUNT-3: tt.load
+// AMD: scf.for
 tt.func @dep_arg_two_uses(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
                           %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32},
                           %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
