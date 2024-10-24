@@ -194,10 +194,8 @@ struct DotOpMFMAConversionHelper {
     int kWidth = aEncoding.getKWidth();
     auto rank = aTensorTy.getShape().size();
 
-    auto repA =
-        mfmaLayout.getMFMARepForOperands(aTensorTy.getShape(), kWidth, 0);
-    auto repB =
-        mfmaLayout.getMFMARepForOperands(bTensorTy.getShape(), kWidth, 1);
+    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
+    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
 
     assert(repA[2] == repB[1]);
 

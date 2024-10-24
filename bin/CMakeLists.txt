@@ -50,7 +50,6 @@ target_link_libraries(triton-reduce PRIVATE
 mlir_check_all_link_libraries(triton-reduce)
 
 add_llvm_executable(triton-lsp triton-lsp.cpp PARTIAL_SOURCES_INTENDED)
-mlir_check_all_link_libraries(triton-lsp)
 
 llvm_update_compile_flags(triton-lsp)
 target_link_libraries(triton-lsp PRIVATE
@@ -95,5 +94,9 @@ export_executable_symbols_for_plugins(triton-llvm-opt)
 add_llvm_executable(triton-tensor-layout triton-tensor-layout.cpp PARTIAL_SOURCES_INTENDED)
 target_link_libraries(triton-tensor-layout PRIVATE
   TritonGPUIR
+  TritonNvidiaGPUIR
   ${triton_libs}
+  ${conversion_libs}
+  ${dialect_libs}
+  TritonTestAnalysis
   )

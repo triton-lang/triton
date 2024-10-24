@@ -216,7 +216,8 @@ static void createTMAAsyncCopy(
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are imcompatible shared
-// encodings set `incompatible` to true.
+// encodings, raise assertion, since incompatible shared encoding has been
+// handled in splitLoadsForIncompatible.
 static std::optional<ttg::SharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   ttg::SharedEncodingAttr attr;
@@ -245,10 +246,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       tempAttr = ttg::SharedEncodingAttr::get(
-          val.getContext(), dotOpEnc, srcTy.getShape(),
-          ttg::getOrder(srcTy.getEncoding()),
-          ttg::getCTALayout(srcTy.getEncoding()),
-          srcTy.getElementType().getIntOrFloatBitWidth(), /*needTrans=*/false);
+          val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
+          bitWidth, /*needTrans=*/false);
     }
     // Check that the shared encodings needed by the users are compatible.
     if (attr != nullptr && attr != tempAttr) {
@@ -451,6 +450,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         // If we can't agree on a shared encoding skip pipelinig the load.
         if (incompatible)
           continue;
+
         // HACK: Triton LLVM codegen has a bug where local_loads from #shared to
         // #mma layout can lead to invalid code if the loaded shape is smaller
         // than the mma tile (e.g. loading a 128x1 tensor for an MMAv2 dot with
@@ -519,6 +519,7 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 static llvm::MapVector<Operation *, LoadInfo>
 scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
               DenseSet<Operation *> &rootUsers, int numStages) {
+
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
@@ -536,6 +537,15 @@ scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,
   });
   if (loadOpToIndLevelAndUse.empty())
     return {};
+
+  // We assume loads with different dist are assigned to different stages.
+  // If numStages is 2, we will have no stage available for indirect loads
+  // with dist >= 1. In general, when dist is equal to numStages - 1, we
+  // should not pipeline it.
+  auto it = llvm::remove_if(loadOpToIndLevelAndUse, [=](auto op) {
+    return std::get<1>(op) >= numStages - 1;
+  });
+  loadOpToIndLevelAndUse.erase(it, loadOpToIndLevelAndUse.end());
 
   // Check which loads are good for pipelining, and assign them
   // memory layouts.

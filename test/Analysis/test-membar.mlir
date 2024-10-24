@@ -713,3 +713,96 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
+#shared1 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.shared = 18944 : i32} {
+// CHECK-LABEL: tma_special_cases
+tt.func @tma_special_cases(%arg1: !tt.ptr<i8, 0>) -> (tensor<256x64xf16, #blocked>){
+  %true = arith.constant 1 : i1
+  %c0 = arith.constant 0 : i32
+  %barrier = triton_gpu.local_alloc  : () -> !tt.memdesc<1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+  %alloc = triton_gpu.local_alloc  : () -> !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+  //      CHECK: triton_nvidia_gpu.init_barrier
+  // CHECK-NEXT: triton_nvidia_gpu.init_barrier
+  triton_nvidia_gpu.init_barrier %barrier, 1 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+  triton_nvidia_gpu.init_barrier %barrier, 1 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+
+  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: triton_nvidia_gpu.barrier_expect
+  // CHECK-NEXT: triton_nvidia_gpu.async_tma_copy_global_to_local
+  // CHECK-NEXT: triton_nvidia_gpu.wait_barrier
+  triton_nvidia_gpu.barrier_expect %barrier, 49152, %true : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+  triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : <i8, 0>, <1xi64, #shared1, #triton_gpu.shared_memory, mutable> -> <256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+  triton_nvidia_gpu.wait_barrier %barrier, %c0 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+
+  // CHECK-NEXT: triton_nvidia_gpu.async_tma_copy_global_to_local
+  // CHECK-NEXT: triton_nvidia_gpu.barrier_expect
+  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: triton_nvidia_gpu.wait_barrier
+  triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : <i8, 0>, <1xi64, #shared1, #triton_gpu.shared_memory, mutable> -> <256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+  triton_nvidia_gpu.barrier_expect %barrier, 49152, %true : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+  triton_nvidia_gpu.wait_barrier %barrier, %c0 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+
+  // CHECK-NEXT: triton_gpu.local_load
+  %t = triton_gpu.local_load %alloc : !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<256x64xf16, #blocked>
+
+  // CHECK-NEXT: triton_nvidia_gpu.barrier_expect
+  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: triton_nvidia_gpu.async_tma_copy_global_to_local
+  // CHECK-NEXT: triton_nvidia_gpu.wait_barrier
+  triton_nvidia_gpu.barrier_expect %barrier, 49152, %true : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+  triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : <i8, 0>, <1xi64, #shared1, #triton_gpu.shared_memory, mutable> -> <256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+  triton_nvidia_gpu.wait_barrier %barrier, %c0 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+
+  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: triton_nvidia_gpu.inval_barrier
+  // CHECK-NEXT: triton_nvidia_gpu.inval_barrier
+  triton_nvidia_gpu.inval_barrier %barrier : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+  triton_nvidia_gpu.inval_barrier %barrier : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+
+  tt.return %t : tensor<256x64xf16, #blocked>
+}
+}
+
+// -----
+
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
+#shared1 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.shared = 18944 : i32} {
+// CHECK-LABEL: tma_special_cases_cf
+tt.func @tma_special_cases_cf(%arg1: !tt.ptr<i8, 0>, %i1 : i1, %arg2: tensor<256x64xf16, #blocked>) -> (tensor<256x64xf16, #blocked>){
+  %true = arith.constant 1 : i1
+  %c0 = arith.constant 0 : i32
+  %barrier = triton_gpu.local_alloc  : () -> !tt.memdesc<1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+  %alloc = triton_gpu.local_alloc  : () -> !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+  // CHECK: cf.cond_br
+  scf.if %i1 {
+    //  CHECK-NOT: gpu.barrier
+    //      CHECK: triton_nvidia_gpu.async_tma_copy_global_to_local
+    // CHECK-NEXT: triton_nvidia_gpu.barrier_expect
+    // CHECK-NEXT: triton_nvidia_gpu.wait_barrier
+    // CHECK-NEXT: cf.br
+    triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : <i8, 0>, <1xi64, #shared1, #triton_gpu.shared_memory, mutable> -> <256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+    triton_nvidia_gpu.barrier_expect %barrier, 49152, %true : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+    triton_nvidia_gpu.wait_barrier %barrier, %c0 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+    scf.yield
+  } else {
+    //  CHECK-NOT: gpu.barrier
+    //      CHECK: triton_gpu.local_store
+    // CHECK-NEXT: cf.br
+    triton_gpu.local_store %arg2, %alloc : tensor<256x64xf16, #blocked> -> !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+    scf.yield
+  }
+  //      CHECK: gpu.barrier
+  // CHECK-NEXT: triton_gpu.local_load
+  %t = triton_gpu.local_load %alloc : !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<256x64xf16, #blocked>
+  tt.return %t : tensor<256x64xf16, #blocked>
+}
+}

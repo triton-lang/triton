@@ -14,6 +14,7 @@
 
 using namespace mlir;
 namespace ttg = mlir::triton::gpu;
+namespace tt = mlir::triton;
 
 static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
   if (isa<ttg::LocalLoadOp>(op))
@@ -49,12 +50,23 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
       // Atomics used for global synchronization.
       if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
         ipnt = bi;
+      // Break at barrier
+      if (isa<gpu::BarrierOp>(wop))
+        ipnt = bi;
       // Break at loops.
       if (isa<scf::ForOp, scf::WhileOp>(wop))
         ipnt = bi;
     });
   }
   return ipnt;
+}
+
+// Check if the operation opInsideLoop is inside any scf::ForOp and
+// opOutsideLoop is not inside the same loop.
+bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
+                         mlir::Operation *opOutsideLoop) {
+  scf::ForOp parentForOp = opInsideLoop->getParentOfType<scf::ForOp>();
+  return parentForOp && !parentForOp->isAncestor(opOutsideLoop);
 }
 
 class TritonAMDGPUReorderInstructionsPass
@@ -97,6 +109,76 @@ public:
       kv.first->moveBefore(kv.second);
     opToMove.clear();
 
+    // Adjust the placement of LDS writes and reads to immediately follow the
+    // definition of their operands in case where LDS write is in the
+    // loop but it's operand is not. This is a heuristic for optimizing fused
+    // attention by hoisting Q tensor LDS read/write operations outside of the
+    // loop, as Q is a loop invariant and can be loaded once before entering the
+    // loop.
+    // There are two possible patterns for this adjustment depending on
+    // whether the write to LDS is performed using an optional `local_alloc`
+    // argument or a `local_store` instruction.
+    //
+    // clang-format off
+    //
+    // 1) %1 = some_op ... (typically a load or an operation that scales the tensor after loading)
+    //    %2 = local_alloc %1
+    //    %3 = local_load %2
+    //
+    // 2) %1 = some_op ...
+    //    %2 = local_alloc
+    //    %3 = local_store %1, %2
+    //    %4 = local_load %2
+    //
+    // clang-format on
+    m.walk([&](ttg::LocalLoadOp localLoad) {
+      auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
+      if (!localAlloc)
+        return;
+
+      // Case when localAlloc has operands
+      if (localAlloc->getNumOperands() == 1) {
+        if (!localAlloc->hasOneUse())
+          return;
+
+        auto srcTensorOp = localAlloc->getOperand(0).getDefiningOp();
+        // Check if localAlloc is in the loop but it's src tensor defining op is
+        // outside of it.
+        if (!srcTensorOp || !isCrossLoopBoundary(localAlloc, srcTensorOp)) {
+          return;
+        }
+
+        localAlloc->moveAfter(srcTensorOp);
+        localLoad->moveAfter(localAlloc);
+        return;
+      }
+
+      // Case when localAlloc has no operands
+      assert(localAlloc->getNumOperands() < 1);
+      auto allocVal = localAlloc->getResult(0);
+
+      // Check if the localAlloc has exactly two uses (localStore and localLoad)
+      int numUses = std::distance(allocVal.use_begin(), allocVal.use_end());
+      if (numUses != 2)
+        return;
+
+      // localStore comes before localLoad in block.
+      Operation *localStore = getFirstUse(localAlloc);
+      if (!isa<ttg::LocalStoreOp>(localStore))
+        return;
+
+      auto srcTensorOp = localStore->getOperand(0).getDefiningOp();
+      // Check if localStore is in the loop but it's src tensor defining op is
+      // outside of it.
+      if (!srcTensorOp || !isCrossLoopBoundary(localStore, srcTensorOp)) {
+        return;
+      }
+
+      localAlloc->moveAfter(srcTensorOp);
+      localStore->moveAfter(localAlloc);
+      localLoad->moveAfter(localStore);
+    });
+
     // Sink conversion after the last dealloc but before the first use ancestor
     // in its block. This helps to avoid unnecessary shared memory allocation.
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
@@ -121,7 +203,7 @@ public:
     // Best perf on GEMM when these precede global loads.
     m.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
 
-    for (auto op : moveOps) {
+    for (auto op : llvm::reverse(moveOps)) {
       // Gather use-def chain in block.
       Block *block = op->getBlock();
       bool leadsToLoad = false;

@@ -10,12 +10,14 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
+    TMAToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
     SPMDOpToLLVM.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     PTXAsmFormat.cpp
     Utility.cpp
+    UpcastMXFPToLLVM.cpp
     TargetInfo.cpp
 
     DEPENDS

@@ -143,13 +143,27 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 
     Explicitly deallocating a buffer is optional; see local_dealloc.
   }];
-  let arguments = (ins Optional<TT_Tensor>:$src);
+  let arguments = (
+    ins
+    Optional<TT_Tensor>:$src,
+    OptionalAttr<I32Attr>:$alignment
+  );
+
+  let builders = [
+    OpBuilder<(ins "Type":$result),
+              [{ build($_builder, $_state, result, Value(), IntegerAttr()); }]>,
+    OpBuilder<(ins "Type":$result, "Value":$src),
+              [{ build($_builder, $_state, result, src, IntegerAttr()); }]>,
+    OpBuilder<(ins "Type":$result, "Value":$src, "int32_t":$alignment),
+              [{ build($_builder, $_state, result, src, $_builder.getI32IntegerAttr(alignment)); }]>
+  ];
 
   let extraClassDeclaration = [{
     bool isSharedMemoryAlloc() {
       return getType().getMemorySpace() &&
              isa<SharedMemorySpaceAttr>(getType().getMemorySpace());
     }
+    int32_t getAlignmentOrDefault();
   }];
   let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 
@@ -239,6 +253,26 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{
     $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
+  }];
+}
+
+def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+  let summary = "Convert an mxfp tensor to bf16";
+
+  let hasVerifier = 1;
+
+  let description = [{
+    Compute the bf16 encoded in the given mxfp number as per
+    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+  }];
+  let arguments = (ins
+                   TT_Tensor:$src,
+                   TT_Tensor:$scale,
+                   TT_F8F6F4TypeAttr:$fp_type);
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
   }];
 }
 

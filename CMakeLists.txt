@@ -210,6 +210,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRSCFToControlFlow
     MLIRIndexToLLVM
     MLIRGPUToROCDLTransforms
+    MLIRUBToLLVM
 
     # LLVM
     LLVMPasses
@@ -220,7 +221,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   )
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
-     CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")     # macOS arm64
+     CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR # macOS arm64
+     CMAKE_OSX_ARCHITECTURES MATCHES "arm64")  # also macOS arm64
       list(APPEND TRITON_LIBRARIES
           LLVMAArch64CodeGen
           LLVMAArch64AsmParser

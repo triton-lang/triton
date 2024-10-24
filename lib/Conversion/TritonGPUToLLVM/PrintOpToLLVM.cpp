@@ -196,9 +196,6 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     std::string prefix = "%";
     if (width.has_value()) {
       prefix += std::to_string(*width);
-    } else if (hex) {
-      prefix += "0";
-      prefix += std::to_string(type.getIntOrFloatBitWidth() / 4);
     }
 
     if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {

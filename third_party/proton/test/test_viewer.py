@@ -52,8 +52,8 @@ def test_min_time_flops():
     with open(cuda_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # sm89
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000025]], atol=1e-5)
         # sm90
@@ -61,8 +61,8 @@ def test_min_time_flops():
     with open(hip_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # MI200
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000026]], atol=1e-5)
         # MI300
@@ -73,8 +73,8 @@ def test_min_time_bytes():
     with open(cuda_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_bytes(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # sm89
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[9.91969e-06]], atol=1e-6)
         # sm90
@@ -82,8 +82,8 @@ def test_min_time_bytes():
     with open(hip_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_bytes(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # MI200
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[6.10351e-06]], atol=1e-6)
         # MI300
@@ -118,8 +118,11 @@ def test_util():
 def test_time_derivation():
     derivation_metrics_test(
         metrics=["time/s", "time/ms", "time/us", "time/ns"], expected_data={
-            'time/s (inc)': [0.0004096, 0.0002048, 0.0002048], 'time/ms (inc)': [0.4096, 0.2048, 0.2048],
-            'time/us (inc)': [409.6, 204.8, 204.8], 'time/ns (inc)': [409600.0, 204800.0, 204800.0]
+            'time/s (inc)': [0.0004096, 0.0002048, 0.0002048],
+            'time/ms (inc)': [0.4096, 0.2048, 0.2048],
+            'time/us (inc)': [409.6, 204.8, 204.8],
+            'time/ns (inc)': [409600.0, 204800.0, 204800.0],
+            'time/% (inc)': [100.0, 50.0, 50.0],
         }, sample_file=cuda_example_file)
 
 

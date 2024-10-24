@@ -17,8 +17,14 @@ python/triton/backends/
 !python/triton/backends/compiler.py
 !python/triton/backends/driver.py
 
+# Language extras
+python/triton/language/extra
+
 # Proton
 python/triton/profiler
+
+# Instrumentation
+python/triton/instrumentation
 
 # Python caches
 __pycache__/
@@ -45,6 +51,7 @@ ptxas
 
 # Third-party include
 third_party/nvidia/backend/include
+third_party/nvidia/backend/lib/cupti
 
 # Docs
 docs/_build/
@@ -64,3 +71,6 @@ docs/sg_execution_times.rst
 
 # Vim
 *.swp
+
+# macOS
+.DS_Store

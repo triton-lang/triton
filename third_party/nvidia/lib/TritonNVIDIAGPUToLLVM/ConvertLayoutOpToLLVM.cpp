@@ -21,7 +21,6 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Forward declarations
@@ -156,11 +155,14 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
+    if (isa<MmaEncodingTrait, BlockedEncodingAttr, SliceEncodingAttr>(
+            srcLayout) &&
+        isa<MmaEncodingTrait, BlockedEncodingAttr, SliceEncodingAttr>(
+            dstLayout)) {
       if (shouldUseDistSmem(srcLayout, dstLayout))
-        return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
+        return lowerDistToDistWithDistSmem(op, adaptor, rewriter, targetInfo);
       if (isLayoutMmaV1(srcLayout) || isLayoutMmaV1(dstLayout))
-        return lowerDistributedToDistributed(op, adaptor, rewriter);
+        return lowerDistributedToDistributed(op, adaptor, rewriter, targetInfo);
     }
     if (isa<NvidiaMmaEncodingAttr>(srcLayout) &&
         isa<DotOperandEncodingAttr>(dstLayout)) {
@@ -362,7 +364,8 @@ private:
   LogicalResult
   lowerDistToDistWithDistSmem(triton::gpu::ConvertLayoutOp op,
                               OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo) const {
     MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
@@ -379,7 +382,7 @@ private:
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     smemBase = bitcast(smemBase, elemPtrTy);
     auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
 
@@ -449,7 +452,8 @@ private:
   LogicalResult
   lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const {
+                                ConversionPatternRewriter &rewriter,
+                                const TargetInfoBase &targetInfo) const {
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
     RankedTensorType srcTy = op.getSrc().getType();
@@ -458,7 +462,7 @@ private:
     Attribute dstLayout = dstTy.getEncoding();
 
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
@@ -492,8 +496,8 @@ private:
         getScratchConfigForCvt(op.getSrc().getType(), op.getType());
     unsigned inVec = scratchConfig.inVec;
     unsigned outVec = scratchConfig.outVec;
-    auto origRepShape = scratchConfig.repShape;
-    auto paddedRepShape = scratchConfig.paddedRepShape;
+    const auto &origRepShape = scratchConfig.repShape;
+    const auto &paddedRepShape = scratchConfig.paddedRepShape;
 
     unsigned outElems = getTotalElemsPerThread(dstTy);
     auto outOrd = getOrder(dstLayout);
@@ -637,7 +641,6 @@ private:
       // for the destination type, we need to pack values together
       // so they can be consumed by tensor core operations
       SmallVector<Value> vecVals;
-      SmallVector<Type> types;
       // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
       // instructions to pack & unpack sub-word integers. A workaround is to
       // store the results of ldmatrix in i32
@@ -651,37 +654,20 @@ private:
                 shl(i32_ty, zext(i32_ty, vals[i + j]), i32_val(elemSize * j));
             val = or_(i32_ty, val, ext);
           }
-          vecVals.push_back(val);
+          vecVals.push_back(bitcast(val, i32_ty));
         }
-        elems = elems / (32 / elemSize);
-        types = SmallVector<Type>(elems, i32_ty);
       } else {
         unsigned vecSize = std::max<unsigned>(32 / elemSize, 1);
         Type vecTy = vec_ty(elemTy, vecSize);
-        types = SmallVector<Type>(elems / vecSize, vecTy);
         for (unsigned i = 0; i < elems; i += vecSize) {
           Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
           for (unsigned j = 0; j < vecSize; j++)
             packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
-          vecVals.push_back(packed);
+          vecVals.push_back(bitcast(packed, i32_ty));
         }
       }
-
-      // This needs to be ordered the same way that
-      // ldmatrix.x4 would order it
-      // TODO: this needs to be refactor so we don't
-      // implicitly depends on how emitOffsetsForMMAV2
-      // is implemented
-      SmallVector<Value> reorderedVals;
-      for (unsigned i = 0; i < vecVals.size(); i += 4) {
-        reorderedVals.push_back(bitcast(vecVals[i], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 2], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 1], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
-      }
-
-      Value view = packLLElements(loc, getTypeConverter(), reorderedVals,
-                                  rewriter, dstTy);
+      Value view =
+          packLLElements(loc, getTypeConverter(), vecVals, rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -723,25 +709,59 @@ struct LocalAllocOpConversion
     else
       return failure();
 
+    auto *ctx = rewriter.getContext();
     Location loc = op->getLoc();
+
     RankedTensorType srcTy = op.getSrc().getType();
-    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
-    auto srcs = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<unsigned> shape;
-    for (int64_t dim : srcTy.getShape())
-      shape.push_back(dim);
-    bool loweredToStMatrix = targetInfo.processReplicaUsingStMatrix(
-        rewriter, loc, smemBase, srcs, srcTy,
-        getTypeConverter()->convertType(srcTy.getElementType()), shape, shape,
-        sharedLayout.getOrder(), 1, swizzleByteSize);
-    if (!loweredToStMatrix)
+    SmallVector<unsigned> shape =
+        convertType<unsigned, int64_t>(srcTy.getShape());
+    auto order = sharedLayout.getOrder();
+    auto layout = chooseStMatrixLayout(rewriter.getContext(), srcTy, shape,
+                                       shape, order, swizzleByteSize);
+    if (!layout.has_value())
       return failure();
+
+    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+    auto smemPtrTy = ptr_ty(ctx, 3);
+
+    auto kRegister = str_attr("register");
+    auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
+    auto kBlock = str_attr("block");
+
+    Value threadId = getThreadId(rewriter, loc);
+    Value threadsPerWarp = i32_val(layout->getInDimSize(kLane));
+    Value laneId = urem(threadId, threadsPerWarp);
+    Value warpId = udiv(threadId, threadsPerWarp);
+
+    auto regBase = applyLinearLayout(loc, rewriter, *layout,
+                                     {{kRegister, i32_val(0)},
+                                      {kLane, laneId},
+                                      {kWarp, warpId},
+                                      {kBlock, i32_val(0)}})[0]
+                       .second;
+    auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto srcVec = layout->getNumConsecutiveInOut();
+    Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
+    for (int i = 0; i < srcVals.size(); i += srcVec) {
+      auto regIdx =
+          layout
+              ->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
+              .second;
+      Value offset = xor_(regBase, i32_val(regIdx));
+      auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);
+      vecAddr.setInbounds(true);
+      SmallVector<Value> inValsVec;
+      for (int j = 0; j < srcVec; j++)
+        inValsVec.push_back(srcVals[i + j]);
+      Value valsVec = packLLVector(loc, inValsVec, rewriter);
+      targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
+    }
 
     auto resultTy = cast<MemDescType>(op.getType());
     // Workaround for 3D tensors
     // TODO: we need to modify the pipeline pass to give a proper shared
     // encoding to 3D tensors
-    auto order = sharedLayout.getOrder();
     SmallVector<unsigned> newOrder;
     if (resultTy.getShape().size() != order.size()) {
       for (auto i = 0; i < order.size(); ++i)
@@ -750,7 +770,6 @@ struct LocalAllocOpConversion
     } else {
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
     }
-    auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
                                       newOrder, loc, rewriter);

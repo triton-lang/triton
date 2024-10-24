@@ -132,7 +132,7 @@ def softmax(x):
     # way so you don't have to come up with manual heuristics yourself.
     num_warps = 8
 
-    # Number of software piepling stages.
+    # Number of software pipelining stages.
     num_stages = 4 if SIZE_SMEM > 200000 else 2
 
     # Allocate output
@@ -231,7 +231,7 @@ def benchmark(M, N, provider):
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':
         ms = triton.testing.do_bench(lambda: softmax(x))
-    gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
+    gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms)
 
 

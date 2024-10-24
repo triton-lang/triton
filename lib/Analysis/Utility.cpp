@@ -36,7 +36,7 @@ SmallVector<unsigned> getParentOrder(Attribute layout) {
   if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return getParentOrder(sliceEncoding.getParent());
   }
-  return getOrder(layout);
+  return getThreadOrder(layout);
 }
 
 } // namespace
@@ -75,7 +75,7 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
     threadOffset = threadsPerWarp[sliceLayout.getDim()];
   } else {
     auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-    auto order = getOrder(srcLayout);
+    auto order = getThreadOrder(srcLayout);
     for (unsigned i = 0; i < order.size(); i++) {
       if (order[i] == axis)
         break;
@@ -488,6 +488,11 @@ bool supportMMA(triton::DotOp op, int version) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
     auto retType = op.getType();
+    RankedTensorType typeA = op.getA().getType();
+    int k = typeA.getShape().back();
+    // If k size is smaller than the native mma size, we cannot use MMA.
+    if (k < 256 / aElemTy.getIntOrFloatBitWidth())
+      return false;
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
     auto mod = op->getParentOfType<ModuleOp>();
@@ -531,6 +536,75 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
+bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+  auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (blockedLayout == nullptr || dotOperandLayout == nullptr)
+    return false;
+  auto parentLayout =
+      dyn_cast<BlockedEncodingAttr>(dotOperandLayout.getParent());
+  if (parentLayout == nullptr)
+    return false;
+  auto opShape = srcTy.getShape();
+  auto rank = opShape.size();
+
+  int kDim = dotOperandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  int nonKDim = dotOperandLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
+  auto ctaLayout = blockedLayout.getCTALayout();
+
+  // The following logic checks that a source blocked layout matches a
+  // destination dot operand layout. This means that given tensor in source
+  // layout could be converted into destination layout without any data movement
+  // between registers or threads.
+  //
+  // It is considered a match if
+  // 1) Each thread in source layout holds a whole copy of all elements along
+  //    the K dimension of a tensor
+  // 2) Distribution of data along all other non-K dimensions(Batch/M/N)
+  //    matches between source and destination parent layouts.
+  //
+  // First condition comes from the property of dot operand layout with Blocked
+  // parent: size per threads along K dimension equals size of the tensor along
+  // K. Second condition comes from other property: dot operand layout
+  // inherits non-K dimensions from it's parent layout.
+  //
+  // clang-format off
+  //
+  // For example, following conversion is a no op:
+  //   tensor<128x32xf16,                          #blocked<{sizePerThread = [2, 32], threadsPerWarp = [32, 1]}>>
+  //     ->
+  //   tensor<128x32xf16, #dot_op<{opIdx=0, parent=#blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1]}>>>
+  //
+  // clang-format on
+  bool ctaLayoutCompatible =
+      ctaLayout.getCTASplitNum()[kDim] == 1 &&
+      blockedLayout.getCTALayout() == parentLayout.getCTALayout();
+  bool threadHoldsWholeKDim =
+      blockedLayout.getSizePerThread()[kDim] == opShape[kDim];
+  bool nonKDimCompatible =
+      blockedLayout.getOrder() == parentLayout.getOrder() &&
+      blockedLayout.getSizePerThread()[nonKDim] ==
+          parentLayout.getSizePerThread()[nonKDim] &&
+      blockedLayout.getThreadsPerWarp()[nonKDim] ==
+          parentLayout.getThreadsPerWarp()[nonKDim] &&
+      blockedLayout.getWarpsPerCTA()[nonKDim] ==
+          parentLayout.getWarpsPerCTA()[nonKDim];
+  bool matrixDimsCompatible =
+      ctaLayoutCompatible && threadHoldsWholeKDim && nonKDimCompatible;
+  if (rank == 2)
+    return matrixDimsCompatible;
+
+  // additional check for batch dimension if it is present
+  assert(rank == 3);
+  bool bDimCompatible =
+      blockedLayout.getSizePerThread()[0] ==
+          parentLayout.getSizePerThread()[0] &&
+      blockedLayout.getThreadsPerWarp()[0] ==
+          parentLayout.getThreadsPerWarp()[0] &&
+      blockedLayout.getWarpsPerCTA()[0] == parentLayout.getWarpsPerCTA()[0];
+  return matrixDimsCompatible && bDimCompatible;
+}
+
 bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
@@ -560,6 +634,7 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
       srcTy.getShape(), srcTy.getElementType(), dotOperandLayout.getParent());
   auto ans = mmaLayout.getVersionMajor() == 3 &&
              dotOperandLayout.getOpIdx() == 0 &&
+             mmaLayout.getWarpsPerCTA()[1] == 1 &&
              !cvtNeedsSharedMemory(parentTy, srcTy) &&
              (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
@@ -619,12 +694,13 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut` and
-  // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
-  // checks.
+  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut`,
+  // `isBlockedToDotShortcut` and `isMfmaToDotShortcut`) once they're fully
+  // subsumed by the linear-layout checks.
   // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
+         !isBlockedToDotShortcut(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
 }
@@ -820,15 +896,16 @@ public:
 
   LogicalResult initialize(Operation *top) override {
     WalkResult result = top->walk([&](Operation *op) {
-      if (failed(visit(op)))
+      ProgramPoint programPoint(op);
+      if (failed(visit(&programPoint)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
     return success(!result.wasInterrupted());
   }
 
-  LogicalResult visit(ProgramPoint point) override {
-    Operation *op = point.get<Operation *>();
+  LogicalResult visit(ProgramPoint *point) override {
+    Operation *op = point->getOperation();
     Attribute value;
     if (matchPattern(op, m_Constant(&value))) {
       auto *constant = getOrCreate<dataflow::Lattice<dataflow::ConstantValue>>(

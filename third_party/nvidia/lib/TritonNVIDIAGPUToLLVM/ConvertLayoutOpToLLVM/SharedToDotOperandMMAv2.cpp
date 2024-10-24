@@ -14,7 +14,6 @@ using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Data loader for mma.16816 instruction.
@@ -496,7 +495,12 @@ Type getSharedMemTy(Type argType) {
     return type::f32Ty(ctx);
   else if (argType.getIntOrFloatBitWidth() == 8)
     return type::i8Ty(ctx);
-  else
+  else if (argType.isInteger(16) || argType.isInteger(32)) {
+    auto bitwidth = argType.getIntOrFloatBitWidth();
+    auto signed_type =
+        argType.isSignedInteger() ? IntegerType::Signed : IntegerType::Unsigned;
+    return IntegerType::get(ctx, bitwidth, signed_type);
+  } else
     llvm::report_fatal_error("mma16816 data type not supported");
 }
 
@@ -509,8 +513,8 @@ Value composeValuesToDotOperandLayoutStruct(
     for (int m = 0; m < n0; ++m)
       for (int k = 0; k < n1; ++k) {
         elems.push_back(vals.at({b, 2 * m, 2 * k}));
-        elems.push_back(vals.at({b, 2 * m, 2 * k + 1}));
         elems.push_back(vals.at({b, 2 * m + 1, 2 * k}));
+        elems.push_back(vals.at({b, 2 * m, 2 * k + 1}));
         elems.push_back(vals.at({b, 2 * m + 1, 2 * k + 1}));
       }
   assert(!elems.empty());
@@ -599,9 +603,9 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
 
-  auto numRep =
-      mmaLayout.getMMAv2Rep(shapePerCTA, bitwidth, encoding.getOpIdx());
   int kWidth = encoding.getKWidth();
+  auto numRep = mmaLayout.getMMAv2RepForOperand(shapePerCTA, bitwidth, kWidth,
+                                                encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto order = triton::gpu::getOrder(mmaLayout);

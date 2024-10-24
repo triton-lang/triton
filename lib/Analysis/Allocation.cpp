@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Alias.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
@@ -114,7 +115,12 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   assert(!isMfmaToDotShortcut(srcTy, dstTy));
 
-  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
+  // FIXME This is NOT entirely correct
+  // This should be getElemOrder, but we don't have such a method
+  // TODO Implement getElemOrder and make sure it's consistent with
+  // getContigPerThread
+  auto inOrd = gpu::getThreadOrder(srcLayout);
+  auto outOrd = gpu::getThreadOrder(dstLayout);
   scratchConfig.order = outOrd;
 
   unsigned srcContigPerThread =
@@ -129,10 +135,10 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                                : srcContigPerThread;
   scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
 
-  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
-  // codegen.
   if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
     if (mma.getVersionMajor() == 1) {
+      // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
+      // codegen.
       scratchConfig.inVec = srcContigPerThread;
     } else if (mlir::isa<BlockedEncodingAttr>(dstLayout)) {
       // when storing from mma layout and loading in blocked layout vectorizing
@@ -142,7 +148,9 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
     }
   }
 
-  if (rank <= 1)
+  // No padding is required if the tensor is 1-D, or if all dimensions except
+  // the first accessed dimension have a size of 1.
+  if (rank <= 1 || product(repShape) == repShape[outOrd[0]])
     return scratchConfig;
 
   auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
@@ -177,8 +185,6 @@ private:
 
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
-    // XXX(Keren): Why this hard-coded alignment?
-    size_t kAlignment = 8;
     for (Value result : op->getResults()) {
       auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>();
       if (alloc && alloc.isSharedMemoryAlloc()) {
@@ -189,15 +195,9 @@ private:
         auto bytes = product<int64_t>(shapePerCTA) *
                      allocType.getElementTypeBitWidth() / 8;
 
-        // XXX(Keren): magic numbers 256 and 1024
-        // benzh@maybe alignment should be passed in.
-        // Software swizzling calculates phase based on offset, while hardware
-        // swizzling do that based on physical address. Thus only by setting the
-        // alignment to 1024 can ensure the correctness. 
-        if (bytes > 256)
-          kAlignment = 1024;
+        auto alignment = alloc.getAlignmentOrDefault();
         allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
-                                                             kAlignment);
+                                                             alignment);
       }
     }
   }
@@ -283,6 +283,12 @@ private:
       auto bytes = funcAlloc->getSharedMemorySize();
       maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, bytes,
                                                           scratchAlignment);
+    } else if (auto createTensormap =
+                   dyn_cast<ExperimentalTensormapCreateOp>(op)) {
+      constexpr int32_t kTMASize = 128;
+      constexpr int32_t kTMAAlign = 128;
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, kTMASize,
+                                                          kTMAAlign);
     }
   }
 

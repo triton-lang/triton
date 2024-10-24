@@ -119,7 +119,7 @@ flops64: float  # The number of 64-bit floating-point operations
 bytes: int  # The number of bytes expected to be transferred
 ```
 
-### Command Line
+### Command line
 
 Proton can be used as a command-line tool to profile Python scripts and Pytest tests.
 The following examples demonstrate how to use Proton command-line.
@@ -149,6 +149,21 @@ More options can be found by running the following command.
 proton-viewer -h
 ```
 
+### Instruction sampling (experimental)
+
+Proton supports instruction sampling on NVIDIA GPUs.
+Please note that this is an experimental feature and may not work on all GPUs.
+You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
+The overhead is mostly caused by data transfer and processing on the CPU.
+Additionally, the proton-viewer options `-i <regex> -d <depth> -t <threshold>` can be helpful for filtering out GPU kernels that are not of interest.
+The following example demonstrates how to use instruction sampling:
+
+```python
+import triton.profiler as proton
+
+proton.start(name="profile_name", context="shadow", backend="cupti_pcsampling")
+```
+
 ## Proton *vs* nsys
 
 - Runtime overhead (up to 1.5x)
@@ -173,11 +188,24 @@ Proton is designed to be portable and can be used on AMD GPUs. nsys only support
 
 Proton can register hooks to analyze the metadata of triton kernels, while nsys cannot. **Note** that the hooks do add additional overhead to proton.
 
-## Known Issues
+## Proton *vs* ncu
 
-- CUDA Graph
+Similar to the comparison between Proton and Nsight Systems (Nsys), Proton has a lower profiling overhead than Nsight Compute (NCU). We also plan to support instruction sampling on AMD GPUs.
+However, Nsight Compute supports the collection of more detailed metrics than Proton, such as memory access patterns, memory transactions, and other instruction-level metrics.
+In contrast, Proton only supports instruction sampling and is designed to be lightweight and portable.
+
+## Known issues
+
+- CUDA graph
 
 `hooks` cannot be used to accurately accumulate the number of FLOPs in CUDA graph mode profiling because kernels are captured and launched separately; metrics are not accumulated when kernels are launched in graph mode. This issue can be circumvented by using `scope` to supply FLOPs.
 
 If profiling is initiated after CUDA graph capturing, there may be minor memory leak issues.
 This is because the number of kernels in a graph instance (i.e., `cuGraphExec`) is unknown, preventing the deletion of mappings between the kernel ID and the graph ID.
+
+- Instruction sampling
+
+If you encounter permission related problems when using instruction sampling, you can lookup this [page](https://developer.nvidia.com/nvidia-development-tools-solutions-err_nvgpuctrperm-permission-issue-performance-counters) for help.
+
+The overhead of instruction sampling on NVIDIA GPUs is about 20x using Proton because we haven't enabled continuous sampling yet.
+Continuous sampling can allow for more runtime optimizations, but it makes it more challenging to attribute performance data back to the GPU kernels because: (1) it enables profiling of concurrent kernels, (2) it doesn't allow profiling of time and instruction samples simultaneously, and (3) it works best if we have a separate thread dedicated to attributing instruction samples to the GPU kernels

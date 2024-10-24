@@ -9,7 +9,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: llvm.br
     // CHECK: rocdl.barrier
     // CHECK: llvm.load
-    // CHECK: llvm.store
+    // CHECK: llvm.intr.masked.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %0 : !tt.ptr<f32>
     tt.return
@@ -25,10 +25,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: llvm.cond_br
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.atomicrmw
-    // CHECK: %[[ADDR1:.*]] = llvm.extractvalue
-    // CHECK: %[[ADDR2:.*]] = llvm.extractvalue
-    // CHECK: llvm.store %{{.*}}, %[[ADDR1]]
-    // CHECK: llvm.store %{{.*}}, %[[ADDR2]]
+    // CHECK: %[[ADDR1:.*]] = llvm.addrspacecast
+    // CHECK: llvm.intr.masked.store %{{.*}}, %[[ADDR1]]
+    // CHECK: %[[ADDR2:.*]] = llvm.addrspacecast
+    // CHECK: llvm.intr.masked.store %{{.*}}, %[[ADDR2]]
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.store %arg0, %0 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return

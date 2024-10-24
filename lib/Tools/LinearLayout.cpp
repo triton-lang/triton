@@ -16,6 +16,24 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+
+static int __builtin_ctzll(unsigned long long x) {
+  unsigned long r;
+  _BitScanForward64(&r, x);
+  return static_cast<int>(r);
+}
+
+#endif
+
 namespace mlir::triton {
 
 namespace {
@@ -640,7 +658,7 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 }
 
 std::optional<LinearLayout>
-LinearLayout::divideRight(const LinearLayout &divisor) {
+LinearLayout::divideRight(const LinearLayout &divisor) const {
   assertCommonDimsSameOrder(getOutDimNames(), divisor.getOutDimNames());
   assertCommonDimsSameOrder(getInDimNames(), divisor.getInDimNames());
 
@@ -681,11 +699,11 @@ LinearLayout::divideRight(const LinearLayout &divisor) {
       std::move(newBases), std::move(newOutDims.takeVector()),
       /*requireSurjective=*/false);
   LDBG("candidate_quotient:" << candidateQuotient);
-  LDBG("*candidate_quotient * divisor=" << *candidateQuotient * divisor);
   if (!candidateQuotient.has_value()) {
     LDBG("candidate quotient failed invariant checks");
     return std::nullopt;
   }
+  LDBG("*candidate_quotient * divisor=" << *candidateQuotient * divisor);
   if (*candidateQuotient * divisor != *this) {
     LDBG("candidate quotient failed invariant checks");
     return std::nullopt;
