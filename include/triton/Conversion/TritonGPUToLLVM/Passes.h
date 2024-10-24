@@ -20,6 +20,8 @@ namespace triton {
 namespace gpu {
 std::unique_ptr<OperationPass<ModuleOp>> createAllocateSharedMemoryPass();
 
+std::unique_ptr<Pass> createTritonGPUGlobalScratchAllocationPass();
+
 } // namespace gpu
 
 #define GEN_PASS_REGISTRATION
