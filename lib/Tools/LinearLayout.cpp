@@ -657,7 +657,7 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
                       inner.isSurjective() && outer.isSurjective());
 }
 
-bool LinearLayout::canQuotient(ArrayRef<StringAttr> dimNames) const {
+bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
   assertDimsSubsetIgnoringOrder(dimNames, getInDimNames());
   assertDimsSubsetIgnoringOrder(dimNames, getOutDimNames());
   auto getRemainingDimNames = [&](auto allDimNames) {
@@ -688,7 +688,7 @@ bool LinearLayout::canQuotient(ArrayRef<StringAttr> dimNames) const {
 
 std::optional<LinearLayout>
 LinearLayout::quotient(ArrayRef<StringAttr> dimNames) const {
-  if (!canQuotient(dimNames)) {
+  if (!isTrivialOver(dimNames)) {
     return std::nullopt;
   }
 

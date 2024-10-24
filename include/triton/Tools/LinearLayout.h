@@ -575,18 +575,19 @@ public:
     return *this;
   }
 
-  // Returns true if this layout can be quotiented by the given dimensions.
-  // In other words, it checks whether the layout maps dimNames into themselves
-  // as the identity.
-  // Note that that this is stronger than the usual definition of quotienting
-  // because it requires the linear map to be the identity, not just leave these
-  // dimensions invariant.
-  bool canQuotient(ArrayRef<StringAttr> dimNames) const;
+  // Returns true if this layout acts trivially (as the identity) on the given
+  // dimensions. This means that it's the identity on those dimensions, and it
+  // does not map other dimensions onto those or these onto other dimensions.
+  bool isTrivialOver(ArrayRef<StringAttr> dimNames) const;
 
   // For an endomorphism on dimNames (linear map that maps dimNames to dimNames)
   // checks whether it is the identity map on these dimensions (i.e
-  // LinearLayouts::canQuotient) and if so, returns the sublayout of the
+  // LinearLayouts::isTrivialOver) and if so, returns the sublayout of the
   // remaining dimensions.
+  // nb. The isTrivialOver condition is more restrictive than the usual
+  //     "leaves the subspace invariant" condition in maths.
+  //     We can always relax it if we know how to take advantage of a conversion
+  //     layout being block-diagonal in the future.
   std::optional<LinearLayout> quotient(ArrayRef<StringAttr> dimNames) const;
 
   // Gets a layout with only these in/out dimensions.
