@@ -561,104 +561,6 @@ TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
                    .getNumConsecutiveInOut());
 }
 
-TEST_F(LinearLayoutTest, DivideRight_Simple) {
-  EXPECT_EQ(LinearLayout::identity1D(8, S("in"), S("out"))
-                .divideRight(LinearLayout::identity1D(4, S("in"), S("out"))),
-            LinearLayout::identity1D(2, S("in"), S("out")));
-
-  EXPECT_EQ(LinearLayout::identity1D(8, S("in"), S("out"))
-                .divideRight(LinearLayout::identity1D(8, S("in"), S("out"))),
-            LinearLayout::empty());
-}
-
-TEST_F(LinearLayoutTest, DivideRight_2D) {
-  LinearLayout l1(
-      {
-          {S("in1"), {{1, 1}, {2, 2}, {0, 8}, {0, 4}}},
-          {S("in2"), {{0, 2}, {0, 1}}},
-      },
-      {S("out1"), S("out2")});
-  LinearLayout l2({{S("in1"), {{2}, {1}}}}, {S("out2")});
-  LinearLayout l3(
-      {
-          {S("in1"), {{1, 1}, {2, 2}}},
-          {S("in2"), {{0, 2}, {0, 1}}},
-      },
-      {S("out1"), S("out2")});
-  ASSERT_EQ(l1.divideRight(l2), l3);
-  EXPECT_EQ(l1.divideRight(l2).value() * l2, l1);
-}
-
-TEST_F(LinearLayoutTest, DivideRight_EliminateInDim) {
-  LinearLayout l1(
-      {
-          {S("in2"), {{0, 1}, {1, 0}}},
-          {S("in1"), {{2, 0}, {0, 2}}},
-      },
-      {S("out1"), S("out2")});
-  LinearLayout l2({{S("in1"), {{1, 0}, {0, 1}}}}, {S("out1"), S("out2")});
-  LinearLayout l3({{S("in2"), {{0, 1}, {1, 0}}}}, {S("out1"), S("out2")});
-  ASSERT_EQ(l3 * l2, l1);
-  EXPECT_EQ(l1.divideRight(l2), l3);
-
-  LinearLayout l4({{S("in1"), {{0, 1}, {0, 2}}}, {S("in2"), {}}},
-                  {S("out1"), S("out2")});
-  LinearLayout l5({{S("in1"), {{0, 1}, {0, 2}}}}, {S("out1"), S("out2")});
-  LinearLayout l6({{S("in2"), {}}}, {S("out1"), S("out2")});
-  ASSERT_EQ(l5 * l6, l4);
-  EXPECT_EQ(l4.divideRight(l6), l5);
-
-  LinearLayout l7({{S("in1"), {}}, {S("in2"), {{0, 1}}}, {S("in3"), {}}},
-                  {S("out1"), S("out2")});
-  LinearLayout l8({{S("in2"), {{0, 1}}}}, {S("out1"), S("out2")});
-  LinearLayout l9({{S("in1"), {}}, {S("in2"), {}}, {S("in3"), {}}}, {});
-  ASSERT_EQ(l9 * l8, l7);
-  EXPECT_EQ(l7.divideRight(l8), l9);
-}
-
-TEST_F(LinearLayoutTest, DivideRight_EliminateOutDim) {
-  LinearLayout l1(
-      {
-          {S("in2"), {{1, 0}, {1, 0}}},
-          {S("in1"), {{2, 0}, {0, 1}}},
-      },
-      {S("out1"), S("out2")});
-  LinearLayout l2({{S("in1"), {{1, 0}, {0, 1}}}}, {S("out1"), S("out2")});
-  LinearLayout l3({{S("in2"), {{1}, {1}}}}, {S("out1")});
-  ASSERT_EQ(l3 * l2, l1);
-  EXPECT_EQ(l1.divideRight(l2), l3);
-
-  LinearLayout l4(
-      {
-          {S("in1"), {{0, 1}, {0, 2}}},
-      },
-      {S("out1"), S("out2")});
-  LinearLayout l5({{S("in1"), {{1}, {2}}}}, {S("out2")});
-  using BasesArray =
-      ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>>;
-  LinearLayout l6(BasesArray{}, {S("out1")});
-  ASSERT_EQ(l6 * l5, l4);
-  EXPECT_EQ(l4.divideRight(l5), l6);
-}
-
-TEST_F(LinearLayoutTest, DivideRight_Assertion) {
-  LinearLayout l1({{S("register"),
-                    {{0, 1, 0, 0}, {0, 2, 0, 0}, {0, 0, 2, 0}, {1, 0, 0, 0}}},
-                   {S("lane"),
-                    {{0, 4, 0, 0},
-                     {0, 8, 0, 0},
-                     {0, 16, 0, 0},
-                     {0, 0, 1, 0},
-                     {2, 0, 0, 0}}},
-                   {S("warp"), {{4, 0, 0, 0}, {8, 0, 0, 0}}},
-                   {S("block"), {}}},
-                  {S("register"), S("lane"), S("warp"), S("block")});
-  LinearLayout l2 = LinearLayout::identity1D(32, S("lane"), S("lane")) *
-                    LinearLayout::identity1D(4, S("warp"), S("warp")) *
-                    LinearLayout::identity1D(1, S("block"), S("block"));
-  EXPECT_EQ(l1.divideRight(l2), std::nullopt);
-}
-
 TEST_F(LinearLayoutTest, EqualsChecksOutDimSizes) {
   EXPECT_FALSE(LinearLayout::identity1D(4, S("in"), S("out")) ==
                LinearLayout({{S("in"), {{1}, {2}}}}, {{S("out"), 8}},
@@ -710,52 +612,33 @@ TEST_F(LinearLayoutTest, SublayoutIsZero) {
   EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out2")}));
 }
 
-TEST_F(LinearLayoutTest, SublayoutIsIdentity) {
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
-                  .sublayoutIsIdentity({S("in")}, {S("out")}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
-                  .sublayoutIsIdentity({}, {S("out")}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
-                  .sublayoutIsIdentity({S("in")}, {}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("out"))
-                  .sublayoutIsIdentity({}, {}));
+TEST_F(LinearLayoutTest, SquareSublayoutIsIdentity) {
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
+                  .squareSublayoutIsIdentity({S("in")}));
+  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
+                  .squareSublayoutIsIdentity({}));
 
   LinearLayout l1(
       {{S("in1"), {{1, 1}, {2, 2}, {4, 4}}}, {S("in2"), {{2, 1}, {1, 2}}}},
-      {{S("out1"), 8}, {S("out2"), 8}}, /*requireSurjective=*/false);
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out2")}));
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1")}, {S("out1"), S("out2")}));
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in1")}, {S("out2"), S("out1")}));
-  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in1")}, {S("out1")}));
-  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in1")}, {S("out2")}));
-  EXPECT_FALSE(l1.sublayoutIsIdentity({S("in2")}, {S("out1")}));
-  EXPECT_TRUE(l1.sublayoutIsIdentity({S("in2")}, {S("out2")}));
+      {{S("in1"), 8}, {S("in2"), 8}}, /*requireSurjective=*/false);
+  EXPECT_TRUE(l1.squareSublayoutIsIdentity({S("in1")}));
+  EXPECT_FALSE(l1.squareSublayoutIsIdentity({S("in2")}));
 
-  LinearLayout l2 =
-      LinearLayout::identity1D(4, S("in1"), S("out1")) *
-      LinearLayout::identity1D(8, S("in2"), S("out2")) *
-      LinearLayout({{S("in3"), {{1, 1, 1}}}},
-                   {{S("out1"), 2}, {S("out2"), 2}, {S("out3"), 2}},
-                   /*requireSurjective=*/false);
-  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in1")}, {S("out1")}));
-  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in2")}, {S("out2")}));
-  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in3")}, {S("out3")}));
-  EXPECT_FALSE(
-      l2.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1"), S("out2")}));
-  EXPECT_FALSE(l2.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
-  EXPECT_TRUE(l2.sublayoutIsIdentity({S("in1"), S("in3")}, {S("out1")}));
+  LinearLayout l2 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
+                    LinearLayout::identity1D(8, S("in2"), S("in2")) *
+                    LinearLayout({{S("in3"), {{1, 1, 1}}}},
+                                 {{S("in1"), 2}, {S("in2"), 2}, {S("in3"), 2}},
+                                 /*requireSurjective=*/false);
+  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1")}));
+  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in2")}));
+  EXPECT_TRUE(l2.squareSublayoutIsIdentity({S("in3")}));
+  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1"), S("in2")}));
 
-  LinearLayout l3 = LinearLayout::identity1D(4, S("in1"), S("out1")) *
-                    LinearLayout::identity1D(8, S("in2"), S("out2"));
-  EXPECT_TRUE(l3.sublayoutIsIdentity({S("in1")}, {S("out1")}));
-  EXPECT_TRUE(l3.sublayoutIsIdentity({S("in2")}, {S("out2")}));
-  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1")}, {S("out2")}));
-  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in2")}, {S("out1")}));
-  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1")}));
-  EXPECT_FALSE(l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out2")}));
-  EXPECT_TRUE(
-      l3.sublayoutIsIdentity({S("in1"), S("in2")}, {S("out1"), S("out2")}));
+  LinearLayout l3 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
+                    LinearLayout::identity1D(8, S("in2"), S("in2"));
+  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1")}));
+  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in2")}));
+  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1"), S("in2")}));
 }
 
 TEST_F(LinearLayoutTest, FreeVariableMasks) {
@@ -786,6 +669,82 @@ TEST_F(LinearLayoutTest, FreeVariableMasks) {
                                       {S("out1"), S("out2")})
                              .getFreeVariableMasks())),
             AR({{S("in1"), 0b100}, {S("in2"), 0b10}}));
+}
+
+TEST_F(LinearLayoutTest, QuotientOneDimension) {
+  LinearLayout layout(
+      {
+          {S("dim1"), {{1, 0}}},
+          {S("dim2"), {{0, 0}}},
+      },
+      {{S("dim1"), 2}, {S("dim2"), 1}}, /*requireSurjective=*/false);
+
+  // Quotient over dim1, which is trivial
+  auto quotientLayout = layout.quotient({S("dim1")});
+  ASSERT_TRUE(quotientLayout.has_value());
+  EXPECT_EQ(*quotientLayout, LinearLayout::zeros1D(2, S("dim2"), S("dim2")));
+  // dim2 is zero, not the identity
+  ASSERT_FALSE(quotientLayout->quotient({S("dim2")}).has_value());
+}
+
+TEST_F(LinearLayoutTest, QuotientSeveralDimensions) {
+  LinearLayout layout(
+      {
+          {S("dim1"), {{1, 0}, {2, 0}, {4, 0}}},
+          {S("dim2"), {{0, 1}, {0, 2}}},
+      },
+      {S("dim1"), S("dim2")});
+
+  auto quotientLayout = layout.quotient({S("dim1"), S("dim2")});
+  EXPECT_TRUE(quotientLayout.has_value());
+}
+
+TEST_F(LinearLayoutTest, QuotientMultipleTrivialDimensions) {
+  LinearLayout layout(
+      {
+          {S("dim1"), {{1, 0, 2}, {2, 0, 1}}},
+          {S("dim2"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+          {S("dim3"), {{0, 0, 1}, {0, 0, 2}}},
+      },
+      {S("dim1"), S("dim2"), S("dim3")});
+
+  // Quotient over dim2 is trivial, even if there's some funny business
+  // going on in the other dimensions
+  auto quotientLayout = layout.quotient({S("dim2")});
+  ASSERT_TRUE(quotientLayout.has_value());
+
+  layout = LinearLayout(
+      {
+          {S("dim1"), {{1, 0, 2}, {2, 0, 1}}},
+          {S("dim2"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+          {S("dim3"), {{0, 1, 1}, {0, 0, 2}}},
+      },
+      {S("dim1"), S("dim2"), S("dim3")});
+
+  // As soon as one maps into the dimension being quotiented or out of it
+  // (in this case dim3 depends on dim2), we cannot quotient
+  quotientLayout = layout.quotient({S("dim2")});
+  ASSERT_FALSE(quotientLayout.has_value());
+}
+
+TEST_F(LinearLayoutTest, QuotientEmptyLayout) {
+  LinearLayout layout = LinearLayout::empty();
+
+  // Quotienting over a dimension that doesn't exist is invalid
+  auto quotientLayout = layout.quotient({S("dim1")});
+  ASSERT_FALSE(quotientLayout.has_value());
+}
+
+TEST_F(LinearLayoutTest, QuotientIdentityMultipleDimensions) {
+  // Test quotient on identity layout with multiple dimensions
+  LinearLayout layout = LinearLayout::identity1D(8, S("dim1"), S("dim1")) *
+                        LinearLayout::identity1D(2, S("dim2"), S("dim2")) *
+                        LinearLayout::identity1D(4, S("dim3"), S("dim3"));
+
+  // We can quotient over all dimensions in any order
+  auto quotientLayout = layout.quotient({S("dim1"), S("dim3")});
+  ASSERT_TRUE(quotientLayout.has_value());
+  ASSERT_TRUE(quotientLayout->quotient({S("dim2")}).has_value());
 }
 
 } // anonymous namespace

@@ -44,10 +44,6 @@ std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth = std::nullopt);
 
-// Given a linear layout with input dims and output dims containing a "block"
-// dimension, determines if the layout moves data across block boundaries.
-bool isCrossCTAConversion(const LinearLayout &layout);
-
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
 // output dimensions.
