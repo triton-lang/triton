@@ -50,7 +50,11 @@ public:
   }
 
 private:
-  // shared -> dot_operand if the result layout is mfma
+  /// Lower ttg.local_load in dot operand layout if the operand parent layout is
+  /// MFMA or WMMA.
+  ///
+  /// \returns value with packed loaded values or empty value if this local_load
+  /// is not supproted.
   Value lowerSharedToDotOperandMMA(
       triton::gpu::LocalLoadOp op, triton::gpu::LocalLoadOpAdaptor adaptor,
       const LLVMTypeConverter *typeConverter,
@@ -104,6 +108,8 @@ private:
     isOuter = K == 1;
     Value res = lowerSharedToDotOperandMMA(op, adaptor, typeConverter, rewriter,
                                            dotOperandLayout, isOuter);
+    if (!res)
+      return failure();
     rewriter.replaceOp(op, res);
     return success();
   }
