@@ -317,9 +317,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
       return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
     } else if (llvm::is_contained(dims, str_attr("register"))) {
+      LinearLayout dstLayout =
+          *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(op, *conversion, adaptor, rewriter);
+      return transferWithinThread(op, dstLayout, *conversion, adaptor,
+                                  rewriter);
     } else {
       // The two layouts are equivalent. We should probably remove these in
       // RemoveLayoutConversion.
@@ -329,8 +332,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
-                       OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &dstLayout,
+                       const LinearLayout &conversion, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
@@ -339,9 +342,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals;
-    outVals.resize(conversion.getInDimSize(kRegister));
-    for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
-      auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
+    outVals.resize(dstLayout.getInDimSize(kRegister));
+    auto masks = dstLayout.getFreeVariableMasks()[kRegister];
+    for (int i = 0; i < outVals.size(); i++) {
+      // Remove free masks from the register index
+      // For example, if idx = 0b00111, and masks = 0b00100, then we get
+      // 0b00011. It means that register 7 (0b111) has the same value as
+      // register 3 (0b011).
+      auto idx = i & (~masks);
+      auto srcIdx = conversion.apply({{kRegister, idx}}).begin()->second;
       outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
