@@ -21,11 +21,11 @@ def _select_backend() -> str:
 
 
 def _validate_backend(backend: str) -> None:
-    if backend == "hip":
+    if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
         for env in hip_device_envs:
             if os.getenv(env, None) is not None:
-                raise ValueError(f"Proton does not support environment variable {env} is set. Please unset it.")
+                raise ValueError(f"Proton does not work when the environment variable {env} is set. Please unset it.")
 
 
 def start(
