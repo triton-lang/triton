@@ -212,4 +212,4 @@ Continuous sampling can allow for more runtime optimizations, but it makes it mo
 
 - Visible devices on AMD GPUs
 
-Environment variables such as `HIP_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES`, or `CUDA_VISIBLE_DEVICES` are not supported on AMD GPUs. Once it's set, we cannot find a valid mapping between the device ID returned by RocTracer and the physical device ID. This issue needs to be addressed by the ROCm team.
+Environment variables such as `HIP_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES`, and `CUDA_VISIBLE_DEVICES` are not supported on AMD GPUs. Once it's set, we cannot find a valid mapping between the device ID returned by RocTracer and the physical device ID. This issue needs to be addressed by the ROCm team.
