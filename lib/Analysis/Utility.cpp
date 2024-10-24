@@ -536,7 +536,7 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (blockedLayout == nullptr || dotOperandLayout == nullptr)
