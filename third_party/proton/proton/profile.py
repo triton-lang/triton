@@ -20,7 +20,7 @@ def _select_backend() -> str:
         raise ValueError("No backend is available for the current target.")
 
 
-def _validate_backend(backend: str) -> None:
+def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
         for env in hip_device_envs:
@@ -75,7 +75,7 @@ def start(
     if backend is None:
         backend = _select_backend()
 
-    _validate_backend(backend)
+    _check_env(backend)
 
     set_profiling_on()
     if hook and hook == "triton":
