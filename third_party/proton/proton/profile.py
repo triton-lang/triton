@@ -22,10 +22,12 @@ def _select_backend() -> str:
 
 def _check_env(backend: str) -> None:
     if backend == "roctracer":
-        hip_device_envs = ["HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
+        hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
         for env in hip_device_envs:
             if os.getenv(env, None) is not None:
-                raise ValueError(f"Proton does not work when the environment variable {env} is set. Please unset it.")
+                raise ValueError(
+                    f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
+                )
 
 
 def start(
