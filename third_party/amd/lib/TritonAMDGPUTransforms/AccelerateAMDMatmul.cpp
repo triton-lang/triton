@@ -59,7 +59,7 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
     if (op->hasTrait<OpTrait::DotLike>() && (op != dotOp))
       return {(unsigned)numWarps, 1};
 
-  SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
+  SmallVector<int64_t, 3> tensorShape = {shape[0], shape[1]};
   SmallVector<unsigned, 2> ret = {1, 1};
   do {
     if (ret[0] * ret[1] >= numWarps)
