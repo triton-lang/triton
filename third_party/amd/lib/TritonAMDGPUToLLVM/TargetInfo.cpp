@@ -245,4 +245,10 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
 
+bool TargetInfo::supportVectorizedAtomics() const {
+  // Note: not currently tested or used, but AMD generally supports vectorized
+  // atomics.
+  return true;
+}
+
 } // namespace mlir::triton::AMD
