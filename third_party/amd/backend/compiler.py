@@ -229,7 +229,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-        if os.environ.get("AMDGCN_USE_BUFFER_OPS"):
+        if os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1":
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
