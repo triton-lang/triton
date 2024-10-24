@@ -1,6 +1,7 @@
 add_triton_library(TritonAMDGPUTransforms
   AccelerateAMDMatmul.cpp
   CanonicalizePointers.cpp
+  ConvertToBufferOps.cpp
   OptimizeEpilogue.cpp
   ReorderInstructions.cpp
   StreamPipelineV2.cpp
