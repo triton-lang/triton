@@ -32,20 +32,6 @@ namespace {
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 
-enum class WMMAInstrType : uint8_t {
-  // D = AB + C;
-  // typeof(D) == typeof(C)
-  // typeof(A) == typeof(B)
-  // typeof(D), typeof(A):
-  FP32_FP16,
-  FP32_BF16,
-  FP16_FP16,
-  BF16_BF16,
-  I32_I8,
-  I32_I4,
-  NOT_APPLICABLE,
-};
-
 using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 
 ValueTable
@@ -85,74 +71,6 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
   return vals;
 }
 
-static WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
-  auto aOperandTy = op.getA().getType();
-  auto aTensorTy = cast<RankedTensorType>(aOperandTy);
-  auto aElemTy = aTensorTy.getElementType();
-  auto bOperandTy = op.getB().getType();
-  auto bTensorTy = cast<RankedTensorType>(bOperandTy);
-  auto bElemTy = bTensorTy.getElementType();
-  assert(aElemTy == bElemTy);
-  auto cOperandTy = op.getC().getType();
-  auto cTensorTy = cast<RankedTensorType>(cOperandTy);
-  auto cElemTy = cTensorTy.getElementType();
-  auto dOperandTy = op.getD().getType();
-  auto dTensorTy = cast<RankedTensorType>(dOperandTy);
-  auto dElemTy = dTensorTy.getElementType();
-  assert(cElemTy == dElemTy);
-
-  if (dElemTy.isF32() && aElemTy.isF16())
-    return WMMAInstrType::FP32_FP16;
-  if (dElemTy.isF32() && aElemTy.isBF16())
-    return WMMAInstrType::FP32_BF16;
-  if (dElemTy.isF16() && aElemTy.isF16())
-    return WMMAInstrType::FP16_FP16;
-  if (dElemTy.isBF16() && aElemTy.isBF16())
-    return WMMAInstrType::BF16_BF16;
-  if (dElemTy.isInteger(32) && aElemTy.isInteger(8))
-    return WMMAInstrType::I32_I8;
-  if (dElemTy.isInteger(32) && aElemTy.isInteger(4))
-    return WMMAInstrType::I32_I4;
-
-  return WMMAInstrType::NOT_APPLICABLE;
-}
-
-Value generateROCDLOp(ConversionPatternRewriter &rewriter, Location loc,
-                      WMMAInstrType wmmaType, Value valA, Value valB,
-                      Value valC, Type aElType, Type bElType) {
-  auto resType = valC.getType();
-  Value falseFlag = int_val(1, false);
-  switch (wmmaType) {
-  case WMMAInstrType::FP32_FP16:
-    return rewriter.create<ROCDL::wmma_f32_16x16x16_f16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC});
-  case WMMAInstrType::FP32_BF16:
-    return rewriter.create<ROCDL::wmma_f32_16x16x16_bf16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC});
-  case WMMAInstrType::FP16_FP16:
-    return rewriter.create<ROCDL::wmma_f16_16x16x16_f16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
-  case WMMAInstrType::BF16_BF16:
-    return rewriter.create<ROCDL::wmma_bf16_16x16x16_bf16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
-  case WMMAInstrType::I32_I8:
-    return rewriter.create<ROCDL::wmma_i32_16x16x16_iu8>(
-        loc, TypeRange{resType},
-        ValueRange{int_val(1, !aElType.isUnsignedInteger()), valA,
-                   int_val(1, !bElType.isUnsignedInteger()), valB, valC,
-                   falseFlag});
-  case WMMAInstrType::I32_I4:
-    return rewriter.create<ROCDL::wmma_i32_16x16x16_iu4>(
-        loc, TypeRange{resType},
-        ValueRange{int_val(1, !aElType.isUnsignedInteger()), valA,
-                   int_val(1, !bElType.isUnsignedInteger()), valB, valC,
-                   falseFlag});
-  default:
-    llvm::report_fatal_error("WMMA data type not supported");
-  }
-  return Value();
-}
-
 std::string getTypeStr(Type ty) {
   std::string scalarName;
   if (ty.isF32()) {
@@ -180,32 +98,36 @@ std::string getTypeStr(Type ty) {
 }
 
 StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
-                               Type valCTy) {
+                               Type valCTy, bool tied) {
   static llvm::SmallDenseMap<llvm::hash_code, std::string> intrinsics;
   using MapInfo = llvm::DenseMapInfo<Type>;
   llvm::hash_code h = llvm::hash_combine(
       MapInfo::getHashValue(aElTy), MapInfo::getHashValue(bElTy),
       MapInfo::getHashValue(dElTy), MapInfo::getHashValue(valATy),
-      MapInfo::getHashValue(valCTy));
+      MapInfo::getHashValue(valCTy), llvm::hash_value(tied));
   if (!intrinsics.contains(h)) {
     std::string name = "llvm.amdgcn.wmma.";
     name += getTypeStr(dElTy);
     name += ".16x16x16."; // TODO support 16x16x32 for i4 operands
     name += getTypeStr(aElTy);
-    if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
-      name += '.' + getTypeStr(bElTy);
-    name += '.' + getTypeStr(valCTy) + "." + getTypeStr(valATy);
+    if (tied) {
+      name += ".tied";
+    } else {
+      if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
+        name += '.' + getTypeStr(bElTy);
+      name += '.' + getTypeStr(valCTy) + "." + getTypeStr(valATy);
+    }
     intrinsics[h] = name;
   }
   return intrinsics[h];
 }
 
 Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
-                            WMMAInstrType wmmaType, Value valA, Value valB,
-                            Value valC, Type aElType, Type bElType,
-                            Type dElType) {
+                            Value valA, Value valB, Value valC, Type aElType,
+                            Type bElType, Type dElType,
+                            std::optional<bool> tiedLower) {
   auto name = getWmmaIntrinsicName(aElType, bElType, dElType, valA.getType(),
-                                   valC.getType());
+                                   valC.getType(), tiedLower.has_value());
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
   if (aElType.isInteger())
@@ -217,8 +139,9 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   operands.push_back(valC);
   // Flag for using low bits in registers. Result could be already packed to
   // int32. Set low bits by default for now.
-  if (32 / dElType.getIntOrFloatBitWidth() > 1 || dElType.isInteger(32)) {
-    operands.push_back(int_val(1, false));
+  if (tiedLower.has_value() || 32 / dElType.getIntOrFloatBitWidth() > 1 ||
+      dElType.isInteger(32)) {
+    operands.push_back(int_val(1, tiedLower.value_or(false)));
   }
   auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, name, valC.getType(), operands);
@@ -226,16 +149,13 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
-                     WMMAInstrType wmmaType, Value valA, Value valB, Value valC,
-                     Type aElType, Type bElType, Type dElType, int version) {
-  if (version == 1) {
-    return generateROCDLOp(rewriter, loc, wmmaType, valA, valB, valC, aElType,
-                           bElType);
-  } else {
-    assert(version == 2);
-    return generateWMMAIntrinsic(rewriter, loc, wmmaType, valA, valB, valC,
-                                 aElType, bElType, dElType);
-  }
+                     Value valA, Value valB, Value valC, Type aElType,
+                     Type bElType, Type dElType,
+                     std::optional<bool> tiedLower) {
+  // Independent of wmma version because builtin functions are backward
+  // compatible
+  return generateWMMAIntrinsic(rewriter, loc, valA, valB, valC, aElType,
+                               bElType, dElType, tiedLower);
 }
 
 // Conduct the Dot conversion.
@@ -247,7 +167,6 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   int wmmaVer = wmmaLayout.getVersion();
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
-  auto wmmaInstrType = getWMMAInstrTypeFromDot(op);
 
   auto loc = op.getLoc();
   Value a = op.getA();
@@ -295,27 +214,42 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto elemsPerVec = mnkDim[0] * mnkDim[1] * paddedOutputElemSize / warpSize;
   auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
+  bool tied = numRepM % 2 == 0 && paddedOutputElemSize == 2;
+  int mGroup = tied ? 2 : 1;
   for (int b = 0; b < numRepB; ++b) {
-    for (int m = 0; m < numRepM; ++m) {
+    for (int m = 0; m < numRepM / mGroup; ++m) {
       for (int n = 0; n < numRepN; ++n) {
         auto batchOffIdx = b * numRepM * numRepN * dElemsToStorePerThread;
-        auto mRepOffId = m * numRepN * dElemsToStorePerThread;
         auto nRepOffId = n * dElemsToStorePerThread;
-        auto fcThreadOffIdx = batchOffIdx + mRepOffId + nRepOffId;
+        auto nBatchOffSum = nRepOffId + batchOffIdx;
 
         Value acc = undef(vecTy);
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          acc = insert_element(vecTy, acc, fc[fcThreadOffIdx + v],
-                               i32_val(v * paddedOutputElemSize));
+          for (int subM = 0; subM < mGroup; ++subM) {
+            auto mRepOffId =
+                (m * mGroup + subM) * numRepN * dElemsToStorePerThread;
+            auto fcThreadOffIdx = nBatchOffSum + mRepOffId;
+            acc = insert_element(vecTy, acc, fc[fcThreadOffIdx + v],
+                                 i32_val(v * paddedOutputElemSize + subM));
+          }
         }
-        for (size_t k = 0; k < numRepK; k++) {
-          acc = generateWMMAOp(rewriter, loc, wmmaInstrType, ha[{b, m, k}],
-                               hb[{b, n, k}], acc, aTensorTy.getElementType(),
-                               bTensorTy.getElementType(), dstElemTy, wmmaVer);
+        for (size_t k = 0; k < numRepK; ++k) {
+          for (int subM = 0; subM < mGroup; ++subM) {
+            acc = generateWMMAOp(
+                rewriter, loc, ha[{b, m * mGroup + subM, k}], hb[{b, n, k}],
+                acc, aTensorTy.getElementType(), bTensorTy.getElementType(),
+                dTensorTy.getElementType(),
+                tied ? std::optional<bool>(subM != 0) : std::nullopt);
+          }
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          fc[fcThreadOffIdx + v] = extract_element(
-              dstElemTy, acc, i32_val(v * paddedOutputElemSize));
+          for (int subM = 0; subM < mGroup; ++subM) {
+            auto mRepOffId =
+                (m * mGroup + subM) * numRepN * dElemsToStorePerThread;
+            auto fcThreadOffIdx = nBatchOffSum + mRepOffId;
+            fc[fcThreadOffIdx + v] = extract_element(
+                dstElemTy, acc, i32_val(v * paddedOutputElemSize + subM));
+          }
         }
       }
     }
