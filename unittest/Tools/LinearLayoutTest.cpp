@@ -671,6 +671,82 @@ TEST_F(LinearLayoutTest, FreeVariableMasks) {
             AR({{S("in1"), 0b100}, {S("in2"), 0b10}}));
 }
 
+TEST_F(LinearLayoutTest, QuotientOneDimension) {
+  LinearLayout layout(
+      {
+          {S("dim1"), {{1, 0}}},
+          {S("dim2"), {{0, 0}}},
+      },
+      {{S("dim1"), 2}, {S("dim2"), 1}}, /*requireSurjective=*/false);
+
+  // Quotient over dim1, which is trivial
+  auto quotientLayout = layout.quotient({S("dim1")});
+  ASSERT_TRUE(quotientLayout.has_value());
+  EXPECT_EQ(*quotientLayout, LinearLayout::zeros1D(2, S("dim2"), S("dim2")));
+  // dim2 is zero, not the identity
+  ASSERT_FALSE(quotientLayout->quotient({S("dim2")}).has_value());
+}
+
+TEST_F(LinearLayoutTest, QuotientSeveralDimensions) {
+  LinearLayout layout(
+      {
+          {S("dim1"), {{1, 0}, {2, 0}, {4, 0}}},
+          {S("dim2"), {{0, 1}, {0, 2}}},
+      },
+      {S("dim1"), S("dim2")});
+
+  auto quotientLayout = layout.quotient({S("dim1"), S("dim2")});
+  EXPECT_TRUE(quotientLayout.has_value());
+}
+
+TEST_F(LinearLayoutTest, QuotientMultipleTrivialDimensions) {
+  LinearLayout layout(
+      {
+          {S("dim1"), {{1, 0, 2}, {2, 0, 1}}},
+          {S("dim2"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+          {S("dim3"), {{0, 0, 1}, {0, 0, 2}}},
+      },
+      {S("dim1"), S("dim2"), S("dim3")});
+
+  // Quotient over dim2 is trivial, even if there's some funny business
+  // going on in the other dimensions
+  auto quotientLayout = layout.quotient({S("dim2")});
+  ASSERT_TRUE(quotientLayout.has_value());
+
+  layout = LinearLayout(
+      {
+          {S("dim1"), {{1, 0, 2}, {2, 0, 1}}},
+          {S("dim2"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+          {S("dim3"), {{0, 1, 1}, {0, 0, 2}}},
+      },
+      {S("dim1"), S("dim2"), S("dim3")});
+
+  // As soon as one maps into the dimension being quotiented or out of it
+  // (in this case dim3 depends on dim2), we cannot quotient
+  quotientLayout = layout.quotient({S("dim2")});
+  ASSERT_FALSE(quotientLayout.has_value());
+}
+
+TEST_F(LinearLayoutTest, QuotientEmptyLayout) {
+  LinearLayout layout = LinearLayout::empty();
+
+  // Quotienting over a dimension that doesn't exist is invalid
+  auto quotientLayout = layout.quotient({S("dim1")});
+  ASSERT_FALSE(quotientLayout.has_value());
+}
+
+TEST_F(LinearLayoutTest, QuotientIdentityMultipleDimensions) {
+  // Test quotient on identity layout with multiple dimensions
+  LinearLayout layout = LinearLayout::identity1D(8, S("dim1"), S("dim1")) *
+                        LinearLayout::identity1D(2, S("dim2"), S("dim2")) *
+                        LinearLayout::identity1D(4, S("dim3"), S("dim3"));
+
+  // We can quotient over all dimensions in any order
+  auto quotientLayout = layout.quotient({S("dim1"), S("dim3")});
+  ASSERT_TRUE(quotientLayout.has_value());
+  ASSERT_TRUE(quotientLayout->quotient({S("dim2")}).has_value());
+}
+
 } // anonymous namespace
 } // namespace mlir::triton
 

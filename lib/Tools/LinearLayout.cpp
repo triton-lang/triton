@@ -658,8 +658,13 @@ LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
 }
 
 bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
-  assertDimsSubsetIgnoringOrder(dimNames, getInDimNames());
-  assertDimsSubsetIgnoringOrder(dimNames, getOutDimNames());
+  for (StringAttr dim : dimNames) {
+    if (!llvm::is_contained(getInDimNames(), dim) &&
+        !llvm::is_contained(getOutDimNames(), dim)) {
+      return false;
+    }
+  }
+
   auto getRemainingDimNames = [&](auto allDimNames) {
     SmallVector<StringAttr> remainingDimNames;
     for (StringAttr dim : allDimNames) {
