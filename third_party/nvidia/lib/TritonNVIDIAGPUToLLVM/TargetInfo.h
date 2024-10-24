@@ -7,7 +7,8 @@ namespace mlir::triton::NVIDIA {
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo(int computeCapability) : computeCapability(computeCapability) {}
+  TargetInfo(int computeCapability, int ptxVersion)
+      : computeCapability(computeCapability), ptxVersion(ptxVersion) {}
 
   bool supportMaximumMinimum() const override;
 
@@ -53,8 +54,11 @@ public:
                   StringRef file, StringRef func, int line) const override;
   int getSharedAddressSpace() const override;
 
+  bool supportVectorizedAtomics() const override;
+
 private:
   int computeCapability;
+  int ptxVersion;
 };
 
 } // namespace mlir::triton::NVIDIA
