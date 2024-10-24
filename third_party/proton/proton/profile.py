@@ -1,5 +1,6 @@
 import functools
 import triton
+import os
 
 from triton._C.libproton import proton as libproton
 from .hook import register_triton_hook, unregister_triton_hook
@@ -17,6 +18,14 @@ def _select_backend() -> str:
         return "roctracer"
     else:
         raise ValueError("No backend is available for the current target.")
+
+
+def _validate_backend(backend: str) -> None:
+    if backend == "hip":
+        hip_device_envs = ["HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
+        for env in hip_device_envs:
+            if os.getenv(env, None) is not None:
+                raise ValueError(f"Proton does not support environment variable {env} is set. Please unset it.")
 
 
 def start(
@@ -65,6 +74,8 @@ def start(
 
     if backend is None:
         backend = _select_backend()
+
+    _validate_backend(backend)
 
     set_profiling_on()
     if hook and hook == "triton":

@@ -209,3 +209,7 @@ If you encounter permission related problems when using instruction sampling, yo
 
 The overhead of instruction sampling on NVIDIA GPUs is about 20x using Proton because we haven't enabled continuous sampling yet.
 Continuous sampling can allow for more runtime optimizations, but it makes it more challenging to attribute performance data back to the GPU kernels because: (1) it enables profiling of concurrent kernels, (2) it doesn't allow profiling of time and instruction samples simultaneously, and (3) it works best if we have a separate thread dedicated to attributing instruction samples to the GPU kernels
+
+- Visible devices on AMD GPUs
+
+Environment variables such as `HIP_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES`, or `CUDA_VISIBLE_DEVICES` are not supported on AMD GPUs. Once it's set, we cannot find a valid mapping between the device ID returned by RocTracer and the physical device ID. This issue needs to be addressed by the ROCm team.
