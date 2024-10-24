@@ -101,6 +101,7 @@ class TestRegression:
         },
     ], ids=lambda val: f"Config: {val}")
     def test_matmul_performance_regression(self, config, record_property):
+        config.setdefault('instruction_sched_variant', 'default')
 
         M, N, K, col_a, col_b, runConfig = tune_gemm.process_item(deepcopy(config))
 
