@@ -3,7 +3,9 @@ import hashlib
 import importlib
 import importlib.resources
 import tempfile
+import time
 
+import triton
 import triton._C
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -353,6 +355,61 @@ class CPULauncher(object):
         self.launch(*args, **kwargs)
 
 
+class CPUDeviceInterface:
+
+    class HooksTimeAccessor:
+
+        def __init__(self, di):
+            self.di = di
+            self.record_idx = 0
+
+        def elapsed_time(self, end_event) -> float:
+            total_time = 0
+            for i in range(self.record_idx, end_event.record_idx):
+                total_time += self.di.kernel_times[i]
+            return total_time * 1000
+
+        def record(self):
+            self.record_idx = len(self.di.kernel_times)
+
+    class TimerEvent:
+
+        def __init__(self):
+            self.timer = 0
+
+        def elapsed_time(self, end_event) -> float:
+            return (end_event.timer - self.timer) * 1000
+
+        def record(self):
+            self.timer = time.perf_counter()
+
+    def __init__(self):
+        self.kernel_times = []
+        self.last_start = 0
+        self.use_hooks = False
+        triton.compiler.CompiledKernel.launch_enter_hook = None
+        triton.compiler.CompiledKernel.launch_exit_hook = None
+
+    def enable_hook_timing(self):
+        self.use_hooks = True
+        triton.compiler.CompiledKernel.launch_enter_hook = lambda arg: self._enter_hook()
+        triton.compiler.CompiledKernel.launch_exit_hook = lambda arg: self._exit_hook()
+
+    def synchronize(self):
+        pass
+
+    def _enter_hook(self):
+        self.last_start = time.perf_counter()
+
+    def _exit_hook(self):
+        self.kernel_times.append(time.perf_counter() - self.last_start)
+
+    def Event(self, enable_timing=True):
+        if self.use_hooks:
+            return CPUDeviceInterface.HooksTimeAccessor(self)
+        return CPUDeviceInterface.TimerEvent()
+
+
 class CPUDriver(DriverBase):
 
     def __init__(self):
@@ -372,6 +429,9 @@ class CPUDriver(DriverBase):
         cpu_arch = llvm.get_cpu_tripple().split("-")[0]
         return GPUTarget("cpu", cpu_arch, 0)
 
+    def get_device_interface(self):
+        return CPUDeviceInterface()
+
     @staticmethod
     def is_active():
         return True
@@ -379,3 +439,10 @@ class CPUDriver(DriverBase):
     def get_benchmarker(self):
         from triton.testing import do_bench
         return do_bench
+
+    def get_empty_cache_for_benchmark(self):
+        import torch
+
+        # A typical LLC size for high-end server CPUs are ~400MB.
+        cache_size = 512 * 1024 * 1024
+        return torch.empty(int(cache_size // 4), dtype=torch.int, device='cpu')

@@ -213,31 +213,26 @@ def benchmark(size, provider):
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-gpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y, quantiles=quantiles, device_type=device)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y, quantiles=quantiles)
     elif provider == 'triton-gpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, None, False), quantiles=quantiles,
-                                                     device_type=device)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, None, False), quantiles=quantiles)
     elif provider == 'torch-cpu':
         # Note that we preallocate the output buffer here to only measure the kernel performance
         # without a large chunk of memory allocation.
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.add(x, y, out=output), quantiles=quantiles,
-                                                     device_type=device)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.add(x, y, out=output), quantiles=quantiles)
     elif provider == 'triton-cpu':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, device), quantiles=quantiles,
-                                                     device_type=device)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, device), quantiles=quantiles)
     elif provider == 'triton-cpu-hooks':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y, output, device), quantiles=quantiles,
-                                                     device_type=device, measure_time_with_hooks=True)
+                                                     measure_time_with_hooks=True)
     elif provider == 'triton-cpu-tiled':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled(x, y, output), quantiles=quantiles,
-                                                     device_type=device)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled(x, y, output), quantiles=quantiles)
     elif provider == 'triton-cpu-tiled-hooks':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled(x, y, output), quantiles=quantiles,
-                                                     device_type=device, measure_time_with_hooks=True)
+                                                     measure_time_with_hooks=True)
     elif provider == 'triton-cpu-tiled-tuned-hooks':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled_with_st_threshold(x, y, output),
-                                                     quantiles=quantiles, device_type=device,
-                                                     measure_time_with_hooks=True)
+                                                     quantiles=quantiles, measure_time_with_hooks=True)
     gbps = lambda ms: 3 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 

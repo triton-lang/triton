@@ -2,67 +2,10 @@ import functools
 import os
 import subprocess
 import sys
-import time
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 from . import runtime
-import triton
-
-
-class CPUDeviceInterface:
-
-    class HooksTimeAccessor:
-
-        def __init__(self, di):
-            self.di = di
-            self.record_idx = 0
-
-        def elapsed_time(self, end_event) -> float:
-            total_time = 0
-            for i in range(self.record_idx, end_event.record_idx):
-                total_time += self.di.kernel_times[i]
-            return total_time * 1000
-
-        def record(self):
-            self.record_idx = len(self.di.kernel_times)
-
-    class TimerEvent:
-
-        def __init__(self):
-            self.timer = 0
-
-        def elapsed_time(self, end_event) -> float:
-            return (end_event.timer - self.timer) * 1000
-
-        def record(self):
-            self.timer = time.perf_counter()
-
-    def __init__(self):
-        self.kernel_times = []
-        self.last_start = 0
-        self.use_hooks = False
-        triton.compiler.CompiledKernel.launch_enter_hook = None
-        triton.compiler.CompiledKernel.launch_exit_hook = None
-
-    def enable_hook_timing(self):
-        self.use_hooks = True
-        triton.compiler.CompiledKernel.launch_enter_hook = lambda arg: self._enter_hook()
-        triton.compiler.CompiledKernel.launch_exit_hook = lambda arg: self._exit_hook()
-
-    def synchronize(self):
-        pass
-
-    def _enter_hook(self):
-        self.last_start = time.perf_counter()
-
-    def _exit_hook(self):
-        self.kernel_times.append(time.perf_counter() - self.last_start)
-
-    def Event(self, enable_timing=True):
-        if self.use_hooks:
-            return CPUDeviceInterface.HooksTimeAccessor(self)
-        return CPUDeviceInterface.TimerEvent()
 
 
 def nvsmi(attrs):
@@ -149,7 +92,8 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(torch.tensor(ret), quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", measure_time_with_hooks=False):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean",
+             measure_time_with_hooks=False):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
