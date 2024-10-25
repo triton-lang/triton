@@ -108,6 +108,8 @@ public:
                                add(c, i32_val(17))};
 
     for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
+      // DEBUG: Remove
+      continue;
       // column major as per the DotOperandEncoding(opidx=0) layout
       auto si = std::array<Value, 4>{
           targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[0]),

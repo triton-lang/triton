@@ -134,37 +134,6 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
                          << ", but the tensor it's attached to has rank "
                          << rankedTy.getRank() << ".";
       }
-
-      int moduleThreadsPerWarp =
-          ttg::TritonGPUDialect::getThreadsPerWarp(module);
-      int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
-      if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
-        return makeErr() << layout << ".\nLayout has a total of "
-                         << layoutThreadsPerWarp
-                         << " threads per warp, but the module specifies "
-                         << moduleThreadsPerWarp << " threads per warp.";
-      }
-
-      int moduleWarpsPerCTA = ttg::TritonGPUDialect::getNumWarps(module);
-      int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
-      if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
-        return makeErr() << layout << ".\nLayout has a total of "
-                         << layoutWarpsPerCTA
-                         << " warps per CTA, but the module specifies "
-                         << moduleWarpsPerCTA << " warps per CTA.";
-      }
-
-      if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
-        int moduleCTAsPerCGA = ttg::TritonGPUDialect::getNumCTAs(module);
-        int64_t layoutCTAsPerCGA =
-            product(blocked.getCTALayout().getCTAsPerCGA());
-        if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
-          return makeErr() << layout << ".\nLayout has a total of "
-                           << layoutCTAsPerCGA
-                           << " CTAs per CGA, but the module specifies "
-                           << moduleCTAsPerCGA << " CTAs per CGA.";
-        }
-      }
     }
 
     return success();

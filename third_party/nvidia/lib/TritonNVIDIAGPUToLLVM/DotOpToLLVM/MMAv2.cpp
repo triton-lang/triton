@@ -411,6 +411,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   // max(repN / 2, 1) is wrong for repN = 1!
   // This is also wrong in
   // NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand
+  assert(repN > 1);
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, std::max(repN / 2, 1),
       repK, bTensorTy);

@@ -393,7 +393,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // The following tasks must be completed before we can remove the layoutIsOK
     // check:
     // 1. Support for AMD's MFMA and WMMA
-    std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
+    std::function<bool(Attribute, Type)> layoutIsOK = [&](Attribute layout,
+                                                          Type elemTy) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
         if (useLegacyMMAConversion) {
           return false;
@@ -407,10 +408,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
             return false;
           }
           // FIXME [Dot LL]
-          // Enabling LL path for buggy kWidth path
-          bool largeKWidth =
-              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
-          return largeKWidth && nvidiaMma.isAmpere();
+          // Remove and return true unconditionally when we support LLs for all
+          // encodings Use when the SharedToDotOperandMMAv2OrV3 is known to be
+          // buggy:
+          // - kWidth == 8
+          // - fp8 with kWidth == 4 and warpSize != {numWarps, 1} or {1,
+          // numWarps}
+          bool legacyLoweringIsBuggy = dotOperand.getKWidth() >= 4;
+          return legacyLoweringIsBuggy && nvidiaMma.isAmpere();
         }
         return false;
       }
@@ -418,11 +423,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         return true;
       }
       if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
-        return layoutIsOK(slice.getParent());
+        return layoutIsOK(slice.getParent(), elemTy);
       }
       return false;
     };
-    if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
+    if (!layoutIsOK(srcTy.getEncoding(), srcTy.getElementType()) ||
+        !layoutIsOK(dstTy.getEncoding(), dstTy.getElementType())) {
       return failure();
     }
 
