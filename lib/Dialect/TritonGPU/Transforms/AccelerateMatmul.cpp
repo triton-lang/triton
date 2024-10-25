@@ -400,6 +400,7 @@ public:
            "NYI: lhs supports fp4 or fp8");
     assert(bType == ScaleDotElemType::E4M3 || bType == ScaleDotElemType::E5M2 ||
            bType == ScaleDotElemType::BF16 && "NYI: rhs supports fp8 and bf16");
+    bool isFp4 = aType == ScaleDotElemType::E2M1;
 
     auto mmaEnc = getMMAEncoding(rewriter, scaledDotOp);
     auto versionMajor = mmaEnc.getVersionMajor();
@@ -418,7 +419,7 @@ public:
     // types
     auto aKWidth = mmaEnc.isHopper() ? 2 : 8;
     auto bKWidth = mmaEnc.isHopper() ? 2 : 8;
-    if (aType == ScaleDotElemType::E2M1) {
+    if (isFp4) {
       // Load 2x4-bit elements per thread
       aKWidth /= 2;
     }
@@ -438,9 +439,41 @@ public:
     // Necessary choice to leave all the scales of the tile in that given warp
     auto threadsPerWarp =
         SmallVector<unsigned>{instrShapeM, warpSize / instrShapeM};
-    auto newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
+
+    assert(versionMajor == 2 &&
+           "NYI: MMAv3. Need to rethink the scale layout otherwise");
+
+    // Copy the bases
+
+    Attribute newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
         ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(),
         newAEncoding.getCTAOrder(), mmaEnc.getCTALayout());
+
+    auto dotBroadcastsWarpLevel = mmaEnc.getWarpsPerCTA()[1] != 1;
+    if (dotBroadcastsWarpLevel) {
+      // If mma has warpsPerCTA == {2, 2}, then newAEncoding has
+      // warpsPerCTA == {2, 1}. In this case, we need to broadcast the warps
+      // on the second dimension as per
+      // A: 0 1 | 0 1
+      //    - - | - -
+      //    2 3 | 2 3
+      // This broadcasting is not representable by standard blocked encodings,
+      // so we need to use linear layouts.
+      // This broadcasting is implemented in ampereDotToLinearLayout
+      auto blocked = cast<BlockedEncodingAttr>(newScaleEncoding);
+      auto blockedLL = *blocked.toLinearLayout(a.getType().getShape());
+      LinearLayout::BasesT scaleBases = blockedLL.getBases();
+      auto nBases = llvm::Log2_32(mmaEnc.getWarpsPerCTA()[1]);
+      auto &warps = scaleBases[StringAttr::get(ctx, "warp")];
+      // Prepend the vector of zeros to the warpBases
+      warps.insert(warps.begin(), nBases, std::vector<int32_t>(rank, 0));
+      auto outDims = llvm::to_vector(blockedLL.getOutDimNames());
+      auto newLL = LinearLayout(scaleBases, outDims);
+      auto repOrder = blocked.getRepOrder();
+      newScaleEncoding =
+          LinearEncodingAttr::get(ctx, std::move(newLL), repOrder);
+    }
+
     a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding);
 
     // Upcast B operand
@@ -543,7 +576,8 @@ private:
     auto dotOp = rewriter.create<DotOp>(
         scaledDotOp.getLoc(), scaledDotOp.getType(), a, b, scaledDotOp.getC());
 
-    // FIXME Waiting on the following comment to be fixed:
+    // Waiting for https://github.com/triton-lang/triton/pull/5003 to land
+    // cf.
     // https://github.com/triton-lang/triton/pull/5003#issuecomment-2445091746
     // int versionMajor = getMMAVersionSafe(computeCapability, dotOp);
     int versionMajor = 2;
@@ -559,10 +593,8 @@ private:
         versionMajor, retShapePerCTA, dotOp.getA().getType().getElementType(),
         numWarps);
 
-    // FIXME Waiting on supporting LLs on convert_layout
-    // auto warpsPerCTA = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
-    //                                    numWarps, instrShape);
-    SmallVector<unsigned> warpsPerCTA = {(unsigned)numWarps, 1};
+    auto warpsPerCTA = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
+                                       numWarps, instrShape);
     return NvidiaMmaEncodingAttr::get(ctx, versionMajor, versionMinor,
                                       warpsPerCTA, CTALayout, instrShape);
   }
