@@ -415,22 +415,11 @@ public:
     auto aType = dotOp.getLhsType();
     auto bType = dotOp.getRhsType();
 
-    auto enumToType = [&rewriter](ScaleTypeType type) {
-      switch (type) {
-      case ScaleTypeType::E4M3:
-        return rewriter.getFloat8E4M3FNType();
-      case ScaleTypeType::E5M2:
-        return rewriter.getFloat8E5M2Type();
-      default:
-        llvm_unreachable("unexpected type");
-      }
-    };
-
     assert((aType == ScaleTypeType::E4M3 || aType == ScaleTypeType::E5M2 ||
             aType == ScaleTypeType::E2M1) &&
            "NYI: lhs supports fp4 or fp8");
-    assert(bType == ScaleTypeType::E4M3 ||
-           bType == ScaleTypeType::E5M2 && "NYI: rhs supports fp8");
+    assert(bType == ScaleTypeType::E4M3 || bType == ScaleTypeType::E5M2 ||
+           bType == ScaleTypeType::BF16 && "NYI: rhs supports fp8 and bf16");
 
     // TODO run accelerate matmul on A and B first to choose their layouts
     // Set return type
@@ -454,7 +443,7 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
-    auto toMMABf16 = [&newRetType, &rewriter, &ctx, &enumToType](
+    auto toMMABf16 = [&newRetType, &rewriter, &ctx](
                          TypedValue<RankedTensorType> v, int idx,
                          ScaleTypeType type) -> TypedValue<RankedTensorType> {
       auto vType = v.getType();
@@ -469,23 +458,22 @@ public:
             vType.getShape(), vType.getElementType(), newVEncoding);
         return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
       } else {
-        assert(type == ScaleTypeType::E5M2 || type == ScaleTypeType::E4M3);
+        assert(type == ScaleTypeType::E5M2 || type == ScaleTypeType::E4M3 ||
+               type == ScaleTypeType::BF16);
         auto newVEncoding = DotOperandEncodingAttr::get(
             ctx, idx, newRetType.getEncoding(), /*kWidth=*/8);
         auto newVType = RankedTensorType::get(
             vType.getShape(), vType.getElementType(), newVEncoding);
         v = rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
 
-        // Bitcast
-        auto vTypeFp8 = RankedTensorType::get(vType.getShape(),
-                                              enumToType(type), newVEncoding);
-        v = cast<TypedValue<RankedTensorType>>(
-            rewriter.create<BitcastOp>(v.getLoc(), vTypeFp8, v).getResult());
-
-        // Convert to bf16
-        auto vTypeBf16 = RankedTensorType::get(
-            vType.getShape(), rewriter.getBF16Type(), newVEncoding);
-        return rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v);
+        if (type == ScaleTypeType::BF16) {
+          return v;
+        } else {
+          // Convert to bf16
+          auto vTypeBf16 = RankedTensorType::get(
+              vType.getShape(), rewriter.getBF16Type(), newVEncoding);
+          return rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v);
+        }
       }
     };
     a = toMMABf16(a, 0, aType);

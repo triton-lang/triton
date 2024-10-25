@@ -3327,7 +3327,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
                           for col_a, col_b in itertools.product([True, False], repeat=2)
                           for type_a in ["e2m1", "e4m3", "e5m2"]
-                          for type_b in ["e4m3", "e5m2"]
+                          for type_b in ["e4m3", "e5m2", "bf16"]
                           for mma in ([32, 16] if is_hip() else [16])
                           for kpack in ([1, 2] if is_hip() else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack, device):
@@ -3345,7 +3345,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, out,
                          BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
                          type_b: tl.constexpr):
-        tl.static_assert(type_b == "e4m3" or type_b == "e5m2", "type_b must be fp8")
+        tl.static_assert(type_b == "e4m3" or type_b == "e5m2" or type_b == "bf16", "type_b must be fp8 or bf16")
         IS_FP8: tl.constexpr = type_a == "e4m3" or type_a == "e5m2"
         DIV_FACTOR: tl.constexpr = 1 if IS_FP8 else 2
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR
@@ -3436,7 +3436,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
 
     def dot_scale_ref(x, scale, y, type_x, type_y):
         e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
-        type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[type_y]
+        type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2, "bf16": torch.bfloat16}[type_y]
 
         comp_dtype = torch.bfloat16
 
@@ -3465,17 +3465,20 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
 
     torch.manual_seed(0)
 
-    def create_uint8(shape, col_major=False, max_val=255):
+    def make_arg(shape, ty, col_major=False, max_val=255):
         if col_major:
             shape = shape[:-2] + (shape[-1], shape[-2])
-        ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
+        if ty == "bf16":
+            ret = torch.randn(shape, dtype=torch.bfloat16, device=device)
+        else:
+            ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
         if col_major:
             ret = ret.mT
         return ret
 
     DIV_FACTOR = 2 if type_a == "e2m1" else 1
-    x = create_uint8((M, K // DIV_FACTOR), col_major=col_a)
-    y = create_uint8((K, N), col_major=col_b)
+    x = make_arg((M, K // DIV_FACTOR), type_a, col_major=col_a)
+    y = make_arg((K, N), type_b, col_major=col_b)
 
     # sample scales that don't overflow as otherwise it's implementation defined (underflowing is alright)
     # We substract a reasonably high number (64) so that the sum of all the mxfp elements does not overflow

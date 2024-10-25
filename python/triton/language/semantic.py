@@ -1528,17 +1528,29 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
 
 def _str_to_fp_type(float_format: Optional[str]):
-    if float_format == 'e4m3':
-        return ir.ScaleTypeTY.E4M3
-    if float_format == 'e5m2':
-        return ir.ScaleTypeTY.E5M2
-    if float_format == 'e2m3':
-        return ir.ScaleTypeTY.E2M3
-    if float_format == 'e3m2':
-        return ir.ScaleTypeTY.E3M2
-    if float_format == 'e2m1':
-        return ir.ScaleTypeTY.E2M1
-    raise ValueError(f"Invalid float format: {float_format}.")
+    ty_enum = getattr(ir.ScaleTypeTY, float_format.upper(), None)
+    if ty_enum is None:
+        raise ValueError(f"Invalid float format: {float_format}.")
+    return ty_enum
+
+
+def _bitcast_to_fp_type(val: tl.tensor, float_format: str, builder: ir.builder):
+    """
+    If float_format is subbyte, make sure it's packed as uint8 and return it.
+    Otherwise, return a tensor (perhaps bitcasting) of the specified float format.
+    """
+    fp_type_to_triton = {"e5m2": tl.float8e5m2, "e4m3": tl.float8e4m3, "bf16": tl.bfloat16}
+    triton_ty = fp_type_to_triton.get(float_format)
+    if triton_ty is None:
+        assert float_format == "e2m1", f"Unexpected float format: {float_format}"
+        assert val.dtype == tl.uint8, f"e2m1 format must be packed as uint8. Got {val.dtype}"
+        return val
+    if val.dtype == triton_ty:
+        return val
+    else:
+        triton_ty_to_unsigned = {"e5m2": tl.uint8, "e4m3": tl.uint8, "bf16": tl.uint16}
+        assert val.dtype == triton_ty_to_unsigned[float_format], f"Unexpected dtype for {float_format}. Got {val.dtype}"
+        return bitcast(val, float_format, builder)
 
 
 def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
@@ -1554,6 +1566,8 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor,
     assert rhs_format in ("e4m3", "e5m2", "bf16"), f"NYI: rhs_format {rhs_format}"
     rhs_scale_is_none = isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None
     assert rhs_scale_is_none, "NYI: rhs_scale not supported"
+    lhs = _bitcast_to_fp_type(lhs, lhs_format, builder)
+    rhs = _bitcast_to_fp_type(rhs, rhs_format, builder)
 
     M = lhs.type.shape[-2]
     K, N = rhs.type.shape[-2:]

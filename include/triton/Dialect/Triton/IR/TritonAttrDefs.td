@@ -127,7 +127,8 @@ def TT_ScaleTypeTypeAttr : I32EnumAttr<
       I32EnumAttrCase<"E5M2", 1, "e5m2">,
       I32EnumAttrCase<"E2M3", 2, "e2m3">,
       I32EnumAttrCase<"E3M2", 3, "e3m2">,
-      I32EnumAttrCase<"E2M1", 4, "e2m1">
+      I32EnumAttrCase<"E2M1", 4, "e2m1">,
+      I32EnumAttrCase<"BF16", 5, "bf16">
 
     ]>{
   let cppNamespace = "::mlir::triton";
