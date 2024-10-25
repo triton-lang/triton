@@ -58,6 +58,8 @@ public:
                   StringRef file, StringRef func, int line) const override;
   int getSharedAddressSpace() const override;
 
+  bool supportVectorizedAtomics() const override;
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   RewriterBase &rewriter, bool useStdErr) const;
