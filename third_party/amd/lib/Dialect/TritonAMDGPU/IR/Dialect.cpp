@@ -86,14 +86,25 @@ LogicalResult ExtractSliceOp::verify() {
   // shapePerCTA. This condition ensures that slice has the same layout as the
   // original tensor.
 
+  auto offsets = getStaticOffsets();
+  if (offsets.size() != 2) {
+    return emitError("invalid offset shape ") << offsets;
+  }
+
   SmallVector<int64_t, 2> sizes;
   for (auto i = 0; i < 2; ++i) {
-    if (resultTy.getDimSize(i) > srcTy.getDimSize(i)) {
+    auto resultDimSize = resultTy.getDimSize(i);
+    auto srcDimSize = srcTy.getDimSize(i);
+    if (resultDimSize > srcDimSize) {
       return emitError(
                  "result shape cannot be larger than input shape at dimension ")
              << i;
     }
-    sizes.push_back(resultTy.getDimSize(i));
+    if (offsets[i] + resultDimSize > srcDimSize) {
+      return emitError("invalid offset ")
+             << offsets[i] << " at dimension " << i;
+    }
+    sizes.push_back(resultDimSize);
   }
 
   if (sizes[0] % shapePerCTA[0] != 0 || sizes[1] % shapePerCTA[1] != 0) {
@@ -101,8 +112,6 @@ LogicalResult ExtractSliceOp::verify() {
                        << "] must be a multiple of shapePerCTA [" << shapePerCTA
                        << "]";
   }
-
-  auto offsets = getStaticOffsets();
 
   if (offsets[0] % shapePerCTA[0] != 0 || offsets[1] % shapePerCTA[1] != 0) {
     return emitError() << "offset [" << offsets

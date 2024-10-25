@@ -35,7 +35,7 @@ class BlockedLayout:
 
 
 # -----------------------
-# test view slice
+# test extract slice
 # -----------------------
 
 extract_layout = [
@@ -107,9 +107,9 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
         f.flush()
         kernel = triton.compile(f.name)
 
-    view = torch.empty((M_tile_size, N_tile_size), device=device, dtype=torch.float16)
+    extract_slice = torch.empty((M_tile_size, N_tile_size), device=device, dtype=torch.float16)
 
-    kernel[(1, 1, 1)](x.data_ptr(), view)
+    kernel[(1, 1, 1)](x.data_ptr(), extract_slice)
     test_result = torch.equal(x[M_tile_offset:M_tile_size + M_tile_offset, N_tile_offset:N_tile_offset + N_tile_size],
-                              view)
+                              extract_slice)
     assert test_result
