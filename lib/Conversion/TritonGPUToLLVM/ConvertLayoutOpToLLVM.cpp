@@ -335,8 +335,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   LogicalResult
   transferWithinThread(ConvertLayoutOp op, int32_t regMasks, int32_t numRegs,
-                       std::optional<LinearLayout> conversion,
-                       OpAdaptor adaptor,
+                       const LinearLayout &conversion, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
@@ -351,8 +350,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // 0b00011. It means that register 7 (0b111) has the same value as
       // register 3 (0b011).
       auto idx = i & (~regMasks);
-      auto srcIdx = conversion
-                        ? conversion->apply({{kRegister, idx}}).begin()->second
+      auto srcIdx = conversion.hasInDim(kRegister)
+                        ? conversion.apply({{kRegister, idx}}).begin()->second
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
