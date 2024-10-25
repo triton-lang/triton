@@ -4,6 +4,8 @@ import triton
 import triton.language as tl
 import pytest
 
+from triton._internal_testing import is_cuda
+
 
 def do_bench(kernel_call, quantiles):
     return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
@@ -11,6 +13,10 @@ def do_bench(kernel_call, quantiles):
 
 @pytest.mark.parametrize('use_cuda_graph', [False, True])
 def test_kwargs(use_cuda_graph: bool, device: str):
+
+    if not is_cuda() and use_cuda_graph:
+        pytest.skip("Use cuda graph without cuda looks strange")
+
     M, N = 1024, 16
     src = torch.randn(M * N, device=device)
     dst = torch.empty(M * N, device=device)
