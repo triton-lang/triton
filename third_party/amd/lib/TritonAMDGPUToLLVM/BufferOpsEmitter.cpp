@@ -133,7 +133,7 @@ Type BufferEmitter::getBufferOpType(Type type) {
   // will be bitcast-able to the original type. So if the types
   // ended up different, we simply have to emit a `bitcastOp` to convert
   Type bufferType = type;
-  if (bufferVecSize != vecSize)
+  if (bufferVecSize != vecSize || bufferElementType != elementType)
     bufferType = VectorType::get(bufferVecSize, bufferElementType);
   if (bufferVecSize == 1)
     bufferType = getElementTypeOrSelf(bufferType);

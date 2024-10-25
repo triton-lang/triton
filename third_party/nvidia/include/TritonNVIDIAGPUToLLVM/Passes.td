@@ -30,6 +30,9 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
         Option<"computeCapability", "compute-capability",
                "int32_t", /*default*/"80",
                "device compute capability">,
+        Option<"ptxVersion", "ptx-version",
+               "int32_t", /*default*/"80",
+               "PTX version">,
     ];
 }
 
