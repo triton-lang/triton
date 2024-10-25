@@ -324,7 +324,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       //         simply reorder the elements of adaptor.getSrc().
       return transferWithinThread(
           op, dstLayout.getFreeVariableMasks()[kRegister],
-          dstLayout.getInDimSize(kRegister), conversion, adaptor, rewriter);
+          dstLayout.getInDimSize(kRegister), *conversion, adaptor, rewriter);
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
