@@ -288,52 +288,78 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return rewriter.notifyMatchFailure(
           op, "NYI. srcTy and/or dstTy don't implement LLs yet");
     }
+    LinearLayout srcLayout =
+        *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    LinearLayout dstLayout =
+        *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+
+    StringAttr kBlock = str_attr("block");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kRegister = str_attr("register");
 
     assert(to_vector(conversion->getInDimNames()) ==
            to_vector(conversion->getOutDimNames()));
     auto dims = conversion->getInDimNames();
-    if (llvm::is_contained(dims, str_attr("block"))) {
+    if (llvm::is_contained(dims, kBlock)) {
       // Case 1: Transfer between values in different CTAs.
       //          This requires moving values through distributed shared memory.
       return rewriter.notifyMatchFailure(
           op, "NYI: Transfer between different CTAs");
-    } else if (llvm::is_contained(dims, str_attr("warp"))) {
+    } else if (llvm::is_contained(dims, kWarp)) {
       // Case 2: Transfer between values in the same CTA, in which case we move
       //         values through shared memory.
-      LinearLayout srcLayout =
-          *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-      LinearLayout dstLayout =
-          *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
       return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
-    } else if (llvm::is_contained(dims, str_attr("lane"))) {
+    } else if (llvm::is_contained(dims, kLane)) {
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         complicated enough we may fall back to using shared memory
       // TODO(Keren): implement warp shuffle instead of using the general
       // approach that uses shared memory
-      LinearLayout srcLayout =
-          *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-      LinearLayout dstLayout =
-          *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
       return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
-    } else if (llvm::is_contained(dims, str_attr("register"))) {
-      LinearLayout dstLayout =
-          *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(op, dstLayout, *conversion, adaptor,
-                                  rewriter);
+      return transferWithinThread(op, *conversion, adaptor, rewriter);
+    } else if (dstLayout.getInDimSize(kRegister) >
+               srcLayout.getInDimSize(kRegister)) {
+      // Case 5. We don't need to transfer from one layout to another, but
+      // need to replicate the values.
+      return replicateWithinThread(op, dstLayout, adaptor, rewriter);
+
     } else {
-      // The two layouts are equivalent. We should probably remove these in
-      // RemoveLayoutConversion.
+      // Cast 6. The two layouts are equivalent. We should probably remove
+      // these in RemoveLayoutConversion.
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &dstLayout,
-                       const LinearLayout &conversion, OpAdaptor adaptor,
+  replicateWithinThread(ConvertLayoutOp op, const LinearLayout &dstLayout,
+                        OpAdaptor adaptor,
+                        ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = op.getContext();
+    auto loc = op.getLoc();
+    StringAttr kRegister = str_attr("register");
+    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    SmallVector<Value> outVals(dstLayout.getInDimSize(kRegister));
+    auto masks = dstLayout.getFreeVariableMasks()[kRegister];
+    for (int i = 0; i < outVals.size(); i++) {
+      auto idx = i & (~masks);
+      outVals[i] = inVals[idx];
+    }
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  LogicalResult
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
+                       OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
@@ -341,16 +367,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals;
-    outVals.resize(dstLayout.getInDimSize(kRegister));
-    auto masks = dstLayout.getFreeVariableMasks()[kRegister];
+    SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
-      // Remove free masks from the register index
-      // For example, if idx = 0b00111, and masks = 0b00100, then we get
-      // 0b00011. It means that register 7 (0b111) has the same value as
-      // register 3 (0b011).
-      auto idx = i & (~masks);
-      auto srcIdx = conversion.apply({{kRegister, idx}}).begin()->second;
+      auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
       outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,

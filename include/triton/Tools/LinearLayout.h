@@ -413,8 +413,6 @@ public:
 
   bool isSurjective() const { return surjective; }
 
-  bool isEmpty() const { return bases.empty(); }
-
   const BasesT &getBases() const { return bases; }
 
   // Get the pos'th basis vector for the inDim -> outDim mapping.

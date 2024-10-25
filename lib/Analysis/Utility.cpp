@@ -640,31 +640,6 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   return ans;
 }
 
-namespace {
-
-// Count the number of not free registers in a layout.
-// A register is free if it maps to duplicate values in the layout.
-// For example, in the following layout, the number of not free registers is 8
-//
-//   register=1 -> 0
-//   register=2 -> 1
-//   register=4 -> 0
-//   register=8 -> 2
-//   register=16 -> 4
-//
-int32_t countNotFreeRegs(int32_t numRegs, int32_t freeRegMasks) {
-  auto numRegsLog2 = llvm::Log2_32(numRegs);
-  auto numNotFreeRegsLog2 = 0;
-  for (auto i = 0; i < numRegsLog2; i++) {
-    if ((freeRegMasks & (1 << i)) == 0) {
-      numNotFreeRegsLog2++;
-    }
-  }
-  return 1 << numNotFreeRegsLog2;
-}
-
-} // namespace
-
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
 // under kBlock, kWarp or kLane (in that order). The idea here is that if we
 // have a transformation that's the identity on kBlock, we don't need to use
@@ -686,24 +661,20 @@ std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
   StringAttr kBlock = StringAttr::get(ctx, "block");
   auto numSrcRegs = srcLayout->getInDimSize(kRegister);
   auto numDstRegs = dstLayout->getInDimSize(kRegister);
-  auto srcFreeVarMasks = srcLayout->getFreeVariableMasks()[kRegister];
-  auto dstFreeVarMasks = dstLayout->getFreeVariableMasks()[kRegister];
-  auto numNotFreeSrcRegs = countNotFreeRegs(numSrcRegs, srcFreeVarMasks);
-  auto numNotFreeDstRegs = countNotFreeRegs(numDstRegs, dstFreeVarMasks);
   // We need to ensure that the number of registers is the same in the source
   // and destination layouts.  We do this by padding the smaller layout with
   // extra registers.
   auto numRegs = std::max(numSrcRegs, numDstRegs);
-  auto srcLayoutWithFreeReg = srcLayout->resize(kRegister, numRegs);
-  auto dstLayoutWithFreeReg = dstLayout->resize(kRegister, numRegs);
+  auto srcLayoutWithFreeRegs = srcLayout->resize(kRegister, numRegs);
+  auto dstLayoutWithFreeRegs = dstLayout->resize(kRegister, numRegs);
   // comp describes the layout function to create dst from src.
   LinearLayout comp =
-      dstLayoutWithFreeReg.invertAndCompose(srcLayoutWithFreeReg);
+      dstLayoutWithFreeRegs.invertAndCompose(srcLayoutWithFreeRegs);
   // We try to quotient by the largest subspace first
   auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
   for (auto dim : dims) {
     auto quotient = comp.quotient(StringAttr::get(ctx, dim));
-    if (!quotient.has_value() || quotient->isEmpty()) {
+    if (!quotient.has_value()) {
       break;
     }
     comp = *quotient;
