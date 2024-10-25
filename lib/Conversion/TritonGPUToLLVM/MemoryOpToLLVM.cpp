@@ -158,7 +158,7 @@ private:
     auto dstShape = dstTy.getShape();
     auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto dstLayout = dstTy.getEncoding();
-    assert((dstShape.size() <= 2 || isSupportedDotOpLayout(dstLayout)) &&
+    assert(dstShape.size() <= 2 &&
            "Unexpected rank of ConvertLayout(shared->distributed)");
     auto inOrd = getOrder(srcSharedLayout);
 
