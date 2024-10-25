@@ -317,18 +317,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // TODO(Keren): implement warp shuffle instead of using the general
       // approach that uses shared memory
       return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
-    } else if (llvm::is_contained(dims, kRegister)) {
+    } else if (llvm::is_contained(dims, kRegister) ||
+               dstLayout.getInDimSize(kRegister) !=
+                   srcLayout.getInDimSize(kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(op, dstLayout, conversion, adaptor, rewriter);
-    } else if (dstLayout.getInDimSize(kRegister) !=
-               srcLayout.getInDimSize(kRegister)) {
-      // Case 5: `dims` is empty, so no layout conversion is required, but the
-      // values need to be replicated.
-      return transferWithinThread(op, dstLayout, std::nullopt, adaptor,
-                                  rewriter);
+      return transferWithinThread(
+          op, dstLayout.getFreeVariableMasks()[kRegister],
+          dstLayout.getInDimSize(kRegister), conversion, adaptor, rewriter);
     } else {
-      // Cast 6. The two layouts are equivalent. We should probably remove
+      // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
@@ -336,7 +334,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &dstLayout,
+  transferWithinThread(ConvertLayoutOp op, int32_t regMasks, int32_t numRegs,
                        std::optional<LinearLayout> conversion,
                        OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
@@ -346,14 +344,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals(dstLayout.getInDimSize(kRegister));
-    auto masks = dstLayout.getFreeVariableMasks()[kRegister];
+    SmallVector<Value> outVals(numRegs);
     for (int i = 0; i < outVals.size(); i++) {
       // Remove free masks from the register index
       // For example, if idx = 0b00111, and masks = 0b00100, then we get
       // 0b00011. It means that register 7 (0b111) has the same value as
       // register 3 (0b011).
-      auto idx = i & (~masks);
+      auto idx = i & (~regMasks);
       auto srcIdx = conversion
                         ? conversion->apply({{kRegister, idx}}).begin()->second
                         : idx;
