@@ -380,10 +380,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     inVals = unpackSrc(inVals, srcTy, rewriter, loc);
-    SmallVector<Value> outVals;
-    outVals.resize(dstLayout.getInDimSize(kRegister));
-    auto masks = dstLayout.getFreeVariableMasks()[kRegister];
-    for (int i = 0; i < dstLayout.getInDimSize(kRegister); i++) {
+    SmallVector<Value> outVals(numRegs);
+    for (int i = 0; i < numRegs; i++) {
       // Remove free masks from the register index
       // For example, if idx = 0b00111, and masks = 0b00100, then we get
       // 0b00011. It means that register 7 (0b111) has the same value as
