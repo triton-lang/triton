@@ -31,59 +31,6 @@ static bool isPureMatmulProblem(ModuleOp moduleOp) {
   return foundLoop && isMatmul;
 }
 
-// Search through block to find earliest insertion point for move op. This can
-// be either an atomic op or last usage of source pointer. Search ends when move
-// op is encountered.
-static llvm::ilist<Operation>::iterator
-findEarlyInsertionPoint(Block *block, Operation *move) {
-  Value src;
-  if (auto ld = dyn_cast<triton::LoadOp>(move))
-    src = ld.getPtr();
-
-  auto ipnt = block->end();
-  for (auto bi = block->begin(); bi != block->end(); ++bi) {
-    auto *op = &*bi;
-    if (op == move) // Don't move later than current location
-      break;
-
-    op->walk([&](Operation *wop) {
-      if (src) {
-        // Check for ops accessing src value.
-        for (auto opr : wop->getOperands()) {
-          if (opr == src)
-            ipnt = bi;
-        }
-      }
-      // Atomics used for global synchronization.
-      if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(wop))
-        ipnt = bi;
-      // Break at barrier
-      if (isa<gpu::BarrierOp>(wop))
-        ipnt = bi;
-      // Break at loops.
-      if (isa<scf::ForOp, scf::WhileOp>(wop))
-        ipnt = bi;
-    });
-  }
-  return ipnt;
-}
-
-// Return the first user in the same block of the given op. If the user is in a
-// nested block then return the op owning the block. Return nullptr if not
-// existing.
-static Operation *getFirstUseInSameBlock(Operation *op) {
-  SmallVector<Operation *> usersInSameBlock;
-  for (auto user : op->getUsers()) {
-    if (Operation *ancestor = op->getBlock()->findAncestorOpInBlock(*user))
-      usersInSameBlock.push_back(ancestor);
-  }
-  auto minOpIt =
-      llvm::min_element(usersInSameBlock, [](Operation *a, Operation *b) {
-        return a->isBeforeInBlock(b);
-      });
-  return minOpIt != usersInSameBlock.end() ? *minOpIt : nullptr;
-}
-
 // Check if the operation opInsideLoop is inside any scf::ForOp and
 // opOutsideLoop is not inside the same loop.
 static bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
