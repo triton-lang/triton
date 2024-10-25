@@ -323,10 +323,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return transferWithinThread(op, *conversion, adaptor, rewriter);
     } else if (dstLayout.getInDimSize(kRegister) >
                srcLayout.getInDimSize(kRegister)) {
-      // Case 5. We don't need to transfer from one layout to another, but
-      // need to replicate the values.
+      // Case 5: `dims` is empty, so no layout conversion is required, but the
+      // values need to be replicated.
       return replicateWithinThread(op, dstLayout, adaptor, rewriter);
-
     } else {
       // Cast 6. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
