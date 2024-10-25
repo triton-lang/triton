@@ -1551,7 +1551,7 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor,
     lhs_format_enum = _str_to_fp_type(lhs_format)
     rhs_format_enum = _str_to_fp_type(rhs_format)
     assert lhs_format in ("e2m1", "e4m3", "e5m2"), f"NYI: lhs_format {lhs_format}"
-    assert rhs_format in ("e4m3", "e5m2"), f"NYI: rhs_format {rhs_format}"
+    assert rhs_format in ("e4m3", "e5m2", "bf16"), f"NYI: rhs_format {rhs_format}"
     rhs_scale_is_none = isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None
     assert rhs_scale_is_none, "NYI: rhs_scale not supported"
 
