@@ -1016,7 +1016,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 //       AMD:       scf.yield %[[DOT_45]]
 //       AMD:     } else {
 //       AMD:       scf.yield %{{.*}}#0
-//       AMD:     }   
+//       AMD:     }
 //       AMD:     %[[ADDI_35:.*]] = arith.addi %{{.*}}#3, %{{.*}}
 //       AMD:     %[[CMPI_36:.*]] = arith.cmpi slt, %[[ADDI_35]], %{{.*}}
 //       AMD:     %[[SELECT_37:.*]] = arith.select %[[CMPI_36]], %[[ADDI_35]], %{{.*}}
@@ -1032,7 +1032,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 //       AMD:       scf.yield %[[DOT_45]]
 //       AMD:     } else {
 //       AMD:       scf.yield %[[SELECT_40]]
-//       AMD:     }   
+//       AMD:     }
 //       AMD:     %[[SELECT_44:.*]] = arith.select %[[CMPI_22]], %[[IF_43]], %[[SELECT_40]]
 //       AMD:     triton_gpu.local_dealloc %{{.*}}
 //       AMD:     triton_gpu.local_dealloc %{{.*}}
