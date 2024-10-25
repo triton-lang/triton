@@ -81,7 +81,7 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
     //   [0, 1], [4, 5], [2, 3], [6, 7], [8, 9], [12, 13], [10, 11], [14, 15]
     SmallVector<Value> ret;
     for (unsigned i = 0; i < values.size(); i += 16) {
-      ret.push_back(values[i + 0]);
+      ret.push_back(values[i]);
       ret.push_back(values[i + 1]);
       ret.push_back(values[i + 4]);
       ret.push_back(values[i + 5]);

@@ -424,17 +424,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
         if (auto nvidiaMma =
                 dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
-          if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
-            return false;
-          }
           if (useLegacyMMAConversion) {
             return false;
           }
-          // FIXME [Dot LL]
-          // Enabling LL path for buggy kWidth path
-          bool largeKWidth =
-              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
-          return largeKWidth && nvidiaMma.isAmpere();
+          return true;
         }
       }
       if (isa<BlockedEncodingAttr>(layout)) {
