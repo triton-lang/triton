@@ -347,6 +347,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     SmallVector<Value> outVals(dstLayout.getInDimSize(kRegister));
     auto masks = dstLayout.getFreeVariableMasks()[kRegister];
     for (int i = 0; i < outVals.size(); i++) {
+      // Remove free masks from the register index
+      // For example, if idx = 0b00111, and masks = 0b00100, then we get
+      // 0b00011. It means that register 7 (0b111) has the same value as
+      // register 3 (0b011).
       auto idx = i & (~masks);
       outVals[i] = inVals[idx];
     }
