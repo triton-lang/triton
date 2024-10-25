@@ -34,13 +34,13 @@ LogicalResult UpcastMXFPOp::verify() {
         "operands must have the same number of dimensions, at least 2");
   }
 
-  if (!(fpType == F8F6F4Type::E2M1 || fpType == F8F6F4Type::E4M3 ||
-        fpType == F8F6F4Type::E5M2)) {
+  if (!(fpType == ScaleTypeType::E2M1 || fpType == ScaleTypeType::E4M3 ||
+        fpType == ScaleTypeType::E5M2)) {
     return emitOpError("NYI: fpType must be E2M1, E4M3, or E5M2");
   }
 
   // Change to support fp8 types
-  const auto elems_packed = fpType == F8F6F4Type::E2M1 ? 2 : 1;
+  const auto elems_packed = fpType == ScaleTypeType::E2M1 ? 2 : 1;
 
   if (xShape.back() != (32 / elems_packed) * scaleShape.back()) {
     return emitOpError("last dimension of first operand must be 16 times "
@@ -93,7 +93,7 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
     return emitOptionalError(loc, "expected a dotOperand encoding");
   }
 
-  if (typeEncoded == F8F6F4Type::E2M1) {
+  if (typeEncoded == ScaleTypeType::E2M1) {
     auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
     auto newVEncoding = DotOperandEncodingAttr::get(
         ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),

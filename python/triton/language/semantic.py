@@ -1529,15 +1529,15 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
 def _str_to_fp_type(float_format: Optional[str]):
     if float_format == 'e4m3':
-        return ir.F8F6F4TY.E4M3
+        return ir.ScaleTypeTY.E4M3
     if float_format == 'e5m2':
-        return ir.F8F6F4TY.E5M2
+        return ir.ScaleTypeTY.E5M2
     if float_format == 'e2m3':
-        return ir.F8F6F4TY.E2M3
+        return ir.ScaleTypeTY.E2M3
     if float_format == 'e3m2':
-        return ir.F8F6F4TY.E3M2
+        return ir.ScaleTypeTY.E3M2
     if float_format == 'e2m1':
-        return ir.F8F6F4TY.E2M1
+        return ir.ScaleTypeTY.E2M1
     raise ValueError(f"Invalid float format: {float_format}.")
 
 

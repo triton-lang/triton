@@ -692,8 +692,8 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       TT_FloatTensor:$c,
       TT_IntTensor:$lhs_scale,
       Optional<TT_IntTensor>:$rhs_scale,
-      TT_F8F6F4TypeAttr:$lhs_type,
-      TT_F8F6F4TypeAttr:$rhs_type
+      TT_ScaleTypeTypeAttr:$lhs_type,
+      TT_ScaleTypeTypeAttr:$rhs_type
     );
 
     let results = (outs TT_FloatTensor:$d);

@@ -415,22 +415,22 @@ public:
     auto aType = dotOp.getLhsType();
     auto bType = dotOp.getRhsType();
 
-    auto enumToType = [&rewriter](F8F6F4Type type) {
+    auto enumToType = [&rewriter](ScaleTypeType type) {
       switch (type) {
-      case F8F6F4Type::E4M3:
+      case ScaleTypeType::E4M3:
         return rewriter.getFloat8E4M3FNType();
-      case F8F6F4Type::E5M2:
+      case ScaleTypeType::E5M2:
         return rewriter.getFloat8E5M2Type();
       default:
         llvm_unreachable("unexpected type");
       }
     };
 
-    assert((aType == F8F6F4Type::E4M3 || aType == F8F6F4Type::E5M2 ||
-            aType == F8F6F4Type::E2M1) &&
+    assert((aType == ScaleTypeType::E4M3 || aType == ScaleTypeType::E5M2 ||
+            aType == ScaleTypeType::E2M1) &&
            "NYI: lhs supports fp4 or fp8");
-    assert(bType == F8F6F4Type::E4M3 ||
-           bType == F8F6F4Type::E5M2 && "NYI: rhs supports fp8");
+    assert(bType == ScaleTypeType::E4M3 ||
+           bType == ScaleTypeType::E5M2 && "NYI: rhs supports fp8");
 
     // TODO run accelerate matmul on A and B first to choose their layouts
     // Set return type
@@ -456,9 +456,9 @@ public:
 
     auto toMMABf16 = [&newRetType, &rewriter, &ctx, &enumToType](
                          TypedValue<RankedTensorType> v, int idx,
-                         F8F6F4Type type) -> TypedValue<RankedTensorType> {
+                         ScaleTypeType type) -> TypedValue<RankedTensorType> {
       auto vType = v.getType();
-      if (type == F8F6F4Type::E2M1) {
+      if (type == ScaleTypeType::E2M1) {
         // A bit too dynamically typed...
         // perhaps return ints in both cases?
 
@@ -469,7 +469,7 @@ public:
             vType.getShape(), vType.getElementType(), newVEncoding);
         return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
       } else {
-        assert(type == F8F6F4Type::E5M2 || type == F8F6F4Type::E4M3);
+        assert(type == ScaleTypeType::E5M2 || type == ScaleTypeType::E4M3);
         auto newVEncoding = DotOperandEncodingAttr::get(
             ctx, idx, newRetType.getEncoding(), /*kWidth=*/8);
         auto newVType = RankedTensorType::get(
