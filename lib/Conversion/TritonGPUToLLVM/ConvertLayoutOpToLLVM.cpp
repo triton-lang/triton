@@ -321,7 +321,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
       return transferWithinThread(op, *conversion, adaptor, rewriter);
-    } else if (dstLayout.getInDimSize(kRegister) >
+    } else if (dstLayout.getInDimSize(kRegister) !=
                srcLayout.getInDimSize(kRegister)) {
       // Case 5: `dims` is empty, so no layout conversion is required, but the
       // values need to be replicated.
@@ -371,6 +371,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
+    auto masks = dstLayout.getFreeVariableMasks()[kRegister];
     for (int i = 0; i < outVals.size(); i++) {
       auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
       outVals[i] = inVals[srcIdx];
