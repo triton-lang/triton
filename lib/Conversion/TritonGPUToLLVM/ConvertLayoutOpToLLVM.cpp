@@ -427,8 +427,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           if (useLegacyMMAConversion) {
             return false;
           }
-          return true;
         }
+        return true;
       }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
