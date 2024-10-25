@@ -109,19 +109,6 @@ public:
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
-  // FIXME [Dot LL]
-  // Do for all DotOperandEncodingAttr once we have LLs for all of them
-  static bool isSupportedDotOpLayout(Attribute layout) {
-    if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
-      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        return mma.isAmpere() && dot.getKWidth() == 8;
-      }
-      if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
-        return true;
-    }
-    return false;
-  };
-
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -131,8 +118,7 @@ public:
     Attribute dstLayout = dstTy.getEncoding();
     if (isa<SharedEncodingAttr>(srcLayout) &&
         (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-             dstLayout) ||
-         isSupportedDotOpLayout(dstLayout))) {
+            dstLayout))) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -184,39 +170,12 @@ private:
     SmallVector<Value> outVals = loadSharedToDistributed(
         dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
 
-    // FIXME [Dot LL]
     // Ampere case
     // In this case, we need to pack the outputs into i32
     if (auto dotOp = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding())) {
       if (auto parent = dyn_cast<NvidiaMmaEncodingAttr>(dotOp.getParent())) {
-        if (parent.isAmpere()) {
-          if (elemLlvmTy.isInteger(8)) {
-            auto concat = [&](Value a1, Value a2, Value a3, Value a4) {
-              return or_(
-                  or_(zext(i32_ty, a1), shl(zext(i32_ty, a2), i32_val(8))),
-                  or_(shl(zext(i32_ty, a3), i32_val(16)),
-                      shl(zext(i32_ty, a4), i32_val(24))));
-            };
-            SmallVector<Value> outVals32(outVals.size() / 4);
-            for (int i = 0; i < outVals32.size(); ++i) {
-              outVals32[i] = concat(outVals[4 * i], outVals[4 * i + 1],
-                                    outVals[4 * i + 2], outVals[4 * i + 3]);
-            }
-            outVals = outVals32;
-          } else {
-            assert(elemLlvmTy.isBF16() && "Unexpected element type");
-            auto concat = [&](Value a, Value b) {
-              return or_(zext(i32_ty, bitcast(a, i16_ty)),
-                         shl(zext(i32_ty, bitcast(b, i16_ty)), i32_val(16)));
-            };
-
-            SmallVector<Value> outVals32(outVals.size() / 2);
-            for (int i = 0; i < outVals32.size(); ++i) {
-              outVals32[i] = concat(outVals[2 * i], outVals[2 * i + 1]);
-            }
-            outVals = outVals32;
-          }
-        }
+        if (parent.getVersionMajor() < 3)
+          packI32(outVals, elemLlvmTy, rewriter, loc);
       }
     }
 
