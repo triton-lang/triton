@@ -120,8 +120,8 @@ def TT_InputPrecisionAttr : I32EnumAttr<
 }
 
 // Type for ScaleType kind of floats.
-def TT_ScaleTypeTypeAttr : I32EnumAttr<
-    "ScaleTypeType", "",
+def TT_ScaleTypeAttr : I32EnumAttr<
+    "ScaleType", "",
     [
       I32EnumAttrCase<"E4M3", 0, "e4m3">,
       I32EnumAttrCase<"E5M2", 1, "e5m2">,

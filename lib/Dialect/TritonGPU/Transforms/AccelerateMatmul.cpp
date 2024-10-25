@@ -415,11 +415,11 @@ public:
     auto aType = dotOp.getLhsType();
     auto bType = dotOp.getRhsType();
 
-    assert((aType == ScaleTypeType::E4M3 || aType == ScaleTypeType::E5M2 ||
-            aType == ScaleTypeType::E2M1) &&
+    assert((aType == ScaleType::E4M3 || aType == ScaleType::E5M2 ||
+            aType == ScaleType::E2M1) &&
            "NYI: lhs supports fp4 or fp8");
-    assert(bType == ScaleTypeType::E4M3 || bType == ScaleTypeType::E5M2 ||
-           bType == ScaleTypeType::BF16 && "NYI: rhs supports fp8 and bf16");
+    assert(bType == ScaleType::E4M3 || bType == ScaleType::E5M2 ||
+           bType == ScaleType::BF16 && "NYI: rhs supports fp8 and bf16");
 
     // TODO run accelerate matmul on A and B first to choose their layouts
     // Set return type
@@ -443,11 +443,11 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
-    auto toMMABf16 = [&newRetType, &rewriter, &ctx](
-                         TypedValue<RankedTensorType> v, int idx,
-                         ScaleTypeType type) -> TypedValue<RankedTensorType> {
+    auto toMMABf16 = [&newRetType, &rewriter,
+                      &ctx](TypedValue<RankedTensorType> v, int idx,
+                            ScaleType type) -> TypedValue<RankedTensorType> {
       auto vType = v.getType();
-      if (type == ScaleTypeType::E2M1) {
+      if (type == ScaleType::E2M1) {
         // A bit too dynamically typed...
         // perhaps return ints in both cases?
 
@@ -458,15 +458,15 @@ public:
             vType.getShape(), vType.getElementType(), newVEncoding);
         return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
       } else {
-        assert(type == ScaleTypeType::E5M2 || type == ScaleTypeType::E4M3 ||
-               type == ScaleTypeType::BF16);
+        assert(type == ScaleType::E5M2 || type == ScaleType::E4M3 ||
+               type == ScaleType::BF16);
         auto newVEncoding = DotOperandEncodingAttr::get(
             ctx, idx, newRetType.getEncoding(), /*kWidth=*/8);
         auto newVType = RankedTensorType::get(
             vType.getShape(), vType.getElementType(), newVEncoding);
         v = rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
 
-        if (type == ScaleTypeType::BF16) {
+        if (type == ScaleType::BF16) {
           return v;
         } else {
           // Convert to bf16
