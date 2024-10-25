@@ -1453,17 +1453,29 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
                           for axis in [0, 1]
                           for num_ctas in num_ctas_list
-                          for dtype_x_str in ['float32', 'uint64', 'int64', 'float64']])
+                          for dtype_x_str in ['float16', 'float32', 'uint64', 'int64', 'float64']])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
+    if is_interpreter() and dtype_x_str == 'float16':
+        pytest.skip('float16 atomic_add does not work in the interpreter mode')
     shape0, shape1 = shape
     # triton kernel
 
     @triton.jit
-    def kernel(Z, X, OLD, AXIS: tl.constexpr, SHAPE0: tl.constexpr, SHAPE1: tl.constexpr):
+    def kernel(Z, X, OLD, AXIS: tl.constexpr, SHAPE0: tl.constexpr, SHAPE1: tl.constexpr, DTYPE: tl.constexpr):
         off0 = tl.arange(0, SHAPE0)
         off1 = tl.arange(0, SHAPE1)
         x = tl.load(X + off0[:, None] * SHAPE1 + off1[None, :])
+
+        if DTYPE == tl.float16:
+            # sum can have bad numerics when accumulating in float16.
+            # if we're dealing with float16, do the sum in float32.
+            x = x.to(tl.float32)
+
         z = tl.sum(x, axis=AXIS)
+
+        if DTYPE == tl.float16:
+            z = z.to(DTYPE)
+
         if AXIS == 1:
             old = tl.atomic_add(Z + off0, z)
             tl.store(OLD + off0, old)
@@ -1477,13 +1489,23 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
     z = numpy_random(z_shape, dtype_str=dtype_x_str, rs=rs)
     old = np.zeros(z_shape, dtype=getattr(np, dtype_x_str))
     # reference results
-    z_ref = z + np.sum(x, axis=axis, keepdims=False)
+    if x.dtype == np.float16:
+        # do the sum in float32 to reduce numerical variation
+        z_ref = z + np.sum(x.astype(np.float32), axis=axis, keepdims=False).astype(x.dtype)
+    else:
+        z_ref = z + np.sum(x, axis=axis, keepdims=False)
     old_ref = np.copy(z)
     # triton result
     x_tri = to_triton(x, device=device)
     z_tri = to_triton(z, device=device)
     old_tri = to_triton(old, device=device)
-    kernel[(1, )](z_tri, x_tri, old_tri, axis, shape0, shape1, num_ctas=num_ctas)
+
+    def torch_to_triton_dtype(t):
+        if t == torch.float16:
+            return tl.float16
+        return None
+
+    kernel[(1, )](z_tri, x_tri, old_tri, axis, shape0, shape1, torch_to_triton_dtype(x_tri.dtype), num_ctas=num_ctas)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
     np.testing.assert_equal(old_ref, to_numpy(old_tri))
 
