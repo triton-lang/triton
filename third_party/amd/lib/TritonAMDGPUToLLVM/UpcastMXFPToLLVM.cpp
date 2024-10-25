@@ -18,6 +18,17 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 namespace {
+
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v,
+                    Value scale) {
+  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
+  Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
+  Value scaledBf16 = fmul(v, scaleBf16);
+  // Account for NaN in the scale as per the mxfp specification.
+  return select(scaleIsNan, nanBf16, scaledBf16);
+};
+
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
 private:
   const TargetInfoBase &targetInfo;
@@ -44,8 +55,8 @@ public:
     // When we lower scaled dot op, we made sure to distribute K only on one
     // warp. MXFP spec mandates 1 scale value for every 32 onsecutive values
     // along the K dimension. So in total each thread should read 32x main
-    // element values. Those fp16 values are packed in xVals to be 32-bit.
-    assert(xVals.size() == scaleVals.size() * 32 / 2);
+    // element values.
+    assert(xVals.size() == scaleVals.size() * 32);
 
     auto dotEncoding =
         cast<DotOperandEncodingAttr>(op.getSrc().getType().getEncoding());
@@ -90,9 +101,9 @@ public:
             targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[1]),
         };
 
-        for (int j = 0; j < 16; ++j) {
-          xVals[16 * i + j] = LLVM::mxfpScaleBf16x2(
-              rewriter, loc, xVals[16 * i + j], si[j / 8]);
+        for (int j = 0; j < 32; ++j) {
+          int index = 32 * i + j;
+          xVals[index] = mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 16]);
         }
       }
     } else {
@@ -112,9 +123,9 @@ public:
             targetInfo.shuffleIdx(rewriter, loc, scaleVal, scaleThreads[3]),
         };
 
-        for (int j = 0; j < 16; ++j) {
-          xVals[16 * i + j] = LLVM::mxfpScaleBf16x2(
-              rewriter, loc, xVals[16 * i + j], si[j / 4]);
+        for (int j = 0; j < 32; ++j) {
+          int index = 32 * i + j;
+          xVals[index] = mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 8]);
         }
       }
     }

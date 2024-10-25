@@ -856,23 +856,5 @@ SmallVector<Value> getWrappedMultiDimOffset(
   return multiDimOffsetWrapped;
 }
 
-Value mxfpScaleBf16x2(RewriterBase &rewriter, Location loc, Value v,
-                      Value scale) {
-  // Split bf16x2 into 2 bf16, scale each of them, and pack them back
-  // TODO Is it true that the bfloats are always packed as bf16x2?
-  auto bf16_0 = bitcast(trunc(i16_ty, v), bf16_ty);
-  auto bf16_1 = bitcast(trunc(i16_ty, lshr(v, i32_val(16))), bf16_ty);
-  auto scaleIsNan = icmp_eq(scale, i8_val(0xff));
-  auto scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
-  auto scaledBf16_0 = fmul(bf16_0, scaleBf16);
-  auto scaledBf16_1 = fmul(bf16_1, scaleBf16);
-  auto i16_0 = bitcast(scaledBf16_0, i16_ty);
-  auto i16_1 = bitcast(scaledBf16_1, i16_ty);
-  auto packed = or_(zext(i32_ty, i16_0), shl(zext(i32_ty, i16_1), i32_val(16)));
-  // Account for NaN in the scale as per the mxfp specification
-  auto packed_nan = select(scaleIsNan, i32_val(0x7fff7fff), packed);
-  return packed_nan;
-};
-
 } // namespace LLVM
 } // namespace mlir
