@@ -327,3 +327,136 @@ def test_tensor_descriptor_store(dtype_str):
     kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK)
 
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
+
+
+@triton.jit(noinline=True)
+def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+    in_desc = tl._experimental_make_tensor_descriptor(
+        in_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[M_BLOCK, N_BLOCK],
+    )
+    out_desc = tl._experimental_make_tensor_descriptor(
+        out_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[M_BLOCK, N_BLOCK],
+    )
+    moffset = tl.program_id(0) * M_BLOCK
+    noffset = tl.program_id(1) * N_BLOCK
+    value = in_desc.load([moffset, noffset])
+    out_desc.store([moffset, noffset], value.abs())
+
+
+@requires_tma
+def test_tensor_descriptor_in_function():
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        tensor_descriptor_in_function_helper(out_ptr, a_ptr, M, N, M_BLOCK, N_BLOCK)
+
+    M, N = 32, 128
+    inp = torch.randn((M, N), device="cuda")
+
+    M_BLOCK = 8
+    N_BLOCK = 32
+    out = inp.new_empty((M, N))
+
+    grid_m = M // M_BLOCK
+    grid_n = N // N_BLOCK
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert size == 2 * 128 * (grid_m * grid_n)
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    expect = inp.abs()
+    kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK)
+    torch.testing.assert_close(expect, out)
+
+
+@triton.jit
+def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
+                                        M, N, K,  #
+                                        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+                                        BLOCK_SIZE_K: tl.constexpr,  #
+                                        ):
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+    offs_am = pid_m * BLOCK_SIZE_M
+    offs_bn = pid_n * BLOCK_SIZE_N
+    offs_k = 0
+
+    a_desc = tl._experimental_make_tensor_descriptor(
+        a_ptr,
+        shape=[M, K],
+        strides=[K, 1],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+    )
+    b_desc = tl._experimental_make_tensor_descriptor(
+        b_ptr,
+        shape=[K, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
+    )
+    c_desc = tl._experimental_make_tensor_descriptor(
+        c_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+    )
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        a = a_desc.load([offs_am, offs_k])
+        b = b_desc.load([offs_k, offs_bn])
+        accumulator = tl.dot(a, b, acc=accumulator)
+        offs_k += BLOCK_SIZE_K
+    accumulator = accumulator.to(a_desc.dtype)
+    c_desc.store([offs_am, offs_bn], accumulator)
+
+
+@requires_tma
+@pytest.mark.parametrize("num_stages", [1, 4])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
+def test_experimental_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
+    device = "cuda"
+    M, N, K = 8192, 8192, 1024
+    torch.manual_seed(42)
+    A = torch.randn((M, K), dtype=torch.float16, device=device)
+    B = torch.randn((K, N), dtype=torch.float16, device=device)
+    C = torch.empty((M, N), dtype=torch.float16, device=device)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1, 1)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert size == 3 * 128 * grid[0]
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    kernel = matmul_kernel_make_tensor_desciptor[grid](
+        A,
+        B,
+        C,
+        M,
+        N,
+        K,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        num_warps=8,
+        num_stages=num_stages,
+    )
+    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
+    torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+    assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm["ptx"]
+    if BLOCK_M >= 64 and BLOCK_N >= 64:
+        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]

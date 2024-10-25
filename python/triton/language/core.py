@@ -1158,10 +1158,23 @@ class _experimental_tensor_descriptor(_value):
 
     @builtin
     def load(self, offsets: List[tensor], _builder=None) -> tensor:
+        """Load a block from the descriptor starting at the given element offsets.
+
+        Values outside of the tensor bounds will be filled with zeros.
+
+        :note: Offset must be a multiple of 16-bytes
+        """
         return _experimental_descriptor_load(self, offsets, self.type.shape, self.type.element_ty, _builder=_builder)
 
     @builtin
     def store(self, offsets: List[tensor], value: tensor, _builder=None) -> tensor:
+        """Store a block from the descriptor starting at the given element offsets.
+
+        Values outside of the tensor bounds will be ignored.
+
+        :note: Offset must be a multiple of 16-bytes
+        """
+        value = cast(value, self.type, _builder=_builder)
         return _experimental_descriptor_store(self, value, offsets, _builder=_builder)
 
 
@@ -1782,7 +1795,54 @@ def _experimental_make_tensor_descriptor(
     strides: List[tensor],
     block_shape: List[constexpr],
     _builder=None,
-):
+) -> _experimental_tensor_descriptor:
+    """Make an experimental tensor descriptor object
+
+    :param base: the base pointer of the tensor, must be 16-byte aligned
+    :param shape: A list of non-negative integers represeting the tensor shape
+    :param strides: A list of tensor strides. Leading dimensions must be multiples
+        of 16-byte strides and the last dimension must be contiguous.
+    :param block_shape: The shape of block to be loaded/stored from global memory
+
+    Notes
+    *****
+    On NVIDIA GPUs with TMA support, this will result in a TMA descriptor object
+    and loads and stores from the descriptor will be backed by the TMA hardware.
+
+    Currently only 2d tensors are supported.
+
+    Example
+    *******
+    .. code-block:: python
+
+        @triton.jit
+        def inplace_abs(in_out_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+            desc = tl._experimental_make_tensor_descriptor(
+                in_out_ptr,
+                shape=[M, N],
+                strides=[N, 1],
+                block_shape=[M_BLOCK, N_BLOCK],
+            )
+
+            moffset = tl.program_id(0) * M_BLOCK
+            noffset = tl.program_id(1) * N_BLOCK
+
+            value = desc.load([moffset, noffset])
+            desc.store([moffset, noffset], tl.abs(value))
+
+        # TMA descriptors require a global memory allocation
+        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+            return torch.empty(size, device="cuda", dtype=torch.int8)
+
+        triton.set_allocator(alloc_fn)
+
+        M, N = 256, 256
+        x = torch.randn(M, N, device="cuda")
+        M_BLOCK, N_BLOCK = 32, 32
+        grid = (M / M_BLOCK, N / N_BLOCK)
+        inplace_abs[grid](x, M, N, M_BLOCK, N_BLOCK)
+
+    """
     return semantic.make_tensor_descriptor(base, shape, strides, block_shape, _builder)
 
 

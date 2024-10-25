@@ -384,7 +384,14 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                                  Value allocOffset = {}) {
   // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 1);
+    // Base for this function
+    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+    if (!allocOffset) {
+      return gmemBase;
+    }
+
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
+    return gep(ptrTy, i8_ty, gmemBase, allocOffset);
   }
 
   // Base for entire kernel

@@ -953,11 +953,11 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
 def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor",
                                [Pure,
                                 SameVariadicOperandSize]> {
-  let summary = "Make a tensor descriptor type with meta information of the parent tensor and the block specified";
+  let summary = "Make a tensor descriptor type with meta information of the parent tensor and block size";
 
   let description = [{
-      `tt.make_tensor_ptr` takes both meta information of the parent tensor and the block tensor, then it returns a
-      pointer to the block tensor, e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
+      `tt.make_tensor_descriptor` takes both meta information of the parent tensor and the block size,
+      and returns a descriptor object which can be used to load/store from the tensor in global memory.
   }];
 
   let arguments = (ins
