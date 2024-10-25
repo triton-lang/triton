@@ -320,12 +320,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(op, *conversion, adaptor, rewriter);
+      return transferWithinThread(op, dstLayout, conversion, adaptor, rewriter);
     } else if (dstLayout.getInDimSize(kRegister) !=
                srcLayout.getInDimSize(kRegister)) {
       // Case 5: `dims` is empty, so no layout conversion is required, but the
       // values need to be replicated.
-      return replicateWithinThread(op, dstLayout, adaptor, rewriter);
+      return transferWithinThread(op, dstLayout, std::nullopt, adaptor,
+                                  rewriter);
     } else {
       // Cast 6. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
@@ -335,9 +336,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   LogicalResult
-  replicateWithinThread(ConvertLayoutOp op, const LinearLayout &dstLayout,
-                        OpAdaptor adaptor,
-                        ConversionPatternRewriter &rewriter) const {
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &dstLayout,
+                       std::optional<LinearLayout> conversion,
+                       OpAdaptor adaptor,
+                       ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
@@ -352,27 +354,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // 0b00011. It means that register 7 (0b111) has the same value as
       // register 3 (0b011).
       auto idx = i & (~masks);
-      outVals[i] = inVals[idx];
-    }
-    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                                  op.getType());
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-
-  LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
-                       OpAdaptor adaptor,
-                       ConversionPatternRewriter &rewriter) const {
-    MLIRContext *ctx = op.getContext();
-    auto loc = op.getLoc();
-    StringAttr kRegister = str_attr("register");
-    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
-    for (int i = 0; i < outVals.size(); i++) {
-      auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
+      auto srcIdx = conversion
+                        ? conversion->apply({{kRegister, idx}}).begin()->second
+                        : idx;
       outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
