@@ -211,6 +211,7 @@ void init_triton_ir(py::module &&m) {
       .value("E2M3", ScaleType::E2M3)
       .value("E3M2", ScaleType::E3M2)
       .value("E2M1", ScaleType::E2M1)
+      .value("BF16", ScaleType::BF16)
       .export_values();
 
   py::class_<MLIRContext>(m, "context", py::module_local())

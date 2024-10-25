@@ -1527,7 +1527,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
                      ret_ty)
 
 
-def _str_to_fp_type(float_format: Optional[str]):
+def _str_to_fp_type(float_format: str):
     ty_enum = getattr(ir.ScaleTypeTY, float_format.upper(), None)
     if ty_enum is None:
         raise ValueError(f"Invalid float format: {float_format}.")
@@ -1539,27 +1539,28 @@ def _bitcast_to_fp_type(val: tl.tensor, float_format: str, builder: ir.builder):
     If float_format is subbyte, make sure it's packed as uint8 and return it.
     Otherwise, return a tensor (perhaps bitcasting) of the specified float format.
     """
-    fp_type_to_triton = {"e5m2": tl.float8e5m2, "e4m3": tl.float8e4m3, "bf16": tl.bfloat16}
-    triton_ty = fp_type_to_triton.get(float_format)
+    triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16}.get(float_format)
     if triton_ty is None:
-        assert float_format == "e2m1", f"Unexpected float format: {float_format}"
+        assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
         assert val.dtype == tl.uint8, f"e2m1 format must be packed as uint8. Got {val.dtype}"
         return val
     if val.dtype == triton_ty:
         return val
     else:
-        triton_ty_to_unsigned = {"e5m2": tl.uint8, "e4m3": tl.uint8, "bf16": tl.uint16}
-        assert val.dtype == triton_ty_to_unsigned[float_format], f"Unexpected dtype for {float_format}. Got {val.dtype}"
-        return bitcast(val, float_format, builder)
+        unsigned_ty = {"e5m2": tl.uint8, "e4m3": tl.uint8, "bf16": tl.uint16}[float_format]
+        assert val.dtype == unsigned_ty, f"Unexpected dtype for {float_format}. Got {val.dtype}"
+        return bitcast(val, triton_ty, builder)
 
 
-def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
-               rhs_format, acc: tl.tensor | None, out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
+               rhs_format: str, acc: tl.tensor | None, out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     #TODO: validate types.
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
     assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    lhs_format: str = lhs_format.value
+    rhs_format: str = rhs_format.value
     lhs_format_enum = _str_to_fp_type(lhs_format)
     rhs_format_enum = _str_to_fp_type(rhs_format)
     assert lhs_format in ("e2m1", "e4m3", "e5m2"), f"NYI: lhs_format {lhs_format}"

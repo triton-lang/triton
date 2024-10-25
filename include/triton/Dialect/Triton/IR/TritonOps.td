@@ -685,13 +685,13 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let arguments = (
       ins
-      // inputs are integer types as they are packed types and we currently
-      // don't have a representation for those.
-      TT_IntTensor:$lhs,
-      TT_IntTensor:$rhs,
+      // inputs are floats if we have a type for them, otherwise (fp4),
+      // they are packed in pairs in an I8Tensor
+      RankedTensorOf<[TT_Float,I8]>:$lhs,
+      RankedTensorOf<[TT_Float,I8]>:$rhs,
       TT_FloatTensor:$c,
-      TT_IntTensor:$lhs_scale,
-      Optional<TT_IntTensor>:$rhs_scale,
+      RankedTensorOf<[I8]>:$lhs_scale,
+      Optional<RankedTensorOf<[I8]>>:$rhs_scale,
       TT_ScaleTypeAttr:$lhs_type,
       TT_ScaleTypeAttr:$rhs_type
     );

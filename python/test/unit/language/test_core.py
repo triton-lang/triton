@@ -3345,7 +3345,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, out,
                          BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
                          type_b: tl.constexpr):
-        tl.static_assert(type_b == "e4m3" or type_b == "e5m2" or type_b == "bf16", "type_b must be fp8 or bf16")
+        tl.static_assert((type_b == "e4m3" or type_b == "e5m2") or type_b == "bf16", "type_b must be fp8 or bf16")
         IS_FP8: tl.constexpr = type_a == "e4m3" or type_a == "e5m2"
         DIV_FACTOR: tl.constexpr = 1 if IS_FP8 else 2
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR
@@ -3485,7 +3485,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
     m_bytes = int(type_a[1])
     bias_type_a = 1 << (m_bytes - 1) - 1
     max_exponent_type_a = (1 << m_bytes) - 1 - bias_type_a
-    scale_x = create_uint8((M, K // 32), max_val=255 - max_exponent_type_a - 64)
+    scale_x = make_arg((M, K // 32), "e8m0", max_val=255 - max_exponent_type_a - 64)
 
     def make_finite(x, dtype):
         # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
