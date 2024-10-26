@@ -109,6 +109,19 @@ public:
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
+  // FIXME [Dot LL]
+  // Do for all DotOperandEncodingAttr once we have LLs for all of them
+  static bool isSupportedDotOpLayout(Attribute layout) {
+    if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
+        return mma.isAmpere() && dot.getKWidth() == 8;
+      }
+      if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
+        return true;
+    }
+    return false;
+  };
+
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -117,8 +130,9 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (isa<SharedEncodingAttr>(srcLayout) &&
-        (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-            dstLayout))) {
+            (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+                dstLayout)) ||
+        isSupportedDotOpLayout(dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -158,7 +172,7 @@ private:
     auto dstShape = dstTy.getShape();
     auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto dstLayout = dstTy.getEncoding();
-    assert(dstShape.size() <= 2 &&
+    assert((dstShape.size() <= 2 || isSupportedDotOpLayout(dstLayout)) &&
            "Unexpected rank of ConvertLayout(shared->distributed)");
     auto inOrd = getOrder(srcSharedLayout);
 

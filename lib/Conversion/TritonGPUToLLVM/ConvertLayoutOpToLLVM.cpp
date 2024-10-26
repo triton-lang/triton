@@ -427,7 +427,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           if (useLegacyMMAConversion) {
             return false;
           }
-          return true;
+          // FIXME [Dot LL]
+          // Enabling LL path for buggy kWidth path
+          bool largeKWidth =
+              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
+          return largeKWidth && nvidiaMma.isAmpere();
         }
         return false;
       }
@@ -473,6 +477,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     }
     inVals = unpackSrc(inVals, srcTy, rewriter, loc);
 
+    // Pretty sure this is the identity function ATM
+    // It'd be better to simply call `quotient({kBlock})` and
+    // remove kBlock from transferWithinBlockImpl
     auto srcLayoutWithinBlock = getLayoutWithinBlock(srcLayout);
     auto dstLayoutWithinBlock = getLayoutWithinBlock(dstLayout);
     SmallVector<Value> outVals =
