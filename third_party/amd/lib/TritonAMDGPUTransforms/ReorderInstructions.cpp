@@ -5,6 +5,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
@@ -15,6 +16,18 @@ namespace ttg = mlir::triton::gpu;
 //===----------------------------------------------------------------------===//
 // Utility functions
 //===----------------------------------------------------------------------===//
+
+// Return true if the given moduleOp contains a pure matmul problem; i.e.,
+// single dot in the main loop.
+static bool isPureMatmulProblem(ModuleOp moduleOp) {
+  for (auto forOp : moduleOp.getOps<scf::ForOp>()) {
+    int counter = 0;
+    forOp.walk([&counter](triton::DotOp dotOp) { ++counter; });
+    if (counter != 1)
+      return false;
+  }
+  return true;
+}
 
 // Search through block to find earliest insertion point for move op. This can
 // be either an atomic op or last usage of source pointer. Search ends when move
@@ -104,10 +117,12 @@ static void sinkDotConversion(ModuleOp moduleOp) {
 
 // Adjust the placement of shared memory writes and reads to immediately follow
 // the definition of their operands in case where shared memory write is in the
-// loop but its operand is not. This is a heuristic for optimizing fused
-// attention by hoisting Q tensor shared memory read/write operations outside of
-// the loop, as Q is a loop invariant and can be loaded once before entering the
-// loop.
+// loop but its operand is not.
+//
+// This is a heuristic driven by optimizing fused attention by hoisting Q tensor
+// shared memory read/write operations outside of the loop, as Q is a loop
+// invariant and can be loaded once before entering the loop. But it should be
+// generally applicable.
 //
 // There are two possible patterns for this adjustment depending on whether the
 // write to shared memory is performed using an optional `local_alloc` argument
@@ -273,7 +288,8 @@ struct TritonAMDGPUReorderInstructionsPass
 
     moveUpTranspose(m);
 
-    scheduleGlobalLoadLocalStore(m);
+    if (isPureMatmulProblem(m))
+      scheduleGlobalLoadLocalStore(m);
   }
 };
 } // namespace
