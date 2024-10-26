@@ -348,6 +348,71 @@ def TT_StoreOp : TT_Op<"store", [
 }
 
 //
+// Atomic Load/Store Ops
+//
+def TT_AtomicLoadOp : TT_Op<"atomic_load", [
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  TypesMatchWith<"result matches ptr type", "ptr", "result", "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask", "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
+  TypesMatchWith<"other matches ptr type", "ptr", "other", "getPointeeType($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+    let summary = "Atomically Load a scalar using scoped (cta, gpu, system) total ordering semantics (acquire, relaxed)";
+
+    let arguments = (
+      ins
+      AnyTypeOf<[TT_PtrLike]>:$ptr,
+      TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope,
+      Optional<TT_BoolLike>:$mask,
+      Optional<TT_Type>:$other
+    );
+
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = [{
+      $ptr
+      `,` `memSemantic` `=` $sem
+      `,` `memSyncScope` `=` $scope
+      (`,` $mask^)? (`,` $other^)?
+      attr-dict `:` type($ptr)
+    }];
+}
+
+def TT_AtomicStoreOp : TT_Op<"atomic_store", [
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  MemoryEffects<[MemWrite<GlobalMemory>]>,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+    let summary = "Atomically Store a scalar using scoped (cta, gpu, system) total ordering semantics (release, relaxed)";
+
+    let arguments = (
+      ins
+      AnyTypeOf<[TT_PtrLike]>:$ptr,
+      TT_Type:$value,
+      TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope,
+      Optional<TT_BoolLike>:$mask
+    );
+
+    let assemblyFormat = [{
+      $ptr `,` $value
+      `,` `memSemantic` `=` $sem
+      `,` `memSyncScope` `=` $scope
+      (`,` $mask^)?
+      attr-dict `:` type($ptr)
+    }];
+}
+
+//
 // Atomic Ops
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [

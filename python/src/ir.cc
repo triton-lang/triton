@@ -1459,6 +1459,31 @@ void init_triton_ir(py::module &&m) {
              return self.create<AtomicRMWOp>(dstType, rmwOp, ptr, val, mask,
                                              sem, scope);
            })
+      .def("create_atomic_load",
+           [](TritonOpBuilder &self, Value &ptrs, MemSemantic sem,
+              MemSyncScope scope) -> Value {
+             Value mask = {};
+             Value other = {};
+             return self.create<AtomicLoadOp>(ptrs, sem, scope, mask, other);
+           })
+      .def("create_atomic_store",
+           [](TritonOpBuilder &self, Value &ptrs, Value &value, MemSemantic sem,
+              MemSyncScope scope) -> void {
+             Value mask = {};
+             self.create<AtomicStoreOp>(ptrs, value, sem, scope, mask);
+           })
+      .def("create_masked_atomic_load",
+           [](TritonOpBuilder &self, Value &ptrs, Value &mask,
+              std::optional<Value> &other, MemSemantic sem,
+              MemSyncScope scope) -> Value {
+             return self.create<AtomicLoadOp>(ptrs, sem, scope, mask,
+                                              other.value_or(Value()));
+           })
+      .def("create_masked_atomic_store",
+           [](TritonOpBuilder &self, Value &ptrs, Value &value, Value &mask,
+              MemSemantic sem, MemSyncScope scope) -> void {
+             self.create<AtomicStoreOp>(ptrs, value, sem, scope, mask);
+           })
       // External
       .def("create_extern_elementwise",
            [](TritonOpBuilder &self, const std::string &libName,

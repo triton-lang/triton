@@ -1822,6 +1822,30 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
 
 @builtin
+def atomic_load(pointer, sem, scope, mask=None, other=None, _builder=None):
+    """
+    Return a scalar atomically loaded from memory at location defined by `pointer`:
+
+    `pointer` must be a single element pointer (a scalar is loaded)
+        - `mask` and `other` must also be scalars,
+        - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
+
+    :param pointer: Pointer to the data to be loaded
+    :type pointer: `triton.PointerType`
+    :param mask: if `mask[idx]` is false, do not load the data at address `pointer[idx]`
+    :param other: if `mask[idx]` is false, return `other[idx]`
+    """
+    # `mask` and `other` can be constexpr
+    mask = _constexpr_to_value(mask)
+    other = _constexpr_to_value(other)
+    if mask is not None:
+        mask = semantic.to_tensor(mask, _builder)
+    if other is not None:
+        other = semantic.to_tensor(other, _builder)
+    return semantic.atomic_load(pointer, sem, scope, mask, other, _builder)
+
+
+@builtin
 def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype,
                                                 _builder=None) -> _experimental_tensor_descriptor_base:
     """
@@ -1904,6 +1928,28 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, _builder)
+
+
+@_tensor_member_fn
+@builtin
+def atomic_store(pointer, value, sem, scope, mask=None, _builder=None):
+    """
+    Atomically store scalar data into memory location defined by `pointer`.
+
+    `pointer` must be a single element pointer (a scalar is stored)
+        - `mask` must also be scalar, and
+
+    :param pointer: The memory location where the elements of `value` are stored
+    :type pointer: `triton.PointerType`
+    :param value: The scalar element to be stored
+    :param mask: If `mask` is false, do not store `value` at `pointer`
+    """
+    # `value` can be constexpr
+    value = semantic.to_tensor(value, _builder)
+    mask = _constexpr_to_value(mask)
+    if mask is not None:
+        mask = semantic.to_tensor(mask, _builder)
+    return semantic.atomic_store(pointer, value, sem, scope, mask, _builder)
 
 
 @builtin
