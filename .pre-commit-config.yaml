@@ -31,7 +31,7 @@ repos:
           )
 
   - repo: https://github.com/google/yapf
-    rev: be72557
+    rev: "7e21823"
     hooks:
       - id: yapf
         args: ["-p", "-i"]
