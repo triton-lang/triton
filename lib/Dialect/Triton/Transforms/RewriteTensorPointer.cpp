@@ -311,12 +311,14 @@ public:
     // Create a new operation
     if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
       auto newResult = builder.create<triton::LoadOp>(
-          loadOp.getLoc(), newPtr, newMask, newOther, loadOp.getCache(),
-          loadOp.getEvict(), loadOp.getIsVolatile());
+          loadOp.getLoc(), newPtr, newMask, newOther, loadOp.getSem(),
+          loadOp.getScope(), loadOp.getCache(), loadOp.getEvict(),
+          loadOp.getIsVolatile());
       op->getResult(0).replaceAllUsesWith(newResult);
     } else if (auto storeOp = dyn_cast<triton::StoreOp>(op)) {
       builder.create<triton::StoreOp>(storeOp.getLoc(), newPtr,
                                       storeOp.getValue(), newMask,
+                                      storeOp.getSem(), storeOp.getScope(),
                                       storeOp.getCache(), storeOp.getEvict());
     }
 

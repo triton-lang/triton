@@ -1631,6 +1631,71 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
     assert (torch.equal(X, Y))
 
 
+@pytest.mark.interpreter
+def test_load_scope_sem(device):
+
+    @triton.jit
+    def kernel_r(ptrs, BLOCK_SIZE: tl.constexpr):
+        numel = 512
+        offset = tl.program_id(0) * BLOCK_SIZE
+        index = offset
+        mask = index < numel
+
+        a = tl.atomic_load(ptrs, mask=mask, sem='acquire', scope='gpu')
+        tl.atomic_store(ptrs, a, sem='release', scope='gpu')
+
+        a = tl.atomic_load(ptrs, sem='acquire', scope='cta')
+        tl.atomic_store(ptrs, a + 1, sem='release', scope='cta')
+
+        # cluster not handled in Triton yet
+        # a = a + tl.load(ptrs, sem='acquire', scope='cluster')
+        # tl.store(ptrs, a + 1, sem='release', scope='cluster')
+
+        a = a + tl.atomic_load(ptrs, mask=mask, sem='acquire', scope='sys')
+        tl.atomic_store(ptrs, a + 1, sem='release', scope='sys')
+
+        ########### relaxed:
+
+        a = tl.atomic_load(ptrs, mask=mask, sem='relaxed', scope='gpu')
+        tl.atomic_store(ptrs, a, sem='relaxed', scope='gpu')
+
+        a = tl.atomic_load(ptrs, sem='relaxed', scope='cta')
+        tl.atomic_store(ptrs, a + 1, sem='relaxed', scope='cta')
+
+        # cluster not handled in Triton yet
+        # a = a + tl.load(ptrs, sem='relaxed', scope='cluster')
+        # tl.store(ptrs, a + 1, sem='relaxed', scope='cluster')
+
+        a = a + tl.atomic_load(ptrs, mask=mask, sem='relaxed', scope='sys')
+        tl.atomic_store(ptrs, a + 1, sem='relaxed', scope='sys')
+
+    block_size = 128
+    data = torch.zeros((128, ), device=device, dtype=torch.float32)
+
+    out = kernel_r[(2, )](data, BLOCK_SIZE=block_size)
+
+    asm = out.asm['ttgir']
+    assert len(re.findall("load .* memSemantic = acquire memSyncScope = gpu", asm)) == 1
+    assert len(re.findall("store .* memSemantic = release memSyncScope = gpu", asm)) == 1
+
+    assert len(re.findall("load .* memSemantic = acquire memSyncScope = cta", asm)) == 1
+    assert len(re.findall("store .* memSemantic = release memSyncScope = cta", asm)) == 1
+
+    assert len(re.findall("load .* memSemantic = acquire memSyncScope = sys", asm)) == 1
+    assert len(re.findall("store .* memSemantic = release memSyncScope = sys", asm)) == 1
+
+    ########### relaxed:
+
+    assert len(re.findall("load .* memSemantic = relaxed memSyncScope = gpu", asm)) == 1
+    assert len(re.findall("store .* memSemantic = relaxed memSyncScope = gpu", asm)) == 1
+
+    assert len(re.findall("load .* memSemantic = relaxed memSyncScope = cta", asm)) == 1
+    assert len(re.findall("store .* memSemantic = relaxed memSyncScope = cta", asm)) == 1
+
+    assert len(re.findall("load .* memSemantic = relaxed memSyncScope = sys", asm)) == 1
+    assert len(re.findall("store .* memSemantic = relaxed memSyncScope = sys", asm)) == 1
+
+
 # ---------------
 # test cast
 # ---------------
