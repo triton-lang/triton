@@ -189,7 +189,7 @@ private:
     if (auto dotOp = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding())) {
       if (auto parent = dyn_cast<NvidiaMmaEncodingAttr>(dotOp.getParent())) {
         if (parent.getVersionMajor() < 3)
-          packI32(outVals, elemLlvmTy, rewriter, loc);
+          outVals = packI32(outVals, elemLlvmTy, rewriter, loc);
       }
     }
 
