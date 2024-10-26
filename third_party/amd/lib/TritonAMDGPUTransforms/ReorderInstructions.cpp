@@ -249,16 +249,13 @@ public:
       }
     }
 
-    // FIXME: check if we have nw=4 and 2waves (let's limit it with 128x128x64
-    // tile size for now)
+    // FIXME: check if we have nw=4 and 2waves (let's limit it with 128x128x64 tile size for now)
     m.walk([&](scf::ForOp forOp) {
       OpBuilder builder(forOp);
       MLIRContext *ctx = forOp.getContext();
       Location loc = forOp.getLoc();
-      IntegerAttr schedMaskAttr =
-          IntegerAttr::get(IntegerType::get(ctx, 32), 6);
-      IntegerAttr schedMaskAttr0 =
-          IntegerAttr::get(IntegerType::get(ctx, 32), 0);
+      IntegerAttr schedMaskAttr = IntegerAttr::get(IntegerType::get(ctx, 32), 6);
+      IntegerAttr schedMaskAttr0 = IntegerAttr::get(IntegerType::get(ctx, 32), 0);
       IntegerAttr zeroAttr = IntegerAttr::get(IntegerType::get(ctx, 16), 0);
       SmallVector<Operation *> gLoadOps;
       SmallVector<Operation *> lLoadOps;
@@ -272,19 +269,19 @@ public:
 
       // start from low priority
       auto setPrio0 = builder.create<ROCDL::SetPrioOp>(loc, zeroAttr);
-      setPrio0->moveBefore(gLoadOps[0]);
+      setPrio0->moveAfter(lLoadOps[0]);
 
       // Splitting loading A and B inorder to prevent global/local load units
       // from the congestion.
       // Locate global load at the end. Otherwise, local_load at the end of
-      // the sequence will be overlapped with the first local_stores from
+      // the sequence will be overlapped with the first local_stores from 
       // the other warp. sched.barriers to keep the order.
-      lLoadOps[0]->moveBefore(gLoadOps[0]);
-        auto schedB0 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
+      gLoadOps[0]->moveAfter(lLoadOps[0]);
+      auto schedB0 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
       schedB0->moveAfter(lLoadOps[0]);
       auto schedB1 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
       schedB1->moveAfter(gLoadOps[0]);
-      lLoadOps[1]->moveBefore(gLoadOps[1]);
+      gLoadOps[1]->moveAfter(lLoadOps[1]);
       auto schedB2 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
       schedB2->moveAfter(lLoadOps[1]);
       auto schedB3 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr0);
