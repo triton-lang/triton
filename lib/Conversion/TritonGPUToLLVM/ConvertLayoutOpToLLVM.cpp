@@ -280,32 +280,26 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   // facilitate instructions such as `ldmatrix`.
   //
   // TODO: Confirm if the problem is still there.
-  SmallVector<Value> unpackSrc(const SmallVector<Value> &inValues,
-                               RankedTensorType srcTy,
-                               ConversionPatternRewriter &rewriter,
-                               Location loc) const {
+  bool needsPacking(RankedTensorType srcTy) const {
     auto srcLayout = srcTy.getEncoding();
     if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(srcLayout)) {
       auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
       if (mmaEnc && mmaEnc.getVersionMajor() < 3) {
-        return unpackI32(inValues, srcTy.getElementType(), rewriter, loc);
+        return true;
       }
     }
-    return inValues;
+    return false;
   }
 
-  SmallVector<Value> packDst(const SmallVector<Value> &inValues,
-                             RankedTensorType dstTy,
-                             ConversionPatternRewriter &rewriter,
-                             Location loc) const {
+  bool needsUnpacking(RankedTensorType dstTy) const {
     auto dstLayout = dstTy.getEncoding();
     if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
       auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
       if (mmaEnc && mmaEnc.getVersionMajor() < 3) {
-        return packI32(inValues, dstTy.getElementType(), rewriter, loc);
+        return true;
       }
     }
-    return inValues;
+    return false;
   }
 
   LogicalResult
@@ -362,7 +356,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
-      rewriter.replaceOp(op, adaptor.getSrc());
+      if (needsPacking(dstTy) || needsUnpacking(srcTy)) {
+        auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
+        inVals = packI32(inVals, srcTy.getElementType(), rewriter, op.getLoc());
+        auto outVals =
+            unpackI32(inVals, dstTy.getElementType(), rewriter, op.getLoc());
+        auto res = packLLElements(op.getLoc(), getTypeConverter(), outVals,
+                                  rewriter, op.getType());
+        rewriter.replaceOp(op, res);
+      } else {
+        rewriter.replaceOp(op, adaptor.getSrc());
+      }
       return success();
     }
   }
@@ -379,7 +383,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    inVals = unpackSrc(inVals, srcTy, rewriter, loc);
+    if (needsUnpacking(srcTy))
+      inVals = packI32(inVals, srcTy.getElementType(), rewriter, loc);
     SmallVector<Value> outVals(numRegs);
     for (int i = 0; i < numRegs; i++) {
       // Remove free masks from the register index
@@ -392,7 +397,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
-    outVals = packDst(outVals, dstTy, rewriter, loc);
+    if (needsPacking(dstTy))
+      outVals = unpackI32(outVals, dstTy.getElementType(), rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -475,7 +481,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
-    inVals = unpackSrc(inVals, srcTy, rewriter, loc);
+    if (needsUnpacking(srcTy))
+      inVals = unpackI32(inVals, dstTy.getElementType(), rewriter, loc);
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
@@ -495,7 +502,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    outVals = packDst(outVals, dstTy, rewriter, loc);
+    if (needsPacking(dstTy))
+      outVals = packI32(outVals, dstTy.getElementType(), rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
