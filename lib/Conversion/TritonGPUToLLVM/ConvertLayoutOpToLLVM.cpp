@@ -283,7 +283,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   bool needsPacking(RankedTensorType srcTy) const {
     auto srcLayout = srcTy.getEncoding();
     if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(srcLayout)) {
-      auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
+      auto mmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
       if (mmaEnc && mmaEnc.getVersionMajor() < 3) {
         return true;
       }
@@ -294,7 +294,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   bool needsUnpacking(RankedTensorType dstTy) const {
     auto dstLayout = dstTy.getEncoding();
     if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
-      auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
+      auto mmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
       if (mmaEnc && mmaEnc.getVersionMajor() < 3) {
         return true;
       }
@@ -358,10 +358,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // these in RemoveLayoutConversion.
       if (needsPacking(dstTy) || needsUnpacking(srcTy)) {
         auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
-        inVals = packI32(inVals, srcTy.getElementType(), rewriter, op.getLoc());
-        auto outVals =
-            unpackI32(inVals, dstTy.getElementType(), rewriter, op.getLoc());
-        auto res = packLLElements(op.getLoc(), getTypeConverter(), outVals,
+        if (needsUnpacking(srcTy))
+          inVals =
+              unpackI32(inVals, srcTy.getElementType(), rewriter, op.getLoc());
+        if (needsPacking(dstTy))
+          inVals =
+              packI32(inVals, dstTy.getElementType(), rewriter, op.getLoc());
+        auto res = packLLElements(op.getLoc(), getTypeConverter(), inVals,
                                   rewriter, op.getType());
         rewriter.replaceOp(op, res);
       } else {
@@ -384,7 +387,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     if (needsUnpacking(srcTy))
-      inVals = packI32(inVals, srcTy.getElementType(), rewriter, loc);
+      inVals = unpackI32(inVals, srcTy.getElementType(), rewriter, loc);
     SmallVector<Value> outVals(numRegs);
     for (int i = 0; i < numRegs; i++) {
       // Remove free masks from the register index
@@ -398,7 +401,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       outVals[i] = inVals[srcIdx];
     }
     if (needsPacking(dstTy))
-      outVals = unpackI32(outVals, dstTy.getElementType(), rewriter, loc);
+      outVals = packI32(outVals, dstTy.getElementType(), rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
