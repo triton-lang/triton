@@ -400,6 +400,7 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   }
 
   auto outDimNames = standardOutDimNames(ctx, rank);
+  bool rotatingPhase = shared.getFromKOuterBlocked();
 
   // Construct bases for the 2 most minor dimensions of the layout.  These are
   // the dims that get swizzled.
@@ -410,9 +411,11 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   int numRows = shape[rowDim];
   StringAttr colDimName = outDimNames[colDim];
   StringAttr rowDimName = outDimNames[rowDim];
+  llvm::outs() << "rotatingPhase inside sharedLL: " << rotatingPhase << "\n";
 
   std::vector<std::vector<int>> bases2D;
   for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
+    llvm::outs() << "logCol: " << logCol << ": (" << 0 << ", " << (1 << logCol) << ")\n";
     bases2D.push_back({0, 1 << logCol});
   }
   for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
@@ -420,7 +423,14 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
     int vec = shared.getVec();
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
-    bases2D.push_back({row, (vec * ((row / perPhase) % maxPhase)) % numCols});
+    int phase = (row / perPhase) % maxPhase;
+    if (rotatingPhase) {
+      llvm::outs() << "phase = (" << phase << " + " << row << " / " << (maxPhase*perPhase) << ") % " << maxPhase << "\n";
+      phase = (phase + row / maxPhase / perPhase) % maxPhase;
+    }
+    bases2D.push_back({row, (vec * phase) % numCols});
+    // bases2D.push_back({row, (vec * ((row / perPhase) % maxPhase)) % numCols});
+    // llvm::outs() << "logRow: " << logRow << ": newPhase=" << phase << ", (" << row << ", " << (vec * phase) % numCols << ")\n";
   }
   LinearLayout ctaLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});

@@ -272,10 +272,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> offsets;
   Value smemBase;
   bool isFastPath =
-      !AMD::isKMajor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
+      !AMD::isKMinor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
   if (isFastPath) {
-    // fast path handles tensors that are not k-major and have swizzling
-    // disabled, in which case offsets computation can be simplified
+    // fast path handles tensors that are not consecutive on k and have
+    // swizzling disabled, in which case offsets computation can be simplified
     // TODO (zhanglx): later when we enable vector access to LDS for non k-major
     // tensors, we'll refactor the scope of fast and normal path
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
@@ -304,10 +304,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   } else { // normal path
     // Normal path handles tensors that fall into either of the following three
     // cases:
-    //   1. k-major + swizzling is enabled <-- this should be the most
+    //   1. k-minor + swizzling is enabled <-- this should be the most
     //   performant case
-    //   2. k-major + swizzling is disabled <-- for testing purpose only
-    //   3. non k-major + swizzling is enabled <-- for testing purpose only
+    //   2. k-minor + swizzling is disabled <-- for testing purpose only
+    //   3. non k-minor + swizzling is enabled <-- for testing purpose only
     if (opIdx == 0) {
       offsets = AMD::computeOffsetsAType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,

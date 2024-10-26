@@ -25,6 +25,7 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
   const auto &order = attr.getOrder();
   auto rank = order.size();
   bool transposed = (order[rank - 2] != 1);
+  auto fromKOuterBlocked = attr.getFromKOuterBlocked();
   if (transposed) {
     // tensor is column-wise, so swapping col and row in computations
     std::swap(row, col);
@@ -41,6 +42,11 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
   // colOffOrdered = col % vec
   // colOff = colOffSwizzled + colOffOrdered
   auto phase = urem(udiv(row, perPhase), maxPhase);
+  if (fromKOuterBlocked) {
+    // phase = (phase + row / maxPhase / perPhase) % maxPhase;
+    auto rotation = udiv(udiv(row, perPhase), maxPhase);
+    phase = urem(add(phase, rotation), maxPhase);
+  }
   auto colOffSwizzled = mul(xor_(udiv(col, vec), phase), vec);
   auto colOffOrdered = urem(col, vec);
   auto colOff = add(colOffSwizzled, colOffOrdered);
@@ -76,7 +82,7 @@ Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
   return base;
 }
 
-bool isKMajor(llvm::ArrayRef<unsigned> order, int opIdx) {
+bool isKMinor(llvm::ArrayRef<unsigned> order, int opIdx) {
   auto rank = order.size();
   int kdim = opIdx == 0 ? rank - 1 : rank - 2;
   return order[0] == kdim;
@@ -106,9 +112,9 @@ bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
   const auto swizzleSlowDimSize =
       sharedLayout.getMaxPhase() * sharedLayout.getPerPhase();
   const auto swizzlePatternSizeK =
-      isKMajor(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
+      isKMinor(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
   const auto swizzlePatternSizeNonK =
-      !isKMajor(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
+      !isKMinor(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
 
   const auto blockSizeK = mfmaInstrK * reps[reps.size() - 1];
   const auto blockSizeNonK = mfmaInstrNonK * warpsPerBlockNonK;

@@ -307,10 +307,10 @@ bool emitTransferBetweenRegistersAndShared(
   if (!regLayout.has_value() || !sharedLayout.has_value()) {
     return false;
   }
-  // LDBG("-----regLayout-----");
-  // LDBG(regLayout);
-  // LDBG("-----sharedLayout-----");
-  // LDBG(sharedLayout);
+  LDBG("-----regLayout-----");
+  LDBG(regLayout);
+  LDBG("-----sharedLayout-----");
+  LDBG(sharedLayout);
   auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
   // LDBG("sharedOrder: " << sharedOrder[0] << " " << sharedOrder[1]);
 
@@ -337,8 +337,8 @@ bool emitTransferBetweenRegistersAndShared(
   // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
   // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
   LinearLayout regToSharedLayout = regLayout->invertAndCompose(*sharedLayout);
-  // LDBG("-----regToSharedLayout-----");
-  // LDBG(regToSharedLayout);
+  LDBG("-----regToSharedLayout-----");
+  LDBG(regToSharedLayout);
 
   for (int inBlock = 1; inBlock < regToSharedLayout.getInDimSize(kBlock);
        inBlock *= 2) {
