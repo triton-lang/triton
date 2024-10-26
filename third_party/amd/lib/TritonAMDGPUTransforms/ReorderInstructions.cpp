@@ -16,14 +16,6 @@ namespace ttg = mlir::triton::gpu;
 // Utility functions
 //===----------------------------------------------------------------------===//
 
-static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
-  if (isa<ttg::LocalLoadOp>(op))
-    return true;
-  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op))
-    return isa<ttg::DotOperandEncodingAttr>(cvt.getType().getEncoding());
-  return false;
-}
-
 // Search through block to find earliest insertion point for move op. This can
 // be either an atomic op or last usage of source pointer. Search ends when move
 // op is encountered.
@@ -89,12 +81,13 @@ static bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
 // Reorder mechanisms
 //===----------------------------------------------------------------------===//
 
-// Sink shared memory loads and layout conversions into loops to decrease
-// register pressure when possible.
-static void sinkLoadConversionIntoLoops(ModuleOp moduleOp) {
+// Sink dot layout conversions into loops to decrease register pressure when
+// possible.
+static void sinkDotConversion(ModuleOp moduleOp) {
   DenseMap<Operation *, Operation *> opToMove;
-  moduleOp.walk([&](Operation *op) {
-    if (!isLocalLoadOrDotLayoutConversion(op))
+  moduleOp.walk([&](ttg::ConvertLayoutOp op) {
+    Attribute encoding = op.getType().getEncoding();
+    if (!isa_and_nonnull<ttg::DotOperandEncodingAttr>(encoding))
       return;
     if (!op->hasOneUse())
       return;
@@ -273,10 +266,9 @@ struct TritonAMDGPUReorderInstructionsPass
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
-    sinkLoadConversionIntoLoops(m);
-
     hoistLocalLoad(m);
 
+    sinkDotConversion(m);
     moveDownCoversion(m);
 
     moveUpTranspose(m);
