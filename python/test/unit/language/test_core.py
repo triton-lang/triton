@@ -3322,20 +3322,24 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
 
-@pytest.mark.parametrize("M, N, K, col_a, col_b, type_a, type_b, num_warps",
-                         [(M, N, K, col_a, col_b, type_a, type_b, 4)
+@pytest.mark.parametrize("M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack",
+                         [(M, N, K, col_a, col_b, type_a, type_b, 4, mma, kpack)
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
                           for col_a, col_b in itertools.product([True, False], repeat=2)
                           for type_a in ["e2m1", "e4m3", "e5m2"]
-                          for type_b in ["e4m3", "e5m2"]])
-def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
+                          for type_b in ["e4m3", "e5m2"]
+                          for mma in ([32, 16] if is_hip() else [16])
+                          for kpack in ([1, 2] if is_hip() else [1])])
+def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
         if type_a != "e5m2" or type_b != "e5m2":
-            pytest.skip(f"{type_a} * {type_b} not yet implemented for HIP")
+            pytest.skip(f"scaled_dot({type_a}, {type_b}) not yet implemented for HIP")
+        if mma == 16 and K == 64:
+            pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, out,
@@ -3494,9 +3498,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
     x = make_finite(x, type_a)
     y = make_finite(y, type_b)
 
+    kernel_kwargs = {"num_warps": num_warps}
+    if is_hip():
+        kernel_kwargs["kpack"] = kpack
+        kernel_kwargs["matrix_instr_nonkdim"] = mma
     z = x.new_empty((M, N), dtype=torch.bfloat16)
-    pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), z, M, N, K, type_a, type_b,
-                                  num_warps=num_warps)
+    pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), z, M, N, K, type_a, type_b, **kernel_kwargs)
 
     z_ref = dot_scale_ref(x, scale_x, y, type_a, type_b)
 

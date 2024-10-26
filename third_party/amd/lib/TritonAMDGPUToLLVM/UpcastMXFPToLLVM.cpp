@@ -56,7 +56,8 @@ public:
     // warp. MXFP spec mandates 1 scale value for every 32 onsecutive values
     // along the K dimension. So in total each thread should read 32x main
     // element values.
-    assert(xVals.size() == scaleVals.size() * 32);
+    if (xVals.size() != scaleVals.size() * 32)
+      return rewriter.notifyMatchFailure(op, "unsupported problem size");
 
     auto dotEncoding =
         cast<DotOperandEncodingAttr>(op.getSrc().getType().getEncoding());
