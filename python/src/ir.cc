@@ -1458,6 +1458,39 @@ void init_triton_ir(py::module &&m) {
              return self.create<AtomicRMWOp>(dstType, rmwOp, ptr, val, mask,
                                              sem, scope);
            })
+      .def("create_atomic_load",
+           [](TritonOpBuilder &self, Value &ptrs,
+              std::optional<MemSemantic> sem, std::optional<MemSyncScope> scope,
+              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
+              bool isVolatile) -> Value {
+             return self.create<LoadOp>(ptrs, sem, scope, cacheModifier,
+                                        evictionPolicy, isVolatile);
+           })
+      .def("create_atomic_store",
+           [](TritonOpBuilder &self, Value &ptrs, Value &value,
+              std::optional<MemSemantic> sem, std::optional<MemSyncScope> scope,
+              CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> void {
+             self.create<StoreOp>(ptrs, value, sem, scope, cacheModifier,
+                                  evictionPolicy);
+           })
+      .def("create_masked_atomic_load",
+           [](TritonOpBuilder &self, Value &ptrs, Value &mask,
+              std::optional<Value> &other, std::optional<MemSemantic> sem,
+              std::optional<MemSyncScope> scope, CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
+             return self.create<LoadOp>(ptrs, mask, other.value_or(Value()),
+                                        sem, scope, cacheModifier,
+                                        evictionPolicy, isVolatile);
+           })
+      .def("create_masked_atomic_store",
+           [](TritonOpBuilder &self, Value &ptrs, Value &val, Value &mask,
+              std::optional<MemSemantic> sem, std::optional<MemSyncScope> scope,
+              CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> void {
+             self.create<StoreOp>(ptrs, val, mask, sem, scope, cacheModifier,
+                                  evictionPolicy);
+           })
       // External
       .def("create_extern_elementwise",
            [](TritonOpBuilder &self, const std::string &libName,

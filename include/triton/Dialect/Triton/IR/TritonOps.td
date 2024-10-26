@@ -246,6 +246,7 @@ def TT_LoadOp : TT_Op<"load", [
 
       DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
       OptionalAttr<TT_PaddingOptionAttr>:$padding,
+      OptionalAttr<TT_MemSemanticAttr>:$sem, OptionalAttr<TT_MemSyncScopeAttr>:$scope,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
       DefaultValuedAttr<BoolAttr, "false">:$isVolatile
@@ -267,10 +268,32 @@ def TT_LoadOp : TT_Op<"load", [
         // A tensor of pointers or a pointer to a scalar with mask and other
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+
+        // A tensor of pointers or a pointer to a scalar
+        OpBuilder<(ins "Value":$ptr,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope,
+                       "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A tensor of pointers or a pointer to a scalar with mask
+        OpBuilder<(ins "Value":$ptr, "Value":$mask,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope,
+                       "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A tensor of pointers or a pointer to a scalar with mask and other
+        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope,
+                       "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
         // A utility function to build the operation with all attributes
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
                        "ArrayRef<int32_t>":$boundaryCheck,
-                       "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
+                       "std::optional<triton::PaddingOption>":$padding,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope,
+                       "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 
@@ -291,7 +314,9 @@ def TT_LoadOp : TT_Op<"load", [
       $ptr (`,` $mask^)? (`,` $other^)?
       oilist(
         `cacheModifier` `=` $cache |
-        `evictionPolicy` `=` $evict
+        `evictionPolicy` `=` $evict |
+        `memSemantic` `=` $sem |
+        `memSyncScope` `=` $scope
       )
       attr-dict `:` type($ptr)
     }];
@@ -317,6 +342,7 @@ def TT_StoreOp : TT_Op<"store", [
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
       DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
+      OptionalAttr<TT_MemSemanticAttr>:$sem, OptionalAttr<TT_MemSyncScopeAttr>:$scope,
       DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict
     );
@@ -326,6 +352,17 @@ def TT_StoreOp : TT_Op<"store", [
         OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>,
         // A tensor of pointers or a pointer to a scalar with mask
         OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict)>,
+        // A tensor of pointers or a pointer to a scalar
+        OpBuilder<(ins "Value":$ptr, "Value":$value,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope,
+                       "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>,
+        // A tensor of pointers or a pointer to a scalar with mask
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask,
+                       "std::optional<triton::MemSemantic>":$sem,
+                       "std::optional<triton::MemSyncScope>":$scope,
+                       "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict)>,
         // A tensor pointer with boundary check
         OpBuilder<(ins "Value":$ptr, "Value":$value, "ArrayRef<int32_t>":$boundaryCheck, "triton::CacheModifier":$cache,
@@ -340,7 +377,9 @@ def TT_StoreOp : TT_Op<"store", [
     // due to limitations in MLIR's asm parser.
     let assemblyFormat = [{
       $ptr `,` $value (`,` $mask^)?
-      oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+      oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict |
+             `memSemantic` `=` $sem | `memSyncScope` `=` $scope
+            )
       attr-dict `:` type($ptr)
     }];
 
