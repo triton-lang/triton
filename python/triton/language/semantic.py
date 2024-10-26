@@ -1134,6 +1134,72 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
         return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
 
 
+def atomic_load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], sem: str, scope: str,
+                cache_modifier: str, eviction_policy: str, is_volatile: bool, builder: ir.builder) -> tl.tensor:
+    # Cache and eviction
+    cache = _str_to_load_cache_modifier(cache_modifier)
+    eviction = _str_to_eviction_policy(eviction_policy)
+
+    sem = _str_to_sem(sem)
+    scope = _str_to_scope(scope)
+    if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
+        raise ValueError(f"Block ptr type not supported for `tl.atomic_load`: {ptr.type.__repr__()}")
+
+    if not ptr.type.scalar.is_ptr():
+        raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
+
+    if ptr.type.is_block():
+        raise ValueError(f"Block ptr type not supported for `tl.atomic_load`: {ptr.type.__repr__()}")
+
+    # Check `mask` and `other`
+    if mask is None and other is not None:
+        raise ValueError("`other` cannot be provided without `mask`")
+
+    # For a pointer of scalar, check the type of `mask` and `other`
+    if not ptr.type.is_block():
+        if mask and mask.type.is_block():
+            raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
+        if other and other.type.is_block():
+            raise ValueError("Other argument cannot be block type if pointer argument is not a block")
+
+    # Make `mask` and `other` into the same shape as `ptr`
+    if ptr.type.is_block():
+        raise ValueError(f"Block ptr type not supported for `tl.atomic_load`: {ptr.type.__repr__()}")
+
+    # Get `pointer_type<elt_ty>` and `elt_ty`
+    ptr_ty = ptr.type.scalar
+    elt_ty = ptr_ty.element_ty
+
+    # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
+    is_bool = elt_ty == tl.int1
+    if is_bool:
+        elt_ty = tl.int8
+        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
+        ptr = cast(ptr, ptr_ty, builder)
+
+    # Cast `other` into `elt_ty` type
+    if other is not None:
+        other = cast(other, elt_ty, builder)
+
+    # Create loaded result type `dst_ty`
+    if ptr.type.is_block():
+        raise ValueError(f"Block ptr type not supported for `tl.atomic_load`: {ptr.type.__repr__()}")
+
+    # Load by de-referencing the pointer of scalar
+    dst_ty = elt_ty
+
+    # Build IR
+    if mask is None:
+        ret = tl.tensor(builder.create_atomic_load(ptr.handle, sem, scope, cache, eviction, is_volatile), dst_ty)
+    else:
+        ret = tl.tensor(
+            builder.create_masked_atomic_load(ptr.handle, mask.handle, other.handle if other else None, sem, scope,
+                                              cache, eviction, is_volatile), dst_ty)
+    if is_bool:
+        ret = cast(ret, tl.int1, builder)
+    return ret
+
+
 def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, builder: ir.builder):
     handle = builder.create_reinterpret_tensor_descriptor(desc_ptr.handle, block_ty.to_ir(builder))
     return tl._experimental_tensor_descriptor_base(handle, block_ty)
@@ -1277,6 +1343,45 @@ def store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], boundary_ch
     else:
         # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
         return _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder)
+
+
+def atomic_store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], sem: str, scope: str, cache_modifier: str,
+                 eviction_policy: str, builder: ir.builder) -> tl.tensor:
+    # Cache and eviction options
+    cache = _str_to_store_cache_modifier(cache_modifier)
+    eviction = _str_to_eviction_policy(eviction_policy)
+
+    if ptr.type.is_const() or ptr.type.scalar.is_const():
+        raise ValueError("Cannot store to a constant pointer")
+
+    sem = _str_to_sem(sem)
+    scope = _str_to_scope(scope)
+    if ptr.type.is_block() or ptr.type.is_ptr() and ptr.type.element_ty.is_block():
+        raise ValueError(f"Block ptr type not supported for `tl.atomic_store`: {ptr.type.__repr__()}")
+
+    # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
+    if not ptr.type.scalar.is_ptr():
+        raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
+
+    ptr_ty = ptr.type.scalar
+    elt_ty = ptr_ty.element_ty
+
+    # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
+    if elt_ty == tl.int1:
+        elt_ty = tl.int8
+        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
+        ptr = cast(ptr, ptr_ty, builder)
+
+    # Cast to target data type
+    val = cast(val, elt_ty, builder)
+
+    # Build IR
+    if mask is None:
+        return tl.tensor(builder.create_atomic_store(ptr.handle, val.handle, sem, scope, cache, eviction), tl.void)
+    if not mask.type.scalar.is_bool():
+        raise ValueError("Mask must have boolean scalar type")
+    return tl.tensor(
+        builder.create_masked_atomic_store(ptr.handle, val.handle, mask.handle, sem, scope, cache, eviction), tl.void)
 
 
 #########
