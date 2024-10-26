@@ -485,7 +485,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
     if (needsUnpacking(srcTy))
-      inVals = unpackI32(inVals, dstTy.getElementType(), rewriter, loc);
+      inVals = unpackI32(inVals, srcTy.getElementType(), rewriter, loc);
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
