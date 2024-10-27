@@ -5,6 +5,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
@@ -22,6 +23,73 @@ static bool isLocalLoadOrDotLayoutConversion(Operation *op) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op))
     return isa<ttg::DotOperandEncodingAttr>(cvt.getType().getEncoding());
   return false;
+}
+
+// Copy of mlir::getBackwardSlice with changes to handle nested regions.
+// This is a temporary local fix until these changes are upstreamed to mlir.
+static void getDeepBackwardSlice(Operation *op,
+                                 SetVector<Operation *> *backwardSlice,
+                                 const BackwardSliceOptions &options) {
+  if (!op || op->hasTrait<OpTrait::IsIsolatedFromAbove>())
+    return;
+
+  // Evaluate whether we should keep this def.
+  // This is useful in particular to implement scoping; i.e. return the
+  // transitive backwardSlice in the current scope.
+  if (options.filter && !options.filter(op))
+    return;
+
+  SetVector<Value> usedValues;
+  Block *opBlock = op->getBlock();
+  auto f = [&](OpOperand *nestedValue) {
+    // Filter out values that are not defined in the block
+    // that contains 'op'. This is to avoid including values
+    // that are defined in the nested regions of 'op'.
+    if (auto *nestedOp = nestedValue->get().getDefiningOp()) {
+      if (opBlock == nestedOp->getBlock()) {
+        usedValues.insert(nestedValue->get());
+      }
+    }
+  };
+
+  // collect all the values used in the nested regions of this op
+  // SetVector<Region*> nestedRegions;
+  for (auto &region : op->getRegions()) {
+    region.walk([&](Region *nestedRegion) {
+      mlir::visitUsedValuesDefinedAbove(*nestedRegion, *nestedRegion, f);
+    });
+  }
+
+  // collect all the values used in the op
+  for (const auto &en : llvm::enumerate(op->getOperands())) {
+    usedValues.insert(en.value());
+  }
+
+  for (const auto &en : llvm::enumerate(usedValues)) {
+    auto operand = en.value();
+    if (auto *definingOp = operand.getDefiningOp()) {
+      if (backwardSlice->count(definingOp) == 0)
+        getDeepBackwardSlice(definingOp, backwardSlice, options);
+    } else if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+      if (options.omitBlockArguments)
+        continue;
+
+      Block *block = blockArg.getOwner();
+      Operation *parentOp = block->getParentOp();
+      // TODO: determine whether we want to recurse backward into the other
+      // blocks of parentOp, which are not technically backward unless they flow
+      // into us. For now, just bail.
+      if (parentOp && backwardSlice->count(parentOp) == 0) {
+        assert(parentOp->getNumRegions() == 1 &&
+               parentOp->getRegion(0).getBlocks().size() == 1);
+        getDeepBackwardSlice(parentOp, backwardSlice, options);
+      }
+    } else {
+      llvm_unreachable("No definingOp and not a block argument.");
+    }
+  }
+
+  backwardSlice->insert(op);
 }
 
 // Search through block to find earliest insertion point for move op. This can
@@ -221,8 +289,7 @@ public:
         // Only move ops residing in the same block.
         return defBlock == block;
       };
-      mlir::getBackwardSlice(op, &backwardSet, options);
-      backwardSet.insert(op);
+      getDeepBackwardSlice(op, &backwardSet, options);
 
       // Don't move a local_store if its source is a load from
       // the same iteration.

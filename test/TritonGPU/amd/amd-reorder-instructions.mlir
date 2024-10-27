@@ -922,3 +922,32 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// Check that reordering preserves def-before-use for values used inside control flow regions
+// For example, %12 should not be moved below the scf.if op %22
+// CHECK:    %{{.+}} = tt.make_range
+// CHECK:    %{{.+}} = scf.if %{{.+}}
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "hip:gfx942", "triton_gpu.threads-per-warp" = 64 : i32} {
+  tt.func public @reoder_across_nested(%arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg6: i32, %arg9: i64, %arg10: i64) attributes {noinline = false} {
+    %12 = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+    %21 = arith.cmpi slt, %arg9, %arg10 : i64
+    %22 = scf.if %21 -> (tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>) {
+      %30 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+      %100 = scf.if %21 -> (tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>) {
+        %31 = tt.addptr %30, %12 : tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>, tensor<512xi32, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+        scf.yield %31 : tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+      } else {
+         %31 = tt.addptr %30, %12 : tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>, tensor<512xi32, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+         scf.yield %31 : tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+      }
+      scf.yield %100 : tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+    } else {
+      %32 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+      scf.yield %32 : tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+    }
+    %23 = tt.splat %arg6 : i32 -> tensor<512xi32, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+    %24 = arith.cmpi slt, %12, %23 : tensor<512xi32, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+    %25 = tt.load %22, %24 : tensor<512x!tt.ptr<f32>, #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>>
+    tt.return
+  }
+}
