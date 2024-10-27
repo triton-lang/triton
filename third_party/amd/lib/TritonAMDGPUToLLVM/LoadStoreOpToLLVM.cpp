@@ -165,7 +165,7 @@ struct LoadStoreConversionBase {
     // Get alignment from the pointer. Since this is a scalar pointer
     // we should not take the pointer contiguity to consider alignment
     auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
-    auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
+    auto maxMultipleBytes = axisInfo->getDivisibility(0);
     auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
     auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
     auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
@@ -768,7 +768,11 @@ struct AtomicRMWOpConversion
     // tensor
     if (tensorTy) {
       auto valTy = cast<RankedTensorType>(val.getType());
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
+      Type elTy = valTy.getElementType();
+      vec = std::min<unsigned>(vec, llvm::isa<FloatType>(elTy) &&
+                                            elTy.getIntOrFloatBitWidth() == 16
+                                        ? 2
+                                        : 1);
       // mask
       numElems = tensorTy.getNumElements();
     }
@@ -783,12 +787,21 @@ struct AtomicRMWOpConversion
     auto vecTy = vec_ty(valueElemTy, vec);
     auto retType = vec == 1 ? valueElemTy : vecTy;
     SmallVector<Value> resultVals(elemsPerThread);
-    const bool f16v2 = vec == 2 && valueElemTy.isF16();
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value rmwPtr = ptrElements[i];
       // TODO: in case llMask is zero we can create only one branch for all
       // elemsPerThread.
       Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
+
+      Value operand;
+      if (vec == 1) {
+        operand = valElements[i];
+      } else {
+        operand = undef(vecTy);
+        for (size_t ii = 0; ii < vec; ++ii)
+          operand =
+              insert_element(vecTy, operand, valElements[i + ii], i32_val(ii));
+      }
 
       Value undefVal = undef(retType);
       // Build blocks to bypass the atomic instruction for ~rmwMask.
@@ -806,25 +819,11 @@ struct AtomicRMWOpConversion
       auto maybeKind = matchAtomicOp(atomicRmwAttr);
       // TODO: use rocdl.raw.buffer.atomic from ROCDL dialect to use efficient
       // atomics for MI-* series of AMD GPU.
-      Value atom = rewriter
-                       .create<LLVM::AtomicRMWOp>(
-                           loc, *maybeKind, rmwPtr, valElements[i],
-                           atomicMemOrdering, StringRef("agent"))
-                       .getResult();
-
-      // NV for the f16v2 case generates one packed instruction. We have to
-      // create two separate instructions since LLVM::AtomicRMWOp doesn't
-      // support this. Can be optimized out with rocdl.raw.buffer.atomic.
-      if (f16v2) {
-        Value atom2 =
-            rewriter
-                .create<LLVM::AtomicRMWOp>(
-                    loc, *maybeKind, ptrElements[i + 1], valElements[i + 1],
-                    atomicMemOrdering, StringRef("agent"))
-                .getResult();
-        auto tmp = insert_element(vecTy, undef(vecTy), atom, i32_val(0));
-        atom = insert_element(vecTy, tmp, atom2, i32_val(1)).getResult();
-      }
+      Value atom =
+          rewriter
+              .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr, operand,
+                                         atomicMemOrdering, StringRef("agent"))
+              .getResult();
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
           Value atomPtr =

@@ -649,13 +649,11 @@ struct AtomicRMWOpConversion
       : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  bool supportsVectorized(Operation *moduleOp, RMWOp opType,
-                          Type elementType) const {
+  bool supportsVectorized(RMWOp opType, Type elementType) const {
     // vectorized atomics are only supported on hopper,
     // and only for specific atomic ops (add, min, max).
     // Note that "packed types" like f16x2 are supported sm60+.
-    auto computeCapability = getNVIDIAComputeCapability(moduleOp);
-    if (computeCapability < 90) {
+    if (!targetInfo.supportVectorizedAtomics()) {
       return false;
     }
 
@@ -707,8 +705,7 @@ struct AtomicRMWOpConversion
       vecOrig = vec;
       packed = 1;
       auto valTy = cast<RankedTensorType>(val.getType());
-      if (!supportsVectorized(moduleOp, atomicRmwAttr,
-                              valTy.getElementType())) {
+      if (!supportsVectorized(atomicRmwAttr, valTy.getElementType())) {
         packed =
             std::min<unsigned>(vecOrig, valTy.getElementType().isF16() ? 2 : 1);
         vec = 1;

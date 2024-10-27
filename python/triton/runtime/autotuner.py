@@ -90,6 +90,10 @@ class Autotuner(KernelInterface):
         while not inspect.isfunction(self.base_fn):
             self.base_fn = self.base_fn.fn
 
+        self.num_warmups = warmup
+        self.num_reps = rep
+        self.use_cuda_graph = use_cuda_graph
+
         # If we got explicitly called via the old interface, raise a warning
         # and proceed with the old behavior.
         if warmup is not None or rep is not None or use_cuda_graph:

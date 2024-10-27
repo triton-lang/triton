@@ -641,7 +641,6 @@ private:
       // for the destination type, we need to pack values together
       // so they can be consumed by tensor core operations
       SmallVector<Value> vecVals;
-      SmallVector<Type> types;
       // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
       // instructions to pack & unpack sub-word integers. A workaround is to
       // store the results of ldmatrix in i32
@@ -655,37 +654,20 @@ private:
                 shl(i32_ty, zext(i32_ty, vals[i + j]), i32_val(elemSize * j));
             val = or_(i32_ty, val, ext);
           }
-          vecVals.push_back(val);
+          vecVals.push_back(bitcast(val, i32_ty));
         }
-        elems = elems / (32 / elemSize);
-        types = SmallVector<Type>(elems, i32_ty);
       } else {
         unsigned vecSize = std::max<unsigned>(32 / elemSize, 1);
         Type vecTy = vec_ty(elemTy, vecSize);
-        types = SmallVector<Type>(elems / vecSize, vecTy);
         for (unsigned i = 0; i < elems; i += vecSize) {
           Value packed = rewriter.create<LLVM::UndefOp>(loc, vecTy);
           for (unsigned j = 0; j < vecSize; j++)
             packed = insert_element(vecTy, packed, vals[i + j], i32_val(j));
-          vecVals.push_back(packed);
+          vecVals.push_back(bitcast(packed, i32_ty));
         }
       }
-
-      // This needs to be ordered the same way that
-      // ldmatrix.x4 would order it
-      // TODO: this needs to be refactor so we don't
-      // implicitly depends on how emitOffsetsForMMAV2
-      // is implemented
-      SmallVector<Value> reorderedVals;
-      for (unsigned i = 0; i < vecVals.size(); i += 4) {
-        reorderedVals.push_back(bitcast(vecVals[i], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 2], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 1], i32_ty));
-        reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
-      }
-
-      Value view = packLLElements(loc, getTypeConverter(), reorderedVals,
-                                  rewriter, dstTy);
+      Value view =
+          packLLElements(loc, getTypeConverter(), vecVals, rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }

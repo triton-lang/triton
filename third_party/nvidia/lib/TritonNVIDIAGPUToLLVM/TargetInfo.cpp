@@ -583,4 +583,8 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
 
+bool TargetInfo::supportVectorizedAtomics() const {
+  return computeCapability >= 90 && ptxVersion >= 81;
+}
+
 } // namespace mlir::triton::NVIDIA
