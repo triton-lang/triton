@@ -200,7 +200,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
         if print_sorted:
-            print("Sorted kernels by time metric percentage")
+            print("Sorted kernels by metric " + metrics[0].strip("(inc)"))
             sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
             for row in range(len(sorted_df)):
                 if row == 0:
@@ -209,7 +209,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
                     kernel_name = sorted_df.iloc[row]['name'][:100] + "..."
                 else:
                     kernel_name = sorted_df.iloc[row]['name']
-                print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row]['pct (inc)']))
+                print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row][metrics[0]]))
         emit_warnings(gf, metrics)
 
 
@@ -310,7 +310,7 @@ proton-viewer -e ".*test.*" path/to/file.json
 - file_function: include the file name and function name.
 """)
     argparser.add_argument(
-        "--print_sorted",
+        "--print-sorted",
         action='store_true',
         default=False,
         help="Sort output by metric value instead of chronologically",
