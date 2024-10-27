@@ -274,34 +274,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
-  // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
-  // instructions to pack & unpack sub-word integers.  A workaround is to
-  // store the results of tensors with dot operand encodings in i32 to
-  // facilitate instructions such as `ldmatrix`.
-  //
-  // TODO: Confirm if the problem is still there.
-  bool needsPacking(RankedTensorType srcTy) const {
-    auto srcLayout = srcTy.getEncoding();
-    if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(srcLayout)) {
-      auto mmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
-      if (mmaEnc && mmaEnc.getVersionMajor() < 3) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  bool needsUnpacking(RankedTensorType dstTy) const {
-    auto dstLayout = dstTy.getEncoding();
-    if (auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
-      auto mmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
-      if (mmaEnc && mmaEnc.getVersionMajor() < 3) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -356,14 +328,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
-      if (needsPacking(dstTy) || needsUnpacking(srcTy)) {
+      if (needsI32Conversion(dstTy) || needsI32Conversion(srcTy)) {
         auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
-        if (needsUnpacking(srcTy))
+        if (needsI32Conversion(srcTy))
           inVals =
-              unpackI32(inVals, srcTy.getElementType(), rewriter, op.getLoc());
-        if (needsPacking(dstTy))
+              unpackI32s(inVals, srcTy.getElementType(), rewriter, op.getLoc());
+        if (needsI32Conversion(dstTy))
           inVals =
-              packI32(inVals, dstTy.getElementType(), rewriter, op.getLoc());
+              packI32s(inVals, dstTy.getElementType(), rewriter, op.getLoc());
         auto res = packLLElements(op.getLoc(), getTypeConverter(), inVals,
                                   rewriter, op.getType());
         rewriter.replaceOp(op, res);
@@ -386,8 +358,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    if (needsUnpacking(srcTy))
-      inVals = unpackI32(inVals, srcTy.getElementType(), rewriter, loc);
+    if (needsI32Conversion(srcTy))
+      inVals = unpackI32s(inVals, srcTy.getElementType(), rewriter, loc);
     SmallVector<Value> outVals(numRegs);
     for (int i = 0; i < numRegs; i++) {
       // Remove free masks from the register index
@@ -400,8 +372,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
-    if (needsPacking(dstTy))
-      outVals = packI32(outVals, dstTy.getElementType(), rewriter, loc);
+    if (needsI32Conversion(dstTy))
+      outVals = packI32s(outVals, dstTy.getElementType(), rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -484,8 +456,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
-    if (needsUnpacking(srcTy))
-      inVals = unpackI32(inVals, srcTy.getElementType(), rewriter, loc);
+    if (needsI32Conversion(srcTy))
+      inVals = unpackI32s(inVals, srcTy.getElementType(), rewriter, loc);
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
@@ -505,8 +477,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    if (needsPacking(dstTy))
-      outVals = packI32(outVals, dstTy.getElementType(), rewriter, loc);
+    if (needsI32Conversion(dstTy))
+      outVals = packI32s(outVals, dstTy.getElementType(), rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);

@@ -103,30 +103,26 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
   llvm_unreachable("unimplemented code path");
 }
 
-SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
-                             ConversionPatternRewriter &rewriter, Location loc,
-                             const LLVMTypeConverter *typeConverter) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return inValues;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return inValues;
-  auto eltTy = typeConverter->convertType(tensorTy.getElementType());
-  return unpackI32(inValues, eltTy, rewriter, loc);
+SmallVector<Value> unpackI32s(const SmallVector<Value> &inValues, Type srcTy,
+                              ConversionPatternRewriter &rewriter, Location loc,
+                              const LLVMTypeConverter *typeConverter) {
+  if (needsI32Conversion(srcTy)) {
+    auto eltTy = typeConverter->convertType(
+        cast<RankedTensorType>(srcTy).getElementType());
+    return unpackI32s(inValues, eltTy, rewriter, loc);
+  }
+  return inValues;
 }
 
-SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
-                           ConversionPatternRewriter &rewriter, Location loc,
-                           const LLVMTypeConverter *typeConverter) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return inValues;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return inValues;
-  auto eltType = typeConverter->convertType(tensorTy.getElementType());
-  return packI32(inValues, eltType, rewriter, loc);
+SmallVector<Value> packI32s(const SmallVector<Value> &inValues, Type srcTy,
+                            ConversionPatternRewriter &rewriter, Location loc,
+                            const LLVMTypeConverter *typeConverter) {
+  if (needsI32Conversion(srcTy)) {
+    auto eltTy = typeConverter->convertType(
+        cast<RankedTensorType>(srcTy).getElementType());
+    return packI32s(inValues, eltTy, rewriter, loc);
+  }
+  return inValues;
 }
 
 int getNumElementsPerThreads(Type type,
@@ -481,7 +477,7 @@ struct ElementwiseInlineAsmOpConversion
       auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
       unpackedOperands.push_back(
-          unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
+          unpackI32s(subOperands, argTy, rewriter, loc, getTypeConverter()));
     }
 
     int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
@@ -541,8 +537,8 @@ struct ElementwiseInlineAsmOpConversion
             unpackedResults[i], /*inType=*/op->getOperand(0).getType(),
             /*ouType=*/op->getResult(i).getType());
       }
-      auto packed = packI32(unpackedResults[i], op->getResult(i).getType(),
-                            rewriter, loc, getTypeConverter());
+      auto packed = packI32s(unpackedResults[i], op->getResult(i).getType(),
+                             rewriter, loc, getTypeConverter());
       outs.push_back(packLLElements(loc, getTypeConverter(), packed, rewriter,
                                     op->getResult(i).getType()));
     }
