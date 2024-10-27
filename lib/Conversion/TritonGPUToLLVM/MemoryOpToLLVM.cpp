@@ -186,7 +186,7 @@ private:
 
     // Ampere case
     // In this case, we need to pack the outputs into i32
-    if (needsI32Conversion(dstTy))
+    if (requiresI32Conversion(dstTy))
       outVals = packI32s(outVals, dstTy.getElementType(), rewriter, loc);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);

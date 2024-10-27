@@ -1394,7 +1394,7 @@ inline Value getStructFromSharedMemoryObject(Location loc,
 // facilitate instructions such as `ldmatrix`.
 //
 // TODO: Confirm if the problem is still there.
-inline bool needsI32Conversion(Type type) {
+inline bool requiresI32Conversion(Type type) {
   auto tensorTy = dyn_cast<RankedTensorType>(type);
   if (!tensorTy)
     return false;
@@ -1428,7 +1428,6 @@ inline SmallVector<Value> unpackI32s(const SmallVector<Value> &inValues,
                                      Location loc) {
   SmallVector<Value> outValues;
   for (auto v : inValues) {
-    // cast i32 to appropriate eltType vector and extract elements
     auto vecTy = vec_ty(eltTy, 32 / eltTy.getIntOrFloatBitWidth());
     auto vec = bitcast(v, vecTy);
     for (int i = 0; i < 32 / eltTy.getIntOrFloatBitWidth(); i++) {

@@ -328,14 +328,18 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
-      if (needsI32Conversion(dstTy) || needsI32Conversion(srcTy)) {
+      auto dstCvt = requiresI32Conversion(dstTy);
+      auto srcCvt = requiresI32Conversion(srcTy);
+      if (dstCvt || srcCvt) {
         auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
-        if (needsI32Conversion(srcTy))
+        if (srcCvt) {
           inVals =
               unpackI32s(inVals, srcTy.getElementType(), rewriter, op.getLoc());
-        if (needsI32Conversion(dstTy))
+        }
+        if (dstCvt) {
           inVals =
               packI32s(inVals, dstTy.getElementType(), rewriter, op.getLoc());
+        }
         auto res = packLLElements(op.getLoc(), getTypeConverter(), inVals,
                                   rewriter, op.getType());
         rewriter.replaceOp(op, res);
@@ -358,7 +362,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    if (needsI32Conversion(srcTy))
+    if (requiresI32Conversion(srcTy))
       inVals = unpackI32s(inVals, srcTy.getElementType(), rewriter, loc);
     SmallVector<Value> outVals(numRegs);
     for (int i = 0; i < numRegs; i++) {
@@ -372,7 +376,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
-    if (needsI32Conversion(dstTy))
+    if (requiresI32Conversion(dstTy))
       outVals = packI32s(outVals, dstTy.getElementType(), rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
@@ -456,7 +460,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
-    if (needsI32Conversion(srcTy))
+    if (requiresI32Conversion(srcTy))
       inVals = unpackI32s(inVals, srcTy.getElementType(), rewriter, loc);
 
     // Pretty sure this is the identity function ATM
@@ -477,7 +481,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    if (needsI32Conversion(dstTy))
+    if (requiresI32Conversion(dstTy))
       outVals = packI32s(outVals, dstTy.getElementType(), rewriter, loc);
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
