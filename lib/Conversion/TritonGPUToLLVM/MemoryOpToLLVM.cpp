@@ -184,11 +184,7 @@ private:
     SmallVector<Value> outVals = loadSharedToDistributed(
         dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
 
-    // Ampere case
-    // In this case, we need to pack the outputs into i32
-    if (requiresI32Conversion(dstTy))
-      outVals = packI32s(outVals, dstTy.getElementType(), rewriter, loc);
-
+    outVals = packI32s(outVals, dstTy, rewriter, loc, typeConverter);
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 

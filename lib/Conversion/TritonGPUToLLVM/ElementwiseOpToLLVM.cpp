@@ -103,28 +103,6 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
   llvm_unreachable("unimplemented code path");
 }
 
-SmallVector<Value> unpackI32s(const SmallVector<Value> &inValues, Type srcTy,
-                              ConversionPatternRewriter &rewriter, Location loc,
-                              const LLVMTypeConverter *typeConverter) {
-  if (requiresI32Conversion(srcTy)) {
-    auto eltTy = typeConverter->convertType(
-        cast<RankedTensorType>(srcTy).getElementType());
-    return unpackI32s(inValues, eltTy, rewriter, loc);
-  }
-  return inValues;
-}
-
-SmallVector<Value> packI32s(const SmallVector<Value> &inValues, Type srcTy,
-                            ConversionPatternRewriter &rewriter, Location loc,
-                            const LLVMTypeConverter *typeConverter) {
-  if (requiresI32Conversion(srcTy)) {
-    auto eltTy = typeConverter->convertType(
-        cast<RankedTensorType>(srcTy).getElementType());
-    return packI32s(inValues, eltTy, rewriter, loc);
-  }
-  return inValues;
-}
-
 int getNumElementsPerThreads(Type type,
                              const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
@@ -476,14 +454,8 @@ struct ElementwiseInlineAsmOpConversion
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
-      if (requiresI32Conversion(argTy)) {
-        auto eltTy = typeConverter->convertType(
-            cast<RankedTensorType>(argTy).getElementType());
-        unpackedOperands.push_back(
-            unpackI32s(subOperands, eltTy, rewriter, loc));
-      } else {
-        unpackedOperands.push_back(subOperands);
-      }
+      unpackedOperands.push_back(
+          unpackI32s(subOperands, argTy, rewriter, loc, getTypeConverter()));
     }
 
     int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
@@ -544,11 +516,8 @@ struct ElementwiseInlineAsmOpConversion
             /*ouType=*/op->getResult(i).getType());
       }
       auto dstTy = op->getResult(i).getType();
-      if (requiresI32Conversion(dstTy)) {
-        auto eltTy = typeConverter->convertType(
-            cast<RankedTensorType>(dstTy).getElementType());
-        unpackedResults[i] = packI32s(unpackedResults[i], eltTy, rewriter, loc);
-      }
+      unpackedResults[i] = packI32s(unpackedResults[i], dstTy, rewriter, loc,
+                                    getTypeConverter());
       outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
                                     rewriter, op->getResult(i).getType()));
     }

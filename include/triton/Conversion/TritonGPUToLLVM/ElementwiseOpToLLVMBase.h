@@ -179,8 +179,8 @@ public:
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
-      if (requiresI32Conversion(argTy))
-        subOperands = unpackI32s(subOperands, argTy, rewriter, loc);
+      subOperands = unpackI32s(subOperands, argTy, rewriter, loc,
+                               this->getTypeConverter());
       allOperands.resize(subOperands.size());
       for (auto v : llvm::enumerate(subOperands))
         allOperands[v.index()].push_back(v.value());
@@ -206,8 +206,8 @@ public:
       resultVals = reorderValues(resultVals, argTy, resultTy);
     }
     resultVals = maybeDeduplicate(op, resultVals);
-    if (requiresI32Conversion(resultTy))
-      resultVals = packI32s(resultVals, resultTy, rewriter, loc);
+    resultVals =
+        packI32s(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
                                 rewriter, resultTy);
     rewriter.replaceOp(op, view);

@@ -1398,18 +1398,24 @@ inline bool requiresI32Conversion(Type type) {
   auto tensorTy = dyn_cast<RankedTensorType>(type);
   if (!tensorTy)
     return false;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!encoding)
+  auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!dotOpEnc)
     return false;
-  auto parent = dyn_cast<NvidiaMmaEncodingAttr>(encoding.getParent());
-  if (!(parent && parent.getVersionMajor() <= 3))
+  auto parent = dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
+  if (!(parent && parent.getVersionMajor() < 3))
     return false;
   return true;
 }
 
 inline SmallVector<Value> packI32s(const SmallVector<Value> &inValues,
-                                   Type eltTy, RewriterBase &rewriter,
-                                   Location loc) {
+                                   Type type, RewriterBase &rewriter,
+                                   Location loc,
+                                   const LLVMTypeConverter *typeConverter) {
+  if (!requiresI32Conversion(type))
+    return inValues;
+  Type eltTy =
+      typeConverter->convertType(cast<RankedTensorType>(type).getElementType());
+
   SmallVector<Value> outValues;
   int vecWidth = 32 / eltTy.getIntOrFloatBitWidth();
   auto vecTy = vec_ty(eltTy, vecWidth);
@@ -1424,8 +1430,14 @@ inline SmallVector<Value> packI32s(const SmallVector<Value> &inValues,
 }
 
 inline SmallVector<Value> unpackI32s(const SmallVector<Value> &inValues,
-                                     Type eltTy, RewriterBase &rewriter,
-                                     Location loc) {
+                                     Type type, RewriterBase &rewriter,
+                                     Location loc,
+                                     const LLVMTypeConverter *typeConverter) {
+  if (!requiresI32Conversion(type))
+    return inValues;
+  Type eltTy =
+      typeConverter->convertType(cast<RankedTensorType>(type).getElementType());
+
   SmallVector<Value> outValues;
   for (auto v : inValues) {
     auto vecTy = vec_ty(eltTy, 32 / eltTy.getIntOrFloatBitWidth());
