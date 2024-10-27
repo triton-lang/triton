@@ -209,7 +209,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
                     kernel_name = sorted_df.iloc[row]['name'][:100] + "..."
                 else:
                     kernel_name = sorted_df.iloc[row]['name']
-                print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row]['pct (inc)']))        
+                print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row]['pct (inc)']))
         emit_warnings(gf, metrics)
 
 
@@ -326,12 +326,12 @@ proton-viewer -e ".*test.*" path/to/file.json
     threshold = args.threshold
     depth = args.depth
     format = args.format
-    print_sorted = args.print_sorted    
+    print_sorted = args.print_sorted
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
     if args.list:
         show_metrics(file_name)
-    elif metrics:        
+    elif metrics:
         parse(metrics, file_name, include, exclude, threshold, depth, format, print_sorted)
 
 
