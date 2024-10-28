@@ -216,8 +216,6 @@ bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
-bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
-
 // Return true if the src and dst layout match.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy);
