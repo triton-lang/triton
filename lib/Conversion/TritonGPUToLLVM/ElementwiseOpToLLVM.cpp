@@ -473,8 +473,7 @@ struct ElementwiseInlineAsmOpConversion
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
-      unpackedOperands.push_back(
-          unpackI32s(subOperands, argTy, rewriter, loc, getTypeConverter()));
+      unpackedOperands.push_back(subOperands);
     }
 
     int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
@@ -534,9 +533,6 @@ struct ElementwiseInlineAsmOpConversion
             unpackedResults[i], /*inType=*/op->getOperand(0).getType(),
             /*ouType=*/op->getResult(i).getType());
       }
-      auto dstTy = op->getResult(i).getType();
-      unpackedResults[i] = packI32s(unpackedResults[i], dstTy, rewriter, loc,
-                                    getTypeConverter());
       outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
                                     rewriter, op->getResult(i).getType()));
     }

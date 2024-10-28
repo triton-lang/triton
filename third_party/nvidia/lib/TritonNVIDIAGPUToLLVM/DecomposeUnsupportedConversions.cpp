@@ -75,6 +75,11 @@ struct DecomposeUnsupportedConversions
     // we have enabled the new layout conversion for all the cases.
     auto nvidiaShortCutFn = [&](RankedTensorType srcTy,
                                 RankedTensorType dstTy) {
+      auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
+      // Supported mma to dot conversion
+      if (nvidiaMma && nvidiaMma.isAmpere())
+        return true;
+      // No need to decompose if shared memory is not needed
       return matchMmaV3AndDotOperandLayout(srcTy, dstTy) ||
              cvtReordersRegisters(srcTy, dstTy);
     };

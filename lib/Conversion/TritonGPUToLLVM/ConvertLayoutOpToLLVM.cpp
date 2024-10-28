@@ -328,20 +328,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
-      auto dstCvt = requiresI32Conversion(dstTy);
-      auto srcCvt = requiresI32Conversion(srcTy);
-      if (dstCvt || srcCvt) {
-        auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
-        inVals = unpackI32s(inVals, srcTy, rewriter, op.getLoc(),
-                            getTypeConverter());
-        inVals =
-            packI32s(inVals, dstTy, rewriter, op.getLoc(), getTypeConverter());
-        auto res = packLLElements(op.getLoc(), getTypeConverter(), inVals,
-                                  rewriter, op.getType());
-        rewriter.replaceOp(op, res);
-      } else {
-        rewriter.replaceOp(op, adaptor.getSrc());
-      }
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
   }
@@ -358,7 +345,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
     SmallVector<Value> outVals(numRegs);
     for (int i = 0; i < numRegs; i++) {
       // Remove free masks from the register index
@@ -371,7 +357,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
-    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -406,11 +391,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           if (useLegacyMMAConversion) {
             return false;
           }
-          // FIXME [Dot LL]
-          // Enabling LL path for buggy kWidth path
-          bool largeKWidth =
-              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
-          return largeKWidth && nvidiaMma.isAmpere();
+          if (nvidiaMma.isAmpere()) {
+            return true;
+          }
         }
         return false;
       }
@@ -454,7 +437,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
-    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
@@ -474,7 +456,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);

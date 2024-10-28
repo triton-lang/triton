@@ -59,11 +59,23 @@ Value loadC(Value tensor, Value llTensor,
 
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter, Value value, int batch, int n0, int n1,
-    RankedTensorType type) {
+    ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
+    int repK, RankedTensorType type) {
   auto elems = unpackLLElements(loc, value, rewriter);
+  auto eltTy = type.getElementType();
   int offset{};
   ValueTableV2 vals;
+  auto numElemsPerVec = 32 / eltTy.getIntOrFloatBitWidth();
+  auto vecTy = vec_ty(eltTy, numElemsPerVec);
+
+  auto packVec = [&](std::array<int, 3> dstIdx) {
+    Value vec = undef(vecTy);
+    for (auto i = 0; i < numElemsPerVec; ++i) {
+      vec = insert_element(vec, elems[offset + i], i32_val(i));
+    }
+    vals[dstIdx] = bitcast(vec, i32_ty);
+    offset += numElemsPerVec;
+  };
 
   // FIXME [Dot LL]
   // [ez] Generalize the logic below for kWidth * elemBitWidth > 32
@@ -77,38 +89,34 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     if (dot.getOpIdx() == 0) {
       // Original register layout:
       //
-      //   [0, 1, 2, 3], [8, 9, 10, 11]
-      //   [4, 5, 6, 7], [12, 13, 14, 15]
+      //   [0, 1, 2, 3, 4, 5, 6, 7], [16, 17, 18, 19, 20, 21, 22, 23, 23]
+      //   [8, 9, 10, 11, 12, 13, 14, 15], [24, 25, 26, 27, 28, 29, 30, 31]
       //
-      // Each element in the layout consists of two bf16 values.
-      // For example, the row [0, 1, 2, 3] expands to:
-      //
-      //   [[0/0, 0/1], [1/0, 1/1], [2/0, 2/1], [3/0, 3/1]]
-      //
-      // Here, 0/0 refers to the first half of element 0, and 0/1 refers to the
-      // second half, matching kWidth = 8.
+      // Each element in the layout is a single bf16.
       //
       // To derive four independent MMA operations, a stride of 4 is applied to
       // the original register layout:
       //
-      //   1st MMA: [0, 4, 8, 12]
-      //   2nd MMA: [1, 5, 9, 13]
-      //   3rd MMA: [2, 6, 10, 14]
-      //   4th MMA: [3, 7, 11, 15]
-      si = llvm::SmallVector<unsigned>{0, 4, 8,  12, 1, 5, 9,  13,
-                                       2, 6, 10, 14, 3, 7, 11, 15};
+      //  1st MMA: [[0, 1], [8, 9], [16, 17], [24, 25]]
+      //  2nd MMA: [[2, 3], [10, 11], [18, 19], [26, 27]]
+      //  3rd MMA: [[4, 5], [12, 13], [20, 21], [28, 29]]
+      //  4th MMA: [[6, 7], [14, 15], [22, 23], [30, 31]]
+      si = llvm::SmallVector<unsigned>{
+          0, 1, 8,  9,  16, 17, 24, 25, 2, 3, 10, 11, 18, 19, 26, 27,
+          4, 5, 12, 13, 20, 21, 28, 29, 6, 7, 14, 15, 22, 23, 30, 31};
     } else {
       // Original register layout:
       //
-      //   [0, 1, 2, 3]^T, [4, 5, 6, 7]^T
+      //   [0, 1, 2, 3, 4, 5, 6, 7]^T, [8, 9, 10, 11, 12, 13, 14, 15]^T
       //
       // A stride of 4 is applied to derive four independent MMA operations:
       //
-      //   1st MMA: [0, 4]
-      //   2nd MMA: [1, 5]
-      //   3rd MMA: [2, 6]
-      //   4th MMA: [3, 7]
-      si = llvm::SmallVector<unsigned>{0, 4, 1, 5, 2, 6, 3, 7};
+      //  1st MMA: [[0, 1], [8, 9]]
+      //  2nd MMA: [[2, 3], [10, 11]]
+      //  3rd MMA: [[4, 5], [12, 13]]
+      //  4th MMA: [[6, 7], [14, 15]]
+      si = llvm::SmallVector<unsigned>{0, 1, 8,  9,  2, 3, 10, 11,
+                                       4, 5, 12, 13, 6, 7, 14, 15};
     }
 
     auto step = si.size();
@@ -119,30 +127,25 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       }
       std::copy(perm.begin(), perm.end(), elems.begin() + i * step);
     }
-
-    if (dot.getOpIdx() == 1) {
-      int elemsInTile = dot.getKWidth();
-      // n0 is unrolled in the legacy path, which makes no sense
-      n0 *= 2;
-      for (auto b = 0; b < batch; ++b)
-        for (auto i = 0; i < n0; ++i)
-          for (auto j = 0; j < n1; ++j) {
-            vals[{b, i, 2 * j}] = elems[offset++];
-            vals[{b, i, 2 * j + 1}] = elems[offset++];
-          }
-      return vals;
-    }
   }
 
-  for (auto b = 0; b < batch; ++b)
-    for (auto i = 0; i < n0; ++i) {
-      for (auto j = 0; j < n1; j++) {
-        vals[{b, 2 * i, 2 * j}] = elems[offset++];
-        vals[{b, 2 * i + 1, 2 * j}] = elems[offset++];
-        vals[{b, 2 * i, 2 * j + 1}] = elems[offset++];
-        vals[{b, 2 * i + 1, 2 * j + 1}] = elems[offset++];
-      }
-    }
+  if (dot.getOpIdx() == 0) {
+    for (auto b = 0; b < batch; ++b)
+      for (auto m = 0; m < repOuter; ++m)
+        for (auto k = 0; k < repK; ++k) {
+          packVec({b, 2 * m, 2 * k});
+          packVec({b, 2 * m + 1, 2 * k});
+          packVec({b, 2 * m, 2 * k + 1});
+          packVec({b, 2 * m + 1, 2 * k + 1});
+        }
+  } else {
+    for (auto b = 0; b < batch; ++b)
+      for (auto n = 0; n < repOuter; ++n)
+        for (auto k = 0; k < repK; ++k) {
+          packVec({b, n, 2 * k});
+          packVec({b, n, 2 * k + 1});
+        }
+  }
   return vals;
 }
 
@@ -391,13 +394,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   auto repA =
       cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-          .getMMAv2OrV3RepForOperand(aShapePerCTA, bitwidth, dotOpA.getKWidth(),
-                                     dotOpA.getOpIdx());
+          .getMMAv2RepForOperand(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   auto repB =
       cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-          .getMMAv2OrV3RepForOperand(bShapePerCTA, bitwidth, dotOpB.getKWidth(),
-                                     dotOpB.getOpIdx());
+          .getMMAv2RepForOperand(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
@@ -412,8 +413,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   // This is also wrong in
   // NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand
   auto hb = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, loadedB, repBatch, std::max(repN / 2, 1),
-      repK, bTensorTy);
+      typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
   auto fc = unpackLLElements(loc, loadedC, rewriter);
   auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int numCPackedElem = 4 / numMmaRets;
@@ -427,7 +427,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto batchOffset =
       elemsPerThread[rank - 2] * elemsPerThread[rank - 1] / numCPackedElem;
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
-    unsigned colsPerThread = repN * 2;
+    unsigned colsPerThread = repN > 1 ? repN * 2 : repN;
     PTXBuilder builder;
     auto &mma = *builder.create(mmaInstructions.at(mmaType));
     // using =r for float32 works but leads to less readable ptx.
