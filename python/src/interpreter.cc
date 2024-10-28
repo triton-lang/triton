@@ -2,6 +2,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <type_traits>
@@ -12,6 +13,16 @@ namespace {
 
 enum class MemSemantic { ACQUIRE_RELEASE, ACQUIRE, RELEASE, RELAXED };
 
+std::mutex atomic_op_guard;
+
+template <typename T>
+constexpr bool is_reinterpret_cast_to_atomic_safe =
+    std::is_trivially_copyable_v<T> &&
+    std::is_trivially_copyable_v<std::atomic<T>> &&
+    std::is_standard_layout_v<T> && std::is_standard_layout_v<std::atomic<T>> &&
+    sizeof(T) == sizeof(std::atomic<T>) &&
+    alignof(T) == alignof(std::atomic<T>);
+
 enum class RMWOp { ADD, FADD, AND, OR, XOR, XCHG, MAX, MIN, UMIN, UMAX };
 
 std::map<MemSemantic, int> mem_semantic_map = {
@@ -21,11 +32,8 @@ std::map<MemSemantic, int> mem_semantic_map = {
     {MemSemantic::RELAXED, static_cast<int>(std::memory_order_relaxed)},
 };
 
-// Use compiler builtin atomics instead of std::atomic which requires
-// each variable to be declared as atomic.
-// Currently work for clang and gcc.
 template <bool is_min, typename T>
-T atomic_cmp(std::atomic<T> *ptr, T val, std::memory_order order) {
+T atomic_cmp(T *ptr, T val, std::memory_order order) {
   auto cmp = [](T old, T val) {
     if constexpr (is_min) {
       return old > val;
@@ -34,26 +42,43 @@ T atomic_cmp(std::atomic<T> *ptr, T val, std::memory_order order) {
     }
   };
 
-  // First load
-  T old_val = ptr->load(order);
-  while (cmp(old_val, val)) {
-    if (ptr->compare_exchange_weak(old_val, val, order, order)) {
-      break;
+  T old_val;
+  if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
+    std::atomic<T> *atomic_ptr = reinterpret_cast<std::atomic<T> *>(ptr);
+    old_val = atomic_ptr->load(order);
+    while (cmp(old_val, val)) {
+      if (atomic_ptr->compare_exchange_weak(old_val, val, order, order)) {
+        break;
+      }
+    }
+  } else {
+    const std::lock_guard<std::mutex> lock(atomic_op_guard);
+    old_val = *ptr;
+    if (cmp(old_val, val)) {
+      *ptr = val;
     }
   }
   return old_val;
 }
 
-template <typename T>
-T atomic_fadd(std::atomic<T> *loc, T value, std::memory_order order) {
+template <typename T> T atomic_fadd(T *loc, T value, std::memory_order order) {
   static_assert(std::is_floating_point<T>::value,
                 "T must be a floating-point type");
+  T old_value;
 
-  T old_value = loc->load(order);
-  T new_value;
-  do {
-    new_value = old_value + value;
-  } while (!loc->compare_exchange_weak(old_value, new_value, order, order));
+  if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
+    T new_value;
+    std::atomic<T> *atomic_loc = reinterpret_cast<std::atomic<T> *>(loc);
+    old_value = atomic_loc->load(order);
+    do {
+      new_value = old_value + value;
+    } while (
+        !atomic_loc->compare_exchange_weak(old_value, new_value, order, order));
+  } else {
+    const std::lock_guard<std::mutex> lock(atomic_op_guard);
+    old_value = *loc;
+    *loc = old_value + value;
+  }
 
   return old_value;
 }
@@ -88,14 +113,14 @@ public:
 protected:
   void applyAt(void *loc, size_t i) override final {
     if (mask[i]) {
-      std::atomic<DType> *atomic_ptr = static_cast<std::atomic<DType> *>(loc);
+      DType *atomic_ptr = static_cast<DType *>(loc);
       *(static_cast<DType *>(ret) + i) =
           applyAtMasked(atomic_ptr, *(static_cast<const DType *>(val) + i),
                         std::memory_order(order));
     }
   }
 
-  virtual DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  virtual DType applyAtMasked(DType *loc, const DType value,
                               std::memory_order order) = 0;
 
   const void *val;
@@ -116,9 +141,19 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  DType applyAtMasked(DType *loc, const DType value,
                       std::memory_order order) override {
-    return std::atomic_fetch_add(loc, value);
+    DType old_val;
+    if constexpr (is_reinterpret_cast_to_atomic_safe<DType>) {
+      std::atomic<DType> *atomic_loc =
+          reinterpret_cast<std::atomic<DType> *>(loc);
+      old_val = std::atomic_fetch_add_explicit(atomic_loc, value, order);
+    } else {
+      const std::lock_guard<std::mutex> lock(atomic_op_guard);
+      old_val = *loc;
+      *loc = *loc + value;
+    }
+    return old_val;
   }
 };
 
@@ -129,9 +164,8 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  DType applyAtMasked(DType *loc, const DType value,
                       std::memory_order order) override {
-
     return atomic_fadd(loc, value, order);
   }
 };
@@ -143,9 +177,19 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  DType applyAtMasked(DType *loc, const DType value,
                       std::memory_order order) override {
-    return std::atomic_fetch_and(loc, value);
+    DType old_val;
+    if constexpr (is_reinterpret_cast_to_atomic_safe<DType>) {
+      std::atomic<DType> *atomic_loc =
+          reinterpret_cast<std::atomic<DType> *>(loc);
+      old_val = std::atomic_fetch_and_explicit(atomic_loc, value, order);
+    } else {
+      const std::lock_guard<std::mutex> lock(atomic_op_guard);
+      old_val = *loc;
+      *loc = *loc and value;
+    }
+    return old_val;
   }
 };
 
@@ -156,9 +200,19 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  DType applyAtMasked(DType *loc, const DType value,
                       std::memory_order order) override {
-    return std::atomic_fetch_or(loc, value);
+    DType old_val;
+    if constexpr (is_reinterpret_cast_to_atomic_safe<DType>) {
+      std::atomic<DType> *atomic_loc =
+          reinterpret_cast<std::atomic<DType> *>(loc);
+      old_val = std::atomic_fetch_or_explicit(atomic_loc, value, order);
+    } else {
+      const std::lock_guard<std::mutex> lock(atomic_op_guard);
+      old_val = *loc;
+      *loc = *loc or value;
+    }
+    return old_val;
   }
 };
 
@@ -169,9 +223,19 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  DType applyAtMasked(DType *loc, const DType value,
                       std::memory_order order) override {
-    return std::atomic_fetch_xor(loc, value);
+    DType old_val;
+    if constexpr (is_reinterpret_cast_to_atomic_safe<DType>) {
+      std::atomic<DType> *atomic_loc =
+          reinterpret_cast<std::atomic<DType> *>(loc);
+      old_val = std::atomic_fetch_xor_explicit(atomic_loc, value, order);
+    } else {
+      const std::lock_guard<std::mutex> lock(atomic_op_guard);
+      old_val = *loc;
+      *loc = *loc xor value;
+    }
+    return old_val;
   }
 };
 
@@ -183,7 +247,7 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  DType applyAtMasked(DType *loc, const DType value,
                       std::memory_order order) override {
     return atomic_cmp</*is_min=*/false>(loc, value, order);
   }
@@ -197,7 +261,7 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  DType applyAtMasked(DType *loc, const DType value,
                       std::memory_order order) override {
     return atomic_cmp</*is_min=*/true>(loc, value, order);
   }
@@ -210,11 +274,43 @@ public:
   using AtomicRMWOpBase<DType>::AtomicRMWOpBase;
 
 protected:
-  DType applyAtMasked(std::atomic<DType> *loc, const DType value,
+  DType applyAtMasked(DType *loc, const DType value,
                       std::memory_order order) override {
-    return loc->exchange(value, order);
+    DType old_val;
+    if constexpr (is_reinterpret_cast_to_atomic_safe<DType>) {
+      std::atomic<DType> *atomic_loc =
+          reinterpret_cast<std::atomic<DType> *>(loc);
+      old_val = atomic_loc->exchange(value, order);
+    } else {
+      const std::lock_guard<std::mutex> lock(atomic_op_guard);
+      old_val = *loc;
+      *loc = value;
+    }
+    return old_val;
   }
 };
+
+template <typename T>
+void atomic_compare_exchange_strong(void *loc, void *expected,
+                                    const void *desired, size_t i,
+                                    std::memory_order order) {
+  T desired_val = *(static_cast<const T *>(desired) + i);
+  T *expected_uint = static_cast<T *>(expected);
+
+  if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
+    std::atomic<T> *atomic_loc = reinterpret_cast<std::atomic<T> *>(loc);
+    atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
+                                        order, order);
+  } else {
+    const std::lock_guard<std::mutex> lock(atomic_op_guard);
+    T *atomic_loc = static_cast<T *>(loc);
+    if (*atomic_loc == *(expected_uint + i)) {
+      *atomic_loc = desired_val;
+    } else {
+      *(expected_uint + i) = *atomic_loc;
+    }
+  }
+}
 
 class AtomicCASOp : public AtomicOp {
 public:
@@ -228,46 +324,18 @@ protected:
     // Atomic operations perform bitwise comparison, so it's safe to
     // use number of bytes (itemsize) to determine the type of pointers
     if (itemsize == 1) {
-      std::atomic<uint8_t> *atomic_loc =
-          reinterpret_cast<std::atomic<uint8_t> *>(loc);
-      uint8_t desired_val = *(static_cast<const uint8_t *>(desired) + i);
-      uint8_t *expected_uint = static_cast<uint8_t *>(expected);
-      // Perform the compare and exchange operation
-      atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
-                                          std::memory_order(order),
-                                          std::memory_order(order));
-
+      atomic_compare_exchange_strong<uint8_t>(loc, expected, desired, i,
+                                              std::memory_order(order));
     } else if (itemsize == 2) {
-      std::atomic<uint16_t> *atomic_loc =
-          reinterpret_cast<std::atomic<uint16_t> *>(loc);
-      uint16_t desired_val = *(static_cast<const uint16_t *>(desired) + i);
-      uint16_t *expected_uint = static_cast<uint16_t *>(expected);
-      atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
-                                          std::memory_order(order),
-                                          std::memory_order(order));
+      atomic_compare_exchange_strong<uint16_t>(loc, expected, desired, i,
+                                               std::memory_order(order));
     } else if (itemsize == 4) {
-      std::atomic<uint32_t> *atomic_loc =
-          reinterpret_cast<std::atomic<uint32_t> *>(loc);
-      uint32_t desired_val = *(static_cast<const uint32_t *>(desired) + i);
-      uint32_t *expected_uint = static_cast<uint32_t *>(expected);
-      atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
-                                          std::memory_order(order),
-                                          std::memory_order(order));
+      atomic_compare_exchange_strong<uint32_t>(loc, expected, desired, i,
+                                               std::memory_order(order));
     } else if (itemsize == 8) {
-      uint64_t desired_val = *(static_cast<const uint64_t *>(desired) + i);
-      std::atomic<uint64_t> *atomic_loc =
-          static_cast<std::atomic<uint64_t> *>(loc);
-      uint64_t *expected_uint = static_cast<uint64_t *>(expected);
-      atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
-                                          std::memory_order(order),
-                                          std::memory_order(order));
-
+      atomic_compare_exchange_strong<uint64_t>(loc, expected, desired, i,
+                                               std::memory_order(order));
     } else {
-      // The ‘__atomic’ builtins can be used with any integral scalar or pointer
-      // type that is 1, 2, 4, or 8 bytes in length. 16-byte integral types are
-      // also allowed if ‘__int128’ (see 128-bit Integers) is supported by the
-      // architecture.
-      // https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html
       throw std::invalid_argument("Invalid byte size");
     }
   }
