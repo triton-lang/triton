@@ -253,5 +253,5 @@ Supported Platforms:
 Supported Hardware:
 
 - NVIDIA GPUs (Compute Capability 8.0+)
-- AMD GPUs (ROCm 5.2+)
+- AMD GPUs (ROCm 6.2+)
 - Under development: CPUs
