@@ -2,8 +2,6 @@
 #include "Utility.h"
 
 #include "cpu/include/TritonCPUToLLVM/Passes.h"
-
-#include "mlir/Dialect/GPU/IR/GPUOps.h.inc"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -96,8 +94,8 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value) {
   return value;
 }
 
-LLVM::LLVMFuncOp getPrintFuncDecl(ConversionPatternRewriter &rewriter,
-                                  bool printf) {
+LLVM::LLVMFuncOp getOrAddPrintFuncDecl(ConversionPatternRewriter &rewriter,
+                                       bool printf) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName = printf ? "printf" : "triton_vector_print";
   Operation *funcOp = moduleOp.lookupSymbol(funcName);
@@ -122,15 +120,50 @@ LLVM::LLVMFuncOp getPrintFuncDecl(ConversionPatternRewriter &rewriter,
                                            funcType);
 }
 
+LLVM::LLVMFuncOp
+getOrAddPrintMemrefFuncDecl(ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName = "triton_print_unranked_memref";
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+  auto *ctx = rewriter.getContext();
+  SmallVector<Type> argsType;
+
+  SmallVector<Type> elemTypes;
+  elemTypes.push_back(i64_ty);
+  elemTypes.push_back(ptr_ty(ctx));
+  Type structTy = struct_ty(elemTypes);
+
+  argsType = {/*pid serialization*/ i32_ty,
+              i32_ty,
+              i32_ty, /*end pids*/
+              ptr_ty(ctx),
+              structTy,
+              /*type sreialization*/ i32_ty,
+              i32_ty,
+              i32_ty, /*end type*/
+              i32_ty};
+  auto funcType =
+      LLVM::LLVMFunctionType::get(i32_ty, argsType, /*isVarArg*/ false);
+
+  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+  return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
+                                           funcType);
+}
+
 static StringRef makeNullTerminatedString(StringRef s) {
   llvm::SmallString<64> ss(s);
   ss.push_back(0);
   return ss;
 }
 
-void llPrintf(StringRef prefix, std::array<Value, 3> pid,
-              std::optional<Value> arg, ConversionPatternRewriter &rewriter,
-              bool hex = false) {
+void createRuntimePrintScalarCall(ConversionPatternRewriter &rewriter,
+                                  std::array<Value, 3> pid, StringRef prefix,
+                                  std::optional<Value> arg, bool hex = false) {
   assert(!prefix.empty() && "printf with empty string not supported");
   auto loc = UnknownLoc::get(rewriter.getContext());
 
@@ -152,30 +185,30 @@ void llPrintf(StringRef prefix, std::array<Value, 3> pid,
     allArgs.push_back(elem);
   if (arg.has_value())
     allArgs.push_back(printfPromoteValue(rewriter, arg.value()));
-  call(getPrintFuncDecl(rewriter, true), allArgs);
+  call(getOrAddPrintFuncDecl(rewriter, true), allArgs);
 }
 
-void llVectorPrint(std::array<Value, 3> pid, StringRef prefix, Value ptr,
-                   bool isInteger, bool isSigned, uint32_t bitWidth,
-                   int64_t numElem, bool hex,
-                   ConversionPatternRewriter &rewriter) {
+void createRuntimePrintCall(ConversionPatternRewriter &rewriter,
+                            std::array<Value, 3> pid, StringRef prefix,
+                            Value ptr, Type dtype, bool hex) {
   assert(!prefix.empty());
   auto loc = UnknownLoc::get(rewriter.getContext());
-
   Value prefixValue = LLVM::addStringToModule(
       loc, rewriter, "vectorPrintPrefix_", makeNullTerminatedString(prefix));
 
   SmallVector<Value> allArgs;
   for (auto elem : pid)
     allArgs.push_back(elem);
+
   allArgs.push_back(prefixValue);
   allArgs.push_back(ptr);
-  allArgs.push_back(i32_val(isInteger));
-  allArgs.push_back(i32_val(isSigned));
-  allArgs.push_back(i32_val(bitWidth));
-  allArgs.push_back(i64_val(numElem));
+
+  allArgs.push_back(i32_val(dtype.getIntOrFloatBitWidth()));
+  allArgs.push_back(i32_val(dtype.isInteger()));
+  allArgs.push_back(i32_val(dtype.isSignedInteger()));
   allArgs.push_back(i32_val(hex));
-  call(getPrintFuncDecl(rewriter, false), allArgs);
+
+  call(getOrAddPrintMemrefFuncDecl(rewriter), allArgs);
 }
 
 bool usePrintf(triton::cpu::PrintOp op) {
@@ -205,38 +238,23 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::cpu::PrintOp> {
 
     if (usePrintf(op)) {
       if (op.getNumOperands() == 0) {
-        llPrintf(op.getPrefix(), pid, std::nullopt, rewriter);
+        createRuntimePrintScalarCall(rewriter, pid, op.getPrefix(),
+                                     std::nullopt);
       } else {
-        Value llOpr = adaptor.getOperands()[0];
-        llPrintf(op.getPrefix(), pid, llOpr, rewriter, op.getHex());
+        createRuntimePrintScalarCall(rewriter, pid, op.getPrefix(),
+                                     adaptor.getOperands()[0], op.getHex());
       }
-    } else {
-      Value llOpr = adaptor.getOperands()[0];
-      auto vecShapedType = cast<ShapedType>(op.getOperands()[0].getType());
-      // Currently, we only support 1D vector printing.
-      if (vecShapedType.getRank() == 1) {
-
-        // To get the pointer of the vector, create an alloca and store it.
-        auto ptrType = ptr_ty(rewriter.getContext());
-        auto ptr = rewriter.create<LLVM::AllocaOp>(loc, ptrType,
-                                                   llOpr.getType(), i32_val(1));
-        rewriter.create<LLVM::StoreOp>(loc, llOpr, ptr);
-
-        // TODO: Consider passing an encoded element type information instead of
-        // booleans and separate bit width.
-        llVectorPrint(pid, op.getPrefix(), ptr,
-                      vecShapedType.getElementType().isInteger(),
-                      op.getIsSigned()[0],
-                      vecShapedType.getElementTypeBitWidth(),
-                      vecShapedType.getNumElements(), op.getHex(), rewriter);
-      } else {
-        // TODO: support 2D+ vector printing.
-        std::string msg{op.getPrefix()};
-        llvm::raw_string_ostream os(msg);
-        os << "<<not implemented for '" << llOpr.getType() << "'>>";
-        llPrintf(msg, pid, std::nullopt, rewriter);
-      }
+      rewriter.eraseOp(op);
+      return success();
     }
+
+    // TODO: support 2D+ vector printing.
+    std::string msg{op.getPrefix()};
+
+    createRuntimePrintCall(
+        rewriter, pid, op.getPrefix(), adaptor.getOperands()[0],
+        cast<UnrankedMemRefType>(op.getVal()[0].getType()).getElementType(),
+        op.getHex());
 
     rewriter.eraseOp(op);
     return success();

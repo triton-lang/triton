@@ -2,6 +2,7 @@
 
 #include "cpu/include/TritonToTritonCPU/Passes.h"
 
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -33,6 +34,9 @@ public:
     addLegalDialect<TritonCPUDialect>();
 
     addLegalOp<arith::ConstantOp>();
+    addLegalOp<memref::AllocOp>();
+    addLegalOp<memref::DeallocOp>();
+    addLegalOp<memref::CastOp>();
 
     addIllegalOp<triton::PrintOp>();
     addIllegalOp<triton::AssertOp>();
@@ -53,18 +57,44 @@ struct PrintOpConversion : public OpConversionPattern<triton::PrintOp> {
       rewriter.create<triton::cpu::PrintOp>(loc, op.getPrefix(), op.getHex(),
                                             ValueRange{},
                                             llvm::SmallVector<int, 0>{});
-    } else {
-      // triton_cpu.print takes up to one vector or scalar operand. It prints
-      // each value as a separate print call like the GPU and interpreter.
-      assert(op.getNumOperands() == op.getIsSigned().size());
-      for (size_t i = 0; i < op.getNumOperands(); i++) {
-        Value opr = op.getOperands()[i];
-        llvm::SmallVector<int, 1> isSigned = {op.getIsSigned()[i]};
-        // TODO: Consider using memrefs for general N-dimensional vectors.
-        rewriter.create<triton::cpu::PrintOp>(loc, op.getPrefix(), op.getHex(),
-                                              rewriter.getRemappedValue(opr),
-                                              isSigned);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    for (auto operand : op.getOperands()) {
+      if (!isa<RankedTensorType>(operand.getType())) {
+        rewriter.create<triton::cpu::PrintOp>(
+            loc, op.getPrefix(), op.getHex(),
+            rewriter.getRemappedValue(operand), false);
+        continue;
       }
+
+      auto tensorTy = cast<RankedTensorType>(operand.getType());
+      auto elemTy = tensorTy.getElementType();
+      if (isa<triton::PointerType>(elemTy)) {
+        elemTy = rewriter.getI64Type();
+      }
+      MemRefType memRefTy = MemRefType::get(tensorTy.getShape(), elemTy);
+
+      Value allocVal = rewriter.create<memref::AllocOp>(
+          loc, memRefTy, rewriter.getI64IntegerAttr(64));
+
+      Value vec = rewriter.getRemappedValue(operand);
+      VectorType vecTy = cast<VectorType>(vec.getType());
+
+      Value zeroIdx = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+      SmallVector<Value> indices(vecTy.getRank(), zeroIdx);
+
+      rewriter.create<vector::TransferWriteOp>(loc, vec, allocVal, indices);
+
+      Value allocUnrankedVal = rewriter.create<memref::CastOp>(
+          loc, UnrankedMemRefType::get(elemTy, memRefTy.getMemorySpace()),
+          allocVal);
+
+      rewriter.create<triton::cpu::PrintOp>(loc, op.getPrefix(), op.getHex(),
+                                            allocUnrankedVal, false);
+
+      rewriter.create<memref::DeallocOp>(loc, allocVal);
     }
 
     rewriter.eraseOp(op);

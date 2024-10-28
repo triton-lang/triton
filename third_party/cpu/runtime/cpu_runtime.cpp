@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #if defined(_MSC_VER)
 #define EXPORT __declspec(dllexport)
@@ -121,56 +122,56 @@ void printElement(std::stringstream &ss, const void *vec, size_t index,
     switch (formatInfo.bitWidth) {
     case 32:
       printElementHelper<float>(ss, vec, index);
-      break;
+      return;
     case 64:
       printElementHelper<double>(ss, vec, index);
-      break;
+      return;
     default:
       llvm_unreachable("Unsupported bitWidth");
     }
-  } else {
-    if (formatInfo.isSigned) {
-      switch (formatInfo.bitWidth) {
-      case 64:
-        printElementHelper<int64_t>(ss, vec, index);
-        break;
-      case 32:
-        printElementHelper<int32_t>(ss, vec, index);
-        break;
-      case 16:
-        printElementHelper<int16_t>(ss, vec, index);
-        break;
-      case 8:
-        // int8_t is printed as char.
-        ss << static_cast<int16_t>(static_cast<const int8_t *>(vec)[index]);
-        break;
-      case 1:
-        printElementHelper<bool>(ss, vec, index);
-        break;
-      default:
-        llvm_unreachable("Unsupported bitWidth");
-      }
-    } else {
-      switch (formatInfo.bitWidth) {
-      case 64:
-        printElementHelper<uint64_t>(ss, vec, index);
-        break;
-      case 32:
-        printElementHelper<uint32_t>(ss, vec, index);
-        break;
-      case 16:
-        printElementHelper<uint16_t>(ss, vec, index);
-        break;
-      case 8:
-        ss << static_cast<uint16_t>(static_cast<const uint8_t *>(vec)[index]);
-        break;
-      case 1:
-        printElementHelper<bool>(ss, vec, index);
-        break;
-      default:
-        llvm_unreachable("Unsupported bitWidth");
-      }
+  }
+
+  if (formatInfo.isSigned) {
+    switch (formatInfo.bitWidth) {
+    case 64:
+      printElementHelper<int64_t>(ss, vec, index);
+      return;
+    case 32:
+      printElementHelper<int32_t>(ss, vec, index);
+      return;
+    case 16:
+      printElementHelper<int16_t>(ss, vec, index);
+      return;
+    case 8:
+      // int8_t is printed as char.
+      ss << static_cast<int16_t>(static_cast<const int8_t *>(vec)[index]);
+      return;
+    case 1:
+      printElementHelper<bool>(ss, vec, index);
+      return;
+    default:
+      llvm_unreachable("Unsupported bitWidth");
     }
+  }
+
+  switch (formatInfo.bitWidth) {
+  case 64:
+    printElementHelper<uint64_t>(ss, vec, index);
+    return;
+  case 32:
+    printElementHelper<uint32_t>(ss, vec, index);
+    return;
+  case 16:
+    printElementHelper<uint16_t>(ss, vec, index);
+    return;
+  case 8:
+    ss << static_cast<uint16_t>(static_cast<const uint8_t *>(vec)[index]);
+    return;
+  case 1:
+    printElementHelper<bool>(ss, vec, index);
+    return;
+  default:
+    llvm_unreachable("Unsupported bitWidth");
   }
 }
 
@@ -201,6 +202,157 @@ void printFormattedElement(std::stringstream &ss, void *vec, size_t index,
     printElement(ss, vec, index, formatInfo);
   }
 }
+
+template <typename T> struct RawMemRefDescriptor {
+  T *allocated;
+  T *aligned;
+  intptr_t offset;
+  intptr_t sizesAndStrides[];
+};
+
+template <typename T> struct MemRefDescriptor {
+  T *allocated;
+  T *aligned;
+  intptr_t offset;
+  std::vector<intptr_t> sizes;
+  std::vector<intptr_t> strides;
+  int32_t rank;
+
+  MemRefDescriptor(int32_t rank, void *rawDescriptor) : rank(rank) {
+    auto *rawDesc = static_cast<RawMemRefDescriptor<T> *>(rawDescriptor);
+    allocated = rawDesc->allocated;
+    aligned = rawDesc->aligned;
+    offset = rawDesc->offset;
+    sizes.resize(rank);
+    strides.resize(rank);
+    for (int32_t i = 0; i < rank; i++) {
+      sizes[i] = rawDesc->sizesAndStrides[i];
+      strides[i] = rawDesc->sizesAndStrides[i + rank];
+    }
+  }
+};
+
+struct UnrankedMemRefType {
+  int64_t rank;
+  void *descriptor;
+};
+
+template <typename T>
+void printToStream(MemRefDescriptor<T> &&desc, std::stringstream &ss,
+                   FormatInfo &partialFormatInfo) {
+
+  if (desc.rank > 1) {
+    ss << "<<not implemented for type with rank = '" << desc.rank << "'>>\n";
+    return;
+  }
+  if (desc.sizes.size() == 0) {
+    ss << "<<nothing to print from empty memref>>\n";
+  }
+
+  T *vec = desc.aligned;
+  int32_t numElems = desc.sizes[0];
+
+  FormatInfo formatInfo = getFormatInfo(
+      vec, partialFormatInfo.isInt, partialFormatInfo.isSigned,
+      partialFormatInfo.bitWidth, numElems, partialFormatInfo.isHex);
+
+  const size_t header = ss.str().size();
+
+  if (numElems <= ELEMS_PER_LINE) {
+    for (int i = 0; i < numElems; i++) {
+      printFormattedElement(ss, vec, i, formatInfo);
+      if (i != numElems - 1)
+        ss << ", ";
+    }
+  } else {
+    // TODO: Too many lines? Omit the middle lines.
+    for (int i = 0; i < numElems; i++) {
+      printFormattedElement(ss, vec, i, formatInfo);
+      if (i == numElems - 1)
+        break;
+      if (i % ELEMS_PER_LINE == ELEMS_PER_LINE - 1) {
+        ss << ",\n" << std::string(header, ' ');
+      } else {
+        ss << ", ";
+      }
+    }
+  }
+  ss << "]\n";
+}
+
+void printMemRef(std::stringstream &ss, int32_t rank, void *descriptor,
+                 int32_t btw, bool isInteger, bool isSignedInteger,
+                 bool asHex) {
+
+  FormatInfo partialFormat{.isInt = isInteger,
+                           .isSigned = isSignedInteger,
+                           .bitWidth = btw,
+                           .isHex = asHex};
+  if (!isInteger) {
+    switch (btw) {
+    case 64:
+      printToStream(MemRefDescriptor<double>(rank, descriptor), ss,
+                    partialFormat);
+      return;
+    case 32:
+      printToStream(MemRefDescriptor<float>(rank, descriptor), ss,
+                    partialFormat);
+      return;
+    default:
+      llvm_unreachable("Unsupported bitWidth");
+    }
+  }
+  if (isSignedInteger) {
+    switch (btw) {
+    case 64:
+      printToStream(MemRefDescriptor<int64_t>(rank, descriptor), ss,
+                    partialFormat);
+      return;
+    case 32:
+      printToStream(MemRefDescriptor<int32_t>(rank, descriptor), ss,
+                    partialFormat);
+      return;
+    case 16:
+      printToStream(MemRefDescriptor<int16_t>(rank, descriptor), ss,
+                    partialFormat);
+      return;
+    case 8:
+      printToStream(MemRefDescriptor<int8_t>(rank, descriptor), ss,
+                    partialFormat);
+      return;
+    case 1:
+      printToStream(MemRefDescriptor<bool>(rank, descriptor), ss,
+                    partialFormat);
+      return;
+    default:
+      llvm_unreachable("Unsupported bitWidth");
+    }
+  }
+  switch (btw) {
+  case 64:
+    printToStream(MemRefDescriptor<uint64_t>(rank, descriptor), ss,
+                  partialFormat);
+    return;
+  case 32:
+    printToStream(MemRefDescriptor<uint32_t>(rank, descriptor), ss,
+                  partialFormat);
+    return;
+  case 16:
+    printToStream(MemRefDescriptor<uint16_t>(rank, descriptor), ss,
+                  partialFormat);
+    return;
+  case 8:
+    printToStream(MemRefDescriptor<uint8_t>(rank, descriptor), ss,
+                  partialFormat);
+    return;
+  case 1:
+    printToStream(MemRefDescriptor<bool>(rank, descriptor), ss, partialFormat);
+    return;
+  default:
+    llvm_unreachable("Unsupported bitWidth");
+  }
+}
+
 } // namespace
 
 extern "C" {
@@ -223,7 +375,7 @@ EXPORT void triton_assert(int32_t pid0, int32_t pid1, int32_t pid2, bool cond,
 //
 // TODO: Implement for higher dimension vectors.
 EXPORT void triton_vector_print(int32_t pid0, int32_t pid1, int32_t pid2,
-                                const char *prefix, void *vec, int32_t isInt,
+                                const char *prefix, void *vec, bool isInt,
                                 bool isSigned, int32_t bitWidth,
                                 int64_t numElem, bool isHex) {
 
@@ -254,6 +406,19 @@ EXPORT void triton_vector_print(int32_t pid0, int32_t pid1, int32_t pid2,
     }
   }
   ss << "]\n";
+  std::cout << ss.str() << std::flush;
+}
+
+EXPORT void triton_print_unranked_memref(int32_t pid0, int32_t pid1,
+                                         int32_t pid2, const char *prefix,
+                                         UnrankedMemRefType memref, int32_t btw,
+                                         bool isInteger, bool isSignedInteger,
+                                         bool asHex) {
+  std::stringstream ss;
+  ss << "(" << pid0 << ", " << pid1 << ", " << pid2 << ")" << prefix;
+
+  printMemRef(ss, memref.rank, memref.descriptor, btw, isInteger,
+              isSignedInteger, asHex);
   std::cout << ss.str() << std::flush;
 }
 
