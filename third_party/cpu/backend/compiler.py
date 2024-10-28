@@ -27,9 +27,14 @@ class CPUOptions:
     # GPU-specific options are used in several places.
     # For now, we just provide dummy values.
     backend_name: str = "cpu"
+    # These options provide compatibility with GPU kernel calls.
+    # All of them are ignored.
     num_warps: int = 0
     num_stages: int = 0
     num_ctas: int = 0
+    # Max number of threads to be used for a kernel call.
+    # Zero value is used to utilize all available CPU cores.
+    num_threads: int = 0
     cluster_dims: tuple = (1, 1, 1)
     extern_libs: dict = None
     debug: bool = False

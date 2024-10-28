@@ -100,7 +100,7 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
 
-def softmax(x, y=None):
+def softmax(x, y=None, num_threads=0):
     n_rows, n_cols = x.shape
     # The block size is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
@@ -126,6 +126,7 @@ def softmax(x, y=None):
         n_cols,
         num_warps=num_warps,
         BLOCK_SIZE=BLOCK_SIZE,
+        num_threads=num_threads,
     )
     return y
 
@@ -190,7 +191,6 @@ if USE_GPU and triton.runtime.driver.get_active_gpus():
         args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
     ))
 def benchmark(M, N, provider):
-    import os
 
     # Currently compilation time is very long. Let's show the progress.
     print(f"Running {provider} with {M} x {N}...")
@@ -201,10 +201,6 @@ def benchmark(M, N, provider):
     if device == 'cpu':
         y = torch.empty_like(x)
         triton.runtime.driver.set_active_to_cpu()
-        if 'single' in provider:
-            os.environ['TRITON_CPU_SINGLE_CORE'] = '1'
-        else:
-            os.unsetenv('TRITON_CPU_SINGLE_CORE')
     else:
         y = None
         triton.runtime.driver.set_active_to_gpu()
@@ -218,7 +214,7 @@ def benchmark(M, N, provider):
         compiled = torch.compile(naive_softmax)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: compiled(x), quantiles=quantiles)
     if provider == 'triton-cpu-single':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x, y), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x, y, num_threads=1), quantiles=quantiles)
     if provider == 'triton-cpu':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x, y), quantiles=quantiles)
     if provider == 'triton-gpu':

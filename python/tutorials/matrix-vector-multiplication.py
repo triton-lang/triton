@@ -49,6 +49,7 @@ def gemv(
     weight: torch.Tensor,
     x: torch.Tensor,
     output: torch.Tensor,
+    num_threads=0,
 ):
     assert weight.shape[1] == x.shape[0], "Incompatible dimensions"
     assert weight.is_contiguous() and x.is_contiguous(), "Input and weight must be contiguous"
@@ -68,7 +69,8 @@ def gemv(
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META["BLOCK_SIZE_M"]), )
 
-    gemv_kernel[grid](output, weight, x, M, N, weight.stride(0), BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N)
+    gemv_kernel[grid](output, weight, x, M, N, weight.stride(0), BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N,
+                      num_threads=num_threads)
 
     return output
 
@@ -146,7 +148,6 @@ if USE_GPU and triton.runtime.driver.get_active_gpus():
         args={'M': 4096},  # Values for function arguments not in `x_names` and `y_name`.
     ))
 def benchmark(M, N, provider):
-    import os
 
     device = 'cpu' if 'cpu' in provider else 'cuda'
     weight = torch.randn((M, N), device=device, dtype=torch.float32)
@@ -155,10 +156,6 @@ def benchmark(M, N, provider):
     if device == 'cpu':
         output = torch.empty((M), device=x.device, dtype=x.dtype)
         triton.runtime.driver.set_active_to_cpu()
-        if 'single' in provider:
-            os.environ['TRITON_CPU_SINGLE_CORE'] = '1'
-        else:
-            os.unsetenv('TRITON_CPU_SINGLE_CORE')
 
         if 'transpose' in provider:
             weight = torch.transpose(weight, 0, 1)
@@ -190,7 +187,8 @@ def benchmark(M, N, provider):
         weight = torch.nn.Linear(N, M, bias=False, device=weight.device, dtype=weight.dtype)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: weight.forward(x), quantiles=quantiles)
     elif provider == 'triton-cpu-single':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output, num_threads=1),
+                                                     quantiles=quantiles)
     elif provider == 'triton-cpu':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: gemv(weight, x, output), quantiles=quantiles)
     elif provider == 'triton-cpu-linear':

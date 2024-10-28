@@ -248,7 +248,7 @@ def matmul_kernel(
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
 
-def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
+def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, num_threads=0):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -272,6 +272,7 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
         c.stride(0), c.stride(1),  #
         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,  #
         GROUP_SIZE_M=GROUP_SIZE_M,  #
+        num_threads=num_threads,  #
     )
     return c
 
@@ -359,7 +360,6 @@ if USE_GPU and triton.runtime.driver.get_active_gpus():
         args={},  # Values for function arguments not in `x_names` and `y_name`.
     ))
 def benchmark(M, N, K, provider):
-    import os
 
     device = 'cpu' if 'cpu' in provider else 'cuda'
     a = torch.randn((M, K), device=device, dtype=torch.float32)
@@ -368,10 +368,6 @@ def benchmark(M, N, K, provider):
     if device == 'cpu':
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         triton.runtime.driver.set_active_to_cpu()
-        if 'single' in provider:
-            os.environ['TRITON_CPU_SINGLE_CORE'] = '1'
-        else:
-            os.unsetenv('TRITON_CPU_SINGLE_CORE')
     else:
         c = None
         triton.runtime.driver.set_active_to_gpu()
@@ -387,7 +383,7 @@ def benchmark(M, N, K, provider):
         compiled = torch.compile(torch.matmul)
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: compiled(a, b, out=c), quantiles=quantiles)
     elif provider == 'triton-cpu-single':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c, num_threads=1), quantiles=quantiles)
     elif provider == 'triton-cpu':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, c), quantiles=quantiles)
     perf = lambda ms: 2 * M * N * K * 1e-9 / (ms * 1e-3)
