@@ -186,7 +186,7 @@ protected:
     } else {
       const std::lock_guard<std::mutex> lock(atomic_op_guard);
       old_val = *loc;
-      *loc = *loc and value;
+      *loc = *loc & value;
     }
     return old_val;
   }
@@ -209,7 +209,7 @@ protected:
     } else {
       const std::lock_guard<std::mutex> lock(atomic_op_guard);
       old_val = *loc;
-      *loc = *loc or value;
+      *loc = *loc | value;
     }
     return old_val;
   }
@@ -232,7 +232,7 @@ protected:
     } else {
       const std::lock_guard<std::mutex> lock(atomic_op_guard);
       old_val = *loc;
-      *loc = *loc xor value;
+      *loc = *loc ^ value;
     }
     return old_val;
   }
