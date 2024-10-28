@@ -207,6 +207,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(typeConverter,
                                                           patterns, AMDBenefit);
+    mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
+                                                        targetInfo, AMDBenefit);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -223,6 +225,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
+
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
