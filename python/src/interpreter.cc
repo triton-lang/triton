@@ -113,9 +113,9 @@ public:
 protected:
   void applyAt(void *loc, size_t i) override final {
     if (mask[i]) {
-      DType *atomic_ptr = static_cast<DType *>(loc);
-      *(static_cast<DType *>(ret) + i) = applyAtMasked(
-          atomic_ptr, *(static_cast<const DType *>(val) + i), order);
+      DType *ptr = static_cast<DType *>(loc);
+      *(static_cast<DType *>(ret) + i) =
+          applyAtMasked(ptr, *(static_cast<const DType *>(val) + i), order);
     }
   }
 
@@ -294,19 +294,19 @@ void atomic_compare_exchange_strong(void *loc, void *expected,
                                     const void *desired, size_t i,
                                     std::memory_order order) {
   T desired_val = *(static_cast<const T *>(desired) + i);
-  T *expected_uint = static_cast<T *>(expected);
+  T *expected_uint = static_cast<T *>(expected) + i;
 
   if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
     std::atomic<T> *atomic_loc = reinterpret_cast<std::atomic<T> *>(loc);
-    atomic_loc->compare_exchange_strong(*(expected_uint + i), desired_val,
-                                        order, order);
+    atomic_loc->compare_exchange_strong(*expected_uint, desired_val, order,
+                                        order);
   } else {
     const std::lock_guard<std::mutex> lock(atomic_op_guard);
     T *atomic_loc = static_cast<T *>(loc);
-    if (*atomic_loc == *(expected_uint + i)) {
+    if (*atomic_loc == *expected_uint) {
       *atomic_loc = desired_val;
     } else {
-      *(expected_uint + i) = *atomic_loc;
+      *expected_uint = *atomic_loc;
     }
   }
 }
