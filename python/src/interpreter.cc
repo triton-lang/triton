@@ -25,11 +25,11 @@ constexpr bool is_reinterpret_cast_to_atomic_safe =
 
 enum class RMWOp { ADD, FADD, AND, OR, XOR, XCHG, MAX, MIN, UMIN, UMAX };
 
-std::map<MemSemantic, int> mem_semantic_map = {
-    {MemSemantic::ACQUIRE_RELEASE, static_cast<int>(std::memory_order_acq_rel)},
-    {MemSemantic::ACQUIRE, static_cast<int>(std::memory_order_acquire)},
-    {MemSemantic::RELEASE, static_cast<int>(std::memory_order_release)},
-    {MemSemantic::RELAXED, static_cast<int>(std::memory_order_relaxed)},
+std::map<MemSemantic, std::memory_order> mem_semantic_map = {
+    {MemSemantic::ACQUIRE_RELEASE, std::memory_order_acq_rel},
+    {MemSemantic::ACQUIRE, std::memory_order_acquire},
+    {MemSemantic::RELEASE, std::memory_order_release},
+    {MemSemantic::RELAXED, std::memory_order_relaxed},
 };
 
 template <bool is_min, typename T>
@@ -85,7 +85,7 @@ template <typename T> T atomic_fadd(T *loc, T value, std::memory_order order) {
 
 class AtomicOp {
 public:
-  AtomicOp(const uint64_t *ptr, size_t numel, int order)
+  AtomicOp(const uint64_t *ptr, size_t numel, std::memory_order order)
       : ptr(ptr), numel(numel), order(order) {}
 
   void apply() {
@@ -101,22 +101,21 @@ protected:
 
   const uint64_t *ptr;
   size_t numel;
-  int order;
+  std::memory_order order;
 };
 
 template <typename DType> class AtomicRMWOpBase : public AtomicOp {
 public:
   AtomicRMWOpBase(const uint64_t *ptr, const void *val, void *ret,
-                  const bool *mask, size_t numel, int order)
+                  const bool *mask, size_t numel, std::memory_order order)
       : AtomicOp(ptr, numel, order), val(val), ret(ret), mask(mask) {}
 
 protected:
   void applyAt(void *loc, size_t i) override final {
     if (mask[i]) {
       DType *atomic_ptr = static_cast<DType *>(loc);
-      *(static_cast<DType *>(ret) + i) =
-          applyAtMasked(atomic_ptr, *(static_cast<const DType *>(val) + i),
-                        std::memory_order(order));
+      *(static_cast<DType *>(ret) + i) = applyAtMasked(
+          atomic_ptr, *(static_cast<const DType *>(val) + i), order);
     }
   }
 
@@ -315,7 +314,7 @@ void atomic_compare_exchange_strong(void *loc, void *expected,
 class AtomicCASOp : public AtomicOp {
 public:
   AtomicCASOp(const uint64_t *ptr, void *expected, const void *desired,
-              size_t itemsize, size_t numel, int order)
+              size_t itemsize, size_t numel, std::memory_order order)
       : AtomicOp(ptr, numel, order), expected(expected), desired(desired),
         itemsize(itemsize) {}
 
@@ -324,17 +323,16 @@ protected:
     // Atomic operations perform bitwise comparison, so it's safe to
     // use number of bytes (itemsize) to determine the type of pointers
     if (itemsize == 1) {
-      atomic_compare_exchange_strong<uint8_t>(loc, expected, desired, i,
-                                              std::memory_order(order));
+      atomic_compare_exchange_strong<uint8_t>(loc, expected, desired, i, order);
     } else if (itemsize == 2) {
       atomic_compare_exchange_strong<uint16_t>(loc, expected, desired, i,
-                                               std::memory_order(order));
+                                               order);
     } else if (itemsize == 4) {
       atomic_compare_exchange_strong<uint32_t>(loc, expected, desired, i,
-                                               std::memory_order(order));
+                                               order);
     } else if (itemsize == 8) {
       atomic_compare_exchange_strong<uint64_t>(loc, expected, desired, i,
-                                               std::memory_order(order));
+                                               order);
     } else {
       throw std::invalid_argument("Invalid byte size");
     }
@@ -361,7 +359,7 @@ template <RMWOp Op> struct OpCreator {
   void *ret;
   const bool *mask;
   size_t numel;
-  int order;
+  std::memory_order order;
   std::unique_ptr<AtomicOp> &atomic_op;
 
   template <typename T> void create() {
@@ -375,7 +373,8 @@ template <RMWOp Op> struct OpCreator {
 template <RMWOp Op, typename... SupportedDTypes>
 std::unique_ptr<AtomicOp>
 makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
-                void *ret, const bool *mask, size_t numel, int order) {
+                void *ret, const bool *mask, size_t numel,
+                std::memory_order order) {
   // Iterate over all supported data types, make one that matches, and return
   std::unique_ptr<AtomicOp> atomic_op;
   OpCreator<Op> try_make_op{dtype, ptr,   val,   ret,
@@ -453,7 +452,7 @@ void init_triton_interpreter(py::module &&m) {
   m.def("atomic_rmw",
         [](RMWOp rmw_op, py::array_t<uint64_t> ptr, py::array val,
            py::array_t<bool> mask, MemSemantic sem) -> py::array {
-          int order = mem_semantic_map[sem];
+          std::memory_order order = mem_semantic_map[sem];
           int numel = ptr.size();
           auto shape =
               std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
@@ -500,7 +499,7 @@ void init_triton_interpreter(py::module &&m) {
   m.def("atomic_cas",
         [](py::array_t<uint64_t> ptr, py::array &cmp, py::array &val,
            MemSemantic sem) -> py::array {
-          int order = mem_semantic_map[sem];
+          std::memory_order order = mem_semantic_map[sem];
           int numel = ptr.size();
           auto shape =
               std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
