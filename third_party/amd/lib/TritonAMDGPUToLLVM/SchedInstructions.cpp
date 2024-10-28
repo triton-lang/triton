@@ -19,6 +19,11 @@ namespace mlir::triton {
 
 using namespace mlir;
 
+// TODO: The following passes/algorithms are applicable only for a single
+// `tt.dot` op in a `scf.for` block -i.e., a single schedule hint op per block.
+// Note, we need to relax this assumption in the future and extend the current
+// implementation.
+
 namespace mlir::triton {
 void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
                          unsigned k, Type elementType) {
@@ -98,16 +103,13 @@ void storeOpConversionCallback(triton::gpu::LocalStoreOp op,
   });
 }
 
-mlir::FailureOr<triton::DotOp> hasSingleDotOp(scf::ForOp forOp) {
+triton::DotOp getSingleDotOpIfExists(scf::ForOp forOp) {
   triton::DotOp dotOp = nullptr;
   size_t dotCounter = 0;
   forOp->walk(
       [&dotOp, &dotCounter](triton::DotOp op) { dotOp = op, ++dotCounter; });
 
-  if (dotCounter == 1)
-    return dotOp;
-
-  return mlir::failure();
+  return (dotCounter == 1) ? dotOp : nullptr;
 }
 } // namespace mlir::triton
 
@@ -178,7 +180,7 @@ struct InstructionSchedHintsRewriter
   // This is the implementation of the CK's V3 pipelining (see
   // see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
   // This scheduling requires 1x register and 1x LDS buffers combined with the
-  // local (LDS to registers) and global (HBN to registers) data prefetching.
+  // local (LDS to registers) and global (HBM to registers) data prefetching.
   // see:
   // include/ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.h
   void
@@ -187,9 +189,8 @@ struct InstructionSchedHintsRewriter
 
     if (!(schedHint.getIsBufferLoadsAEnabled() &&
           schedHint.getIsBufferLoadsBEnabled())) {
-      schedHint.emitError(
-          "Skipping instruction scheduling because `ck_v3` "
-          "scheduling can be used only with `buffer_load` instructions");
+      LDBG("Skipping instruction scheduling because `ck_v3` "
+           "scheduling can be used only with `buffer_load` instructions.");
       return;
     }
 
@@ -208,7 +209,7 @@ struct InstructionSchedHintsRewriter
       schedHint.emitError("buffer load count for tile A must be initialized");
 
     if (numBufferLoadInstB == 0)
-      schedHint->emitError("buffer load count for tile B must be initialized");
+      schedHint.emitError("buffer load count for tile B must be initialized");
 
     const uint32_t numMfmaInst = schedHint.getNumMMAs().getValue();
 
@@ -405,13 +406,10 @@ struct TritonAMDGPUInsertInstructionSchedHints
     ModuleOp mod = getOperation();
 
     mod.walk([this, ctx](scf::ForOp forOp) {
-      auto maybeSingleDotOp = hasSingleDotOp(forOp);
-
       // Note, instruction schedule barriers are inserted only in the case of
       // a single `tt.dot` op in a `scf::ForOp` scope in the current
       // implementation.
-      if (mlir::succeeded(maybeSingleDotOp)) {
-        triton::DotOp dotOp = maybeSingleDotOp.value();
+      if (auto dotOp = getSingleDotOpIfExists(forOp)) {
         mlir::OpBuilder rewriter(ctx);
         rewriter.setInsertionPointAfter(dotOp);
         rewriter.create<triton::amdgpu::InstructionSchedHint>(dotOp->getLoc());

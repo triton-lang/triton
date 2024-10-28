@@ -72,8 +72,8 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   let builders = [
     OpBuilder<(ins), [{
       auto ctx = $_state.getContext();
-      auto type = IntegerType::get(ctx, 32);
-      auto emptyAttr = amdgpu::InstCounterAttr::get(ctx, 0, type);
+      auto noneType = NoneType::get(ctx);
+      auto emptyAttr = amdgpu::InstCounterAttr::get(ctx, 0, noneType);
       build($_builder, $_state, emptyAttr, emptyAttr, emptyAttr, emptyAttr,
             emptyAttr, emptyAttr, false, false, emptyAttr);
     }]>

@@ -170,6 +170,11 @@ void StreamPipeliner::createStreamCopy(
     result = select->getResults();
   }
 
+  // If the currently processed `LoadOp` is labeled with an index regarding
+  // to which `DotOp` operand the corresponding data belongs to, then label the
+  // expanded `LocalStoreOp` with the same index. This is required for
+  // instruction scheduling hints to correctly count the emitted `ds_write`
+  // instructions for each GEMM tile.
   if (auto attr = loadOp->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic())) {
     storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
   }
@@ -693,26 +698,22 @@ bool StreamPipeliner::pipelineLoop() {
 namespace {
 // Go through a single use chain to get the result of the target op after all
 // unary ops - e.g., `convert_layout`, `fp_to_fp`, etc.
-template <typename TargetOpType>
-FailureOr<Operation *> rewindUnaryOps(Value value) {
-  auto getNextUnaryOps = [](Value value) -> FailureOr<Operation *> {
-    auto defOp = value.getDefiningOp();
-    if (isa<BlockArgument>(value))
-      return failure();
-    if ((defOp->getNumOperands() == 1) || llvm::dyn_cast<TargetOpType>(defOp))
-      return defOp;
-    return failure();
+template <typename TargetOpType> Operation *passPrevUnaryOps(Value value) {
+  auto getNextUnaryOps = [](Value value) -> Operation * {
+    if (auto defOp = value.getDefiningOp()) {
+      if ((defOp->getNumOperands() == 1) || llvm::dyn_cast<TargetOpType>(defOp))
+        return defOp;
+    }
+    return nullptr;
   };
 
-  auto maybeUnaryOp = getNextUnaryOps(value);
-  while (llvm::succeeded(maybeUnaryOp)) {
-    auto unaryOp = maybeUnaryOp.value();
+  auto unaryOp = getNextUnaryOps(value);
+  while (unaryOp) {
     if (llvm::dyn_cast<TargetOpType>(unaryOp))
       return unaryOp;
-
-    maybeUnaryOp = getNextUnaryOps(unaryOp->getOperand(0));
+    unaryOp = getNextUnaryOps(unaryOp->getOperand(0));
   }
-  return failure();
+  return nullptr;
 }
 
 // Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
@@ -720,14 +721,9 @@ FailureOr<Operation *> rewindUnaryOps(Value value) {
 // we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
 void labelLoadOpsForTritonDot(scf::ForOp forOp) {
   mlir::MLIRContext *ctx = forOp->getContext();
-  auto maybeSingleDotOp = triton::hasSingleDotOp(forOp);
-
-  if (llvm::succeeded(maybeSingleDotOp)) {
-    triton::DotOp dotOp = maybeSingleDotOp.value();
+  if (auto dotOp = triton::getSingleDotOpIfExists(forOp)) {
     for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
-      auto maybeLoadOp = rewindUnaryOps<triton::LoadOp>(dotOperand);
-      if (llvm::succeeded(maybeLoadOp)) {
-        auto loadOp = maybeLoadOp.value();
+      if (auto loadOp = passPrevUnaryOps<triton::LoadOp>(dotOperand)) {
         auto opIdxAttr = triton::amdgpu::OpIdxAttr::get(ctx, opIdx);
         loadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
       }

@@ -20,7 +20,7 @@ void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t numDsReadsCount,
                             Type type);
 void storeOpConversionCallback(triton::gpu::LocalStoreOp op, size_t llvmOpCount,
                                Type type);
-llvm::FailureOr<triton::DotOp> hasSingleDotOp(scf::ForOp forOp);
+triton::DotOp getSingleDotOpIfExists(scf::ForOp forOp);
 } // namespace mlir::triton
 
 #endif
