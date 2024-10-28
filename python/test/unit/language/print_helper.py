@@ -90,9 +90,17 @@ def kernel_print_pointer(X, Y, BLOCK: tl.constexpr):
     tl.device_print("ptr ", X + tl.arange(0, BLOCK))
 
 
+@triton.jit
+def kernel_print_2d_tensor(X, Y, BLOCK_SIZE_X: tl.constexpr, BLOCK_SIZE_Y: tl.constexpr):
+    off_x = tl.arange(0, BLOCK_SIZE_X)
+    off_y = tl.arange(0, BLOCK_SIZE_Y)
+    x = tl.load(X + off_x[:, None] * BLOCK_SIZE_Y + off_y[None, :])
+    tl.device_print("", x)
+
+
 def test_print(func: str, data_type: str, device: str):
     N = 128  # This value should match with test_print in test_subprocess.py.
-    # TODO(antiagainst): Currently the warp count is chosen to make sure wedon't have multiple
+    # TODO(antiagainst): Currently the warp count is chosen to make sure we don't have multiple
     # threads printing duplicated messages due to broadcasting. Improve print op lowering logic
     # to filter out duplicated data range.
     num_warps = N // get_current_target_warp_size()
@@ -128,12 +136,18 @@ def test_print(func: str, data_type: str, device: str):
         kernel_device_print_hex[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_pointer":
         kernel_print_pointer[(1, )](x, y, num_warps=num_warps, BLOCK=N)
+    elif func == "device_print_2d_tensor":
+        BLOCK_SIZE_X = num_warps
+        BLOCK_SIZE_Y = get_current_target_warp_size()
+        x_2d_tensor = x.reshape((BLOCK_SIZE_X, BLOCK_SIZE_Y))
+        kernel_print_2d_tensor[(1, )](x_2d_tensor, y, num_warps=num_warps, BLOCK_SIZE_X=BLOCK_SIZE_X,
+                                      BLOCK_SIZE_Y=BLOCK_SIZE_Y)
     else:
         assert f"Unknown kernel: {func}"
 
     if func != "print_no_arg" and func != "no_arg_print" and func != "device_print_large" and \
        func != "print_multiple_args" and func != "device_print_multiple_args" and \
-       func != "device_print_pointer" and func != "device_print_scalar":
+       func != "device_print_pointer" and func != "device_print_scalar" and func != "device_print_2d_tensor":
         assert_close(y, x)
 
     # Wait until driver complete all the jobs for the device_print, especially test_subprocess
