@@ -804,7 +804,7 @@ class CodeGenerator(ast.NodeVisitor):
     def _verify_loop_carried_variable(self, name, loop_val, live_val):
         assert _is_triton_value(loop_val), f'cannot reassign constxpr {name} in the loop'
         assert _is_triton_value(live_val), f'cannot reasign constexpr {name} in the loop'
-        assert type(loop_val) == type(live_val), f'Loop carried variable {name} changed type'
+        assert type(loop_val) is type(live_val), f'Loop carried variable {name} changed type'
         assert not _is_triton_tensor(loop_val) or loop_val.type == live_val.type, \
             f'Loop-carried variable {name} has initial type {live_val.type} '\
             f'but is re-assigned to {loop_val.type} in loop! '\
