@@ -1,873 +1,873 @@
-x = 
-[
-    {
+x =
+    [
+      {
         "children": [
-            {
+          {
+            "children": [],
+            "frame": {
+              "name": "_ZN2at6native12_GLOBAL__N_143distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfLm4EPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET2_T3_EUlP25hiprandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_fLi4ES9_SO_SH_EEvSJ_SK_RKSL_T4_EUlifE_EEviNS_15PhiloxCudaStateET1_SK_",
+              "type": "function"
+            },
+            "metrics": {
+              "count": 32,
+              "device_id": "0",
+              "device_type": "HIP",
+              "time (ns)": 358880
+            }
+          },
+          {
+            "children": [
+              {
                 "children": [],
                 "frame": {
-                    "name": "_ZN2at6native12_GLOBAL__N_143distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfLm4EPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET2_T3_EUlP25hiprandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_fLi4ES9_SO_SH_EEvSJ_SK_RKSL_T4_EUlifE_EEviNS_15PhiloxCudaStateET1_SK_",
-                    "type": "function"
+                  "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                  "type": "function"
                 },
                 "metrics": {
-                    "count": 32,
-                    "device_id": "0",
-                    "device_type": "HIP",
-                    "time (ns)": 358880
+                  "count": 439,
+                  "device_id": "0",
+                  "device_type": "HIP",
+                  "time (ns)": 84261632
                 }
-            },
-            {
+              },
+              {
                 "children": [
-                    {
-                        "children": [],
-                        "frame": {
-                            "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "count": 439,
-                            "device_id": "0",
-                            "device_type": "HIP",
-                            "time (ns)": 84261632
-                        }
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "Cijk_Ailk_Bljk_HHS_BH_MT128x96x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_96_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG128_2_1_WGM1",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "Cijk_Ailk_Bljk_HHS_BH_MT128x96x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_96_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG128_2_1_WGM1",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 548,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 13579842
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "cublas",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "bytes": 3447717888,
-                            "flops": 1176821039104
-                        }
-                    },
-                    {
-                        "children": [
-                            {
-                                "children": [
-                                    {
-                                        "children": [],
-                                        "frame": {
-                                            "name": "matmul_kernel",
-                                            "type": "function"
-                                        },
-                                        "metrics": {
-                                            "count": 3279,
-                                            "device_id": "0",
-                                            "device_type": "HIP",
-                                            "time (ns)": 221133532
-                                        }
-                                    }
-                                ],
-                                "frame": {
-                                    "name": "<autotune>",
-                                    "type": "function"
-                                },
-                                "metrics": {}
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 3011,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 576939730
-                                }
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "matmul_kernel",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 479,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 27258254
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "triton",
-                            "type": "function"
-                        },
-                        "metrics": {}
+                    "metrics": {
+                      "count": 548,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 13579842
                     }
+                  }
                 ],
                 "frame": {
-                    "name": "matmul_1024_1024_1024",
-                    "type": "function"
+                  "name": "cublas",
+                  "type": "function"
                 },
-                "metrics": {}
-            },
-            {
+                "metrics": {
+                  "bytes": 3447717888,
+                  "flops": 1176821039104
+                }
+              },
+              {
                 "children": [
-                    {
+                  {
+                    "children": [
+                      {
                         "children": [],
                         "frame": {
-                            "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                            "type": "function"
+                          "name": "matmul_kernel",
+                          "type": "function"
                         },
                         "metrics": {
-                            "count": 402,
-                            "device_id": "0",
-                            "device_type": "HIP",
-                            "time (ns)": 78190414
+                          "count": 3279,
+                          "device_id": "0",
+                          "device_type": "HIP",
+                          "time (ns)": 221133532
                         }
+                      }
+                    ],
+                    "frame": {
+                      "name": "<autotune>",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "Cijk_Ailk_Bljk_HHS_BH_MT128x96x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_96_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG128_2_1_WGM1",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 502,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 24125138
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "cublas",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "bytes": 3997237248,
-                            "flops": 1534939103232
-                        }
+                    "metrics": {}
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [
-                                    {
-                                        "children": [],
-                                        "frame": {
-                                            "name": "matmul_kernel",
-                                            "type": "function"
-                                        },
-                                        "metrics": {
-                                            "count": 3113,
-                                            "device_id": "0",
-                                            "device_type": "HIP",
-                                            "time (ns)": 263474818
-                                        }
-                                    }
-                                ],
-                                "frame": {
-                                    "name": "<autotune>",
-                                    "type": "function"
-                                },
-                                "metrics": {}
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 2868,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 550122288
-                                }
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "matmul_kernel",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 468,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 30308812
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "triton",
-                            "type": "function"
-                        },
-                        "metrics": {}
+                    "metrics": {
+                      "count": 3011,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 576939730
                     }
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "matmul_kernel",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 479,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 27258254
+                    }
+                  }
                 ],
                 "frame": {
-                    "name": "matmul_1152_1152_1152",
-                    "type": "function"
+                  "name": "triton",
+                  "type": "function"
                 },
                 "metrics": {}
+              }
+            ],
+            "frame": {
+              "name": "matmul_1024_1024_1024",
+              "type": "function"
             },
-            {
+            "metrics": {}
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "frame": {
+                  "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                  "type": "function"
+                },
+                "metrics": {
+                  "count": 402,
+                  "device_id": "0",
+                  "device_type": "HIP",
+                  "time (ns)": 78190414
+                }
+              },
+              {
                 "children": [
-                    {
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "Cijk_Ailk_Bljk_HHS_BH_MT128x96x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_96_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG128_2_1_WGM1",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 502,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 24125138
+                    }
+                  }
+                ],
+                "frame": {
+                  "name": "cublas",
+                  "type": "function"
+                },
+                "metrics": {
+                  "bytes": 3997237248,
+                  "flops": 1534939103232
+                }
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
                         "children": [],
                         "frame": {
-                            "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                            "type": "function"
+                          "name": "matmul_kernel",
+                          "type": "function"
                         },
                         "metrics": {
-                            "count": 120,
-                            "device_id": "0",
-                            "device_type": "HIP",
-                            "time (ns)": 23174888
+                          "count": 3113,
+                          "device_id": "0",
+                          "device_type": "HIP",
+                          "time (ns)": 263474818
                         }
+                      }
+                    ],
+                    "frame": {
+                      "name": "<autotune>",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "Cijk_Ailk_Bljk_HHS_BH_MT16x64x64_MI16x16x16x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA4_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB16_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR5_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW0_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_16_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG16_16_1_WGM1",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 149,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 1040322
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "cublas",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "bytes": 58589184,
-                            "flops": 4999610368
-                        }
+                    "metrics": {}
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [
-                                    {
-                                        "children": [],
-                                        "frame": {
-                                            "name": "matmul_kernel",
-                                            "type": "function"
-                                        },
-                                        "metrics": {
-                                            "count": 3855,
-                                            "device_id": "0",
-                                            "device_type": "HIP",
-                                            "time (ns)": 56624018
-                                        }
-                                    }
-                                ],
-                                "frame": {
-                                    "name": "<autotune>",
-                                    "type": "function"
-                                },
-                                "metrics": {}
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 3567,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 688860500
-                                }
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "matmul_kernel",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 599,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 5726082
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "triton",
-                            "type": "function"
-                        },
-                        "metrics": {}
+                    "metrics": {
+                      "count": 2868,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 550122288
                     }
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "matmul_kernel",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 468,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 30308812
+                    }
+                  }
                 ],
                 "frame": {
-                    "name": "matmul_256_256_256",
-                    "type": "function"
+                  "name": "triton",
+                  "type": "function"
                 },
                 "metrics": {}
+              }
+            ],
+            "frame": {
+              "name": "matmul_1152_1152_1152",
+              "type": "function"
             },
-            {
+            "metrics": {}
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "frame": {
+                  "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                  "type": "function"
+                },
+                "metrics": {
+                  "count": 120,
+                  "device_id": "0",
+                  "device_type": "HIP",
+                  "time (ns)": 23174888
+                }
+              },
+              {
                 "children": [
-                    {
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "Cijk_Ailk_Bljk_HHS_BH_MT16x64x64_MI16x16x16x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA4_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB16_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR5_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW0_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_16_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG16_16_1_WGM1",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 149,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 1040322
+                    }
+                  }
+                ],
+                "frame": {
+                  "name": "cublas",
+                  "type": "function"
+                },
+                "metrics": {
+                  "bytes": 58589184,
+                  "flops": 4999610368
+                }
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
                         "children": [],
                         "frame": {
-                            "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                            "type": "function"
+                          "name": "matmul_kernel",
+                          "type": "function"
                         },
                         "metrics": {
-                            "count": 480,
-                            "device_id": "0",
-                            "device_type": "HIP",
-                            "time (ns)": 93036508
+                          "count": 3855,
+                          "device_id": "0",
+                          "device_type": "HIP",
+                          "time (ns)": 56624018
                         }
+                      }
+                    ],
+                    "frame": {
+                      "name": "<autotune>",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x16x32_MI16x16x16x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA2_GLVWB2_GRCGA1_GRCGB1_GRPM1_GRVW2_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB16_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR2_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW0_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_16_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM1",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 599,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 6306402
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "cublas",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "bytes": 529956864,
-                            "flops": 67834478592
-                        }
+                    "metrics": {}
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [
-                                    {
-                                        "children": [],
-                                        "frame": {
-                                            "name": "matmul_kernel",
-                                            "type": "function"
-                                        },
-                                        "metrics": {
-                                            "count": 3880,
-                                            "device_id": "0",
-                                            "device_type": "HIP",
-                                            "time (ns)": 72618096
-                                        }
-                                    }
-                                ],
-                                "frame": {
-                                    "name": "<autotune>",
-                                    "type": "function"
-                                },
-                                "metrics": {}
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 3581,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 690525178
-                                }
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "matmul_kernel",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 592,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 7557922
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "triton",
-                            "type": "function"
-                        },
-                        "metrics": {}
+                    "metrics": {
+                      "count": 3567,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 688860500
                     }
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "matmul_kernel",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 599,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 5726082
+                    }
+                  }
                 ],
                 "frame": {
-                    "name": "matmul_384_384_384",
-                    "type": "function"
+                  "name": "triton",
+                  "type": "function"
                 },
                 "metrics": {}
+              }
+            ],
+            "frame": {
+              "name": "matmul_256_256_256",
+              "type": "function"
             },
-            {
+            "metrics": {}
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "frame": {
+                  "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                  "type": "function"
+                },
+                "metrics": {
+                  "count": 480,
+                  "device_id": "0",
+                  "device_type": "HIP",
+                  "time (ns)": 93036508
+                }
+              },
+              {
                 "children": [
-                    {
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x16x32_MI16x16x16x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA2_GLVWB2_GRCGA1_GRCGB1_GRPM1_GRVW2_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB16_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR2_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW0_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_16_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM1",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 599,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 6306402
+                    }
+                  }
+                ],
+                "frame": {
+                  "name": "cublas",
+                  "type": "function"
+                },
+                "metrics": {
+                  "bytes": 529956864,
+                  "flops": 67834478592
+                }
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
                         "children": [],
                         "frame": {
-                            "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                            "type": "function"
+                          "name": "matmul_kernel",
+                          "type": "function"
                         },
                         "metrics": {
-                            "count": 473,
-                            "device_id": "0",
-                            "device_type": "HIP",
-                            "time (ns)": 91212666
+                          "count": 3880,
+                          "device_id": "0",
+                          "device_type": "HIP",
+                          "time (ns)": 72618096
                         }
+                      }
+                    ],
+                    "frame": {
+                      "name": "<autotune>",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x16x32_MI16x16x16x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB2_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB16_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR2_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW0_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_16_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM15",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 591,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 7844486
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "cublas",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "bytes": 929562624,
-                            "flops": 158645354496
-                        }
+                    "metrics": {}
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [
-                                    {
-                                        "children": [],
-                                        "frame": {
-                                            "name": "matmul_kernel",
-                                            "type": "function"
-                                        },
-                                        "metrics": {
-                                            "count": 3850,
-                                            "device_id": "0",
-                                            "device_type": "HIP",
-                                            "time (ns)": 85604352
-                                        }
-                                    }
-                                ],
-                                "frame": {
-                                    "name": "<autotune>",
-                                    "type": "function"
-                                },
-                                "metrics": {}
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 3550,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 679427884
-                                }
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "matmul_kernel",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 583,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 10140482
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "triton",
-                            "type": "function"
-                        },
-                        "metrics": {}
+                    "metrics": {
+                      "count": 3581,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 690525178
                     }
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "matmul_kernel",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 592,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 7557922
+                    }
+                  }
                 ],
                 "frame": {
-                    "name": "matmul_512_512_512",
-                    "type": "function"
+                  "name": "triton",
+                  "type": "function"
                 },
                 "metrics": {}
+              }
+            ],
+            "frame": {
+              "name": "matmul_384_384_384",
+              "type": "function"
             },
-            {
+            "metrics": {}
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "frame": {
+                  "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                  "type": "function"
+                },
+                "metrics": {
+                  "count": 473,
+                  "device_id": "0",
+                  "device_type": "HIP",
+                  "time (ns)": 91212666
+                }
+              },
+              {
                 "children": [
-                    {
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x16x32_MI16x16x16x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB2_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB16_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR2_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW0_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_16_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM15",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 591,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 7844486
+                    }
+                  }
+                ],
+                "frame": {
+                  "name": "cublas",
+                  "type": "function"
+                },
+                "metrics": {
+                  "bytes": 929562624,
+                  "flops": 158645354496
+                }
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
                         "children": [],
                         "frame": {
-                            "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                            "type": "function"
+                          "name": "matmul_kernel",
+                          "type": "function"
                         },
                         "metrics": {
-                            "count": 482,
-                            "device_id": "0",
-                            "device_type": "HIP",
-                            "time (ns)": 93361314
+                          "count": 3850,
+                          "device_id": "0",
+                          "device_type": "HIP",
+                          "time (ns)": 85604352
                         }
+                      }
+                    ],
+                    "frame": {
+                      "name": "<autotune>",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x64x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM1_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_32_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM15",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 602,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 6979366
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "cublas",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "bytes": 1479475200,
-                            "flops": 315621376000
-                        }
+                    "metrics": {}
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [
-                                    {
-                                        "children": [],
-                                        "frame": {
-                                            "name": "matmul_kernel",
-                                            "type": "function"
-                                        },
-                                        "metrics": {
-                                            "count": 3815,
-                                            "device_id": "0",
-                                            "device_type": "HIP",
-                                            "time (ns)": 104472682
-                                        }
-                                    }
-                                ],
-                                "frame": {
-                                    "name": "<autotune>",
-                                    "type": "function"
-                                },
-                                "metrics": {}
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 3513,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 675255132
-                                }
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "matmul_kernel",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 572,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 12237920
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "triton",
-                            "type": "function"
-                        },
-                        "metrics": {}
+                    "metrics": {
+                      "count": 3550,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 679427884
                     }
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "matmul_kernel",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 583,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 10140482
+                    }
+                  }
                 ],
                 "frame": {
-                    "name": "matmul_640_640_640",
-                    "type": "function"
+                  "name": "triton",
+                  "type": "function"
                 },
                 "metrics": {}
+              }
+            ],
+            "frame": {
+              "name": "matmul_512_512_512",
+              "type": "function"
             },
-            {
+            "metrics": {}
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "frame": {
+                  "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                  "type": "function"
+                },
+                "metrics": {
+                  "count": 482,
+                  "device_id": "0",
+                  "device_type": "HIP",
+                  "time (ns)": 93361314
+                }
+              },
+              {
                 "children": [
-                    {
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x64x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM1_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_32_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM15",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 602,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 6979366
+                    }
+                  }
+                ],
+                "frame": {
+                  "name": "cublas",
+                  "type": "function"
+                },
+                "metrics": {
+                  "bytes": 1479475200,
+                  "flops": 315621376000
+                }
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
                         "children": [],
                         "frame": {
-                            "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                            "type": "function"
+                          "name": "matmul_kernel",
+                          "type": "function"
                         },
                         "metrics": {
-                            "count": 459,
-                            "device_id": "0",
-                            "device_type": "HIP",
-                            "time (ns)": 88367068
+                          "count": 3815,
+                          "device_id": "0",
+                          "device_type": "HIP",
+                          "time (ns)": 104472682
                         }
+                      }
+                    ],
+                    "frame": {
+                      "name": "<autotune>",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x128x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_64_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM15",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 573,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 9354724
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "cublas",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "bytes": 2027814912,
-                            "flops": 519120617472
-                        }
+                    "metrics": {}
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [
-                                    {
-                                        "children": [],
-                                        "frame": {
-                                            "name": "matmul_kernel",
-                                            "type": "function"
-                                        },
-                                        "metrics": {
-                                            "count": 3662,
-                                            "device_id": "0",
-                                            "device_type": "HIP",
-                                            "time (ns)": 136016840
-                                        }
-                                    }
-                                ],
-                                "frame": {
-                                    "name": "<autotune>",
-                                    "type": "function"
-                                },
-                                "metrics": {}
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 3366,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 644955746
-                                }
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "matmul_kernel",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 541,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 14631526
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "triton",
-                            "type": "function"
-                        },
-                        "metrics": {}
+                    "metrics": {
+                      "count": 3513,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 675255132
                     }
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "matmul_kernel",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 572,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 12237920
+                    }
+                  }
                 ],
                 "frame": {
-                    "name": "matmul_768_768_768",
-                    "type": "function"
+                  "name": "triton",
+                  "type": "function"
                 },
                 "metrics": {}
+              }
+            ],
+            "frame": {
+              "name": "matmul_640_640_640",
+              "type": "function"
             },
-            {
+            "metrics": {}
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "frame": {
+                  "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                  "type": "function"
+                },
+                "metrics": {
+                  "count": 459,
+                  "device_id": "0",
+                  "device_type": "HIP",
+                  "time (ns)": 88367068
+                }
+              },
+              {
                 "children": [
-                    {
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x128x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_64_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM15",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 573,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 9354724
+                    }
+                  }
+                ],
+                "frame": {
+                  "name": "cublas",
+                  "type": "function"
+                },
+                "metrics": {
+                  "bytes": 2027814912,
+                  "flops": 519120617472
+                }
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
                         "children": [],
                         "frame": {
-                            "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                            "type": "function"
+                          "name": "matmul_kernel",
+                          "type": "function"
                         },
                         "metrics": {
-                            "count": 462,
-                            "device_id": "0",
-                            "device_type": "HIP",
-                            "time (ns)": 89199066
+                          "count": 3662,
+                          "device_id": "0",
+                          "device_type": "HIP",
+                          "time (ns)": 136016840
                         }
+                      }
+                    ],
+                    "frame": {
+                      "name": "<autotune>",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x128x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_64_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM1",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 577,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 10821606
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "cublas",
-                            "type": "function"
-                        },
-                        "metrics": {
-                            "bytes": 2779348992,
-                            "flops": 830098898944
-                        }
+                    "metrics": {}
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                      "type": "function"
                     },
-                    {
-                        "children": [
-                            {
-                                "children": [
-                                    {
-                                        "children": [],
-                                        "frame": {
-                                            "name": "matmul_kernel",
-                                            "type": "function"
-                                        },
-                                        "metrics": {
-                                            "count": 3576,
-                                            "device_id": "0",
-                                            "device_type": "HIP",
-                                            "time (ns)": 159910298
-                                        }
-                                    }
-                                ],
-                                "frame": {
-                                    "name": "<autotune>",
-                                    "type": "function"
-                                },
-                                "metrics": {}
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 3299,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 631504860
-                                }
-                            },
-                            {
-                                "children": [],
-                                "frame": {
-                                    "name": "matmul_kernel",
-                                    "type": "function"
-                                },
-                                "metrics": {
-                                    "count": 543,
-                                    "device_id": "0",
-                                    "device_type": "HIP",
-                                    "time (ns)": 17277772
-                                }
-                            }
-                        ],
-                        "frame": {
-                            "name": "triton",
-                            "type": "function"
-                        },
-                        "metrics": {}
+                    "metrics": {
+                      "count": 3366,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 644955746
                     }
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "matmul_kernel",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 541,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 14631526
+                    }
+                  }
                 ],
                 "frame": {
-                    "name": "matmul_896_896_896",
-                    "type": "function"
+                  "name": "triton",
+                  "type": "function"
                 },
                 "metrics": {}
-            }
+              }
+            ],
+            "frame": {
+              "name": "matmul_768_768_768",
+              "type": "function"
+            },
+            "metrics": {}
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "frame": {
+                  "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                  "type": "function"
+                },
+                "metrics": {
+                  "count": 462,
+                  "device_id": "0",
+                  "device_type": "HIP",
+                  "time (ns)": 89199066
+                }
+              },
+              {
+                "children": [
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "Cijk_Ailk_Bljk_HHS_BH_MT64x128x64_MI32x32x8x1_SE_1LDSB0_APM1_ABV0_ACED0_AF0EM8_AF1EM1_AMAS0_ASE_ASGT_ASLT_ASM_ASAE01_ASCE01_ASEM1_AAC0_BL1_BS1_CLR0_DTLA0_DTLB0_DTVA0_DTVB0_DVO0_ETSP_EPS0_ELFLR0_EMLL0_FSSC10_FL0_GLVWA8_GLVWB8_GRCGA1_GRCGB1_GRPM1_GRVW8_GSU1_GSUASB_GLS0_ISA90a_IU1_K1_KLA_LBSPPA0_LBSPPB128_LPA0_LPB8_LDL1_LRVW8_LWPMn1_LDW0_MAC_MIAV0_MDA2_MO40_MMFGLC_MKFGSU256_NTA0_NTB0_NTC0_NTD0_NEPBS0_NLCA1_NLCB1_ONLL1_OPLV0_PK0_PAP0_PGR2_PLR9_PKA0_SIA3_SLW1_SS0_SU0_SUM0_SUS0_SCIUI1_SPO0_SRVW4_SSO0_SVW4_SNLL0_TSGRA0_TSGRB0_TT1_64_TLDS1_UMLDSA0_UMLDSB1_USFGROn1_VAW2_VSn1_VW1_VWB1_VFLRP0_WSGRA1_WSGRB1_WS64_WG64_4_1_WGM1",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 577,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 10821606
+                    }
+                  }
+                ],
+                "frame": {
+                  "name": "cublas",
+                  "type": "function"
+                },
+                "metrics": {
+                  "bytes": 2779348992,
+                  "flops": 830098898944
+                }
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [],
+                        "frame": {
+                          "name": "matmul_kernel",
+                          "type": "function"
+                        },
+                        "metrics": {
+                          "count": 3576,
+                          "device_id": "0",
+                          "device_type": "HIP",
+                          "time (ns)": 159910298
+                        }
+                      }
+                    ],
+                    "frame": {
+                      "name": "<autotune>",
+                      "type": "function"
+                    },
+                    "metrics": {}
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "_ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEENS_6detail5ArrayIPcLi1EEEEEviT0_T1_",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 3299,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 631504860
+                    }
+                  },
+                  {
+                    "children": [],
+                    "frame": {
+                      "name": "matmul_kernel",
+                      "type": "function"
+                    },
+                    "metrics": {
+                      "count": 543,
+                      "device_id": "0",
+                      "device_type": "HIP",
+                      "time (ns)": 17277772
+                    }
+                  }
+                ],
+                "frame": {
+                  "name": "triton",
+                  "type": "function"
+                },
+                "metrics": {}
+              }
+            ],
+            "frame": {
+              "name": "matmul_896_896_896",
+              "type": "function"
+            },
+            "metrics": {}
+          }
         ],
         "frame": {
-            "name": "ROOT",
-            "type": "function"
+          "name": "ROOT",
+          "type": "function"
         },
         "metrics": {
-            "bytes": 0,
-            "count": 0,
-            "flops": 0,
-            "time (ns)": 0
+          "bytes": 0,
+          "count": 0,
+          "flops": 0,
+          "time (ns)": 0
         }
-    },
-    {
+      },
+      {
         "HIP": {
-            "0": {
-                "arch": "gfx90a",
-                "bus_width": 4096,
-                "clock_rate": 1700000,
-                "memory_clock_rate": 1600000,
-                "num_sms": 104
-            }
+          "0": {
+            "arch": "gfx90a",
+            "bus_width": 4096,
+            "clock_rate": 1700000,
+            "memory_clock_rate": 1600000,
+            "num_sms": 104
+          }
         }
-    }
-]
+      }
+    ]
