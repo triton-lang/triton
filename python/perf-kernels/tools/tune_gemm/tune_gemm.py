@@ -662,11 +662,11 @@ def main():
         formatted_tflops = format_output(tri_tflops)
         minTime = format_output(minTime)
         if not run_bench:
-            print(f'TFLOPS: {formatted_tflops} time(us): {minTime}', end=" ", flush=True)
+            print(f'\nTFLOPS: {formatted_tflops}; time(us): {minTime}', end=" ", flush=True)
 
         bestConfig_compact_str = gen_configStr(bestConfig)
         if not run_bench:
-            print(f'best_config: {bestConfig_compact_str}', end=" ", flush=True)
+            print(f'\nbest_config: {bestConfig_compact_str}', end=" ", flush=True)
 
         # write best config to tuning_results.yaml
         if run_bench:
