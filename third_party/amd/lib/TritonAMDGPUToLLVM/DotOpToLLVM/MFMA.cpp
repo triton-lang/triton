@@ -226,9 +226,6 @@ struct DotOpMFMAConversionHelper {
         getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
-    IntegerAttr highPrioAttr = IntegerAttr::get(IntegerType::get(ctx, 16), 1);
-    IntegerAttr lowPrioAttr = IntegerAttr::get(IntegerType::get(ctx, 16), 0);
-
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int b = 0; b < numRepB; ++b) {
       for (int m = 0; m < numRepM; ++m) {
@@ -243,17 +240,13 @@ struct DotOpMFMAConversionHelper {
           }
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
-            for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
+            for (int kPack = 0; kPack < kWidth / kBase; ++kPack)
               acc =
                   mfmaLayout.getIsTransposed()
                       ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
                                        operandA[kPack][{b, m, k}], acc)
                       : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
                                        operandB[kPack][{b, n, k}], acc);
-              // only after the first mfma.
-              if (b + m + n + k + kPack == 0)
-                rewriter.create<ROCDL::SetPrioOp>(loc, highPrioAttr);
-            }
           }
           acc = reduceSubBlocks(subBlocks, acc);
           for (unsigned v = 0; v < elemsPerVec; ++v) {
@@ -264,8 +257,6 @@ struct DotOpMFMAConversionHelper {
         }
       }
     }
-    rewriter.create<ROCDL::SetPrioOp>(loc, lowPrioAttr);
-
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
