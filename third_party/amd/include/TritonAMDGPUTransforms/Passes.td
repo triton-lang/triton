@@ -124,4 +124,17 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
   let dependentDialects = [];
 }
 
+def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::ModuleOp"> {
+  let summary = "Transform into 2 block ping-pong";
+
+  let description = "This pass reorder instructions to better fit the ping-pong pattern "
+                    "Where two warps from different blocks run concurrently in the synchronized fashion"
+                    "This block ping-pong pattern only works under the certain condition including"
+                    "Total register usage. Only apply this under known configs.";
+
+  let constructor = "mlir::createTritonAMDGPUBlockPingpongPass()";
+
+  let dependentDialects = [];
+}
+
 #endif
