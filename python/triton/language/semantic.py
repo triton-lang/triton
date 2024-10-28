@@ -1528,7 +1528,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
 
 def _str_to_fp_type(float_format: str):
-    ty_enum = getattr(ir.ScaleTypeTY, float_format.upper(), None)
+    ty_enum = getattr(ir.ScaleDotElemTypeTY, float_format.upper(), None)
     if ty_enum is None:
         raise ValueError(f"Invalid float format: {float_format}.")
     return ty_enum

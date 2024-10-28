@@ -205,13 +205,13 @@ void init_triton_ir(py::module &&m) {
       .value("IEEE", InputPrecision::IEEE)
       .export_values();
 
-  py::enum_<ScaleType>(m, "ScaleTypeTY", py::module_local())
-      .value("E4M3", ScaleType::E4M3)
-      .value("E5M2", ScaleType::E5M2)
-      .value("E2M3", ScaleType::E2M3)
-      .value("E3M2", ScaleType::E3M2)
-      .value("E2M1", ScaleType::E2M1)
-      .value("BF16", ScaleType::BF16)
+  py::enum_<ScaleDotElemType>(m, "ScaleDotElemTypeTY", py::module_local())
+      .value("E4M3", ScaleDotElemType::E4M3)
+      .value("E5M2", ScaleDotElemType::E5M2)
+      .value("E2M3", ScaleDotElemType::E2M3)
+      .value("E3M2", ScaleDotElemType::E3M2)
+      .value("E2M1", ScaleDotElemType::E2M1)
+      .value("BF16", ScaleDotElemType::BF16)
       .export_values();
 
   py::class_<MLIRContext>(m, "context", py::module_local())
@@ -1424,9 +1424,9 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_dot_scaled",
            [](TritonOpBuilder &self, mlir::Value &lhs, mlir::Value &lhs_scale,
-              ScaleType lhs_format, mlir::Value &rhs,
-              std::optional<mlir::Value> &rhs_scale, ScaleType rhs_format,
-              mlir::Value &c) -> mlir::Value {
+              ScaleDotElemType lhs_format, mlir::Value &rhs,
+              std::optional<mlir::Value> &rhs_scale,
+              ScaleDotElemType rhs_format, mlir::Value &c) -> mlir::Value {
              return self.create<DotScaledOp>(
                  c.getType(), lhs, rhs, c, lhs_scale,
                  rhs_scale.value_or(Value()), lhs_format, rhs_format);

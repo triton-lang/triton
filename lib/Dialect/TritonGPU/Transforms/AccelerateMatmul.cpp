@@ -415,11 +415,12 @@ public:
     auto aType = dotOp.getLhsType();
     auto bType = dotOp.getRhsType();
 
-    assert((aType == ScaleType::E4M3 || aType == ScaleType::E5M2 ||
-            aType == ScaleType::E2M1) &&
+    assert((aType == ScaleDotElemType::E4M3 ||
+            aType == ScaleDotElemType::E5M2 ||
+            aType == ScaleDotElemType::E2M1) &&
            "NYI: lhs supports fp4 or fp8");
-    assert(bType == ScaleType::E4M3 || bType == ScaleType::E5M2 ||
-           bType == ScaleType::BF16 && "NYI: rhs supports fp8 and bf16");
+    assert(bType == ScaleDotElemType::E4M3 || bType == ScaleDotElemType::E5M2 ||
+           bType == ScaleDotElemType::BF16 && "NYI: rhs supports fp8 and bf16");
 
     // TODO run accelerate matmul on A and B first to choose their layouts
     // Set return type
@@ -443,11 +444,12 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
-    auto toMMABf16 = [&newRetType, &rewriter,
-                      &ctx](TypedValue<RankedTensorType> v, int idx,
-                            ScaleType type) -> TypedValue<RankedTensorType> {
+    auto toMMABf16 =
+        [&newRetType, &rewriter,
+         &ctx](TypedValue<RankedTensorType> v, int idx,
+               ScaleDotElemType type) -> TypedValue<RankedTensorType> {
       auto vType = v.getType();
-      if (type == ScaleType::E2M1) {
+      if (type == ScaleDotElemType::E2M1) {
         // A bit too dynamically typed...
         // perhaps return ints in both cases?
 
@@ -458,15 +460,16 @@ public:
             vType.getShape(), vType.getElementType(), newVEncoding);
         return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
       } else {
-        assert(type == ScaleType::E5M2 || type == ScaleType::E4M3 ||
-               type == ScaleType::BF16);
+        assert(type == ScaleDotElemType::E5M2 ||
+               type == ScaleDotElemType::E4M3 ||
+               type == ScaleDotElemType::BF16);
         auto newVEncoding = DotOperandEncodingAttr::get(
             ctx, idx, newRetType.getEncoding(), /*kWidth=*/8);
         auto newVType = RankedTensorType::get(
             vType.getShape(), vType.getElementType(), newVEncoding);
         v = rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
 
-        if (type == ScaleType::BF16) {
+        if (type == ScaleDotElemType::BF16) {
           return v;
         } else {
           // Convert to bf16
@@ -503,11 +506,11 @@ public:
     auto newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
         ctx, {1, 1}, threadsPerWarp, warpsPerCTA, {1, 0}, CTALayout);
 
-    auto newScaleType = RankedTensorType::get(scale.getType().getShape(),
-                                              scale.getType().getElementType(),
-                                              newScaleEncoding);
-    scale =
-        rewriter.create<ConvertLayoutOp>(scale.getLoc(), newScaleType, scale);
+    auto newScaleDotElemType = RankedTensorType::get(
+        scale.getType().getShape(), scale.getType().getElementType(),
+        newScaleEncoding);
+    scale = rewriter.create<ConvertLayoutOp>(scale.getLoc(),
+                                             newScaleDotElemType, scale);
 
     auto scaledA = rewriter.create<triton::gpu::UpcastMXFPOp>(
         dotOp.getLoc(), a, scale, dotOp.getLhsType());

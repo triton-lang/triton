@@ -119,9 +119,9 @@ def TT_InputPrecisionAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton";
 }
 
-// Type for ScaleType kind of floats.
-def TT_ScaleTypeAttr : I32EnumAttr<
-    "ScaleType", "",
+// Type for ScaleDotElemType kind of floats.
+def TT_ScaleDotElemTypeAttr : I32EnumAttr<
+    "ScaleDotElemType", "",
     [
       I32EnumAttrCase<"E4M3", 0, "e4m3">,
       I32EnumAttrCase<"E5M2", 1, "e5m2">,
