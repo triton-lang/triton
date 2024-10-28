@@ -92,7 +92,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(torch.tensor(ret), quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", device_type="cuda"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -117,11 +117,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     fn()
     di.synchronize()
 
-    # We maintain a buffer of 256 MB that we clear
-    # before each kernel call to make sure that the L2 cache
-    # doesn't contain any input data before the run
-    cache_size = 256 * 1024 * 1024
-    cache = torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')
+    cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
     # Estimate the runtime of the function
     start_event = di.Event(enable_timing=True)

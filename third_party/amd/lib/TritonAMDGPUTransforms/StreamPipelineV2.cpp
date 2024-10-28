@@ -149,7 +149,7 @@ void StreamPipeliner::createStreamCopy(
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
     if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      alloc.replaceAllUsesWith(viewLoad.getResult());
+      triton::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
       allocsToErase.push_back(alloc);
     }
   }

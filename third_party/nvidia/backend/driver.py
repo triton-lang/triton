@@ -1,5 +1,6 @@
 import functools
 import os
+import sysconfig
 import hashlib
 import subprocess
 import tempfile
@@ -48,7 +49,8 @@ def library_dirs():
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
+    ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+    cache_path = cache.get_file(f"{name}.{ext}")
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.c")
@@ -56,7 +58,7 @@ def compile_module_from_src(src, name):
                 f.write(src)
             so = _build(name, src_path, tmpdir, library_dirs(), include_dir, libraries)
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+                cache_path = cache.put(f.read(), f"{name}.{ext}", binary=True)
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
@@ -452,3 +454,12 @@ class CudaDriver(GPUDriver):
     def get_benchmarker(self):
         from triton.testing import do_bench
         return do_bench
+
+    def get_empty_cache_for_benchmark(self):
+        import torch
+
+        # We maintain a buffer of 256 MB that we clear
+        # before each kernel call to make sure that the L2 cache
+        # doesn't contain any input data before the run
+        cache_size = 256 * 1024 * 1024
+        return torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')

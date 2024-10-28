@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import functools
 import os
+import sysconfig
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -151,7 +152,8 @@ def triton_key():
 
     # backend
     libtriton_hash = hashlib.sha256()
-    with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
+    ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+    with open(os.path.join(TRITON_PATH, f"_C/libtriton.{ext}"), "rb") as f:
         while True:
             chunk = f.read(1024**2)
             if not chunk:

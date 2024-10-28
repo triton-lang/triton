@@ -503,3 +503,10 @@ class HIPDriver(GPUDriver):
     def get_benchmarker(self):
         from triton.testing import do_bench
         return do_bench
+
+    def get_empty_cache_for_benchmark(self):
+        import torch
+
+        # It's the same as the Nvidia backend.
+        cache_size = 256 * 1024 * 1024
+        return torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')

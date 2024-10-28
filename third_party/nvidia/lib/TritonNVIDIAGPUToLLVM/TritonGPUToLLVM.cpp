@@ -79,13 +79,16 @@ struct ConvertTritonGPUToLLVM
   ConvertTritonGPUToLLVM(int32_t computeCapability)
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
 
+  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
+      : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
-    TargetInfo targetInfo(computeCapability);
+    TargetInfo targetInfo(computeCapability, ptxVersion);
     TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
@@ -226,6 +229,12 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
+}
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int32_t computeCapability,
+                                 int32_t ptxVersion) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability,
+                                                  ptxVersion);
 }
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {

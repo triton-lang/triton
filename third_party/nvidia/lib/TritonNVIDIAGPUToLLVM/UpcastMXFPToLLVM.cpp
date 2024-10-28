@@ -80,19 +80,6 @@ public:
         ret.push_back(v);
       }
     }
-    // FIXME [Dot LL]
-    // The DotOperandEncodingAttr without LLs encodes the
-    // layout as
-    // e0 e1
-    // e2 e3
-    // rather than transposed that, as the PTX docs say
-    // We transpose every block of 4 elements (kWidth = 8 -> 4 bf16x2)
-    assert(ret.size() % 16 == 0);
-    for (int i = 0; i < ret.size() / 16; ++i) {
-      for (int j = 0; j < 4; ++j) {
-        std::swap(ret[16 * i + j + 4], ret[16 * i + j + 8]);
-      }
-    }
 
     return ret;
   }

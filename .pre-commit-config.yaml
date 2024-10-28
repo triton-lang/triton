@@ -1,6 +1,7 @@
+default_stages: [pre-commit, pre-push, manual]
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
+    rev: v5.0.0
     hooks:
       - id: check-symlinks
       - id: destroyed-symlinks
@@ -17,12 +18,11 @@ repos:
       - id: debug-statements
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.3
+    rev: v0.7.1
     hooks:
       - id: ruff
         files: '^python/.*'
-        args: ["--fix", "--line-length", "120"]
-        stages: [pre-commit, pre-push, manual]
+        args: ["--fix", "--exit-non-zero-on-fix"]
         exclude: |
           (?x)(
             ^python/triton/runtime/.*|
@@ -31,18 +31,16 @@ repos:
           )
 
   - repo: https://github.com/google/yapf
-    rev: be72557
+    rev: "7e21823"
     hooks:
       - id: yapf
         args: ["-p", "-i"]
-        stages: [pre-commit, pre-push, manual]
         exclude: "python/test/unit/language/test_line_info.py"
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v16.0.6
+    rev: v19.1.2
     hooks:
       - id: clang-format
-        stages: [pre-commit, pre-push, manual]
 
   # Expand YAML anchors in files used by github workflows, because github can't
   # do this itself.  This lets us use anchors, which avoids code duplication.
