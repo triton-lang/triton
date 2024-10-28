@@ -23,7 +23,6 @@ class Pingponger {
   SmallVector<Operation *> dotOps;
 
 public:
-  Pingponger() = delete;
   Pingponger(scf::ForOp forOp) : forOp(forOp) {};
   void getDotPingponged();
 };
@@ -39,7 +38,7 @@ void Pingponger::getDotPingponged() {
   IntegerAttr highPrioAttr = IntegerAttr::get(IntegerType::get(ctx, 16), 1);
   auto f16_ty = builder.getF16Type();
 
-  forOp.walk([&](triton::LoadOp op) {
+  forOp->walk([&](triton::LoadOp op) {
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
     auto shape = ty.getShape();
     if (shape.size() != 2)
@@ -50,7 +49,7 @@ void Pingponger::getDotPingponged() {
       gLoadOps.push_back(op);
   });
 
-  forOp.walk([&](ttg::LocalLoadOp op) {
+  forOp->walk([&](ttg::LocalLoadOp op) {
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
     auto shape = ty.getShape();
     if (shape.size() != 2)
@@ -61,13 +60,13 @@ void Pingponger::getDotPingponged() {
       lLoadOps.push_back(op);
   });
 
-  forOp.walk([&](triton::DotOp op) {
+  forOp->walk([&](triton::DotOp op) {
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
     auto shape = ty.getShape();
     if (shape.size() != 2)
       return;
     // Only support 128x128x64xf16 at the moment.
-    if (ty.getElementType() == f16_ty && shape[0] == 128 && shape[1] == 128)
+    if (shape[0] == 128 && shape[1] == 128)
       dotOps.push_back(op);
   });
 
@@ -97,7 +96,9 @@ void Pingponger::getDotPingponged() {
   auto schedB4 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr0);
   schedB4->moveAfter(dotOps[0]);
   auto setPrio1 = builder.create<ROCDL::SetPrioOp>(loc, highPrioAttr);
+  auto setPrioBack0 = builder.create<ROCDL::SetPrioOp>(loc, lowPrioAttr);
   setPrio1->moveBefore(dotOps[0]);
+  setPrioBack0->moveAfter(dotOps[0]);
 }
 
 class TritonAMDGPUBlockPingpongPass
