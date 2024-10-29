@@ -23,6 +23,7 @@ from triton._internal_testing import (
     int_dtypes,
     uint_dtypes,
     float_dtypes,
+    float_dtypes_with_bfloat16,
     dtypes,
     dtypes_with_bfloat16,
     is_cuda,
@@ -64,6 +65,11 @@ else:
 def _bitwidth(dtype: str) -> int:
     # ex.: "int64" -> 64
     return int(re.search(r'(\d+)$', dtype).group(1))
+
+
+def _dtype(dtype: str) -> str:
+    # ex.: "int64" -> "int"
+    return re.match(r'([a-zA-Z]+)', dtype).group(0)
 
 
 def patch_kernel(template, to_replace):
@@ -267,7 +273,8 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', num_ctas=1,
-                 y_low=None, y_high=None, filter_y=None, test_broadcast=True, test_scalar=True):
+                 x_low=None, x_high=None, y_low=None, y_high=None, filter_y=None, test_broadcast=True,
+                 test_scalar=True):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
     check_type_supported(dtype_y, device)
     SIZE = 128
@@ -312,7 +319,7 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
 
     # inputs
     rs = RandomState(17)
-    x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs)
+    x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs, low=x_low, high=x_high)
     y = numpy_random(SIZE, dtype_str=dtype_y, rs=rs, low=y_low, high=y_high)
     if filter_y:
         y[filter_y(y)] = 1
@@ -380,26 +387,35 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         do_test(x, y[:1].reshape(()), kernel_broadcast_rhs)
 
 
-def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
-    # FIXME For large x, we are casting x to a floating point where it does not fit!!
-    return (dtype_x, dtype_y) in [
-        ('int32', 'bfloat16'),
-        ('int32', 'float16'),
-        ('int32', 'float32'),
-        ('int64', 'bfloat16'),
-        ('int64', 'float16'),
-        ('int64', 'float32'),
-        ('int64', 'float64'),
-        ('uint16', 'float32'),
-        ('uint16', 'float64'),
-        ('uint32', 'bfloat16'),
-        ('uint32', 'float16'),
-        ('uint32', 'float32'),
-        ('uint64', 'bfloat16'),
-        ('uint64', 'float16'),
-        ('uint64', 'float32'),
-        ('uint64', 'float64'),
-    ]
+def _min_max_integral_mod_value(dtype_x, dtype_y) -> Optional[int]:
+    """
+    Limit min/max values for integral types for mod values. Leads to
+    overflow/underflow when casting large integral types to floats.
+    """
+    x_bitwidth = _bitwidth(dtype_x)
+    y_bitwidth = _bitwidth(dtype_y)
+
+    # uint types have larger range, must limit min/max values
+    if x_bitwidth < y_bitwidth and dtype_x in int_dtypes:
+        return None, None
+
+    # Limit max value bit-width to be one integral type less than y-bitwidth
+    # For example:
+    #   int64, float32 -> int16
+    #   uint16, float16 -> uint8
+    #   int8 -> int8 (no int4 type in numpy)
+    x_dtype = _dtype(dtype_x)
+    max_bitwidth = max(x_bitwidth >> (x_bitwidth // y_bitwidth), 8)
+    dtype_max = x_dtype + str(max_bitwidth)
+
+    max_info = np.iinfo(getattr(np, dtype_max))
+
+    if max_bitwidth == 8:
+        return max_info.min, max_info.max
+    elif dtype_x in uint_dtypes:
+        return max_info.min, max_info.max // 16
+    else:
+        return max_info.min // 8, max_info.max // 8
 
 
 def test_dtype_codegen():
@@ -442,11 +458,11 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         numpy_expr = np_expr_gen('x', 'y')
     else:
         numpy_expr = None
-    if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
-        with pytest.raises(AssertionError, match="Not equal to tolerance"):
-            _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
-    elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
-                                (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
+    # if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
+    #     with pytest.raises(AssertionError, match="Not equal to tolerance"):
+    #         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
+    if (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
+                              (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
         with pytest.raises(triton.TritonError, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     else:
@@ -455,8 +471,8 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         # We also skip mod when it is ill-conditioned
         skip_scalar_test = ((dtype_x == "bfloat16" and "float" in dtype_y)
                             or (op in ('/', '%') and dtype_x in ("float16", "bfloat16"))
-                            or (expr == "x % y" and dtype_x in int_dtypes + uint_dtypes and dtype_y in float_dtypes
-                                and _mod_operation_ill_conditioned(dtype_x, "float32")))
+                            or (expr == "x % y" and dtype_x in int_dtypes + uint_dtypes and dtype_y in float_dtypes))
+        # and _mod_operation_ill_conditioned(dtype_x, "float32")))
         # can't divide by zero
         not_zero = op in ('/', '%') and dtype_x in integral_dtypes and dtype_y in integral_dtypes
         # can't represent -int(max)
@@ -465,11 +481,17 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             filter_y = lambda y: not_zero * (y == 0) | not_minus_one * (y == -1)
         else:
             filter_y = None
+
+        if op == "%" and dtype_x in integral_dtypes and dtype_y in float_dtypes_with_bfloat16:
+            x_low, x_high = _min_max_integral_mod_value(dtype_x, dtype_y)
+        else:
+            x_low, x_high = None, None
+
         _test_binary(
             dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas,
             # fails with values where fmod(x, y) is roughly zero, but happens to
             # pass with the random values chosen for non-broadcast tests
-            test_broadcast=(op != "%"), filter_y=filter_y, test_scalar=not skip_scalar_test)
+            test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
 
 
 @pytest.mark.interpreter
