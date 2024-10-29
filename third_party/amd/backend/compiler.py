@@ -227,13 +227,14 @@ class HIPBackend(BaseBackend):
                 if options.num_stages == 0:
                     amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
-        amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
+        #amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if use_new_pipeliner or options.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-            amd.passes.ttgpuir.add_block_pingpong(pm)
+            if os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG") == "1" :
+                amd.passes.ttgpuir.add_block_pingpong(pm)
         amd.passes.ttgpuir.add_canonicalize_pointers(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
