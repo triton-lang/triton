@@ -1313,9 +1313,26 @@ kWidth defines number of consecutive elements stored by one thread along k dimen
 Some layouts do not use this parameter, either because they have a fixed number of
 elements along the K dim, or they use all elements of the tensor along the K dim.
 
+# WGMMA Notes
 We require kWidth to be provided for Hopper because the dtype at loading might be
 different from the dtype at WGMMA, due to casting. The kWidth is determined by the
 dtype at WGMMA.
+
+The encoded tensor consists of operand A for possibly multiple wgmma instructions.
+For each wgmma, each warp in a warp group feeds a single "warp matrix"
+Each warp matrix consists of 2x2 "quads".
+Each thread holds several elements in each quad. Right before a wgmma,
+the sum of bitwidth of
+the elements in each quad should add up to 32.
+
+These values are stored unrolled in `elements`.
+The ordering of dimensions is as follows by convention:
+batch (only 1 batch for Hopper currently)
+matM (m-index of the "warp matrix")
+matK (k-index of the "warp matrix")
+quadK (k-index of the "quad" in the core matrix)
+quadM (m-index of the "quad" in the core matrix)
+vecIdx (index of the element in the quad; this is always along the k-dim)
   }];
 
   let parameters = (
