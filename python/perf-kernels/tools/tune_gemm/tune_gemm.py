@@ -64,7 +64,7 @@ def get_full_tuning_space():
     waves_per_eu_range = [0]
     matrix_instr_nonkdim_range = [16, 32]
     kpack_range = [1, 2]
-    sched_variants = ["\"default\"", "\"iglp0\"", "\"ck_v3\""]
+    sched_variants = ["\"default\""]
 
     for block_m in block_mn_range:
         for block_n in block_mn_range:

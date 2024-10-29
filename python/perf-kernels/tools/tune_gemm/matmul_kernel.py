@@ -7,6 +7,15 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr, bias_ptr, M, N, K, stride_am, stride_ak, 
                   stride_cn, stride_bias, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
                   BLOCK_SIZE_K: tl.constexpr, SPLIT_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr, BIAS: tl.constexpr,
                   EVEN_K: tl.constexpr, GRID_MN: tl.constexpr, NUM_XCDS: tl.constexpr):
+
+    tl.assume(stride_am > 0)
+    tl.assume(stride_ak > 0)
+    tl.assume(stride_bk > 0)
+    tl.assume(stride_bn > 0)
+    tl.assume(stride_cm > 0)
+    tl.assume(stride_cn > 0)
+    tl.assume(stride_bias > 0)
+
     pid = tl.program_id(axis=0)
     pid_z = tl.program_id(1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -32,6 +41,9 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr, bias_ptr, M, N, K, stride_am, stride_ak, 
         group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
         pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
         pid_n = (pid % num_pid_in_group) // group_size_m
+
+    tl.assume(pid_m > 0)
+    tl.assume(pid_n > 0)
 
     if SPLIT_K == 1:
         offs_k = tl.arange(0, BLOCK_SIZE_K)
