@@ -42,12 +42,16 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
   // colOffOrdered = col % vec
   // colOff = colOffSwizzled + colOffOrdered
   auto phase = urem(udiv(row, perPhase), maxPhase);
+  mlir::Value rotation;
   if (fromKOuterBlocked) {
     // phase = (phase + row / maxPhase / perPhase) % maxPhase;
-    auto rotation = udiv(udiv(row, perPhase), maxPhase);
-    phase = urem(add(phase, rotation), maxPhase);
+    // auto rotation = udiv(udiv(row, perPhase), maxPhase);
+    rotation = i32_val(1);
+    // phase = add(phase, rotation);
+  } else {
+    rotation = i32_val(0);
   }
-  auto colOffSwizzled = mul(xor_(udiv(col, vec), phase), vec);
+  auto colOffSwizzled = mul(xor_(udiv(col, vec), add(phase, rotation)), vec);
   auto colOffOrdered = urem(col, vec);
   auto colOff = add(colOffSwizzled, colOffOrdered);
 
@@ -220,6 +224,7 @@ llvm::SmallVector<Value> computeOffsetsBType(
 
   if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr,
                                      warpsPerBlock)) {
+    llvm::outs() << "It does not fit in a block\n";
     for (int block = 0; block < numBlocks; ++block) {
       int blockNonKOffset = block * nonKDim * warpsPerBlock;
       for (int i = 0; i < mapping.size(); ++i) {
@@ -232,6 +237,7 @@ llvm::SmallVector<Value> computeOffsetsBType(
       }
     }
   } else {
+    llvm::outs() << "It fits in a block\n";
     // compute inblock offsets once and reuse them for all blocks
     llvm::SmallVector<Value> inblockOffset(mapping.size());
     for (int i = 0; i < mapping.size(); ++i) {
