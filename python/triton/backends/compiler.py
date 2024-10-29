@@ -211,7 +211,7 @@ class AttrsDescriptor:
         return "N"
 
     def __repr__(self):
-        return f"AttrsDescriptor.from_dict({self.to_dict()})"
+        return f"AttrsDescriptor.from_dict({self.to_dict()!r})"
 
 
 @dataclass(frozen=True)
