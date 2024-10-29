@@ -202,10 +202,8 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
         if print_sorted:
             print("Sorted kernels by metric " + metrics[0].strip("(inc)"))
             sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
-            for row in range(len(sorted_df)):
-                if row == 0:
-                    continue
-                if (len(sorted_df.iloc[row]['name']) > 100):
+            for row in range(1, len(sorted_df)):
+                if len(sorted_df.iloc[row]['name']) > 100:
                     kernel_name = sorted_df.iloc[row]['name'][:100] + "..."
                 else:
                     kernel_name = sorted_df.iloc[row]['name']
