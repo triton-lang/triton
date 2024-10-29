@@ -121,4 +121,17 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::ModuleOp"> {
+  let summary = "Transform into 2 block ping-pong";
+
+  let description = "This pass reorder instructions to better fit the ping-pong pattern "
+                    "Where two warps from different blocks run concurrently in the synchronized fashion"
+                    "This block ping-pong pattern could be beneficial under few conditions including"
+                    "occupancy and number of warps.";
+
+  let constructor = "mlir::createTritonAMDGPUBlockPingpongPass()";
+
+  let dependentDialects = [];
+}
+
 #endif

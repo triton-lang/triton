@@ -163,7 +163,8 @@ struct DotOpMFMAConversionHelper {
   }
 
   // Conduct the Dot conversion.
-  LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+  LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
+                           Operation *prev) const {
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
@@ -226,6 +227,12 @@ struct DotOpMFMAConversionHelper {
         getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
+    // check if we want to set prirority of this dot
+    ROCDL::SetPrioOp setPrioOp;
+    if (prev)
+      setPrioOp = dyn_cast<ROCDL::SetPrioOp>(prev);
+    Value firstMfma;
+
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int b = 0; b < numRepB; ++b) {
       for (int m = 0; m < numRepM; ++m) {
@@ -240,13 +247,16 @@ struct DotOpMFMAConversionHelper {
           }
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
-            for (int kPack = 0; kPack < kWidth / kBase; ++kPack)
+            for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
               acc =
                   mfmaLayout.getIsTransposed()
                       ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
                                        operandA[kPack][{b, m, k}], acc)
                       : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
                                        operandB[kPack][{b, n, k}], acc);
+              if (b + m + n + k == 0)
+                firstMfma = acc;
+            }
           }
           acc = reduceSubBlocks(subBlocks, acc);
           for (unsigned v = 0; v < elemsPerVec; ++v) {
@@ -257,6 +267,11 @@ struct DotOpMFMAConversionHelper {
         }
       }
     }
+
+    // move setprio after the first mfma in the group.
+    if (setPrioOp)
+      setPrioOp->moveAfter(firstMfma.getDefiningOp());
+
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
@@ -379,6 +394,8 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
 
-  return helper.convertDot(op, adaptor);
+  // Check if this dot has priority set. Obtain previous op before we insert any
+  Operation *prev = op->getPrevNode();
+  return helper.convertDot(op, adaptor, prev);
 }
 } // namespace mlir::triton::AMD
