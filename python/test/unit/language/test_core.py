@@ -458,9 +458,7 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         numpy_expr = np_expr_gen('x', 'y')
     else:
         numpy_expr = None
-    # if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
-    #     with pytest.raises(AssertionError, match="Not equal to tolerance"):
-    #         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
+
     if (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
                               (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
         with pytest.raises(triton.TritonError, match='Cannot use .* because they have different signedness'):
@@ -468,11 +466,9 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     else:
         # skip when bfloat16, as NumPy's ref performs the computation in float32
         # while Triton performs it in bfloat16
-        # We also skip mod when it is ill-conditioned
         skip_scalar_test = ((dtype_x == "bfloat16" and "float" in dtype_y)
                             or (op in ('/', '%') and dtype_x in ("float16", "bfloat16"))
                             or (expr == "x % y" and dtype_x in int_dtypes + uint_dtypes and dtype_y in float_dtypes))
-        # and _mod_operation_ill_conditioned(dtype_x, "float32")))
         # can't divide by zero
         not_zero = op in ('/', '%') and dtype_x in integral_dtypes and dtype_y in integral_dtypes
         # can't represent -int(max)
