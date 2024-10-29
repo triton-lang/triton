@@ -20,13 +20,15 @@ namespace ttg = mlir::triton::gpu;
 // Return true if the given moduleOp contains a pure matmul problem; i.e.,
 // single dot in the main loop.
 static bool isPureMatmulProblem(ModuleOp moduleOp) {
-  for (auto forOp : moduleOp.getOps<scf::ForOp>()) {
+  bool isMatmul = true;
+  bool foundLoop = false;
+  moduleOp.walk([&](scf::ForOp forOp) -> void {
     int counter = 0;
     forOp.walk([&counter](triton::DotOp dotOp) { ++counter; });
-    if (counter != 1)
-      return false;
-  }
-  return true;
+    isMatmul = (isMatmul && (counter == 1));
+    foundLoop = true;
+  });
+  return foundLoop && isMatmul;
 }
 
 // Search through block to find earliest insertion point for move op. This can
