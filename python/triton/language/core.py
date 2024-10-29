@@ -13,10 +13,9 @@ import os
 
 from .._C.libtriton import ir
 from . import semantic
+from ._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape
 
 T = TypeVar('T')
-
-TRITON_MAX_TENSOR_NUMEL = 1048576
 
 TRITON_BUILTIN = "__triton_builtin__"
 
@@ -30,6 +29,7 @@ def builtin(fn: T) -> T:
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
+            print(kwargs)
             raise ValueError("Did you forget to add @triton.jit ? "
                              "(`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
@@ -440,6 +440,20 @@ class dtype:
             assert self.is_floating()
             return dtype.KIND.FLOATING
 
+    def get_int_max_value(self):
+        if self.is_int_signed():
+            return 2**(self.int_bitwidth - 1) - 1
+        if self.is_int_unsigned():
+            return 2**self.int_bitwidth - 1
+        assert False
+
+    def get_int_min_value(self):
+        if self.is_int_signed():
+            return -2**(self.int_bitwidth - 1)
+        if self.is_int_unsigned():
+            return 0
+        assert False
+
     @staticmethod
     def is_dtype(type_str):
         return type_str in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES
@@ -597,18 +611,11 @@ class block_type(dtype):
         # while tensor's shape is a list of constexpr.
 
         # shape can be empty ([]) when an input is a 0D tensor.
-        if not shape:
+        self.shape = _unwrap_shape(shape)
+        if not self.shape:
             raise TypeError('0d block_type is forbidden')
-        if isinstance(shape[0], constexpr):
-            shape = [s.value for s in shape]
 
-        self.shape = shape
-        self.numel = 1
-        for s in self.shape:
-            self.numel *= s
-        if self.numel > TRITON_MAX_TENSOR_NUMEL:
-            raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
-
+        self.numel = validate_block_shape(self.shape)
         self.name = f'<{self.shape}, {self.element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
@@ -701,12 +708,20 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
         raise ValueError(f'Unsupported bitwidth {bitwidth} and signedness {signed}')
 
 
+class _value:
+    """Base class of values that exist in the triton IR (i.e. not constexprs).
+    """
+
+    def __init__(self, handle):
+        self.handle = handle
+
+
 # -----------------------
 # tensor
 # -----------------------
 
 
-class tensor:
+class tensor(_value):
     """Represents an N-dimensional array of values or pointers.
 
     :code:`tensor` is the fundamental data structure in Triton programs.  Most
@@ -729,7 +744,7 @@ class tensor:
     def __init__(self, handle, type: dtype):
         """Not called by user code."""
         # IR handle
-        self.handle = handle
+        super().__init__(handle)
         # Block shape
         self.shape = type.shape if type.is_block() else ()
         self.numel = 1
@@ -747,31 +762,27 @@ class tensor:
 
     @builtin
     def __add__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.add(self, other, _builder)
+        return add(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __radd__(self, other, _builder=None):
-        return self.__add__(other, _builder=_builder)
+        return add(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __sub__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.sub(self, other, _builder)
+        return sub(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __rsub__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.sub(other, self, _builder)
+        return sub(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __mul__(self, other, _builder=None):
-        other = _unwrap_if_constexpr(other)
-        return semantic.mul(self, other, _builder)
+        return mul(self, other, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __rmul__(self, other, _builder=None):
-        return self.__mul__(other, _builder=_builder)
+        return mul(other, self, sanitize_overflow=True, _builder=_builder)
 
     @builtin
     def __truediv__(self, other, _builder=None):
@@ -1189,18 +1200,15 @@ arange.__doc__ = f"""
 """
 
 
-def _shape_check_impl(shape):
+def _unwrap_shape(shape):
     shape = _constexpr_to_value(shape)
-    for i, d in enumerate(shape):
-        if isinstance(d, int):
-            d = constexpr(d)
-        if not isinstance(d, constexpr):
-            raise TypeError(f"Shape element {i} must have type `constexpr`")
-        if not isinstance(d.value, int):
-            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
-        if d.value & (d.value - 1) != 0:
-            raise ValueError(f"Shape element {i} must be a power of 2")
-    return [_constexpr_to_value(x) for x in shape]
+    return [_constexpr_to_value(s) for s in shape]
+
+
+def _shape_check_impl(shape):
+    shape = _unwrap_shape(shape)
+    validate_block_shape(shape)
+    return shape
 
 
 @builtin
@@ -1282,6 +1290,7 @@ def trans(input: tensor, *dims, _builder=None):
     :py:func:`permute` is equivalent to this function, except it doesn't
     have the special case when no permutation is specified.
     """
+    dims = _unwrap_iterable(dims)
     if not dims:
         dims = (1, 0)
     return semantic.permute(input, dims, _builder)
@@ -1540,6 +1549,29 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     return semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, _builder)
 
 
+@builtin
+def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, out_dtype=float32, _builder=None):
+    """
+    Returns the matrix product of two blocks in microscaling format.
+    lhs and rhs use microscaling formats described here:
+    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+    :param lhs: The first tensor to be multiplied.
+    :type lhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :param lhs_scale: Scale factor for lhs tensor.
+    :type lhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
+    :param lhs_format: format of the lhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :param rhs: The second tensor to be multiplied.
+    :type rhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :param rhs_scale: Scale factor for rhs tensor.
+    :type rhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
+    :param rhs_format: format of the rhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :param acc: The accumulator tensor. If not None, the result is added to this tensor.
+    """
+    out_dtype = _constexpr_to_value(out_dtype)
+    assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
+    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, out_dtype, _builder)
+
+
 # -----------------------
 # Non-Atomic Memory Operations
 # -----------------------
@@ -1613,7 +1645,7 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
 
     This loads a tensor of data based on the descriptor and offsets.
     """
-    type = block_type(dtype, shape)
+    type = block_type(_constexpr_to_value(dtype), shape)
     return semantic.descriptor_load(desc_pointer, offsets, "", "", type, _builder)
 
 
@@ -1861,6 +1893,27 @@ def where(condition, x, y, _builder=None):
 # -----------------------
 # Math
 # -----------------------
+
+
+@builtin
+def add(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    return semantic.add(x, y, sanitize_overflow, _builder)
+
+
+@builtin
+def sub(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    return semantic.sub(x, y, sanitize_overflow, _builder)
+
+
+@builtin
+def mul(x, y, sanitize_overflow: constexpr = True, _builder=None):
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
+    return semantic.mul(x, y, sanitize_overflow, _builder)
 
 
 @builtin

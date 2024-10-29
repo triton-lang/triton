@@ -9,6 +9,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getOrder;
+using ::mlir::triton::gpu::getThreadOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -49,7 +50,7 @@ public:
     auto smemShape = helper.getScratchRepShape();
 
     SmallVector<Value> smemBases =
-        getSmemBases(op, product<unsigned>(smemShape), rewriter);
+        getSmemBases(op, product<unsigned>(smemShape), rewriter, targetInfo);
 
     storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
 
@@ -271,7 +272,7 @@ private:
 
     auto threadsPerWarp =
         triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
-    auto order = getOrder(srcLayout);
+    auto order = getThreadOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
     Value laneIdAxis = multiDimLaneId[axis];
@@ -293,8 +294,8 @@ private:
           linearize(rewriter, loc, writeIdx, smemShape, smemOrder);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         auto elemTy = getElementType(op, i);
-        Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
-                             smemBases[i], writeOffset);
+        Value writePtr =
+            gep(smemBases[i].getType(), elemTy, smemBases[i], writeOffset);
         targetInfo.storeShared(rewriter, loc, writePtr, acc[i], laneZero);
       }
     }
@@ -328,8 +329,8 @@ private:
       SmallVector<Value> acc(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         auto elemTy = getElementType(op, i);
-        Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
-                            smemBases[i], readOffset);
+        Value readPtr =
+            gep(smemBases[i].getType(), elemTy, smemBases[i], readOffset);
         acc[i] = targetInfo.loadShared(rewriter, loc, readPtr, elemTy,
                                        threadIsNeeded);
       }
@@ -340,8 +341,8 @@ private:
       SmallVector<Value> writePtrs(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         auto elemTy = getElementType(op, i);
-        writePtrs[i] = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
-                           smemBases[i], writeOffset);
+        writePtrs[i] =
+            gep(smemBases[i].getType(), elemTy, smemBases[i], writeOffset);
       }
 
       Value laneIdModSizeInterWarps = urem(laneId, i32_val(sizeInterWarps));
@@ -402,8 +403,8 @@ private:
           }
           Value readOffset =
               linearize(rewriter, loc, readIdx, smemShape, smemOrder);
-          Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
-                              smemBases[i], readOffset);
+          Value readPtr =
+              gep(smemBases[i].getType(), elemTy, smemBases[i], readOffset);
           resultVals[j] = load(elemTy, readPtr);
         }
 

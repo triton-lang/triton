@@ -149,7 +149,7 @@ void StreamPipeliner::createStreamCopy(
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
     if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      alloc.replaceAllUsesWith(viewLoad.getResult());
+      triton::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
       allocsToErase.push_back(alloc);
     }
   }
@@ -207,8 +207,22 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+      SmallVector<unsigned> sharedOrder;
+      int rank = order.size();
+      // TODO rework this when shared -> dotOp conversions support arbitrary
+      // shared memory ordering
+      if (rank == 3) {
+        // Move the batch dimension (dim #0) to be the last so that it will be
+        // the slowest varying dimension.
+        for (unsigned i = 0; i < rank; ++i)
+          if (order[i] != 0)
+            sharedOrder.emplace_back(order[i]);
+        sharedOrder.emplace_back(0);
+      } else {
+        sharedOrder = order;
+      }
       tempAttr = ttg::SharedEncodingAttr::get(
-          val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
+          val.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder, CTALayout,
           bitWidth, /*needTrans=*/false);
     }
     // Check that the shared encodings needed by the users are compatible.

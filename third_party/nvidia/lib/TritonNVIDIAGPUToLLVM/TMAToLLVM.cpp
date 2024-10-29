@@ -248,7 +248,7 @@ struct ExperimentalTensormapCreateOpConversion
     Location loc = op->getLoc();
     auto ctx = getContext();
 
-    auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, op);
+    auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
     zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
     tensormap_replace_global_address(loc, ctx, rewriter, smemBase,

@@ -36,7 +36,7 @@ SmallVector<unsigned> getParentOrder(Attribute layout) {
   if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return getParentOrder(sliceEncoding.getParent());
   }
-  return getOrder(layout);
+  return getThreadOrder(layout);
 }
 
 } // namespace
@@ -75,7 +75,7 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
     threadOffset = threadsPerWarp[sliceLayout.getDim()];
   } else {
     auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-    auto order = getOrder(srcLayout);
+    auto order = getThreadOrder(srcLayout);
     for (unsigned i = 0; i < order.size(); i++) {
       if (order[i] == axis)
         break;
@@ -536,20 +536,73 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
+bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
+  if (blockedLayout == nullptr || dotOperandLayout == nullptr)
     return false;
-  // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
-  // improved. In addition, we can enable this shortcut for regular MFMA
-  // layout when opIdx == 1.
-  return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
-         dotOperandLayout.getKWidth() == getContigPerThread(mfmaLayout)[1] &&
-         dotOperandLayout.getParent() == mfmaLayout &&
-         (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
-         (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+  auto parentLayout =
+      dyn_cast<BlockedEncodingAttr>(dotOperandLayout.getParent());
+  if (parentLayout == nullptr)
+    return false;
+  auto opShape = srcTy.getShape();
+  auto rank = opShape.size();
+
+  int kDim = dotOperandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  int nonKDim = dotOperandLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
+  auto ctaLayout = blockedLayout.getCTALayout();
+
+  // The following logic checks that a source blocked layout matches a
+  // destination dot operand layout. This means that given tensor in source
+  // layout could be converted into destination layout without any data movement
+  // between registers or threads.
+  //
+  // It is considered a match if
+  // 1) Each thread in source layout holds a whole copy of all elements along
+  //    the K dimension of a tensor
+  // 2) Distribution of data along all other non-K dimensions(Batch/M/N)
+  //    matches between source and destination parent layouts.
+  //
+  // First condition comes from the property of dot operand layout with Blocked
+  // parent: size per threads along K dimension equals size of the tensor along
+  // K. Second condition comes from other property: dot operand layout
+  // inherits non-K dimensions from it's parent layout.
+  //
+  // clang-format off
+  //
+  // For example, following conversion is a no op:
+  //   tensor<128x32xf16,                          #blocked<{sizePerThread = [2, 32], threadsPerWarp = [32, 1]}>>
+  //     ->
+  //   tensor<128x32xf16, #dot_op<{opIdx=0, parent=#blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1]}>>>
+  //
+  // clang-format on
+  bool ctaLayoutCompatible =
+      ctaLayout.getCTASplitNum()[kDim] == 1 &&
+      blockedLayout.getCTALayout() == parentLayout.getCTALayout();
+  bool threadHoldsWholeKDim =
+      blockedLayout.getSizePerThread()[kDim] == opShape[kDim];
+  bool nonKDimCompatible =
+      blockedLayout.getOrder() == parentLayout.getOrder() &&
+      blockedLayout.getSizePerThread()[nonKDim] ==
+          parentLayout.getSizePerThread()[nonKDim] &&
+      blockedLayout.getThreadsPerWarp()[nonKDim] ==
+          parentLayout.getThreadsPerWarp()[nonKDim] &&
+      blockedLayout.getWarpsPerCTA()[nonKDim] ==
+          parentLayout.getWarpsPerCTA()[nonKDim];
+  bool matrixDimsCompatible =
+      ctaLayoutCompatible && threadHoldsWholeKDim && nonKDimCompatible;
+  if (rank == 2)
+    return matrixDimsCompatible;
+
+  // additional check for batch dimension if it is present
+  assert(rank == 3);
+  bool bDimCompatible =
+      blockedLayout.getSizePerThread()[0] ==
+          parentLayout.getSizePerThread()[0] &&
+      blockedLayout.getThreadsPerWarp()[0] ==
+          parentLayout.getThreadsPerWarp()[0] &&
+      blockedLayout.getWarpsPerCTA()[0] == parentLayout.getWarpsPerCTA()[0];
+  return matrixDimsCompatible && bDimCompatible;
 }
 
 // For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
@@ -571,68 +624,105 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   return ans;
 }
 
-bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
+// We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
+// under kBlock, kWarp or kLane (in that order). The idea here is that if we
+// have a transformation that's the identity on kBlock, we don't need to use
+// distributed shared memory. If it's also the identity on kWarp, we can
+// transfer via warp-shuffles, and if it's the identity on kLane just have to
+// reorder the registers
+std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
+                                             RankedTensorType dstTy) {
   MLIRContext *ctx = srcTy.getContext();
   std::optional<LinearLayout> srcLayout =
       toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
   std::optional<LinearLayout> dstLayout =
       toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  if (srcLayout.has_value() && dstLayout.has_value()) {
-    // comp describes the layout function for converting from src to dst.
-    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
-    StringAttr kLane = StringAttr::get(ctx, "lane");
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
-    // TODO(jlebar): These checks are overly-restrictive.  For example, we can
-    // transfer by shuffling registers (case 1) if and only if all of the bases
-    // for `register` have 0s for lane, warp, and block.  But the check below is
-    // stronger than this, checking also that the choice of lane/warp/block does
-    // not affect the permutation of registers.  If we allow different
-    // lane/warp/blocks to have different permutations, we can generalize this.
-    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kLane),
-                                                  kLane, kLane) *
-                         LinearLayout::identity1D(comp.getInDimSize(kWarp),
-                                                  kWarp, kWarp) *
-                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
-                                                  kBlock, kBlock))
-            .has_value()) {
-      return true;
+  if (!(srcLayout.has_value() && dstLayout.has_value()))
+    return std::nullopt;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  auto numSrcRegs = srcLayout->getInDimSize(kRegister);
+  auto numDstRegs = dstLayout->getInDimSize(kRegister);
+  // The `invertAndCompose` function will generate a layout that is injective
+  // by assigning new output dimensions to free variables.  For instance,
+  // consider a scenario where `srcLayout` has a free variable in the lane
+  // dimension, while `dstLayout` has two free variables in the lane
+  // dimension and also a larger number of registers.
+  // The injective form of `srcLayout` will add only a single additional row
+  // to the transformation matrix, whereas the injective form of `dstLayout`
+  // will add two additional rows.  This discrepancy causes misleading results
+  // because the matrices end up with a different number of rows.
+  //
+  // Take `dstLayout ⋅ srcLayout^-1` as an example:
+  //
+  //   - `injective(dstLayout)`: [n, m] → [n + 2, m]
+  //   - `injective(srcLayout)`: [n, m] → [n + 1, m]
+  //   - `injective(srcLayout)^-1`: [n + 1, m] → [m, n + 1]
+  //   - `injective(dstLayout) ⋅ injective(srcLayout)^-1`: [n + 2, m] ⋅ [m, n +
+  //   1] → [n + 2, n + 1]
+  //
+  // Here, the `(n + 1)`-th row added by `dstLayout` represents the free
+  // variable in registers, and the `(n + 2)`-th row represents the free
+  // variable in lanes.  However, the `(n + 1)`-th row added by `srcLayout`
+  // represents the free variable in lanes.  As a result, the `(n + 1)`-th row
+  // in two layouts do not correspond to the same free variable.
+  //
+  // To address this issue, we pad the free variables in `srcLayout` and
+  // `dstLayout` to ensure they have the same number of registers.  This
+  // guarantees that the resulting matrices have the same number of rows,
+  // ensuring consistency in the composition process.
+  auto numRegs = std::max(numSrcRegs, numDstRegs);
+  auto srcLayoutWithFreeRegs = srcLayout->resize(kRegister, numRegs);
+  auto dstLayoutWithFreeRegs = dstLayout->resize(kRegister, numRegs);
+  // comp describes the layout function to create dst from src.
+  LinearLayout comp =
+      dstLayoutWithFreeRegs.invertAndCompose(srcLayoutWithFreeRegs);
+  // We try to quotient by the largest subspace first
+  auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
+  for (auto dim : dims) {
+    auto quotient = comp.quotient(StringAttr::get(ctx, dim));
+    if (!quotient.has_value()) {
+      break;
     }
+    comp = *quotient;
   }
-  return false;
+  return comp;
+}
+
+bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto layout = minimalCvtLayout(srcTy, dstTy);
+  MLIRContext *ctx = srcTy.getContext();
+  if (!layout.has_value()) {
+    return false;
+  }
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto outDims = llvm::to_vector(layout->getOutDimNames());
+  return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
-  std::optional<LinearLayout> srcLayout =
-      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  std::optional<LinearLayout> dstLayout =
-      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  if (srcLayout.has_value() && dstLayout.has_value()) {
-    // comp describes the layout function for converting from src to dst.
-    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
-    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kWarp),
-                                                  kWarp, kWarp) *
-                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
-                                                  kBlock, kBlock))
-            .has_value()) {
-      return true;
-    }
+  if (!layout.has_value()) {
+    return false;
   }
-  return false;
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  return llvm::to_vector(layout->getOutDimNames()) ==
+         llvm::SmallVector<StringAttr, 2>{kRegister, kLane};
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut` and
+  // TODO(jlebar): Remove these special cases (`isBlockedToDotShortcut` and
   // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
   // checks.
   // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
-         !isMmaToDotShortcut(srcTy, dstTy) &&
-         !isMfmaToDotShortcut(srcTy, dstTy);
+         !isBlockedToDotShortcut(srcTy, dstTy) &&
+         !matchMmaV3AndDotOperandLayout(srcTy, dstTy);
 }
 
 bool atomicNeedsSharedMemory(Value value) {
@@ -640,20 +730,6 @@ bool atomicNeedsSharedMemory(Value value) {
   if (isa<RankedTensorType>(type) || value.use_empty())
     return false;
   return true;
-}
-
-bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  if (matchMmaV3AndDotOperandLayout(srcTy, dstTy))
-    return true;
-  // dot_op<opIdx=0, parent=#mma> = #mma
-  // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
-  auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  return mmaLayout && dotOperandLayout && mmaLayout.getVersionMajor() == 2 &&
-         mmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getParent() == mmaLayout &&
-         !srcTy.getElementType().isF32();
 }
 
 namespace {
@@ -826,15 +902,16 @@ public:
 
   LogicalResult initialize(Operation *top) override {
     WalkResult result = top->walk([&](Operation *op) {
-      if (failed(visit(op)))
+      ProgramPoint programPoint(op);
+      if (failed(visit(&programPoint)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
     return success(!result.wasInterrupted());
   }
 
-  LogicalResult visit(ProgramPoint point) override {
-    Operation *op = point.get<Operation *>();
+  LogicalResult visit(ProgramPoint *point) override {
+    Operation *op = point->getOperation();
     Attribute value;
     if (matchPattern(op, m_Constant(&value))) {
       auto *constant = getOrCreate<dataflow::Lattice<dataflow::ConstantValue>>(

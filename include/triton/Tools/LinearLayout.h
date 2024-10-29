@@ -575,29 +575,20 @@ public:
     return *this;
   }
 
-  // divideLeft and divideRight are the inverses of operator*.
-  //
-  // Consider `a = c.divideRight(b)`, where `a` is a linear layout with
-  // `in-dims(a) == in-dims(b)` and `out-dims(a) == out-dims(c)`. We may remove
-  // some empty dimensions from `a` to form `a'` and still have `a' * b == c`.
-  // Therefore, there are multiple possible values that we could return for
-  // `(a * b).divideRight(b)` which would satisfy
-  // `((a * b).divideRight(b)) * b == a * b`.
-  //
-  // In the following example, we have `a * b == a' * b` when "in1" is an empty
-  // dimension that maps everything to 0:
-  //
-  //   a = L("in1", "in2") -> ("out1", "out2")
-  //   a' = L("in1") -> ("out1")
-  //   b = L("in2") -> ("out2")
-  //
-  // divideLeft and divideRight resolve this ambiguity by always returning the
-  // "canonical" quotient, namely the one with the fewest possible size-zero
-  // input and output dimensions.
-  //
-  // TODO(jlebar): Implement divideLeft.
-  // std::optional<LinearLayout> divideLeft(const LinearLayout &divisor);
-  std::optional<LinearLayout> divideRight(const LinearLayout &divisor);
+  // Returns true if this layout acts trivially (as the identity) on the given
+  // dimensions. This means that it's the identity on those dimensions, and it
+  // does not map other dimensions onto those or these onto other dimensions.
+  bool isTrivialOver(ArrayRef<StringAttr> dimNames) const;
+
+  // For an endomorphism on dimNames (linear map that maps dimNames to dimNames)
+  // checks whether it is the identity map on these dimensions (i.e
+  // LinearLayouts::isTrivialOver) and if so, returns the sublayout of the
+  // remaining dimensions.
+  // nb. The isTrivialOver condition is more restrictive than the usual
+  //     "leaves the subspace invariant" condition in maths.
+  //     We can always relax it if we know how to take advantage of a conversion
+  //     layout being block-diagonal in the future.
+  std::optional<LinearLayout> quotient(ArrayRef<StringAttr> dimNames) const;
 
   // Gets a layout with only these in/out dimensions.
   //
@@ -614,10 +605,10 @@ public:
   bool sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
                        ArrayRef<StringAttr> outDimNames) const;
 
-  // Is the sublayout restricted to inDimNames + outDimNames and then flattened
-  // to 1D the identity layout (ignoring out-dim sizes)?
-  bool sublayoutIsIdentity(ArrayRef<StringAttr> inDimNames,
-                           ArrayRef<StringAttr> outDimNames) const;
+  // Is the sublayout defined from dimNames to dimNames the identity?
+  // In particular, is the input and  output size in these dimensions
+  // the same, and are the bases the identity?
+  bool squareSublayoutIsIdentity(ArrayRef<StringAttr> dimNames) const;
 
   // Computes and returns L(x, y, z).
   //
@@ -687,6 +678,13 @@ public:
   // output.  If all of the free variables are 0, then the layout is injective
   // (i.e. every input bit affects the output).
   llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
+
+  // Increase an input dimension without affecting the output dimension.  The
+  // added free variables are mapped to 0, ensuring that the new input
+  // dimensions correspond directly to the existing output space.  The function
+  // errors out if `newInDimSize` is less than the current size or the new size
+  // is not a power of 2.
+  LinearLayout resize(StringAttr inDim, int32_t newInDimSize) const;
 
   std::string toString() const;
 

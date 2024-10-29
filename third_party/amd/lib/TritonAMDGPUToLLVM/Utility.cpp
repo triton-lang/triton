@@ -189,12 +189,14 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, triton::CacheModifier cm) {
+             Value pred, Value falseVal, int64_t alignmentBytes,
+             triton::CacheModifier cm) {
 
   // Try to emit llvm.intr.masked.load if we can. In theory the backend should
   // be happier because we emit less branchy code to optimize. The backend will
   // lower it down however it wants at some point.
-  if (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE) {
+  if (alignmentBytes &&
+      (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE)) {
     // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we need
     // to bitcast to `vector<1xelemTy>` (and back)
     int64_t vecSize = getNumElements(elemTy);
@@ -203,7 +205,7 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
     Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
     bool nt = (cm == triton::CacheModifier::CG);
     Value vecData = rewriter.create<LLVM::MaskedLoadOp>(
-        loc, vecType, ptr, maskVal, falseVal, vecSize, nt);
+        loc, vecType, ptr, maskVal, falseVal, alignmentBytes, nt);
     // If it is not a vector, remember to bitcast back to a scalar
     vecData = bitcast(vecData, elemTy);
     return vecData;
@@ -229,19 +231,17 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
   auto funcName = mangleFunc(getLoadNameRaw(cm), funcType);
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
-  auto loadVal =
-      rewriter
-          .create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, pred, falseVal}))
-          .getResult();
-  return loadVal;
+  return LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                ValueRange({ptr, pred, falseVal}))
+      .getResult();
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, triton::CacheModifier cm) {
+             Value pred, int64_t alignmentBytes, triton::CacheModifier cm) {
   // Try to emit llvm.intr.masked.store if we can. In theory the backend should
   // be happier because we emit less branchy code to optimize. The backend will
   // lower it down however it wants at some point.
-  if (cm == triton::CacheModifier::NONE) {
+  if (alignmentBytes && cm == triton::CacheModifier::NONE) {
     // `llvm.intr.masked.store` only accepts vectors. If we see a scalar we need
     // to bitcast to `vector<1xelemTy>`
     Type elemTy = val.getType();
@@ -249,8 +249,8 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
     Type vecType = castToVectorType(elemTy);
     val = bitcast(val, vecType);
     Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
-    auto op =
-        rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal, vecSize);
+    auto op = rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal,
+                                                   alignmentBytes);
     return;
   }
 
@@ -274,7 +274,7 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
   auto funcName = mangleFunc(getStoreNameRaw(cm), funcType);
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
-  rewriter.create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, val, pred}));
+  LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
 } // namespace mlir::LLVM::AMD

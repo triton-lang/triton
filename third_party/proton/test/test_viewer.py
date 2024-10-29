@@ -7,12 +7,28 @@ file_path = __file__
 cuda_example_file = file_path.replace("test_viewer.py", "example_cuda.json")
 hip_example_file = file_path.replace("test_viewer.py", "example_hip.json")
 frame_example_file = file_path.replace("test_viewer.py", "example_frame.json")
+leaf_example_file = file_path.replace("test_viewer.py", "example_leaf_nodes.json")
 
 
 def test_help():
     # Only check if the viewer can be invoked
     ret = subprocess.check_call(["proton-viewer", "-h"], stdout=subprocess.DEVNULL)
     assert ret == 0
+
+
+def test_sort():
+    with open(leaf_example_file, "r") as f:
+        gf, raw_metrics, device_info = get_raw_metrics(f)
+        gf = format_frames(gf, None)
+        gf.update_inclusive_columns()
+        metrics = ["time/s", "time/ms", "time/us", "time/ns"]
+        metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
+        gf = filter_frames(gf, None, None, None, metrics[0])
+        sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
+        actual = sorted_df.iloc[0:5]['name'].values
+        expected = ['ROOT', 'kernel_1_1_1', 'kernel_3_1_1', 'kernel_3_2_2', 'kernel_1_2_2']
+        assert len(actual) == len(expected)
+        assert all([a == b for a, b in zip(actual, expected)])
 
 
 @pytest.mark.parametrize("option", ["full", "file_function_line", "function_line", "file_function"])
@@ -52,8 +68,8 @@ def test_min_time_flops():
     with open(cuda_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # sm89
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000025]], atol=1e-5)
         # sm90
@@ -61,8 +77,8 @@ def test_min_time_flops():
     with open(hip_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # MI200
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000026]], atol=1e-5)
         # MI300
@@ -73,8 +89,8 @@ def test_min_time_bytes():
     with open(cuda_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_bytes(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # sm89
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[9.91969e-06]], atol=1e-6)
         # sm90
@@ -82,8 +98,8 @@ def test_min_time_bytes():
     with open(hip_example_file, "r") as f:
         gf, _, device_info = get_raw_metrics(f)
         ret = get_min_time_bytes(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["DeviceId"] == "0"
-        device1_idx = gf.dataframe["DeviceId"] == "1"
+        device0_idx = gf.dataframe["device_id"] == "0"
+        device1_idx = gf.dataframe["device_id"] == "1"
         # MI200
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[6.10351e-06]], atol=1e-6)
         # MI300
@@ -118,8 +134,11 @@ def test_util():
 def test_time_derivation():
     derivation_metrics_test(
         metrics=["time/s", "time/ms", "time/us", "time/ns"], expected_data={
-            'time/s (inc)': [0.0004096, 0.0002048, 0.0002048], 'time/ms (inc)': [0.4096, 0.2048, 0.2048],
-            'time/us (inc)': [409.6, 204.8, 204.8], 'time/ns (inc)': [409600.0, 204800.0, 204800.0]
+            'time/s (inc)': [0.0004096, 0.0002048, 0.0002048],
+            'time/ms (inc)': [0.4096, 0.2048, 0.2048],
+            'time/us (inc)': [409.6, 204.8, 204.8],
+            'time/ns (inc)': [409600.0, 204800.0, 204800.0],
+            'time/% (inc)': [100.0, 50.0, 50.0],
         }, sample_file=cuda_example_file)
 
 

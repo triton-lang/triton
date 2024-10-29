@@ -132,7 +132,7 @@ def softmax(x):
     # way so you don't have to come up with manual heuristics yourself.
     num_warps = 8
 
-    # Number of software piepling stages.
+    # Number of software pipelining stages.
     num_stages = 4 if SIZE_SMEM > 200000 else 2
 
     # Allocate output

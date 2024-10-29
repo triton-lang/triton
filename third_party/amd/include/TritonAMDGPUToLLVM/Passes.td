@@ -49,10 +49,14 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
 
 def ConvertBuiltinFuncToLLVM : Pass<"convert-builtin-func-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert Builtin Func to LLVM";
-    let constructor = "mlir::triton::createConvertBuiltinFuncToLLVMPass()";
+    let constructor = "mlir::triton::createConvertBuiltinFuncToLLVMPass(/*ftz=*/true)";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 
+    let options = [
+        Option<"ftz", "ftz", "bool", /*default*/"true",
+               "flush denorms for math functions">,
+    ];
 }
 
 def InsertInstructionSchedHints : Pass<"insert-instruction-sched-hints", "mlir::ModuleOp"> {

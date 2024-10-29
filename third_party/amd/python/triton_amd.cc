@@ -41,8 +41,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch, ftz));
         });
-  m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm) {
-    pm.addPass(createConvertBuiltinFuncToLLVMPass());
+  m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm, bool ftz) {
+    pm.addPass(createConvertBuiltinFuncToLLVMPass(ftz));
   });
   m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm) {
     pm.addPass(createInsertInstructionSchedHintsPass());
@@ -66,10 +66,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
   ADD_PASS_WRAPPER_0("add_canonicalize_pointers",
                      mlir::createTritonAMDGPUCanonicalizePointersPass);
+  ADD_PASS_WRAPPER_0("add_convert_to_buffer_ops",
+                     mlir::createTritonAMDGPUConvertToBufferOpsPass);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
-  ADD_PASS_WRAPPER_0("add_stream_pipeline",
-                     mlir::createTritonAMDGPUStreamPipelinePass);
   ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
                      mlir::createTritonAMDGPUStreamPipelineV2Pass, int);
 }
@@ -255,6 +255,15 @@ void init_triton_amd(py::module &&m) {
       return true;
     default:
       return false;
+    }
+  });
+
+  m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
+    for (llvm::Argument &arg : fn->args()) {
+      // Check for incompatible attributes.
+      if (arg.hasByRefAttr() || arg.hasNestAttr())
+        continue;
+      arg.addAttr(llvm::Attribute::InReg);
     }
   });
 }

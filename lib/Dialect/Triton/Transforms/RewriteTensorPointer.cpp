@@ -370,9 +370,11 @@ public:
     }
 
     // update rewritedInfo
+    auto opResults = op.getResults();
     unsigned oldResIdx = 0, newResIdx = 0;
     while (oldResIdx < results.size()) {
       if (!triton::isTensorPointerType(results[oldResIdx].getType())) {
+        opResults[oldResIdx].replaceAllUsesWith(newOp.getResult(newResIdx));
         oldResIdx++;
         newResIdx++;
       } else {
@@ -413,6 +415,7 @@ public:
     auto newForOp = builder.create<scf::ForOp>(op.getLoc(), op.getLowerBound(),
                                                op.getUpperBound(), op.getStep(),
                                                newIterOperands);
+    newForOp->setAttrs(op->getAttrs());
 
     // Create value mapping. Note that for tensor pointers, we use identity
     // mapping. It may refer to a value in the old loop, but we will rewrite it

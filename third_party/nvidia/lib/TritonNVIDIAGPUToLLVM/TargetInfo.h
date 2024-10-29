@@ -7,7 +7,8 @@ namespace mlir::triton::NVIDIA {
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo(int computeCapability) : computeCapability(computeCapability) {}
+  TargetInfo(int computeCapability, int ptxVersion)
+      : computeCapability(computeCapability), ptxVersion(ptxVersion) {}
 
   bool supportMaximumMinimum() const override;
 
@@ -41,15 +42,6 @@ public:
                   triton::ReduceOp op, unsigned numLaneToReduce,
                   unsigned interleave) const override;
 
-  bool processReplicaUsingStMatrix(RewriterBase &rewriter, Location loc,
-                                   Value smemBase, SmallVector<Value> &vals,
-                                   RankedTensorType srcTy, Type elemTy,
-                                   ArrayRef<unsigned> paddedRepShape,
-                                   ArrayRef<unsigned> origRepShape,
-                                   ArrayRef<unsigned> outOrd,
-                                   unsigned accumNumReplicates,
-                                   int swizzleByteWidth) const override;
-
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
@@ -60,9 +52,13 @@ public:
 
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
+  int getSharedAddressSpace() const override;
+
+  bool supportVectorizedAtomics() const override;
 
 private:
   int computeCapability;
+  int ptxVersion;
 };
 
 } // namespace mlir::triton::NVIDIA

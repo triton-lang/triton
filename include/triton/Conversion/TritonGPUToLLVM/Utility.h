@@ -6,6 +6,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -101,7 +102,7 @@ using namespace mlir::triton;
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
-#define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
+#define call(...) LLVM::createLLVMCallOp(rewriter, loc, __VA_ARGS__)
 
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
@@ -124,16 +125,18 @@ using namespace mlir::triton;
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
+#define int_val(bitwidth, val)                                                 \
+  LLVM::createLLVMIntegerConstant(rewriter, loc, bitwidth, val)
 #define i1_val(val) LLVM::createConstantI1(loc, rewriter, val)
 #define true_val() i1_val(true)
 #define false_val() i1_val(false)
 #define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
+#define i8_val(val) int_val(8, val)
+#define i16_val(val) int_val(16, val)
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
 #define i64_val(...) LLVM::createConstantI64(loc, rewriter, __VA_ARGS__)
-#define int_val(width, val)                                                    \
-  LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
 #define tid_val() getThreadId(rewriter, loc)
 
 // Attributes
@@ -227,6 +230,12 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
                           const TypeConverter *converter, int64_t value);
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value);
+
+LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
+                              LLVMFuncOp funcOp, ValueRange args);
+LLVM::CallIntrinsicOp
+createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
+                          TypeRange types, ValueRange args);
 
 // Is v an integer or floating-point scalar constant equal to 0?
 bool isConstantZero(Value v);
@@ -358,22 +367,20 @@ inline bool isKernel(FunctionOpInterface funcOp) {
 
 inline Value getStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
-  auto mod = funcOp->getParentOfType<ModuleOp>();
-  LLVM::GlobalOp globalBase = nullptr;
-  mod.walk([&](LLVM::GlobalOp op) {
-    if (op.getSymName() == "global_smem")
-      globalBase = op;
-  });
-  assert(globalBase);
-  if (isKernel(funcOp))
-    return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
-  else
+  if (!isKernel(funcOp)) {
     return funcOp.getArgument(funcOp.getNumArguments() - 1);
+  }
+
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
+  assert(globalBase);
+  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
 }
 
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
-                                 Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+                                 const TargetInfoBase &target, Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                          target.getSharedAddressSpace());
   FunctionOpInterface func =
       op->template getParentOfType<FunctionOpInterface>();
   assert(op->hasAttr("allocation.offset"));
@@ -1222,7 +1229,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   // then (x + y) XOR z = 0byyyyxxxx XOR 0b00000zzzz = (x XOR z) + y
   // This means that we can use some immediate offsets for shared memory
   // operations.
-  auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
+  auto dstPtrTy = smemObj.base.getType();
   auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
   Value dstPtrBase = gep(dstPtrTy, resElemTy, smemObj.base, dstOffset);
 
@@ -1379,6 +1386,67 @@ inline Value getStructFromSharedMemoryObject(Location loc,
     llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
+}
+
+// For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
+// instructions to pack & unpack sub-word integers.  A workaround is to
+// store the results of tensors with dot operand encodings in i32 to
+// facilitate instructions such as `ldmatrix`.
+//
+// TODO: Confirm if the problem is still there.
+inline bool requiresI32Conversion(Type type) {
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
+  if (!tensorTy)
+    return false;
+  auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!dotOpEnc)
+    return false;
+  auto parent = dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
+  if (!(parent && parent.getVersionMajor() < 3))
+    return false;
+  return true;
+}
+
+inline SmallVector<Value> packI32s(const SmallVector<Value> &inValues,
+                                   Type type, RewriterBase &rewriter,
+                                   Location loc,
+                                   const LLVMTypeConverter *typeConverter) {
+  if (!requiresI32Conversion(type))
+    return inValues;
+  Type eltTy =
+      typeConverter->convertType(cast<RankedTensorType>(type).getElementType());
+
+  SmallVector<Value> outValues;
+  int vecWidth = 32 / eltTy.getIntOrFloatBitWidth();
+  auto vecTy = vec_ty(eltTy, vecWidth);
+  for (int i = 0; i < inValues.size(); i += vecWidth) {
+    Value vec = undef(vecTy);
+    for (int j = 0; j < vecWidth; j++) {
+      vec = insert_element(vec, inValues[i + j], i32_val(j));
+    }
+    outValues.push_back(bitcast(vec, i32_ty));
+  }
+  return outValues;
+}
+
+inline SmallVector<Value> unpackI32s(const SmallVector<Value> &inValues,
+                                     Type type, RewriterBase &rewriter,
+                                     Location loc,
+                                     const LLVMTypeConverter *typeConverter) {
+  if (!requiresI32Conversion(type))
+    return inValues;
+  Type eltTy =
+      typeConverter->convertType(cast<RankedTensorType>(type).getElementType());
+
+  SmallVector<Value> outValues;
+  for (auto v : inValues) {
+    auto vecTy = vec_ty(eltTy, 32 / eltTy.getIntOrFloatBitWidth());
+    auto vec = bitcast(v, vecTy);
+    for (int i = 0; i < 32 / eltTy.getIntOrFloatBitWidth(); i++) {
+      outValues.push_back(extract_element(vec, i32_val(i)));
+    }
+  }
+  return outValues;
 }
 
 inline SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,

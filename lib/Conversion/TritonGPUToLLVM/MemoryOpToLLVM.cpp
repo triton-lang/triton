@@ -51,7 +51,7 @@ struct LocalAllocOpConversion
       return failure();
     Location loc = op->getLoc();
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
@@ -109,6 +109,19 @@ public:
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
+  // FIXME [Dot LL]
+  // Do for all DotOperandEncodingAttr once we have LLs for all of them
+  static bool isSupportedDotOpLayout(Attribute layout) {
+    if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
+        return mma.isAmpere() && dot.getKWidth() == 8;
+      }
+      if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
+        return true;
+    }
+    return false;
+  };
+
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -116,10 +129,10 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    // TODO: do we need to check if src is shared ?
     if (isa<SharedEncodingAttr>(srcLayout) &&
-        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-            dstLayout)) {
+        (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+             dstLayout) ||
+         isSupportedDotOpLayout(dstLayout))) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -157,10 +170,10 @@ private:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
     auto dstShape = dstTy.getShape();
-    assert(dstShape.size() <= 2 &&
-           "Unexpected rank of ConvertLayout(shared->blocked)");
     auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto dstLayout = dstTy.getEncoding();
+    assert((dstShape.size() <= 2 || isSupportedDotOpLayout(dstLayout)) &&
+           "Unexpected rank of ConvertLayout(shared->distributed)");
     auto inOrd = getOrder(srcSharedLayout);
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
@@ -171,6 +184,7 @@ private:
     SmallVector<Value> outVals = loadSharedToDistributed(
         dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
 
+    outVals = packI32s(outVals, dstTy, rewriter, loc, typeConverter);
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
