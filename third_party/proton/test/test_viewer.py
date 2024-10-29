@@ -26,7 +26,7 @@ def test_sort():
         gf = filter_frames(gf, None, None, None, metrics[0])
         sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
         actual = sorted_df.iloc[0:5]['name'].values
-        expected = ['ROOT','kernel_1_1_1','kernel_3_1_1','kernel_3_2_2','kernel_1_2_2']
+        expected = ['ROOT', 'kernel_1_1_1', 'kernel_3_1_1', 'kernel_3_2_2', 'kernel_1_2_2']
         assert len(actual) == len(expected)
         assert all([a == b for a, b in zip(actual, expected)])
 
