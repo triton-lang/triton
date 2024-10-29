@@ -2064,8 +2064,8 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand(
   }
   // A100
   if (isAmpere()) {
-    auto rep = getMMAv2OrV3RepForOperand(shapePerCTA, eltTy.getIntOrFloatBitWidth(),
-                                     kWidth, opIdx);
+    auto rep = getMMAv2OrV3RepForOperand(
+        shapePerCTA, eltTy.getIntOrFloatBitWidth(), kWidth, opIdx);
     if (opIdx == 0)
       return 4 * rep[0] * rep[1] * rep[2];
     if (opIdx == 1)

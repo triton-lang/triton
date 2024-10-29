@@ -444,8 +444,8 @@ MMA16816SmemLoader::MMA16816SmemLoader(
     ArrayRef<int> instrShape, ArrayRef<int> matShape,
     SmallVector<Value> multiDimWarpId, int perPhase, int maxPhase,
     int elemBytes, int mmaElemBytes, bool isHopper,
-    ConversionPatternRewriter &rewriter,
-    const LLVMTypeConverter *typeConverter, const Location &loc)
+    ConversionPatternRewriter &rewriter, const LLVMTypeConverter *typeConverter,
+    const Location &loc)
     : nPerWarp(nPerWarp), order(order.begin(), order.end()),
       warpsPerCTA(warpsPerCTA.begin(), warpsPerCTA.end()), kOrder(kOrder),
       kWidth(kWidth), tileShape(tileShape.begin(), tileShape.end()),
@@ -453,12 +453,12 @@ MMA16816SmemLoader::MMA16816SmemLoader(
       matShape(matShape.begin(), matShape.end()),
       multiDimWarpId(multiDimWarpId.begin(), multiDimWarpId.end()),
       perPhase(perPhase), maxPhase(maxPhase), elemBytes(elemBytes),
-      mmaElemBytes(mmaElemBytes), isHopper(isHopper),
-      rewriter(rewriter), loc(loc), ctx(rewriter.getContext()) {
-  // If the current elemType width is different from the MMA elemType width, i.e.
-  // width-changing casting is done later in DotOp Layout... then, in the case of
-  // Hopper, the number of bytes held by each thread after loading will no longer
-  // be 32B. Hence this flag is required to stipulate different logic.
+      mmaElemBytes(mmaElemBytes), isHopper(isHopper), rewriter(rewriter),
+      loc(loc), ctx(rewriter.getContext()) {
+  // If the current elemType width is different from the MMA elemType width,
+  // i.e. width-changing casting is done later in DotOp Layout... then, in the
+  // case of Hopper, the number of bytes held by each thread after loading will
+  // no longer be 32B. Hence this flag is required to stipulate different logic.
   bool isHopperWidthChange = isHopper && (mmaElemBytes != elemBytes);
 
   contiguousMatShape = matShape[order[0]];
@@ -536,7 +536,8 @@ std::vector<Value> unpackInt(const std::vector<Value> &inValues, Type elTy,
   for (auto v : inValues) {
     // cast i32 to appropriate eltType vector and extract elements
     auto eltType = typeConverter->convertType(elTy);
-    auto vecType = vec_ty(eltType, inBitWidth / eltType.getIntOrFloatBitWidth());
+    auto vecType =
+        vec_ty(eltType, inBitWidth / eltType.getIntOrFloatBitWidth());
     auto vec = bitcast(v, vecType);
     for (int i = 0; i < inBitWidth / eltType.getIntOrFloatBitWidth(); i++) {
       outValues.push_back(extract_element(vec, i32_val(i)));
@@ -597,12 +598,12 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int batch, int a, int b) {
-    MMA16816SmemLoader loader(
-        nPerWarp, warpsPerTile, sharedLayout.getOrder(),
-        mmaLayout.getWarpsPerCTA(), kOrder, kWidth, smemObj.strides,
-        shapePerCTA /*tileShape*/, instrShape, matShape, multiDimWarpId,
-        perPhase, maxPhase, elemBytes, mmaElemBytes,
-        isHopper, rewriter, typeConverter, loc);
+    MMA16816SmemLoader loader(nPerWarp, warpsPerTile, sharedLayout.getOrder(),
+                              mmaLayout.getWarpsPerCTA(), kOrder, kWidth,
+                              smemObj.strides, shapePerCTA /*tileShape*/,
+                              instrShape, matShape, multiDimWarpId, perPhase,
+                              maxPhase, elemBytes, mmaElemBytes, isHopper,
+                              rewriter, typeConverter, loc);
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs = loader.computeOffsets(lane, cSwizzleOffset);
@@ -647,9 +648,9 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   bool isHopper = mmaLayout.getVersionMajor() == 3;
   auto shapePerCTA = getShapePerCTA(descTy);
   int bitwidth = descTy.getElementTypeBitWidth();
-  // For Hopper WGMMA, the sum of bitwidth of the elements in each quad should add
-  // up to 32. We use kWidth to compute the element bitwidth of the input to WGMMA,
-  // which could be different from `bitwidth` due to later casting.
+  // For Hopper WGMMA, the sum of bitwidth of the elements in each quad should
+  // add up to 32. We use kWidth to compute the element bitwidth of the input to
+  // WGMMA, which could be different from `bitwidth` due to later casting.
   int mmaBitwidth = isHopper ? (32 / encoding.getKWidth()) : bitwidth;
 
   ValueTable vals;
@@ -657,8 +658,8 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / mmaBitwidth;
 
   int kWidth = encoding.getKWidth();
-  auto numRep = mmaLayout.getMMAv2OrV3RepForOperand(shapePerCTA, bitwidth, kWidth,
-                                                encoding.getOpIdx());
+  auto numRep = mmaLayout.getMMAv2OrV3RepForOperand(
+      shapePerCTA, bitwidth, kWidth, encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto order = triton::gpu::getOrder(mmaLayout);

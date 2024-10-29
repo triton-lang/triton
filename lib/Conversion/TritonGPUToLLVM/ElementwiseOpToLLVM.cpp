@@ -21,7 +21,8 @@ bool isDotOpTensorAndPacked(Type srcTy) {
   if (!encoding)
     return false;
   auto parentEnc = dyn_cast<NvidiaMmaEncodingAttr>(encoding.getParent());
-  // By code convention, values for Hopper's dotOp-encoded tensors are not packed
+  // By code convention, values for Hopper's dotOp-encoded tensors are not
+  // packed
   if (!parentEnc || parentEnc.isHopper())
     return false;
   return true;
