@@ -11,6 +11,8 @@ namespace py = pybind11;
 
 namespace {
 
+typedef uint16_t npy_half;
+
 enum class MemSemantic { ACQUIRE_RELEASE, ACQUIRE, RELEASE, RELAXED };
 
 std::mutex atomic_op_guard;
@@ -79,6 +81,213 @@ template <typename T> T atomic_fadd(T *loc, T value, std::memory_order order) {
     old_value = *loc;
     *loc = old_value + value;
   }
+
+  return old_value;
+}
+
+/** Create a value of type `To` from the bits of `from`.
+ *
+ * similar to `std::bit_cast` but compatible with C++17,
+ * should perform similar to `*reinterpret_cast<To*>(&from)`
+ * or through punning without expecting any undefined behaviors.
+ *
+ * Note: taken from
+ * https://github.com/numpy/numpy/blob/70fde29fdd4d8fcc6098df7ef8a34c84844e347f/numpy/_core/src/common/utils.hpp#L32
+ * with simplification.
+ */
+template <typename To, typename From>
+inline To BitCast(const From &from) noexcept {
+  static_assert(sizeof(To) == sizeof(From),
+                "both data types must have the same size");
+
+  static_assert(std::is_trivially_copyable_v<To> &&
+                    std::is_trivially_copyable_v<From>,
+                "both data types must be trivially copyable");
+
+  To to;
+  memcpy(&to, &from, sizeof(from));
+  return to;
+}
+
+// Taken from
+// https://github.com/numpy/numpy/blob/70fde29fdd4d8fcc6098df7ef8a34c84844e347f/numpy/_core/src/common/half_private.hpp#L14
+template <bool gen_overflow = true, bool gen_underflow = true,
+          bool round_even = true>
+inline npy_half FromFloatBits(uint32_t f) {
+  uint32_t f_exp, f_sig;
+  uint16_t h_sgn, h_exp, h_sig;
+
+  h_sgn = (uint16_t)((f & 0x80000000u) >> 16);
+  f_exp = (f & 0x7f800000u);
+
+  /* Exponent overflow/NaN converts to signed inf/NaN */
+  if (f_exp >= 0x47800000u) {
+    if (f_exp == 0x7f800000u) {
+      /* Inf or NaN */
+      f_sig = (f & 0x007fffffu);
+      if (f_sig != 0) {
+        /* NaN - propagate the flag in the significand... */
+        uint16_t ret = (uint16_t)(0x7c00u + (f_sig >> 13));
+        /* ...but make sure it stays a NaN */
+        if (ret == 0x7c00u) {
+          ret++;
+        }
+        return h_sgn + ret;
+      } else {
+        /* signed inf */
+        return (uint16_t)(h_sgn + 0x7c00u);
+      }
+    } else {
+      if constexpr (gen_overflow) {
+        /* overflow to signed inf */
+        // FIXME
+        // FloatStatus::RaiseOverflow();
+      }
+      return (uint16_t)(h_sgn + 0x7c00u);
+    }
+  }
+
+  /* Exponent underflow converts to a subnormal half or signed zero */
+  if (f_exp <= 0x38000000u) {
+    /*
+     * Signed zeros, subnormal floats, and floats with small
+     * exponents all convert to signed zero half-floats.
+     */
+    if (f_exp < 0x33000000u) {
+      if constexpr (gen_underflow) {
+        /* If f != 0, it underflowed to 0 */
+        if ((f & 0x7fffffff) != 0) {
+          // FIXME
+          // FloatStatus::RaiseUnderflow();
+        }
+      }
+      return h_sgn;
+    }
+    /* Make the subnormal significand */
+    f_exp >>= 23;
+    f_sig = (0x00800000u + (f & 0x007fffffu));
+    if constexpr (gen_underflow) {
+      /* If it's not exactly represented, it underflowed */
+      if ((f_sig & (((uint32_t)1 << (126 - f_exp)) - 1)) != 0) {
+        // FIXME
+        // FloatStatus::RaiseUnderflow();
+      }
+    }
+    /*
+     * Usually the significand is shifted by 13. For subnormals an
+     * additional shift needs to occur. This shift is one for the largest
+     * exponent giving a subnormal `f_exp = 0x38000000 >> 23 = 112`, which
+     * offsets the new first bit. At most the shift can be 1+10 bits.
+     */
+    f_sig >>= (113 - f_exp);
+    /* Handle rounding by adding 1 to the bit beyond half precision */
+    if constexpr (round_even) {
+      /*
+       * If the last bit in the half significand is 0 (already even), and
+       * the remaining bit pattern is 1000...0, then we do not add one
+       * to the bit after the half significand. However, the (113 - f_exp)
+       * shift can lose up to 11 bits, so the || checks them in the original.
+       * In all other cases, we can just add one.
+       */
+      if (((f_sig & 0x00003fffu) != 0x00001000u) || (f & 0x000007ffu)) {
+        f_sig += 0x00001000u;
+      }
+    } else {
+      f_sig += 0x00001000u;
+    }
+    h_sig = (uint16_t)(f_sig >> 13);
+    /*
+     * If the rounding causes a bit to spill into h_exp, it will
+     * increment h_exp from zero to one and h_sig will be zero.
+     * This is the correct result.
+     */
+    return (uint16_t)(h_sgn + h_sig);
+  }
+
+  /* Regular case with no overflow or underflow */
+  h_exp = (uint16_t)((f_exp - 0x38000000u) >> 13);
+  /* Handle rounding by adding 1 to the bit beyond half precision */
+  f_sig = (f & 0x007fffffu);
+  if constexpr (round_even) {
+    /*
+     * If the last bit in the half significand is 0 (already even), and
+     * the remaining bit pattern is 1000...0, then we do not add one
+     * to the bit after the half significand.  In all other cases, we do.
+     */
+    if ((f_sig & 0x00003fffu) != 0x00001000u) {
+      f_sig += 0x00001000u;
+    }
+  } else {
+    f_sig += 0x00001000u;
+  }
+  h_sig = (uint16_t)(f_sig >> 13);
+  /*
+   * If the rounding causes a bit to spill into h_exp, it will
+   * increment h_exp by one and h_sig will be zero.  This is the
+   * correct result.  h_exp may increment to 15, at greatest, in
+   * which case the result overflows to a signed inf.
+   */
+  if constexpr (gen_overflow) {
+    h_sig += h_exp;
+    if (h_sig == 0x7c00u) {
+      // FIXME
+      // FloatStatus::RaiseOverflow();
+    }
+    return h_sgn + h_sig;
+  } else {
+    return h_sgn + h_exp + h_sig;
+  }
+}
+
+// Taken from
+// https://github.com/numpy/numpy/blob/70fde29fdd4d8fcc6098df7ef8a34c84844e347f/numpy/_core/src/common/half_private.hpp#L269
+constexpr uint32_t ToFloatBits(npy_half h) {
+  uint16_t h_exp = (h & 0x7c00u);
+  uint32_t f_sgn = ((uint32_t)h & 0x8000u) << 16;
+  switch (h_exp) {
+  case 0x0000u: { // 0 or subnormal
+    uint16_t h_sig = (h & 0x03ffu);
+    // Signed zero
+    if (h_sig == 0) {
+      return f_sgn;
+    }
+    // Subnormal
+    h_sig <<= 1;
+    while ((h_sig & 0x0400u) == 0) {
+      h_sig <<= 1;
+      h_exp++;
+    }
+    uint32_t f_exp = ((uint32_t)(127 - 15 - h_exp)) << 23;
+    uint32_t f_sig = ((uint32_t)(h_sig & 0x03ffu)) << 13;
+    return f_sgn + f_exp + f_sig;
+  }
+  case 0x7c00u: // inf or NaN
+    // All-ones exponent and a copy of the significand
+    return f_sgn + 0x7f800000u + (((uint32_t)(h & 0x03ffu)) << 13);
+  default: // normalized
+    // Just need to adjust the exponent and shift
+    return f_sgn + (((uint32_t)(h & 0x7fffu) + 0x1c000u) << 13);
+  }
+}
+
+npy_half npy_float_to_half(float f) {
+  return FromFloatBits(BitCast<uint32_t>(f));
+}
+
+float npy_half_to_float(npy_half h) {
+  return BitCast<float>(ToFloatBits(h));
+}
+
+template <>
+npy_half atomic_fadd<npy_half>(npy_half *loc, npy_half value,
+                               std::memory_order order) {
+  npy_half old_value;
+
+  const std::lock_guard<std::mutex> lock(atomic_op_guard);
+  old_value = *loc;
+  *loc = BitCast<npy_half>(
+      npy_float_to_half(npy_half_to_float(BitCast<uint16_t>(old_value)) +
+                        npy_half_to_float(BitCast<uint16_t>(value))));
 
   return old_value;
 }
@@ -366,6 +575,12 @@ template <RMWOp Op> struct OpCreator {
     if (!atomic_op && dtype.is(pybind11::dtype::of<T>())) {
       atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
                                                        numel, order);
+    } else if (!atomic_op &&
+               std::string(pybind11::str(dtype)) == std::string("float16")) {
+      // workaround until https://github.com/pybind/pybind11/issues/4061 is
+      // implemented
+      atomic_op = std::make_unique<AtomicRMWOp<npy_half, Op>>(
+          ptr, val, ret, mask, numel, order);
     }
   }
 };
@@ -476,7 +691,7 @@ void init_triton_interpreter(py::module &&m) {
 
           switch (rmw_op) {
             MAKE_ATOMIC_RMW_OP(RMWOp::ADD, int32_t, uint32_t, int64_t, uint64_t)
-            MAKE_ATOMIC_RMW_OP(RMWOp::FADD, float, double)
+            MAKE_ATOMIC_RMW_OP(RMWOp::FADD, npy_half, float, double)
             MAKE_ATOMIC_RMW_OP(RMWOp::AND, int32_t, uint32_t, int64_t, uint64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::OR, int32_t, uint32_t, int64_t, uint64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::XOR, int32_t, uint32_t, int64_t, uint64_t)
