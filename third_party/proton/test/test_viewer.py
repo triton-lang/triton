@@ -25,11 +25,8 @@ def test_sort():
         metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
         gf = filter_frames(gf, None, None, None, metrics[0])
         sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
-        actual = sorted_df.iloc[0:8]['name'].values
-        expected = [
-            'ROOT', 'matmul_1152_1152_1152', 'matmul_1024_1024_1024', 'matmul_896_896_896', 'matmul_768_768_768',
-            'matmul_640_640_640', 'matmul_512_512_512', 'matmul_384_384_384'
-        ]
+        actual = sorted_df.iloc[0:5]['name'].values
+        expected = ['ROOT','kernel_1_1_1','kernel_3_1_1','kernel_3_2_2','kernel_1_2_2']
         assert len(actual) == len(expected)
         assert all([a == b for a, b in zip(actual, expected)])
 
