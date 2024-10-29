@@ -313,13 +313,13 @@ static void scheduleGlobalLoadLocalStore(ModuleOp m) {
  */
 static void sinkSecondLoad(ModuleOp m) {
   m.walk([&](scf::ForOp forOp) -> void {
-    SetVector<Operation *> loadOps;
-    Operation *dotOp;
+    SetVector<triton::LoadOp> loadOps;
+    triton::DotOp dotOp;
     for (Operation &op : forOp) {
       if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
         loadOps.insert(loadOp);
       if (auto curOp = dyn_cast<triton::DotOp>(&op))
-        dotOp = &op;
+        dotOp = curOp;
     }
     // Only apply the optimization when there are 2 load's in the loop
     if (loadOps.size() != 2)
@@ -327,21 +327,21 @@ static void sinkSecondLoad(ModuleOp m) {
     // Only apply the optimization when tile size is large enough
     // 1. nonKDim >= 128
     // 2. kDim >= 64
-    auto ldAOp = dyn_cast<triton::LoadOp>(loadOps[0]);
+    auto ldAOp = loadOps[0];
     auto tileAShape = cast<RankedTensorType>(ldAOp.getType()).getShape();
-    auto ldBOp = dyn_cast<triton::LoadOp>(loadOps[1]);
+    auto ldBOp = loadOps[1];
     auto tileBShape = cast<RankedTensorType>(ldBOp.getType()).getShape();
     if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 && tileBShape[1] >= 128))
       return;
     // Only apply the optimization when the moving is legal
     // 1. Make sure the 2nd loadOp is before the dot
     // 2. Make sure the first user of the 2nd loadOp is after the dot.
-    bool isBeforeDotOp = loadOps[1]->isBeforeInBlock(dotOp);
+    bool isBeforeDotOp = ldBOp->isBeforeInBlock(dotOp);
     auto firstUser = *ldBOp.getResult().getUsers().begin();
     bool firstUserAfterDotOp = dotOp->isBeforeInBlock(firstUser);
     if (isBeforeDotOp && firstUserAfterDotOp)
       // move ldBOp right before tt.dot
-      loadOps[1]->moveBefore(dotOp);
+      ldBOp->moveBefore(dotOp);
   });
 }
 
