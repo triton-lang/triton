@@ -126,7 +126,7 @@ void createSchedGroupBarrier(PatternRewriter &rewriter, Location loc,
       rewriter.getI32IntegerAttr(static_cast<int32_t>(sizeValue));
   IntegerAttr groupId =
       rewriter.getI32IntegerAttr(static_cast<int32_t>(groupIdValue));
-  rewriter.create<mlir::ROCDL::SchedGroupBarrier>(loc, mask, size, groupId);
+  rewriter.create<ROCDL::SchedGroupBarrier>(loc, mask, size, groupId);
 }
 
 // Insert intrinsic that controls the types of instructions that may be
@@ -135,7 +135,7 @@ Operation *createSchedBarrier(PatternRewriter &rewriter, Location loc,
                               mlir::amdgpu::sched_barrier_opt_enum maskValue) {
   IntegerAttr mask =
       rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
-  return rewriter.create<mlir::ROCDL::SchedBarrier>(loc, mask);
+  return rewriter.create<ROCDL::SchedBarrier>(loc, mask);
 }
 
 // Insert an experimental intrinsic for instruction group level parallelism.
@@ -143,13 +143,13 @@ Operation *createSchedBarrier(PatternRewriter &rewriter, Location loc,
 Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
   IntegerAttr iglpValue =
       rewriter.getI32IntegerAttr(static_cast<int32_t>(value));
-  return rewriter.create<mlir::ROCDL::IglpOpt>(loc, iglpValue);
+  return rewriter.create<ROCDL::IglpOpt>(loc, iglpValue);
 }
 
 struct InstructionSchedHintsRewriter
     : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
-  InstructionSchedHintsRewriter(mlir::MLIRContext *ctx, int32_t numStages,
+  InstructionSchedHintsRewriter(MLIRContext *ctx, int32_t numStages,
                                 std::string variant)
       : OpRewritePattern(ctx), numStages(numStages) {
     std::transform(variant.begin(), variant.end(), variant.begin(),
@@ -306,11 +306,15 @@ struct InstructionSchedHintsRewriter
   LogicalResult
   matchAndRewrite(triton::amdgpu::InstructionSchedHint instructionSchedHint,
                   PatternRewriter &rewriter) const override {
+    if (this->schedulingType == SchedulingType::NONE) {
+      rewriter.eraseOp(instructionSchedHint);
+      return success();
+    }
 
     if (this->schedulingType == SchedulingType::UNKNOWN) {
       instructionSchedHint.emitError(
           "unknown instruction scheduling variant has been provided");
-      return mlir::failure();
+      return failure();
     }
 
     // The switch controls whether instructions are allowed to cross the basic
@@ -354,7 +358,7 @@ struct InstructionSchedHintsRewriter
                          mlir::amdgpu::sched_barrier_opt_enum::none);
 
     rewriter.eraseOp(instructionSchedHint);
-    return mlir::success();
+    return success();
   }
 
 private:
@@ -389,8 +393,8 @@ struct TritonAMDGPULowerInstructionSchedHints
 
                                                 this->variant);
 
-    if (mlir::failed(applyPartialConversion(getOperation(), target,
-                                            std::move(patterns)))) {
+    if (failed(applyPartialConversion(getOperation(), target,
+                                      std::move(patterns)))) {
 
       signalPassFailure();
     }
@@ -410,7 +414,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
       // a single `tt.dot` op in a `scf::ForOp` scope in the current
       // implementation.
       if (auto dotOp = getSingleDotOpIfExists(forOp)) {
-        mlir::OpBuilder rewriter(ctx);
+        OpBuilder rewriter(ctx);
         rewriter.setInsertionPointAfter(dotOp);
         rewriter.create<triton::amdgpu::InstructionSchedHint>(dotOp->getLoc());
       }
