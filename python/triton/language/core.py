@@ -1290,6 +1290,7 @@ def trans(input: tensor, *dims, _builder=None):
     :py:func:`permute` is equivalent to this function, except it doesn't
     have the special case when no permutation is specified.
     """
+    dims = _unwrap_iterable(dims)
     if not dims:
         dims = (1, 0)
     return semantic.permute(input, dims, _builder)
