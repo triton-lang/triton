@@ -109,6 +109,7 @@ auto cloneSlice(PatternRewriter& rewriter, const SetVector<Operation *>& slice) 
   // First pass: clone ops; the result values are cloned as well, but the operands still
   // refer to the original result values
   for (Operation *op : slice) {
+    rewriter.setInsertionPoint(op);
     auto newOp = rewriter.clone(*op);
     newSlice.insert(newOp);
     sliceMap.map(op, newOp);
@@ -526,7 +527,7 @@ struct MMAV3HoistLayoutConversion
       }
 
       // Step 5b: Change the result to have DotOp rather than Blocked encoding
-      auto resTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+      auto resTy = cast<RankedTensorType>(op->getResult(0).getType());
       op->getResult(0).setType(RankedTensorType::get(
           resTy.getShape(), resTy.getElementType(), dotOperandEnc));
     }

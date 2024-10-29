@@ -285,10 +285,6 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 // This ordering is decided when a tensor in DotOpEnc is lowered into llvm.
 // For WGMMA this happens in both SharedToDotOperand and MMAToDotOperand.
 // Thus, both lowerings must obey this above ordering for the below code to be correct.
-//
-// Additionally, note that WGMMA expects quadK ordered before quadM, i.e. the layout
-// is quadM-major. This is opposite to Ampere's  ordering for ldmatrix and dotOp.
-// (see SharedToDotOperandMMAv2OrV3.cpp)
 llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Location loc,
                                  const SmallVector<Value> &elements,
