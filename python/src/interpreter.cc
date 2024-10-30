@@ -274,9 +274,7 @@ npy_half npy_float_to_half(float f) {
   return FromFloatBits(BitCast<uint32_t>(f));
 }
 
-float npy_half_to_float(npy_half h) {
-  return BitCast<float>(ToFloatBits(h));
-}
+float npy_half_to_float(npy_half h) { return BitCast<float>(ToFloatBits(h)); }
 
 template <>
 npy_half atomic_fadd<npy_half>(npy_half *loc, npy_half value,
@@ -285,9 +283,8 @@ npy_half atomic_fadd<npy_half>(npy_half *loc, npy_half value,
 
   const std::lock_guard<std::mutex> lock(atomic_op_guard);
   old_value = *loc;
-  *loc = BitCast<npy_half>(
-      npy_float_to_half(npy_half_to_float(BitCast<uint16_t>(old_value)) +
-                        npy_half_to_float(BitCast<uint16_t>(value))));
+  *loc = npy_float_to_half(npy_half_to_float(BitCast<uint16_t>(old_value)) +
+                           npy_half_to_float(BitCast<uint16_t>(value)));
 
   return old_value;
 }
@@ -575,7 +572,7 @@ template <RMWOp Op> struct OpCreator {
     if (!atomic_op && dtype.is(pybind11::dtype::of<T>())) {
       atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
                                                        numel, order);
-    } else if (!atomic_op && dtype.char_() == 'e') {  // float16
+    } else if (!atomic_op && dtype.char_() == 'e') { // float16
       // workaround until https://github.com/pybind/pybind11/issues/4061 is
       // implemented
       atomic_op = std::make_unique<AtomicRMWOp<npy_half, Op>>(
