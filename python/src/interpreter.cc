@@ -273,11 +273,11 @@ constexpr uint32_t ToFloatBits(uint16_t h) {
 }
 
 npy_half npy_float_to_half(float f) {
-  return BitCast<npy_half>(FromFloatBits(BitCast<uint32_t>(f)));
+  return {FromFloatBits(BitCast<uint32_t>(f))};
 }
 
 float npy_half_to_float(npy_half h) {
-  return BitCast<float>(ToFloatBits(BitCast<uint16_t>(h)));
+  return BitCast<float>(ToFloatBits(h.value));
 }
 
 template <>
