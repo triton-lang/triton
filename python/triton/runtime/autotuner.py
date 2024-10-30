@@ -7,7 +7,7 @@ import inspect
 from typing import Dict
 
 from .jit import KernelInterface
-from .errors import OutOfResources
+from .errors import OutOfResources, PTXASError
 from .driver import driver
 
 
@@ -125,7 +125,7 @@ class Autotuner(KernelInterface):
             self.do_bench = do_bench
 
     def _bench(self, *args, config, **meta):
-        from ..compiler.errors import CompileTimeAssertionFailure, PTXASError
+        from ..compiler.errors import CompileTimeAssertionFailure
 
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
