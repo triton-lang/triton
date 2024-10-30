@@ -1523,9 +1523,9 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     where the first dimension of each block represents the batch dimension.
 
     :param input: The first tensor to be multiplied.
-    :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code:`float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second tensor to be multiplied.
-    :type other: 2D or 3D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type other: 2D or 3D tensor of scalar-type in {:code:`int8`, :code:`float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     :type acc: 2D or 3D tensor of scalar-type in {:code:`float16`, :code:`float32`, :code:`int32`}
     :param input_precision: How to exercise the Tensor Cores for f32 x f32. If
@@ -1559,13 +1559,13 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :type lhs: 2D tensor representing fp4 or fp8 elements packed into uint8 for fp4 inputs, or in uint8 or the corresponding fp8 type for fp8 inputs.
     :param lhs_scale: Scale factor for lhs tensor.
     :type lhs_scale: e8m0 type represented as an uint8 tensor.
-    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code: `e5m2`}.
+    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`}.
     :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
     :type rhs: 2D tensor representing fp8 or bf16 elements in uint8 or the corresponding fp8 type for fp8 inputs or bf16 for bf16 inputs.
     :param rhs_scale: Scale factor for rhs tensor.
     :type rhs_scale: e8m0 type represented as an uint8 tensor.
-    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e4m3`, :code: `e5m2`, :code:`bf16`}.
+    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     """
