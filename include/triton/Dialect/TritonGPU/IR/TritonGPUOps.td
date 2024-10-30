@@ -268,7 +268,7 @@ def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<In
   let arguments = (ins
                    TT_Tensor:$src,
                    TT_Tensor:$scale,
-                   TT_F8F6F4TypeAttr:$fp_type);
+                   TT_ScaleDotElemTypeAttr:$fp_type);
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{

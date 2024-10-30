@@ -59,6 +59,7 @@ Linear Algebra Ops
     :nosignatures:
 
     dot
+    dot_scaled
 
 
 Memory/Pointer Ops

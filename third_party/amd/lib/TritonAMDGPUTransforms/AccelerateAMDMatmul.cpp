@@ -504,12 +504,14 @@ public:
     TensorValue a = dotOp.getLhs();
     TensorValue b = dotOp.getRhs();
     TensorValue aScale = dotOp.getLhsScale();
-    F8F6F4Type aElemType = dotOp.getLhsType();
-    F8F6F4Type bElemType = dotOp.getRhsType();
+    ScaleDotElemType aElemType = dotOp.getLhsType();
+    ScaleDotElemType bElemType = dotOp.getRhsType();
 
-    if (!(aElemType == F8F6F4Type::E4M3 || aElemType == F8F6F4Type::E5M2))
+    if (!(aElemType == ScaleDotElemType::E4M3 ||
+          aElemType == ScaleDotElemType::E5M2))
       return rewriter.notifyMatchFailure(dotOp, "NYI: non-mxfp8 LHS");
-    if (!(bElemType == F8F6F4Type::E4M3 || bElemType == F8F6F4Type::E5M2))
+    if (!(bElemType == ScaleDotElemType::E4M3 ||
+          bElemType == ScaleDotElemType::E5M2))
       return rewriter.notifyMatchFailure(dotOp, "NYI: non-fp8 RHS");
 
     MLIRContext *ctx = dotOp.getContext();
@@ -553,11 +555,11 @@ public:
     // OCP mxfp8 requires implementations to follow OCP fp8 elements. We are
     // doing software emulation using bf16 here, so we map to OCP fp8 f8E4M3FN
     // and f8E5M2.
-    auto enumToType = [&rewriter](F8F6F4Type type) {
+    auto enumToType = [&rewriter](ScaleDotElemType type) {
       switch (type) {
-      case F8F6F4Type::E4M3:
+      case ScaleDotElemType::E4M3:
         return rewriter.getFloat8E4M3FNType();
-      case F8F6F4Type::E5M2:
+      case ScaleDotElemType::E5M2:
         return rewriter.getFloat8E5M2Type();
       default:
         llvm_unreachable("unexpected fp type");
@@ -565,8 +567,8 @@ public:
     };
 
     auto toMMABf16 = [&](TensorValue v, int idx,
-                         F8F6F4Type type) -> TensorValue {
-      assert(type == F8F6F4Type::E5M2 || type == F8F6F4Type::E4M3);
+                         ScaleDotElemType type) -> TensorValue {
+      assert(type == ScaleDotElemType::E5M2 || type == ScaleDotElemType::E4M3);
       auto vType = v.getType();
       auto newVEnc = DotOperandEncodingAttr::get(
           ctx, idx, newRetType.getEncoding(), kWdith);
