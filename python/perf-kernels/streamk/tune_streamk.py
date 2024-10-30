@@ -15,6 +15,7 @@ from streamk_kernel import streamk_gemm
 from datetime import datetime
 import multiprocessing
 import pandas as pd
+import itertools
 
 from utils.file_generator import (
     gen_configStr,
@@ -63,22 +64,17 @@ def get_full_tuning_space():
     kpack_range = [1, 2]
     num_sms_range = [304]
 
-    for block_m in block_mn_range:
-        for block_n in block_mn_range:
-            for block_k in block_k_range:
-                for num_warps in num_warps_range:
-                    for group_m in group_m_range:
-                        for num_sms in num_sms_range:
-                            for num_stages in num_stage_range:
-                                for waves_per_eu in waves_per_eu_range:
-                                    for matrix_instr_nonkdim in matrix_instr_nonkdim_range:
-                                        for kpack in kpack_range:
-                                            configs.append({
-                                                'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K':
-                                                block_k, 'GROUP_SIZE_M': group_m, 'NUM_SMS': num_sms, 'num_warps':
-                                                num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu,
-                                                'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack
-                                            })
+    space = itertools.product(block_mn_range, block_mn_range, block_k_range, num_warps_range, group_m_range,
+                              num_sms_range, num_stage_range, waves_per_eu_range, matrix_instr_nonkdim_range,
+                              kpack_range)
+
+    for instance in space:
+        block_m, block_n, block_k, num_warps, group_m, num_sms, num_stages, waves_per_eu, matrix_instr_nonkdim, kpack = instance
+        configs.append({
+            'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m,
+            'NUM_SMS': num_sms, 'num_warps': num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu,
+            'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack
+        })
 
     return configs
 
@@ -139,8 +135,14 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
             continue
         # out of shared memory resource
         # TODO (zhanglx): This does not consider the LDS usage in the epilogue
-        LDS = BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a + BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b
-        LDS = LDS if not num_stages else LDS * (num_stages - 1)
+        LDSA = BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a
+        LDSB = BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b
+        if num_stages <= 1:
+            # No pipeline, buffer A and buffer B can re-use each other
+            LDS = max(LDSA, LDSB)
+        else:
+            # Pipeline, we need (num_stages - 1) buffers for both A and B at the same time
+            LDS = (LDSA + LDSB) * (num_stages - 1)
         if LDS > 65536:
             continue
         # Skip small block sizes and num_warps for large gemm

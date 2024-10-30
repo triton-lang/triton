@@ -16,6 +16,7 @@ from matmul_kernel import matmul_kernel
 from datetime import datetime
 import multiprocessing
 import pandas as pd
+import itertools
 
 from utils.file_generator import (
     gen_configStr,
@@ -64,26 +65,19 @@ def get_full_tuning_space():
     waves_per_eu_range = [0]
     matrix_instr_nonkdim_range = [16, 32]
     kpack_range = [1, 2]
-    sched_variants = ["\"default\""]
+    sched_variants = ["none"]
 
-    for block_m in block_mn_range:
-        for block_n in block_mn_range:
-            for block_k in block_k_range:
-                for num_warps in num_warps_range:
-                    for group_m in group_m_range:
-                        for split_k in split_k_range:
-                            for num_stages in num_stage_range:
-                                for waves_per_eu in waves_per_eu_range:
-                                    for matrix_instr_nonkdim in matrix_instr_nonkdim_range:
-                                        for sched_variant in sched_variants:
-                                            for kpack in kpack_range:
-                                                configs.append({
-                                                    'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K':
-                                                    block_k, 'GROUP_SIZE_M': group_m, 'SPLIT_K': split_k, 'num_warps':
-                                                    num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu,
-                                                    'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack,
-                                                    'instruction_sched_variant': sched_variant
-                                                })
+    space = itertools.product(block_mn_range, block_mn_range, block_k_range, num_warps_range, group_m_range,
+                              split_k_range, num_stage_range, waves_per_eu_range, matrix_instr_nonkdim_range,
+                              sched_variants, kpack_range)
+
+    for instance in space:
+        block_m, block_n, block_k, num_warps, group_m, split_k, num_stages, waves_per_eu, matrix_instr_nonkdim, sched_variant, kpack = instance
+        configs.append({
+            'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m,
+            'SPLIT_K': split_k, 'num_warps': num_warps, 'num_stages': num_stages, 'waves_per_eu': waves_per_eu,
+            'matrix_instr_nonkdim': matrix_instr_nonkdim, 'kpack': kpack, 'instruction_sched_variant': sched_variant
+        })
 
     return configs
 

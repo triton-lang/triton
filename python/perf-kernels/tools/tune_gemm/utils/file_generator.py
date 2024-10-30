@@ -30,7 +30,8 @@ def gen_configStr(config):
         config)
 
     ## {M}_{N}_{K} is removed since the same kernel can be used for differen gemm sizes
-    configStr = f"BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}_sched{sched_variant[1:-1].upper()}"
+    sched_variant = sched_variant.upper().replace('-', '_')
+    configStr = f"BM{block_m}_BN{block_n}_BK{block_k}_GM{group_m}_SK{split_k}_nW{num_warps}_nS{num_stages}_EU{waves_per_eu}_kP{kpack}_mfma{mfmaInstrSize}_sched{sched_variant}"
 
     return configStr
 
@@ -113,7 +114,7 @@ def matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
         EVEN_K = {EVEN_K},
         GRID_MN = grid_mn,
         NUM_XCDS = {num_xcds},
-        instruction_sched_variant = {sched_variant},
+        instruction_sched_variant = \"{sched_variant}\",
         grid=(1,),
     )
     return None
@@ -148,7 +149,7 @@ def matmul_{configStr}(a, b, c, bias, M, N, K, am, ak, bk, bn, cm, cn, biasn):
         EVEN_K = {EVEN_K},
         GRID_MN = grid[0],
         NUM_XCDS = {num_xcds},
-        instruction_sched_variant = {sched_variant},
+        instruction_sched_variant = \"{sched_variant}\",
     )
     return c
 """
