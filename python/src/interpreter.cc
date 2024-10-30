@@ -12,7 +12,9 @@ namespace py = pybind11;
 
 namespace {
 
-typedef uint16_t npy_half;
+struct npy_half {
+  uint16_t value;
+};
 
 enum class MemSemantic { ACQUIRE_RELEASE, ACQUIRE, RELEASE, RELAXED };
 
@@ -114,7 +116,7 @@ inline To BitCast(const From &from) noexcept {
 // https://github.com/numpy/numpy/blob/70fde29fdd4d8fcc6098df7ef8a34c84844e347f/numpy/_core/src/common/half_private.hpp#L14
 template <bool gen_overflow = true, bool gen_underflow = true,
           bool round_even = true>
-inline npy_half FromFloatBits(uint32_t f) {
+inline uint16_t FromFloatBits(uint32_t f) {
   uint32_t f_exp, f_sig;
   uint16_t h_sgn, h_exp, h_sig;
 
@@ -241,7 +243,7 @@ inline npy_half FromFloatBits(uint32_t f) {
 
 // Taken from
 // https://github.com/numpy/numpy/blob/70fde29fdd4d8fcc6098df7ef8a34c84844e347f/numpy/_core/src/common/half_private.hpp#L269
-constexpr uint32_t ToFloatBits(npy_half h) {
+constexpr uint32_t ToFloatBits(uint16_t h) {
   uint16_t h_exp = (h & 0x7c00u);
   uint32_t f_sgn = ((uint32_t)h & 0x8000u) << 16;
   switch (h_exp) {
@@ -271,10 +273,12 @@ constexpr uint32_t ToFloatBits(npy_half h) {
 }
 
 npy_half npy_float_to_half(float f) {
-  return FromFloatBits(BitCast<uint32_t>(f));
+  return BitCast<npy_half>(FromFloatBits(BitCast<uint32_t>(f)));
 }
 
-float npy_half_to_float(npy_half h) { return BitCast<float>(ToFloatBits(h)); }
+float npy_half_to_float(npy_half h) {
+  return BitCast<float>(ToFloatBits(BitCast<uint16_t>(h)));
+}
 
 template <>
 npy_half atomic_fadd<npy_half>(npy_half *loc, npy_half value,
@@ -283,8 +287,8 @@ npy_half atomic_fadd<npy_half>(npy_half *loc, npy_half value,
 
   const std::lock_guard<std::mutex> lock(atomic_op_guard);
   old_value = *loc;
-  *loc = npy_float_to_half(npy_half_to_float(BitCast<uint16_t>(old_value)) +
-                           npy_half_to_float(BitCast<uint16_t>(value)));
+  *loc = npy_float_to_half(npy_half_to_float(old_value) +
+                           npy_half_to_float(value));
 
   return old_value;
 }
@@ -572,12 +576,16 @@ template <RMWOp Op> struct OpCreator {
     if (!atomic_op && dtype.is(pybind11::dtype::of<T>())) {
       atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
                                                        numel, order);
-    } else if (!atomic_op && dtype.char_() == 'e') { // float16
-      // workaround until https://github.com/pybind/pybind11/issues/4061 is
-      // implemented
-      atomic_op = std::make_unique<AtomicRMWOp<npy_half, Op>>(
-          ptr, val, ret, mask, numel, order);
     }
+  }
+};
+
+template <> template <> void OpCreator<RMWOp::FADD>::create<npy_half>() {
+  if (!atomic_op && dtype.char_() == 'e') { // float16
+    // workaround until https://github.com/pybind/pybind11/issues/4061 is
+    // implemented
+    atomic_op = std::make_unique<AtomicRMWOp<npy_half, RMWOp::FADD>>(
+        ptr, val, ret, mask, numel, order);
   }
 };
 
