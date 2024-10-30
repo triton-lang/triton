@@ -1458,8 +1458,6 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['float16', 'float32', 'uint64', 'int64', 'float64']])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
-    if is_interpreter() and dtype_x_str == 'float16':
-        pytest.skip('float16 atomic_add does not work in the interpreter mode')
     shape0, shape1 = shape
     # triton kernel
 
