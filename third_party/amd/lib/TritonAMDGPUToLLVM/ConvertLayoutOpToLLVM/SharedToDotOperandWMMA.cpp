@@ -136,31 +136,89 @@ computeTensorElemMappingInBlockWmma2(
   return mapping;
 }
 
+/// Expand layout of dot operands and dot results to 3d variant.
+/// 
+/// If given layout describes 3d tensor, return it without change.
+/// If given layout describes 2d tensor, create new layout
+/// describing 3d tensor by adding batch = 1.
+Attribute getExpandedEncoding(Attribute encoding) {
+  auto ctx = encoding.getContext();
+  if (auto sharedEncoding = mlir::dyn_cast<SharedEncodingAttr>(encoding)) {
+    auto expandedEncoding = getExpandedSharedEncoding(sharedEncoding);
+    return expandedEncoding;
+  } else if (auto wmmaEncoding =
+                 mlir::dyn_cast<AMDWmmaEncodingAttr>(encoding)) {
+    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(wmmaEncoding);
+    auto rank = warpsPerCTA.size();
+    if (rank == 3) {
+      return encoding;
+    }
+
+    SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0], warpsPerCTA[1]};
+    return AMDWmmaEncodingAttr::get(
+        ctx, /*version=*/1, expandedWarpsPerCTA, getExpandedCTALayout(ctx, wmmaEncoding.getCTALayout()));
+ } else if (auto dotOperandEncoding =
+                 mlir::dyn_cast<DotOperandEncodingAttr>(encoding)) {
+    auto wmmaEncoding =
+        mlir::cast<AMDWmmaEncodingAttr>(dotOperandEncoding.getParent());
+    auto expandedWmmaEncoding = getExpandedEncoding(wmmaEncoding);
+    auto expandedEncoding = DotOperandEncodingAttr::get(
+        ctx, dotOperandEncoding.getOpIdx(), expandedWmmaEncoding,
+        dotOperandEncoding.getKWidth());
+    return expandedEncoding;
+  } else
+    llvm_unreachable("unsupported encoding");
+}
+
+/// Expand date type of dot operands to 3d variant. If the given type is a 3d tensor,
+/// return it without change. If it is a 2d tensor, create a new type that describes 
+/// 3d tensor with expanded shape and layout.
+MemDescType getExpandedDesc(MemDescType descTy) {
+  ArrayRef<int64_t> shape = descTy.getShape();
+  auto rank = shape.size();
+  if (rank == 3)
+    return descTy;
+
+  auto elTy = descTy.getElementType();
+  auto expandedShape = SmallVector<int64_t>(3, 1);
+  expandedShape[1] = shape[0];
+  expandedShape[2] = shape[1];
+  auto encoding = descTy.getEncoding();
+  auto expandedEncoding = getExpandedEncoding(encoding);
+  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
+                                       descTy.getMemorySpace());
+  return expandedDesc;
+}
+
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto rank = smemObj.getStrides().size();
-  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
-  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+  auto tensorTy = cast<MemDescType>(tensor.getType());
+  auto aTensorTy = getExpandedDesc(tensorTy);
+  ArrayRef<int64_t> shape = aTensorTy.getShape();
+  auto rank = shape.size();
+  assert(rank == 3);
+  int kDimIdx = opIdx == 0 ? 2 : 1;
+  int nonKDimIdx = opIdx == 0 ? 1 : 2;
 
-  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(encoding.getParent());
+  auto expandedEncoding = cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
+
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(expandedEncoding.getParent());
   auto computeTensorElemMappingInBlock =
       wmmaLayout.getVersion() == 1 ? computeTensorElemMappingInBlockWmma1
                                    : computeTensorElemMappingInBlockWmma2;
   assert(wmmaLayout.getMNKDimPerInstr()[nonKDimIdx] == 16);
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-
-  auto aTensorTy = cast<MemDescType>(tensor.getType());
-  ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
-  assert((rank == 2 || order[2] == 0) &&
-         "expect batch to be the slowest dimension");
+  assert(order[2] == 0 && "expect batch to be the slowest dimension");
+
+  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj, tensorTy.getShape());
 
   auto elemTy = aTensorTy.getElementType();
-  int kWidth = encoding.getKWidth();
+  int kWidth = expandedEncoding.getKWidth();
   auto elemsPerInstr = wmmaLayout.getElemsPerInstrForOperands();
   auto wmmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
   auto wmmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
@@ -182,30 +240,29 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value lane = urem(thread, waveSize);
   unsigned int maxNumWarps = shape[nonKDimIdx] / wmmaInstrNonK;
   int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
-  int warpsPerBatch =
-      rank == 3 ? std::min<unsigned>(shape[0], warpsPerCTA[0]) : 1;
+  int warpsPerBatch = std::min<unsigned>(shape[0], warpsPerCTA[0]);
   Value waveIdInBatch = urem(linearWaveId, i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
-
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
       shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(wmmaLayout));
+
   if (opIdx == 0) {
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
         spatialWarpId, lane, warpsPerBlockNonK, numElemsPerThreadPerRep,
-        numReps, smemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
+        numReps, expandedSmemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
   } else {
     assert(opIdx == 1);
     offsets = AMD::computeOffsetsBType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
         spatialWarpId, lane, warpsPerBlockNonK, numElemsPerThreadPerRep,
-        numReps, smemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
+        numReps, expandedSmemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
   }
-  smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
+  smemBase = AMD::computeBasePtr(rewriter, loc, expandedSmemObj);
 
   Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
@@ -251,6 +308,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       ctx, SmallVector<Type>(loadedValues.size(), loadedValues[0].getType()));
   auto result =
       packLLElements(loc, typeConverter, loadedValues, rewriter, structTy);
+  llvm::errs()<<"\nreturns ";
+  result.dump();
   return result;
 }
 

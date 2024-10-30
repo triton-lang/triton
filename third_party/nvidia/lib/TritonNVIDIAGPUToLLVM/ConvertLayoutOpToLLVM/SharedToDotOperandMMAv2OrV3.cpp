@@ -722,50 +722,10 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
       loc, rewriter, eltTy, kWidth, isHopper, isA);
 }
 
-template <typename T>
-SmallVector<T> insertValue(ArrayRef<T> vec, unsigned index, T value) {
-  SmallVector<T> res(vec.begin(), vec.end());
-  res.insert(res.begin() + index, value);
-  return res;
-}
-template <typename T>
-SmallVector<T> insertValue(const SmallVector<T> &vec, unsigned index, T value) {
-  SmallVector<T> res(vec.begin(), vec.end());
-  res.insert(res.begin() + index, value);
-  return res;
-}
-
-CTALayoutAttr getExpandedCTALayout(MLIRContext *ctx,
-                                   CTALayoutAttr ctaLayoutAttr) {
-  auto rank = ctaLayoutAttr.getCTAsPerCGA().size();
-  auto ctasPerCGA3d =
-      insertValue<unsigned>(ctaLayoutAttr.getCTAsPerCGA(), rank, 1);
-  auto ctasSplitNum3d =
-      insertValue<unsigned>(ctaLayoutAttr.getCTASplitNum(), rank, 1);
-  auto ctaOrder3d =
-      insertValue<unsigned>(ctaLayoutAttr.getCTAOrder(), rank, rank);
-  auto expandedCTALayout = triton::gpu::CTALayoutAttr::get(
-      ctx, ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
-  return expandedCTALayout;
-}
-
 Attribute getExpandedEncoding(Attribute encoding) {
   auto ctx = encoding.getContext();
   if (auto sharedEncoding = mlir::dyn_cast<SharedEncodingAttr>(encoding)) {
-    auto order = sharedEncoding.getOrder();
-    auto rank = order.size();
-    if (rank == 3) {
-      return encoding;
-    }
-    auto expandedOrder = SmallVector<unsigned>(3, 0);
-    expandedOrder[0] = order[0] + 1;
-    expandedOrder[1] = order[1] + 1;
-    ArrayRef<unsigned> expandedOrderArr(expandedOrder);
-    auto expandedEncoding = SharedEncodingAttr::get(
-        ctx, sharedEncoding.getVec(), sharedEncoding.getPerPhase(),
-        sharedEncoding.getMaxPhase(), expandedOrderArr,
-        getExpandedCTALayout(ctx, sharedEncoding.getCTALayout()),
-        sharedEncoding.getHasLeadingOffset());
+    auto expandedEncoding = getExpandedSharedEncoding(sharedEncoding);
     return expandedEncoding;
   } else if (auto mmaEncoding =
                  mlir::dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
@@ -812,23 +772,6 @@ MemDescType getExpandedDesc(MemDescType descTy) {
   auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
                                        descTy.getMemorySpace());
   return expandedDesc;
-}
-
-SharedMemoryObject
-getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
-                              SharedMemoryObject smemObj,
-                              ArrayRef<int64_t> shape) {
-  auto strides = smemObj.getStrides();
-  auto offsets = smemObj.getOffsets();
-  auto rank = strides.size();
-  if (rank == 3)
-    return smemObj;
-  auto expandedStrides = insertValue(strides, 0, i32_val(shape[0] * shape[1]));
-  auto expandedOffsets = insertValue(offsets, 0, i32_val(0));
-  auto expandedSmemObj =
-      SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(),
-                         expandedStrides, expandedOffsets);
-  return expandedSmemObj;
 }
 
 namespace SharedToDotOperandMMAv2OrV3 {
