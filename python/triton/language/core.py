@@ -1290,6 +1290,7 @@ def trans(input: tensor, *dims, _builder=None):
     :py:func:`permute` is equivalent to this function, except it doesn't
     have the special case when no permutation is specified.
     """
+    dims = _unwrap_iterable(dims)
     if not dims:
         dims = (1, 0)
     return semantic.permute(input, dims, _builder)
@@ -1555,15 +1556,17 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     lhs and rhs use microscaling formats described here:
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
     :param lhs: The first tensor to be multiplied.
-    :type lhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :type lhs: 2D tensor representing fp4 or fp8 elements packed into uint8 for fp4 inputs, or in uint8 or the corresponding fp8 type for fp8 inputs.
     :param lhs_scale: Scale factor for lhs tensor.
-    :type lhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
-    :param lhs_format: format of the lhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :type lhs_scale: e8m0 type represented as an uint8 tensor.
+    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code: `e5m2`}.
+    :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
-    :type rhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :type rhs: 2D tensor representing fp8 or bf16 elements in uint8 or the corresponding fp8 type for fp8 inputs or bf16 for bf16 inputs.
     :param rhs_scale: Scale factor for rhs tensor.
-    :type rhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
-    :param rhs_format: format of the rhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :type rhs_scale: e8m0 type represented as an uint8 tensor.
+    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e4m3`, :code: `e5m2`, :code:`bf16`}.
+    :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     """
     out_dtype = _constexpr_to_value(out_dtype)
