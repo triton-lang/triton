@@ -575,8 +575,7 @@ template <RMWOp Op> struct OpCreator {
     if (!atomic_op && dtype.is(pybind11::dtype::of<T>())) {
       atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
                                                        numel, order);
-    } else if (!atomic_op &&
-               std::string(pybind11::str(dtype)) == std::string("float16")) {
+    } else if (!atomic_op && dtype.char_() == 'e') {  // float16
       // workaround until https://github.com/pybind/pybind11/issues/4061 is
       // implemented
       atomic_op = std::make_unique<AtomicRMWOp<npy_half, Op>>(
