@@ -5,6 +5,7 @@
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -728,6 +729,22 @@ LogicalResult ReshapeOp::verify() {
 }
 
 //-- FpToFpOp --
+OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
+  auto srcVal = getSrc();
+  if (!isZeroConst(srcVal)) {
+    return {};
+  }
+
+  auto srcConstant = srcVal.getDefiningOp<arith::ConstantOp>();
+  assert(srcConstant && "Expected srcVal to be a zero constant");
+
+  auto dstTy = getType();
+  OpBuilder builder(srcConstant);
+  auto newConstant = builder.create<mlir::arith::ConstantOp>(
+      srcConstant.getLoc(), dstTy, builder.getZeroAttr(dstTy));
+  return newConstant.getResult();
+}
+
 LogicalResult FpToFpOp::verify() {
   auto dstType = getType().getElementType();
   auto srcType = getSrc().getType().getElementType();
