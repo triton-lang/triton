@@ -5,6 +5,7 @@
 #include <mutex>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
+#include <stdexcept>
 #include <type_traits>
 
 namespace py = pybind11;
@@ -139,9 +140,8 @@ inline npy_half FromFloatBits(uint32_t f) {
       }
     } else {
       if constexpr (gen_overflow) {
-        /* overflow to signed inf */
-        // FIXME
         // FloatStatus::RaiseOverflow();
+        throw std::overflow_error("overflow to signed inf");
       }
       return (uint16_t)(h_sgn + 0x7c00u);
     }
@@ -157,8 +157,8 @@ inline npy_half FromFloatBits(uint32_t f) {
       if constexpr (gen_underflow) {
         /* If f != 0, it underflowed to 0 */
         if ((f & 0x7fffffff) != 0) {
-          // FIXME
           // FloatStatus::RaiseUnderflow();
+          throw std::underflow_error("");
         }
       }
       return h_sgn;
@@ -169,8 +169,8 @@ inline npy_half FromFloatBits(uint32_t f) {
     if constexpr (gen_underflow) {
       /* If it's not exactly represented, it underflowed */
       if ((f_sig & (((uint32_t)1 << (126 - f_exp)) - 1)) != 0) {
-        // FIXME
         // FloatStatus::RaiseUnderflow();
+        throw std::underflow_error("");
       }
     }
     /*
@@ -230,8 +230,8 @@ inline npy_half FromFloatBits(uint32_t f) {
   if constexpr (gen_overflow) {
     h_sig += h_exp;
     if (h_sig == 0x7c00u) {
-      // FIXME
       // FloatStatus::RaiseOverflow();
+      throw std::overflow_error("");
     }
     return h_sgn + h_sig;
   } else {
