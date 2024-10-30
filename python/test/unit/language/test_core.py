@@ -3330,7 +3330,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
                           for col_a, col_b in itertools.product([True, False], repeat=2)
                           for type_a in ["e2m1", "e4m3", "e5m2"]
-                          for type_b in ["e4m3", "e5m2"]
+                          for type_b in ["e4m3", "e5m2", "bf16"]
                           for mma in ([32, 16] if is_hip() else [16])
                           for kpack in ([1, 2] if is_hip() else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack, device):
@@ -3351,7 +3351,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, out,
                          BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
                          type_b: tl.constexpr):
-        tl.static_assert(type_b == "e4m3" or type_b == "e5m2", "type_b must be fp8")
+        tl.static_assert((type_b == "e4m3" or type_b == "e5m2") or type_b == "bf16", "type_b must be fp8 or bf16")
         IS_FP8: tl.constexpr = type_a == "e4m3" or type_a == "e5m2"
         DIV_FACTOR: tl.constexpr = 1 if IS_FP8 else 2
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR
@@ -3442,7 +3442,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
 
     def dot_scale_ref(x, scale, y, type_x, type_y):
         e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
-        type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[type_y]
+        type_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2, "bf16": torch.bfloat16}[type_y]
 
         comp_dtype = torch.bfloat16
 
@@ -3455,7 +3455,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
         mxfp_to_bf16_kernel[grid](x, scale, x_upcast, scale.numel(), e_bits, m_bits, BLOCK_SIZE, num_warps=num_warps)
         assert x_upcast.isfinite().all()
 
-        y_upcast = y.view(type_fp8_y).to(comp_dtype)
+        y_upcast = y.view(type_y).to(comp_dtype)
 
         class AccumulateInFp32:
 
@@ -3467,28 +3467,30 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
                 torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = self.prev_value
 
         with AccumulateInFp32():
-            return torch.matmul(x_upcast.to(comp_dtype), y_upcast.to(comp_dtype))
+            return torch.matmul(x_upcast, y_upcast)
 
     torch.manual_seed(0)
 
-    def create_uint8(shape, col_major=False, max_val=255):
+    def make_arg(shape, ty, col_major=False, max_val=255):
         if col_major:
             shape = shape[:-2] + (shape[-1], shape[-2])
-        ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
+        if ty == "bf16":
+            ret = torch.randn(shape, dtype=torch.bfloat16, device=device)
+            # Clamp to avoid relative error issues
+            ret.clamp_(-2**15, 2**15 - 1)
+        else:
+            ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
         if col_major:
             ret = ret.mT
         return ret
 
     DIV_FACTOR = 2 if type_a == "e2m1" else 1
-    x = create_uint8((M, K // DIV_FACTOR), col_major=col_a)
-    y = create_uint8((K, N), col_major=col_b)
+    x = make_arg((M, K // DIV_FACTOR), type_a, col_major=col_a)
+    y = make_arg((K, N), type_b, col_major=col_b)
 
     # sample scales that don't overflow as otherwise it's implementation defined (underflowing is alright)
-    # We substract a reasonably high number (64) so that the sum of all the mxfp elements does not overflow
-    m_bytes = int(type_a[1])
-    bias_type_a = 1 << (m_bytes - 1) - 1
-    max_exponent_type_a = (1 << m_bytes) - 1 - bias_type_a
-    scale_x = create_uint8((M, K // 32), max_val=255 - max_exponent_type_a - 64)
+    # Max scale= 2**15
+    scale_x = make_arg((M, K // 32), "e8m0", max_val=127 + 15)
 
     def make_finite(x, dtype):
         # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
@@ -3513,7 +3515,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
 
     z_ref = dot_scale_ref(x, scale_x, y, type_a, type_b)
 
-    # generous rtol as we are sampling the whole range of floats
     torch.testing.assert_close(z, z_ref, atol=1e-5, rtol=1e-2)
 
     # make sure ld/st are vectorized
