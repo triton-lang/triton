@@ -125,7 +125,7 @@ class Autotuner(KernelInterface):
             self.do_bench = do_bench
 
     def _bench(self, *args, config, **meta):
-        from ..compiler.errors import CompileTimeAssertionFailure
+        from ..compiler.errors import CompileTimeAssertionFailure, PTXASError
 
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
@@ -157,7 +157,7 @@ class Autotuner(KernelInterface):
 
         try:
             return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
-        except (OutOfResources, CompileTimeAssertionFailure):
+        except (OutOfResources, CompileTimeAssertionFailure, PTXASError):
             return [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):

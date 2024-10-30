@@ -49,3 +49,7 @@ class CompileTimeAssertionFailure(CompilationError):
 
 class UnsupportedLanguageConstruct(CompilationError):
     pass
+
+
+class PTXASError(TritonError):
+    pass
