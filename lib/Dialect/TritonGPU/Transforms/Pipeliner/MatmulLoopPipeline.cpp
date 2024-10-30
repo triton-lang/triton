@@ -420,39 +420,6 @@ static bool hasSharedEncodingHelper(Operation *loadOp) {
   return true;
 }
 
-static bool skipDotUseForPipeline(Operation *op, Operation *use) {
-  // HACK: Triton LLVM codegen has a bug where local_loads from #shared to
-  // #mma layout can lead to invalid code if the loaded shape is smaller
-  // than the mma tile (e.g. loading a 128x1 tensor for an MMAv2 dot with
-  // tile {16,8} is bad because 1 < 8).  To work around this, don't
-  // pipeline such loads.
-  //
-  // The codegen bug is caught by an assertion, so if you think you've
-  // fixed it, feel free to delete this code and see if the assert still
-  // fails.  :)
-  auto dot = dyn_cast<tt::DotOp>(use);
-  if (auto dotEnc = dyn_cast<ttg::NvidiaMmaEncodingAttr>(
-          dot.getResult().getType().getEncoding())) {
-    auto loadTy = cast<RankedTensorType>(op->getResultTypes()[0]);
-    auto mmaInstrShape = dotEnc.getInstrShape();
-    if (loadTy.getRank() < mmaInstrShape.size())
-      return true;
-    bool ok = true;
-    for (int i = 0; i < mmaInstrShape.size(); i++) {
-      if (loadTy.getShape()[loadTy.getRank() - mmaInstrShape.size() + i] <
-          mmaInstrShape[i]) {
-        ok = false;
-        break;
-      }
-    }
-    // If this load might trigger the bug, don't do the fallback logic
-    // below, which might allow the load to be pipelined.
-    if (!ok)
-      return true;
-  }
-  return false;
-}
-
 // Check to see if loads can be pipelined.
 static llvm::DenseSet<Operation *>
 filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
