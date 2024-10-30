@@ -20,7 +20,7 @@ class Pingponger {
   SmallVector<Operation *> dotOps;
 
 public:
-  Pingponger(scf::ForOp forOp) : forOp(forOp){};
+  Pingponger(scf::ForOp forOp) : forOp(forOp) {};
   void getDotPingponged();
 };
 
@@ -41,10 +41,6 @@ void Pingponger::getDotPingponged() {
 
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2 || dotOps.size() != 1)
     return;
-
-  // Set low priority for the memory ops
-  // auto setPrio0 = builder.create<ROCDL::SetPrioOp>(loc, lowPrioAttr);
-  // setPrio0->moveBefore(gLoadOps[0]);
 
   // Splitting loading A and B inorder to prevent global/local load units
   // from the congestion.

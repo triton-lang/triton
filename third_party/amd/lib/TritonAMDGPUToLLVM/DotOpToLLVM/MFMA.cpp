@@ -254,7 +254,7 @@ struct DotOpMFMAConversionHelper {
                                        operandA[kPack][{b, m, k}], acc)
                       : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
                                        operandB[kPack][{b, n, k}], acc);
-              if (b + m + n + k + kPack== 0)
+              if (b + m + n + k + kPack == 0)
                 firstMfma = acc;
             }
           }
