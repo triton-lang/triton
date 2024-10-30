@@ -11,6 +11,25 @@ using namespace mlir::triton::gpu;
 
 namespace mlir::triton::gpu {
 
+namespace {
+
+bool isDotOpTensorAndPacked(Type srcTy) {
+  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
+  if (!tensorTy)
+    return false;
+  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!encoding)
+    return false;
+  auto parentEnc = dyn_cast<NvidiaMmaEncodingAttr>(encoding.getParent());
+  // By code convention, values for Hopper's dotOp-encoded tensors are not
+  // packed
+  if (!parentEnc || parentEnc.isHopper())
+    return false;
+  return true;
+}
+
+} // namespace
+
 Type getElementType(Value value) {
   auto type = value.getType();
   if (auto tensorType = dyn_cast<RankedTensorType>(type))
@@ -33,7 +52,7 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
   // If the parent of the dot operand is in block encoding, we don't need to
   // reorder elements
   auto parentEncoding = dyn_cast<NvidiaMmaEncodingAttr>(ouEncoding.getParent());
-  if (!parentEncoding)
+  if (!parentEncoding || parentEncoding.isHopper())
     return values;
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
   size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();

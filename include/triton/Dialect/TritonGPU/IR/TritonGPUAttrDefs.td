@@ -361,8 +361,8 @@ compared to 1*64 when the hasLeadingOffset is false.
           return get(context, vec, perPhase, maxPhase, order, CTALayout);
         }
 
-        // ---- begin Ampere ----
-        if (mmaEnc.isAmpere()) {
+        // ---- begin Ampere & Hopper ----
+        if (mmaEnc.isAmpere() || mmaEnc.isHopper()) {
           int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
           perPhase = std::max<int>(perPhase, 1);
           std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
@@ -395,13 +395,6 @@ compared to 1*64 when the hasLeadingOffset is false.
           }
 
           llvm_unreachable("invalid operand index");
-        }
-
-        // ---- begin version 3 ----
-        if (mmaEnc.isHopper()) {
-          llvm_unreachable("SharedEncodingAttr builder when the MMAEncodingAttr"
-                           " is Hopper has not been implemented yet");
-          return $_get(context, 1, 1, 1, order, CTALayout, true);
         }
 
         // ---- not implemented ----
@@ -1224,7 +1217,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     SmallVector<int> getMMAv1Rep(int opIdx) const;
     SmallVector<int> getMMAv1ShapePerWarp(int opIdx) const;
     int getMMAv1Vec(int opIdx) const;
-    SmallVector<int64_t> getMMAv2RepForOperand(ArrayRef<int64_t> shape,
+    SmallVector<int64_t> getMMAv2OrV3RepForOperand(ArrayRef<int64_t> shape,
                                                int bitwidth, int kWidth, int opIdx) const;
 
     bool supportReduction() const {
@@ -1319,6 +1312,27 @@ The parent field is the layout of d.
 kWidth defines number of consecutive elements stored by one thread along k dimension.
 Some layouts do not use this parameter, either because they have a fixed number of
 elements along the K dim, or they use all elements of the tensor along the K dim.
+
+# WGMMA Notes
+We require kWidth to be provided for Hopper because the dtype at loading might be
+different from the dtype at WGMMA, due to casting. The kWidth is determined by the
+dtype at WGMMA.
+
+The encoded tensor consists of operand A for possibly multiple wgmma instructions.
+For each wgmma, each warp in a warp group feeds a single "warp matrix"
+Each warp matrix consists of 2x2 "quads".
+Each thread holds several elements in each quad. Right before a wgmma,
+the sum of bitwidth of
+the elements in each quad should add up to 32.
+
+These values are stored unrolled in `elements`.
+The ordering of dimensions is as follows by convention:
+batch (only 1 batch for Hopper currently)
+matM (m-index of the "warp matrix")
+matK (k-index of the "warp matrix")
+quadK (k-index of the "quad" in the core matrix)
+quadM (m-index of the "quad" in the core matrix)
+vecIdx (index of the element in the quad; this is always along the k-dim)
   }];
 
   let parameters = (
@@ -1329,16 +1343,16 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   );
 
   let builders = [
-        // Specially for MMAV1(Volta)
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
-      if (!parentAttr || !parentAttr.isAmpere())
-        return $_get(context, opIdx, parent, 0);
+      if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
+        return $_get(context, opIdx, parent, 0); // For MMAV1
+      // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      unsigned MMAv2kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, MMAv2kWidth);
+      unsigned kWidth = 32 / bitwidth;
+      return $_get(context, opIdx, parent, kWidth);
     }]>
   ];
 
