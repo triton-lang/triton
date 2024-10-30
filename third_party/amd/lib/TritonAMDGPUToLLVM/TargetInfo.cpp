@@ -5,6 +5,8 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+using mlir::getSingleCombinerFromReduceOp;
+
 namespace mlir::triton::AMD {
 
 namespace {
@@ -103,22 +105,22 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  return LLVM::AMD::shuffleXor(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleXor(loc, rewriter, val, i, getISAFamily());
 }
 
 Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
                             int i) const {
-  return LLVM::AMD::shuffleUp(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleUp(loc, rewriter, val, i, getISAFamily());
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              Value i) const {
-  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
 }
 
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
@@ -126,11 +128,160 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
+static inline Type castToInt(RewriterBase &rewriter, Location loc, Value &val,
+                             Type valType, unsigned bits) {
+  unsigned originalBits = valType.getIntOrFloatBitWidth();
+  Type actualType = valType;
+
+  if (!valType.isIntOrIndex()) {
+    val = bitcast(val, int_ty(originalBits));
+    actualType = int_ty(originalBits);
+  }
+
+  if (originalBits < bits) {
+    val = sext(int_ty(bits), val);
+    actualType = int_ty(bits);
+  }
+
+  return actualType;
+}
+
+static inline void castFromInt(RewriterBase &rewriter, Location loc, Value &val,
+                               Type valType, unsigned bits) {
+  unsigned originalBits = valType.getIntOrFloatBitWidth();
+
+  if (originalBits < bits) {
+    val = trunc(int_ty(originalBits), val);
+  }
+
+  if (!valType.isIntOrIndex()) {
+    val = bitcast(val, valType);
+  }
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
-  return false;
+  if (numLaneToReduce != 64)
+    return false;
+
+  if (auto family = getISAFamily();
+      family != ISAFamily::CDNA3 && family != ISAFamily::CDNA2) {
+    return false;
+  }
+
+  Operation *reduxOp = getSingleCombinerFromReduceOp(op);
+  if (!reduxOp)
+    return false;
+
+  auto createDppReduxOp = [&](Type valType, Value &src, int dppCtrl,
+                              int rowMask, int bankMask,
+                              bool boundCtrl) -> Value {
+    // DPP has limited support for data types, so here we need to
+    // cast non-integer types or integer types shorter than 32 bits
+    // to int32, except for fp32.
+    Type actualType = valType;
+    if (!valType.isF32()) {
+      actualType = castToInt(rewriter, loc, src, valType, 32);
+    }
+
+    Value dppResult =
+        rewriter
+            .create<ROCDL::DPPUpdateOp>(loc, actualType, src, src,
+                                        rewriter.getI32IntegerAttr(dppCtrl),
+                                        rewriter.getI32IntegerAttr(rowMask),
+                                        rewriter.getI32IntegerAttr(bankMask),
+                                        rewriter.getBoolAttr(boundCtrl))
+            .getRes();
+
+    if (!valType.isF32()) {
+      castFromInt(rewriter, loc, src, valType, 32);
+      castFromInt(rewriter, loc, dppResult, valType, 32);
+    }
+
+    IRMapping mapping;
+    mapping.map(reduxOp->getOperand(0), src);
+    mapping.map(reduxOp->getOperand(1), dppResult);
+    return rewriter.clone(*reduxOp, mapping)->getResult(0);
+  };
+
+  for (int i = 0; i < acc.size(); i++) {
+    Value buf;
+    auto valType = acc[i].getType();
+
+    /*
+      Here's the implementation of full-wavefront reduction using dpp.
+      https://gpuopen.com/learn/amd-gcn-assembly-cross-lane-operations/
+
+      Each step has a v_mov_dpp instruction following the redux op. In
+      some cases, the lower-level compiler could merge them into single
+      instruction. For example, v_mov_dpp + max => v_max_dpp.
+
+      In DPP, each row consists of 16 consecutive lanes.
+      So the modifier row_shr and row_bcast mean they have the same operations
+      in each row, so in the following instructions, we only take row 0
+      as an example:
+
+      Step 1: Right shift for 8 lanes.
+          lane 8-15 = redux(lane 0-7, lane 8-15)
+
+      Step 2: Right shift for 4 lanes.
+          lane 12-15 = redux(lane 8-11, lane 12-15)
+
+      Step 3: Right shift for 2 lanes.
+          lane 14-15 = redux(lane 12-13, lane 14-15)
+
+      Step 4: Right shift for 1 lane.
+          lane 15 = redux(lane 14, lane 15)
+
+      Step 5: Broadcast lane 15 of each row to all the lanes of its next row.
+          lane 16-31 = redux(lane 15, lane 16-31)
+
+      Step 6: Broadcast lane 31 to lane 32-63.
+          lane 32-63 = redux(lane 31, lane 32-63)
+
+      Now the reduction result is stored in lane 63.
+
+      Step 7: Read the reduction result from lane 63 and broadcast with
+      readlane.
+    */
+
+    // row_shr:8
+    buf = createDppReduxOp(valType, acc[i], 8 + DppCtrl::ROW_SHR0, 0xf, 0xf,
+                           true);
+
+    // row_shr:4
+    buf = createDppReduxOp(valType, buf, 4 + DppCtrl::ROW_SHR0, 0xf, 0xf, true);
+
+    // row_shr:2
+    buf = createDppReduxOp(valType, buf, 2 + DppCtrl::ROW_SHR0, 0xf, 0xf, true);
+
+    // row_shr:1
+    buf = createDppReduxOp(valType, buf, 1 + DppCtrl::ROW_SHR0, 0xf, 0xf, true);
+
+    // row_bcast:15 row_mask:0xa
+    buf = createDppReduxOp(valType, buf, DppCtrl::BCAST15, 0xa, 0xf, true);
+
+    // row_bcast:31
+    buf = createDppReduxOp(valType, buf, DppCtrl::BCAST31, 0xf, 0xf, true);
+
+    // Similarly, we need to cast data types for readlane instruction.
+    Type actualType = castToInt(rewriter, loc, buf, valType, 16);
+
+    // Get reduction result from lane 63
+    std::string intrinsic = "llvm.amdgcn.readlane";
+    Value result =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, actualType,
+                                        ValueRange{buf, i32_val(63)})
+            ->getResult(0);
+
+    castFromInt(rewriter, loc, result, valType, 16);
+
+    acc[i] = result;
+  }
+
+  return true;
 }
 
 void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,

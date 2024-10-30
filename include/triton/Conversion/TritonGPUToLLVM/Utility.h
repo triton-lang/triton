@@ -1417,6 +1417,22 @@ inline Value packLLVector(Location loc, ValueRange vals,
   return vec;
 }
 
+inline Operation *getSingleCombinerFromReduceOp(triton::ReduceOp op) {
+  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+    return nullptr;
+  Block *block = &(*op.getCombineOp().begin());
+  Operation *yield = block->getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return nullptr;
+  if (reduceOp->getOperand(0) != block->getArgument(0) ||
+      reduceOp->getOperand(1) != block->getArgument(1))
+    return nullptr;
+
+  return reduceOp;
+}
+
 } // namespace mlir
 
 #endif
