@@ -47,9 +47,14 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
+
+    libraries += ["gcc"]
     # Use dynamic lookup to load Python library on Mac
     if system == "Darwin":
         cc_cmd += ["-undefined", "dynamic_lookup"]
+        # Don't use libgcc on clang + macos
+        if "clang" in cc:
+            libraries.remove("gcc")
     cc_cmd += [f'-l{lib}' for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
@@ -57,7 +62,9 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cc_cmd.extend(["-Wl,-rpath", dir])
     # CPU backend uses C++ (driver.cpp). Some old version compilers need a specific C++17 flag.
     if src.endswith(".cpp") or src.endswith(".cc"):
-        cc_cmd += ["-std=c++17", "-fopenmp"]
+        cc_cmd += ["-std=c++17"]
+        if not os.environ.get("TRITON_DISABLE_OPENMP", None):
+            cc_cmd += ["-fopenmp"]
     if src.endswith(".s"):
         # This is required to properly parse .file directives
         cc_cmd += ["-g"]

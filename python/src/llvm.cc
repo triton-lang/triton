@@ -43,13 +43,28 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 
 using namespace llvm;
 
+std::string getDefaultTargerOrProcessTriple() {
+  // Return process triple iff the default target triple is empty.
+  std::string triple = llvm::sys::getDefaultTargetTriple();
+  if (triple.empty()) {
+    // host
+    triple = llvm::sys::getProcessTriple();
+  }
+  return triple;
+}
+
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features,
                     bool enable_fast_math = false) {
+  auto triple = getDefaultTargerOrProcessTriple();
+  module->setTargetTriple(triple);
   std::string error;
   auto target =
       llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
+  if (!target) {
+    throw std::runtime_error("target lookup error: " + error);
+  }
   llvm::TargetOptions opt;
   bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (enable_fp_fusion)
@@ -403,10 +418,14 @@ void init_triton_llvm(py::module &&m) {
       py::arg("enable_fp_fusion") = false);
 
   m.def("set_host_target", [](llvm::Module *mod) {
-    mod->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+    auto triple = getDefaultTargerOrProcessTriple();
+    mod->setTargetTriple(triple);
     std::string error;
     auto target =
         llvm::TargetRegistry::lookupTarget(mod->getTargetTriple(), error);
+    if (!target) {
+      throw std::runtime_error("target lookup error: " + error);
+    }
     std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
         mod->getTargetTriple(), llvm::sys::getHostCPUName(), "", {},
         llvm::Reloc::PIC_)};
@@ -433,10 +452,10 @@ void init_triton_llvm(py::module &&m) {
                 "failed to parse IR: " + error.getMessage() +
                 "lineno: " + std::to_string(error.getLineNo()));
           }
-          res =
-              translateLLVMIRToASM(*module, llvm::sys::getDefaultTargetTriple(),
-                                   llvm::sys::getHostCPUName().str(), "", {},
-                                   enable_fp_fusion, false, enable_fast_math);
+          auto triple = getDefaultTargerOrProcessTriple();
+          res = translateLLVMIRToASM(*module, triple,
+                                     llvm::sys::getHostCPUName().str(), "", {},
+                                     enable_fp_fusion, false, enable_fast_math);
         }
         return py::str(res);
       },

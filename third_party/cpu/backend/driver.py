@@ -143,7 +143,9 @@ def make_launcher(constants, signature, ids):
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#ifdef _OPENMP
 #include <omp.h>
+#endif // _OPENMP
 #include <optional>
 #include <stdio.h>
 #include <string>
@@ -238,7 +240,11 @@ static void run_omp_kernels(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int 
   }}
 
   auto all_grids = get_all_grids(gridX, gridY, gridZ);
-  int max_threads = (num_threads > 0) ? num_threads : omp_get_max_threads();
+  int omp_max_threads = 1;
+  #ifdef _OPENMP
+  omp_max_threads = omp_get_max_threads();
+  #endif // _OPENMP
+  int max_threads = (num_threads > 0) ? num_threads : omp_max_threads;
 
   // Don't pay OMP overhead price when a single thread is used.
   if (max_threads == 1) {{
@@ -250,7 +256,9 @@ static void run_omp_kernels(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int 
   }}
 
   // For now, use the default chunk size, total iterations / max_threads.
+#ifdef _OPENMP
 #pragma omp parallel for schedule(static) num_threads(max_threads)
+#endif // _OPENMP
   for (size_t i = 0; i < N; ++i) {{
     const auto [x, y, z] = all_grids[i];
     (*kernel_ptr)({kernel_fn_args_list + ', ' if len(kernel_fn_args) > 0 else ''} x, y, z, gridX, gridY, gridZ);
