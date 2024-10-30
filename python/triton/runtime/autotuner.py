@@ -265,11 +265,12 @@ class Config:
                     function are args.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, maxnreg=None, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, num_threads=0, maxnreg=None, pre_hook=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
         self.num_stages = num_stages
+        self.num_threads = num_threads
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
 
@@ -281,6 +282,7 @@ class Config:
                     ("num_warps", self.num_warps),
                     ("num_ctas", self.num_ctas),
                     ("num_stages", self.num_stages),
+                    ("num_threads", self.num_threads),
                     ("maxnreg", self.maxnreg),
                 ) if v is not None
             }
@@ -293,6 +295,7 @@ class Config:
         res.append(f"num_warps: {self.num_warps}")
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
+        res.append(f"num_threads: {self.num_threads}")
         res.append(f"maxnreg: {self.maxnreg}")
         return ", ".join(res)
 

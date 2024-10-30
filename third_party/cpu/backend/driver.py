@@ -435,7 +435,13 @@ class CPUDriver(DriverBase):
 
     def get_benchmarker(self):
         from triton.testing import do_bench
-        return do_bench
+
+        def do_bench_cpu(*args, **kwargs):
+            if not 'measure_time_with_hooks' in kwargs:
+                kwargs['measure_time_with_hooks'] = True
+            return do_bench(*args, **kwargs)
+
+        return do_bench_cpu
 
     def get_empty_cache_for_benchmark(self):
         import torch

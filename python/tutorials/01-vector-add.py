@@ -78,6 +78,39 @@ def add_kernel_tiled(x_ptr,  # *Pointer* to first input vector.
         tl.store(output_ptr + offsets, output, mask=mask)
 
 
+@triton.autotune(
+    configs=[
+        # For small vectors it might be faster to use a single thread instead
+        # of paying OMP threading overhead, so add a single-threaded option.
+        # Other options use all available threads.
+        triton.Config({'TILE_SIZE': 16, 'BLOCK_SIZE': 4096}, num_threads=1),
+        triton.Config({'TILE_SIZE': 16, 'BLOCK_SIZE': 4096}, num_threads=0),
+        triton.Config({'TILE_SIZE': 16, 'BLOCK_SIZE': 8192}, num_threads=0),
+        triton.Config({'TILE_SIZE': 16, 'BLOCK_SIZE': 16384}, num_threads=0),
+        triton.Config({'TILE_SIZE': 16, 'BLOCK_SIZE': 32768}, num_threads=0),
+        triton.Config({'TILE_SIZE': 16, 'BLOCK_SIZE': 65536}, num_threads=0),
+    ],
+    key=['n_elements'],
+)
+@triton.jit
+def add_kernel_tiled_autotuned(x_ptr,  # *Pointer* to first input vector.
+                               y_ptr,  # *Pointer* to second input vector.
+                               output_ptr,  # *Pointer* to output vector.
+                               n_elements,  # Size of the vector.
+                               BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
+                               TILE_SIZE: tl.constexpr,  # Number of elements each iteration should process.
+                               ):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    for i in range(0, tl.cdiv(BLOCK_SIZE, TILE_SIZE)):
+        offsets = block_start + i * TILE_SIZE + tl.arange(0, TILE_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+
 # %%
 # Let's also declare a helper function to (1) allocate the `z` tensor
 # and (2) enqueue the above kernel with appropriate grid/block sizes:
@@ -124,6 +157,15 @@ def add_tiled_with_st_threshold(x: torch.Tensor, y: torch.Tensor, output):
     return output
 
 
+def add_tiled_autotuned(x: torch.Tensor, y: torch.Tensor, output):
+    if output is None:
+        output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    add_kernel_tiled_autotuned[grid](x, y, output, n_elements)
+    return output
+
+
 # %%
 # We can now use the above function to compute the element-wise sum of two `torch.tensor` objects and test its correctness:
 torch.manual_seed(0)
@@ -144,13 +186,13 @@ print(f'The maximum difference between torch-cpu-tiled and triton-cpu is '
 
 LINE_VALS = [
     'triton-cpu', 'triton-cpu-hooks', 'triton-cpu-tiled', 'triton-cpu-tiled-hooks', 'triton-cpu-tiled-tuned-hooks',
-    'torch-cpu'
+    'triton-cpu-tiled-autotuned-hooks', 'torch-cpu'
 ]
 LINE_NAMES = [
     'TritonCPU', 'TritonCPU (hooks)', 'TritonCPUTiled', 'TritonCPUTiled (hooks)', 'TritonCPUTiled (tuned, hooks)',
-    'TorchCPU'
+    'TritonCPUTiled (autotuned, hooks)', 'TorchCPU'
 ]
-LINE_STYLES = [('blue', '--'), ('blue', '-'), ('blue', '-'), ('blue', '-'), ('blue', '-'), ('green', '-')]
+LINE_STYLES = [('blue', '--'), ('blue', '-.'), ('red', '-'), ('red', '--'), ('red', '-.'), ('red', ':'), ('green', '-')]
 
 if USE_GPU and triton.runtime.driver.get_active_gpus():
     triton.runtime.driver.set_active_to_gpu()
@@ -228,6 +270,9 @@ def benchmark(size, provider):
     elif provider == 'triton-cpu-tiled-tuned-hooks':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled_with_st_threshold(x, y, output),
                                                      quantiles=quantiles, measure_time_with_hooks=True)
+    elif provider == 'triton-cpu-tiled-autotuned-hooks':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add_tiled_autotuned(x, y, output), quantiles=quantiles,
+                                                     measure_time_with_hooks=True)
     gbps = lambda ms: 3 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
