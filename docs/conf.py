@@ -145,7 +145,7 @@ extensions = [
 autosummary_generate = True
 
 # versioning config
-smv_tag_whitelist = r'^(v3.0.0)$'
+smv_tag_whitelist = r'^(v3.2.0)$'
 smv_branch_whitelist = r'^main$'
 smv_remote_whitelist = None
 smv_released_pattern = r'^tags/.*$'

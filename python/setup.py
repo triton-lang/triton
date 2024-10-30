@@ -693,7 +693,7 @@ def get_git_commit_hash(length=8):
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.0.0" + get_git_commit_hash() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="3.2.0" + get_git_commit_hash() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
