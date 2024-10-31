@@ -14,18 +14,6 @@
 using namespace llvm;
 using namespace std;
 
-// class Constant;
-// class DIBuilder;
-// class DbgRecord;
-// class Function;
-// class GlobalVariable;
-// class Instruction;
-// class MDNode;
-// class Metadata;
-// class Module;
-// class Type;
-// using ValueToValueMapTy = ValueMap<const Value *, WeakTrackingVH>;
-
 namespace {
 
 struct CloneKernelAndAugmentArgs
