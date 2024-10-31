@@ -63,7 +63,7 @@ def get_triton_dot_autotune_configs() -> list[triton.Config]:
             {
                 "BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": block_size_n, "BLOCK_SIZE_K": block_size_k, "waves_per_eu": 0,
                 "matrix_instr_nonkdim": 16, "kpack": kpack
-            }, num_warps=num_warps, num_stages=0) for block_size_n, block_size_k, kpack, num_warps in itertools.product(
+            }, num_warps=num_warps, num_stages=2) for block_size_n, block_size_k, kpack, num_warps in itertools.product(
                 block_size_n_range, block_size_k_range, kpack_range, num_warps_range)
     ]
 
@@ -75,7 +75,7 @@ def get_triton_multreduce_autotune_configs() -> list[triton.Config]:
     return [
         triton.Config(
             {"BLOCK_SIZE_M": 1, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": block_size_k, "waves_per_eu": 0, "kpack": kpack},
-            num_warps=8, num_stages=0) for block_size_k, kpack in itertools.product(block_size_k_range, kpack_range)
+            num_warps=8, num_stages=2) for block_size_k, kpack in itertools.product(block_size_k_range, kpack_range)
     ]
 
 

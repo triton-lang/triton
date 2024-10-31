@@ -129,6 +129,7 @@ jobs:
           pytest -vvvv ./python/perf-kernels/softmax.py
           pytest -vvv ./python/perf-kernels/rmsnorm.py
           pytest -vvv ./python/perf-kernels/layernorm.py
+          sh ./python/perf-kernels/streamk/utils/unittest.sh
           pytest -vvv ./python/perf-kernels/multreduce_matmul_kernel.py
       - name: Run Perf Kernels Benchmark
         run: |
