@@ -301,6 +301,32 @@ struct InstructionSchedHintsRewriter
       createSchedGroupBarrier(
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma, 1, 0);
     }
+
+    // The AMDGPU compiler backend can fold consecutive `ds_read/ds_write`
+    // instructions into wider variants as a part of its load/store optimization
+    // during the instruction selection pass. If it happens, then it means that
+    // we are overestimated these types of instructions at the current level of
+    // the IR. In this scenario, the inserted `sched.group.barriers` will result
+    // in "fooling" the scheduling solver which can mess up the final assembly.
+    // To avoid this, we switch off the backend load/store folding optimization
+    // which is going to prevent instructions folding. In this case, the
+    // instruction widths of `ds_read/ds_write` instructions are going to match
+    // their LLVM representations. This is implemented as follows.
+
+    // TODO: The current implementation disables `ds_read/ds_write` folding for
+    // all basic blocks in the currently processed function. We should try to
+    // avoid it. The compiler backend team proposed to play we the load/store
+    // alignment values within the currently processed basic block as an
+    // alternative solution.
+    auto funcOp = schedHint->getParentOfType<LLVM::LLVMFuncOp>();
+    MLIRContext *ctx = schedHint->getContext();
+    llvm::SmallVector<StringAttr> targetFeatures;
+    if (auto attr = funcOp.getTargetFeatures()) {
+      llvm::copy(attr->getFeatures(), std::back_inserter(targetFeatures));
+    }
+    targetFeatures.push_back(str_attr("-load-store-opt"));
+    funcOp.setTargetFeaturesAttr(
+        ::mlir::LLVM::TargetFeaturesAttr::get(ctx, targetFeatures));
   }
 
   LogicalResult
