@@ -3337,7 +3337,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if type_a != "e5m2" or type_b != "e5m2":
+        if type_a != "e5m2" or (type_b != "e5m2" and type_b != "bf16"):
             pytest.skip(f"scaled_dot({type_a}, {type_b}) not yet implemented for HIP")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
