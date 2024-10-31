@@ -154,9 +154,11 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
           oldType.getMemorySpace(), isMutable);
       newVal = builder.create<triton::gpu::MemDescSubviewOp>(
           subview.getLoc(), newDstType, val, subview.getOffsets());
+      newVal.getDefiningOp()->setAttrs(user->getAttrs());
     } else if (auto trans = dyn_cast<triton::TransOp>(user)) {
       newVal = builder.create<triton::TransOp>(trans.getLoc(), val,
                                                trans.getOrderAttr());
+      newVal.getDefiningOp()->setAttrs(user->getAttrs());
     }
     assert(newVal);
     replaceUsesAndPropagateType(builder, user, newVal);
