@@ -218,6 +218,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # LLVMNVPTXAsmPrinter
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
+    LLVMTransformUtils
+    LLVMSupport
 
   )
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
