@@ -27,15 +27,33 @@ constexpr int patternBenefitPrioritizeOverLLVMConversions = 10;
 constexpr int patternBenefitClampOptimizedPattern = 20;
 constexpr int patternBenefitConvertLayoutOptimizedPattern = 20;
 
+struct BackendCallbacks {
+  /**
+   * A backend-specific callback for appending auxiliary data during
+   * `LocalStoreOp` conversion.
+   *
+   * @param[in] op The reference to the re-written `LocalStoreOp`.
+   * @param[in] count The number of issued LLVM instructions.
+   * @param[in] type The input type of issued LLVM instructions.
+   */
+  std::function<void(triton::gpu::LocalStoreOp op, size_t llvmOpCount,
+                     Type llvmOpType)>
+      localStoreOpConversion = nullptr;
+};
+
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
 
-void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                   const TargetInfoBase &targetInfo,
-                                   RewritePatternSet &patterns,
-                                   PatternBenefit benefit);
+// The given callback is invoked at the end of a successful rewrite. The
+// callback receives 1) the current source op, 2) the number of issued LLVM
+// instructions and 3) their input types. Each MLIR backend can provide a
+// callback and, thus, handle backend-specific behaviors.
+void populateMemoryOpToLLVMPattern(
+    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit,
+    std::optional<BackendCallbacks> backendCallbacks = std::nullopt);
 
 void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,

@@ -15,12 +15,11 @@ using namespace mlir::triton::gpu;
 // blocked -> shared.
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
-void lowerDistributedToShared(Location loc, Value src, Value dst,
-                              Value adaptorSrc,
-                              const SharedMemoryObject &smemObj,
-                              const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter,
-                              const TargetInfoBase &targetInfo) {
+void lowerDistributedToShared(
+    Location loc, Value src, Value dst, Value adaptorSrc,
+    const SharedMemoryObject &smemObj, const LLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
+    std::pair<size_t, Type> *const llvmOpCount = nullptr) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
@@ -33,7 +32,7 @@ void lowerDistributedToShared(Location loc, Value src, Value dst,
   auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
   storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
-                           loc, rewriter, targetInfo);
+                           loc, rewriter, targetInfo, llvmOpCount);
 }
 
 struct LocalAllocOpConversion
@@ -200,12 +199,15 @@ struct LocalStoreOpConversion
 public:
   using ConvertOpToLLVMPattern<
       triton::gpu::LocalStoreOp>::ConvertOpToLLVMPattern;
+  using BackendCallbackType =
+      decltype(BackendCallbacks::localStoreOpConversion);
 
   LocalStoreOpConversion(const LLVMTypeConverter &converter,
                          const TargetInfoBase &targetInfo,
+                         BackendCallbackType backendCallback,
                          PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp>(converter, benefit),
-        targetInfo(targetInfo) {}
+        targetInfo(targetInfo), backendCallback(backendCallback) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
@@ -215,24 +217,36 @@ public:
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
+
+    std::pair<size_t, Type> llvmOpCount;
     lowerDistributedToShared(op.getLoc(), op.getSrc(), op.getDst(),
                              adaptor.getSrc(), smemObj, getTypeConverter(),
-                             rewriter, targetInfo);
+                             rewriter, targetInfo, &llvmOpCount);
+
+    if (backendCallback)
+      (backendCallback)(op, llvmOpCount.first, llvmOpCount.second);
+
     rewriter.eraseOp(op);
     return success();
   }
 
 private:
   const TargetInfoBase &targetInfo;
+  BackendCallbackType backendCallback;
 };
 
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    RewritePatternSet &patterns, PatternBenefit benefit,
+    std::optional<BackendCallbacks> backendCallbacks) {
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
+
+  auto backendCall =
+      backendCallbacks ? backendCallbacks->localStoreOpConversion : nullptr;
+  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, backendCall,
+                                       benefit);
 }

@@ -1,6 +1,7 @@
 #include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -276,6 +277,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
+    Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -286,7 +288,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(wordNElems * nWords * numVecs == numElems);
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
-      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
 
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
@@ -309,6 +310,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
+
+    setNumGeneratedGlobalLoads(op, numVecs, vecTy);
+
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -391,6 +395,10 @@ struct BufferLoadOpConversion
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
+
+    const int numVecs = numElems / vec;
+    setNumGeneratedGlobalLoads(op, numVecs, vecTy);
+
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
