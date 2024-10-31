@@ -395,28 +395,24 @@ def _min_max_integral_mod_value(dtype_x, dtype_y) -> Optional[int]:
     x_bitwidth = _bitwidth(dtype_x)
     y_bitwidth = _bitwidth(dtype_y)
 
-    # uint types have larger range, must limit min/max values
-    if x_bitwidth < y_bitwidth and dtype_x in int_dtypes:
-        return None, None
+    # hard cap max value bit-width to 32 if 64 bit-width types
+    min_bitwidth = min(x_bitwidth, y_bitwidth, 32)
 
-    # Limit max value bit-width to be one integral type less than y-bitwidth
+    # Limit max value bit-width to be one integral type less than the min bit-width
     # For example:
     #   int64, float32 -> int16
     #   uint16, float16 -> uint8
     x_dtype = _dtype(dtype_x)
-    max_bitwidth = max(x_bitwidth >> (x_bitwidth // y_bitwidth), 8)
+    max_bitwidth = max(min_bitwidth >> 1, 8)
     dtype_max = x_dtype + str(max_bitwidth)
 
     max_info = np.iinfo(getattr(np, dtype_max))
 
-    # Still need to limit values here so choose lowest
-    # power of two (no concrete reason).
-    if max_bitwidth == 8:
-        return max_info.min, max_info.max
-    elif dtype_x in uint_dtypes:
-        return max_info.min, max_info.max // 16
+    # Still need to limit values here for uints
+    if max_bitwidth >= 16 and dtype_max in uint_dtypes:
+        return max_info.min, max_info.max // 4
     else:
-        return max_info.min // 8, max_info.max // 8
+        return max_info.min, max_info.max
 
 
 def test_dtype_codegen():
