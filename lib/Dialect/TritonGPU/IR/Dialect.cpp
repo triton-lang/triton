@@ -288,7 +288,14 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     auto distributedLayout = cast<DistributedEncodingTrait>(layout);
     auto rank = distributedLayout.getWarpsPerCTA().size();
     SmallVector<unsigned> order(rank);
-    std::iota(order.rbegin(), order.rend(), 0);
+    auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
+    if (nvidiaMma && nvidiaMma.isHopper()) {
+      // Hopper WGMMA requires that the 4 warps in a warp group be laid out along
+      // the M-dimension; so here we rasterize M-first
+      std::iota(order.begin(), order.end(), 0);
+    } else {
+      std::iota(order.rbegin(), order.rend(), 0);
+    }
     return order;
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
