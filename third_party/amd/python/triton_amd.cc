@@ -60,6 +60,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_2("add_optimize_lds_usage",
                      mlir::triton::AMD::createOptimizeLDSUsagePass,
                      const std::string &, int32_t);
+  ADD_PASS_WRAPPER_1("add_optimize_atomic_layouts",
+                     mlir::createTritonAMDGPUOptimizeAtomicLayoutsPass,
+                     const std::string);
   ADD_PASS_WRAPPER_3("add_accelerate_matmul",
                      mlir::createTritonAMDGPUAccelerateMatmulPass,
                      const std::string, int, int);

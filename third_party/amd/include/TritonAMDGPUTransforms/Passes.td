@@ -22,6 +22,25 @@ def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir
   ];
 }
 
+def TritonAMDGPUOptimizeAtomicLayouts : Pass<"tritonamdgpu-optimize-atomic-layouts", "mlir::ModuleOp"> {
+  let summary = "optimize atomic layouts";
+
+  let description = [{
+    TritonAMDGPUOptimizeAtomicLayouts pass is required for rearranging layouts for atomic operations
+    to generate more profitable instructions.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUOptimizeAtomicLayoutsPass()";
+
+  let dependentDialects = [];
+
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">
+  ];
+}
+
 def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir::ModuleOp"> {
   let summary = "accelerate matmul";
 
