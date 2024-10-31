@@ -177,8 +177,21 @@ struct ConvertTritonLoadToBufferLoad
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
-      rewriter.replaceOpWithNewOp<triton::amdgpu::BufferLoadOp>(
-          op, op.getType(), basePtr, tensorOffset, maybeMask, maybeOther);
+
+      auto bufferLoadOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
+          op->getLoc(), op.getType(), basePtr, tensorOffset, maybeMask,
+          maybeOther);
+
+      // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
+      // labeled it. The attribute needs to be preserved for custom instruction
+      // scheduling.
+      if (auto opIdxAttr = op->getAttrOfType<triton::amdgpu::OpIdxAttr>(
+              triton::amdgpu::OpIdxAttr::getMnemonic())) {
+        bufferLoadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(),
+                              opIdxAttr);
+      }
+      rewriter.replaceOp(op, bufferLoadOp);
+
       return success();
     }
     LDBG("Failed to convert: " << op);
