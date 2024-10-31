@@ -59,10 +59,8 @@ public:
         loops.push_back(forOp);
     });
 
-    // check which one is the unrolled loop and which one is the prolog/epilog
-    // loop. A simple heuristic is to check the number of instructions in the
-    // loop. The unrolled main loop should have the most instructions.
-    assert(loops.size() == 2 && "only support unrolling one loop at a time");
+    assert(loops.size() <= 2 && "Expect at most 2 loops, one for the main loop "
+                                "and one for the prolog/epilog");
     SmallVector<int, 2> loopInstructionCounts;
     for (auto loop : loops) {
       loop->removeAttr(loopUnrollFactorAttrName);
@@ -71,11 +69,15 @@ public:
       loop->walk([&](Operation *op) { count++; });
       loopInstructionCounts.push_back(count);
     }
-
-    // sort the loops by the number of instructions. The unrolled main loop
-    // should go first.
-    if (loopInstructionCounts[0] < loopInstructionCounts[1])
-      std::swap(loops[0], loops[1]);
+    if (loops.size() == 2) {
+      // check which one is the unrolled loop and which one is the prolog/epilog
+      // loop. A simple heuristic is to check the number of instructions in the
+      // loop. The unrolled main loop should have the most instructions.
+      // sort the loops by the number of instructions. The unrolled main loop
+      // should go first.
+      if (loopInstructionCounts[0] < loopInstructionCounts[1])
+        std::swap(loops[0], loops[1]);
+    }
 
     return loops;
   }
