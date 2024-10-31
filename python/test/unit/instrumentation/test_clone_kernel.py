@@ -30,7 +30,7 @@ def test_clone_kernel(device):
                         matches.append((start_index, i))
             kernel_signatures.append(line.strip()[matches[-1][0] + 1:matches[-1][1]])
 
-    if "libCloneKernelAndAugmentArgsLib.so" in os.environ['LLVM_PASS_PLUGIN_PATH']:
+    if 'LLVM_PASS_PLUGIN_PATH' in os.environ and "libCloneKernelAndAugmentArgsLib.so" in os.environ['LLVM_PASS_PLUGIN_PATH']:    
         if (triton.runtime.driver.active.get_current_target().backend == 'hip'):
             assert kernel_signatures == [
                 'ptr addrspace(1) inreg nocapture writeonly %0', 'ptr addrspace(1) inreg nocapture writeonly %0, ptr %1'
