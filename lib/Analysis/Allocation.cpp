@@ -234,6 +234,7 @@ private:
         auto smemShape = getRepShapeForAtomic(op->getResult(0));
         auto elems = getNumScratchElements(smemShape);
         auto elemTy = cast<PointerType>(value.getType()).getPointeeType();
+        assert(!isa<PointerType>(elemTy) && "unexpected pointer type");
         auto bytes =
             elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
         maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
