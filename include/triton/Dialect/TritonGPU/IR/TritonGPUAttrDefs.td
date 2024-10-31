@@ -311,7 +311,7 @@ compared to 1*64 when the hasLeadingOffset is false.
           } else {
             SmallVector<unsigned int> newOrder(order);
             std::swap(newOrder[0], newOrder[1]);
-            // return get(context, vecSize, perPhase, maxPhase, newOrder, CTALayout);
+            // set fromKOuterBlocked to true since we want to use special swizzling
             return $_get(context, vecSize, perPhase, maxPhase, newOrder, CTALayout, false, true);
           }
         }

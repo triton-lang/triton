@@ -77,6 +77,8 @@ LinearLayout identityND(StringAttr inDimName, ArrayRef<unsigned> shape,
   return ret;
 }
 
+// Returns 2D layout that traverses the 2nd leading dimension first and then
+// 1st leading dimension. Only supports 2D layout for now.
 LinearLayout transposeND(StringAttr inDimName, ArrayRef<unsigned> shape,
                         ArrayRef<unsigned> order,
                         ArrayRef<StringAttr> outDimNames) {
@@ -90,18 +92,15 @@ LinearLayout transposeND(StringAttr inDimName, ArrayRef<unsigned> shape,
 
   LinearLayout ret = LinearLayout::empty();
   std::vector<std::vector<int32_t>> bases;
+  // traverse 2nd dimension (K-dim in GEMM case)
   int dim = order[1];
-  // llvm::outs() << "i=" << 1 << "; dim=" << dim <<"; shape=" << shape[dim] <<
-  //  "; outDimNames=" << outDimNames[dim] << "\n";
   for (int basis = 1; basis < shape[dim]; basis <<= 1) {
-    // llvm::outs() << "basis = " << basis << "\n";
     bases.push_back({0, basis});
   }
+  // traverse 1st dimension (N-dim in GEMM K-major B-tensor)
+  // this is the consecutive dimension loaded from global memory
   dim = order[0];
-  // llvm::outs() << "i=" << 0 << "; dim=" << dim <<"; shape=" << shape[dim] <<
-  //  "; outDimNames=" << outDimNames[dim] << "\n";
   for (int basis = 1; basis < shape[dim]; basis <<= 1) {
-    // llvm::outs() << "basis = " << basis << "\n";
     bases.push_back({basis, 0});
   }
   auto dimMinor = "dim"+std::to_string(order[0]);
@@ -114,16 +113,6 @@ LinearLayout transposeND(StringAttr inDimName, ArrayRef<unsigned> shape,
          {kDimMajor, shape[order[1]]}},
         false);
 
-  // llvm::outs() << "transposeND test:" << ret << "\n";
-  // ret = LinearLayout(
-  //       {{kRegister, {{0, 1}, {1, 0}, {2, 0}, {4, 0}}}},
-  //       {{kDim1, 8}, {kDim0, 2}}, false);
-
-  // ret = LinearLayout(
-  //       {{kRegister, {{0, 1}, {0, 2}, {1, 0}, {2, 0}, {4, 0}}}},
-  //       {{kDim1, 8}, {kDim0, 4}}, false);
-
-  // llvm::outs() << "transposeND ret" << ret << "\n";
   return ret;
 }
 
@@ -422,11 +411,12 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
     int phase = (row / perPhase) % maxPhase;
+    // AMD special swizzling for K-major matrix. We switch up swizzling pattern
+    // every perPhase*maxPhase rows to reduce write bank conflict
     if (fromKOuterBlocked) {
       phase = (phase ^ row / maxPhase / perPhase) % maxPhase;
     }
     bases2D.push_back({row, (vec * phase) % numCols});
-    // bases2D.push_back({row, (vec * ((row / perPhase) % maxPhase)) % numCols});
   }
   LinearLayout ctaLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
