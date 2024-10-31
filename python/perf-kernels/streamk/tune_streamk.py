@@ -54,7 +54,7 @@ def get_full_tuning_space():
     block_k_range = [16, 32, 64, 128, 256]
     num_warps_range = [1, 2, 4, 8]
     group_m_range = [1, 4, 8, 16, 32]
-    # For now we see better perf with num_stages=0 for all gemm configs we care
+    # For now we see better perf with num_stages=2 for all gemm configs we care
     # But keep this explicit so that we do not forget we may need to set it to
     # other values in the future
     num_stage_range = [2]
