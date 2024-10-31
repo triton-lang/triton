@@ -235,9 +235,7 @@ private:
         auto elems = getNumScratchElements(smemShape);
         auto elemTy = cast<PointerType>(value.getType()).getPointeeType();
         auto bytes =
-            isa<PointerType>(elemTy)
-                ? elems * kPtrBitWidth / 8
-                : elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
+            elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
         maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                             scratchAlignment);
       }
