@@ -43,7 +43,7 @@ public:
   matchAndRewrite(UpcastMXFPOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto fpType = op.getFpType();
-    if (!(fpType == F8F6F4Type::E4M3 || fpType == F8F6F4Type::E5M2))
+    if (!(fpType == ScaleDotElemType::E4M3 || fpType == ScaleDotElemType::E5M2))
       return rewriter.notifyMatchFailure(op, "NYI: non-mxfp8 cases");
 
     Location loc = op.getLoc();

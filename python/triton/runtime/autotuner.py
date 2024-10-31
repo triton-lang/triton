@@ -7,7 +7,7 @@ import inspect
 from typing import Dict
 
 from .jit import KernelInterface
-from .errors import OutOfResources
+from .errors import OutOfResources, PTXASError
 from .driver import driver
 
 
@@ -157,7 +157,7 @@ class Autotuner(KernelInterface):
 
         try:
             return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
-        except (OutOfResources, CompileTimeAssertionFailure):
+        except (OutOfResources, CompileTimeAssertionFailure, PTXASError):
             return [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
