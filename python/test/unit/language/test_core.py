@@ -403,13 +403,14 @@ def _min_max_integral_mod_value(dtype_x, dtype_y) -> Optional[int]:
     # For example:
     #   int64, float32 -> int16
     #   uint16, float16 -> uint8
-    #   int8 -> int8 (no int4 type in numpy)
     x_dtype = _dtype(dtype_x)
     max_bitwidth = max(x_bitwidth >> (x_bitwidth // y_bitwidth), 8)
     dtype_max = x_dtype + str(max_bitwidth)
 
     max_info = np.iinfo(getattr(np, dtype_max))
 
+    # Still need to limit values here so choose lowest
+    # power of two (no concrete reason).
     if max_bitwidth == 8:
         return max_info.min, max_info.max
     elif dtype_x in uint_dtypes:
@@ -467,8 +468,7 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         # skip when bfloat16, as NumPy's ref performs the computation in float32
         # while Triton performs it in bfloat16
         skip_scalar_test = ((dtype_x == "bfloat16" and "float" in dtype_y)
-                            or (op in ('/', '%') and dtype_x in ("float16", "bfloat16"))
-                            or (expr == "x % y" and dtype_x in int_dtypes + uint_dtypes and dtype_y in float_dtypes))
+                            or (op in ('/', '%') and dtype_x in ("float16", "bfloat16")))
         # can't divide by zero
         not_zero = op in ('/', '%') and dtype_x in integral_dtypes and dtype_y in integral_dtypes
         # can't represent -int(max)
