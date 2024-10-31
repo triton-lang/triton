@@ -1,6 +1,5 @@
 import torch
 import os
-import re
 
 import triton
 import triton.language as tl
@@ -29,15 +28,12 @@ def test_clone_kernel(device):
                     if stack:
                         start_index = stack.pop()
                         matches.append((start_index, i))
-            kernel_signatures.append(line.strip()[matches[-1][0]+1:matches[-1][1]])
+            kernel_signatures.append(line.strip()[matches[-1][0] + 1:matches[-1][1]])
 
     if 'LLVM_PASS_PLUGIN_PATH' in os.environ and os.environ['LLVM_PASS_PLUGIN_PATH'].split(
             "/")[-1] == "libCloneKernelAndAugmentArgsLib.so":
         assert kernel_signatures == [
-            'ptr addrspace(1) inreg nocapture writeonly %0',
-            'ptr addrspace(1) inreg nocapture writeonly %0, ptr %1'
+            'ptr addrspace(1) inreg nocapture writeonly %0', 'ptr addrspace(1) inreg nocapture writeonly %0, ptr %1'
         ]
     else:
-        assert kernel_signatures == [
-            "ptr addrspace(1) inreg nocapture writeonly %0"
-        ]
+        assert kernel_signatures == ["ptr addrspace(1) inreg nocapture writeonly %0"]
