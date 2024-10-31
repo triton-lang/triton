@@ -25,6 +25,7 @@ def test_clone_kernel(device):
             kernel_signatures.append(line.strip())
 
     if 'LLVM_PASS_PLUGIN_PATH' in os.environ and os.environ['LLVM_PASS_PLUGIN_PATH'].split("/")[-1] == "libCloneKernelAndAugmentArgsLib.so":
-        assert kernel_signatures == ['define amdgpu_kernel void @_kernel(ptr addrspace(1) inreg nocapture writeonly %0) local_unnamed_addr #0 !dbg !4 {', 'define amdgpu_kernel void @_kernelPv(ptr addrspace(1) inreg nocapture writeonly %0, ptr %1) local_unnamed_addr #0 !dbg !15 {']
+        assert kernel_signatures == ['define amdgpu_kernel void @_kernel(ptr addrspace(1) inreg nocapture writeonly %0) local_unnamed_addr #0 !dbg !4 {', 
+                                     'define amdgpu_kernel void @_kernelPv(ptr addrspace(1) inreg nocapture writeonly %0, ptr %1) local_unnamed_addr #0 !dbg !15 {']
     else:
         assert kernel_signatures == ["define amdgpu_kernel void @_kernel(ptr addrspace(1) inreg nocapture writeonly %0) local_unnamed_addr #0 !dbg !4 {"]
