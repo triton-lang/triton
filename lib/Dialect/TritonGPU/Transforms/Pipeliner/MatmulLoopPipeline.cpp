@@ -113,25 +113,26 @@ static std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp) {
   return std::make_pair(minClusterId, maxClusterId);
 }
 
-// Return use of a loadOp with the lowest stage.
+// Return user of a loadOp with the lowest stage, if two users have the
+// same stage, return the user with lower cluster.
 static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
-  Operation *firstUse = nullptr;
-  for (auto &tUse : loadOp->getUses()) {
-    Operation *useOp = tUse.getOwner();
-    if (useOp && useOp->getBlock() == loadOp->getBlock()) {
-      auto [stage, clusterId] = getStageCluster(useOp);
+  Operation *firstUser = nullptr;
+  for (Operation *user : loadOp->getUsers()) {
+    if (user->getBlock() == loadOp->getBlock()) {
+      auto [stage, clusterId] = getStageCluster(user);
       // Update FirstUse if this use has lower stage or lower cluster.
-      if (!firstUse)
-        firstUse = useOp;
+      if (!firstUser)
+        firstUser = user;
       else {
-        auto [stageForFirstUse, clusterForFirstUse] = getStageCluster(firstUse);
+        auto [stageForFirstUse, clusterForFirstUse] =
+            getStageCluster(firstUser);
         if (stage < stageForFirstUse ||
             (stage == stageForFirstUse && clusterId < clusterForFirstUse))
-          firstUse = useOp;
+          firstUser = user;
       }
     }
   }
-  return firstUse;
+  return firstUser;
 }
 
 static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
