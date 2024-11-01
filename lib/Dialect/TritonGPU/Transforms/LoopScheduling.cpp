@@ -497,9 +497,9 @@ public:
       // shift so afterPrologue will be at clusterId 0
       auto ctx = forOp.getContext();
       for (auto [op, stage_, cluster] : coarseSchedule.getOpsInOrder(forOp)) {
-        op->setAttr("loop.stage",
+        op->setAttr(mlir::triton::kLoopStageAttrName,
                     IntegerAttr::get(IntegerType::get(ctx, 32), stage_));
-        op->setAttr("loop.cluster",
+        op->setAttr(mlir::triton::kLoopClusterAttrName,
                     IntegerAttr::get(IntegerType::get(ctx, 32),
                                      *cluster /*- *afterPrologue*/));
         LLVM_DEBUG({

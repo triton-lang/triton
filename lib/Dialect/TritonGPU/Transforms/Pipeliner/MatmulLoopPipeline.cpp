@@ -64,9 +64,9 @@ public:
                      Args &&...args) {
     OpTy op = OpBuilder::create<OpTy>(location, std::forward<Args>(args)...);
     auto ctx = getContext();
-    op->setAttr("loop.stage",
+    op->setAttr(mlir::triton::kLoopStageAttrName,
                 IntegerAttr::get(IntegerType::get(ctx, 32), stage));
-    op->setAttr("loop.cluster",
+    op->setAttr(mlir::triton::kLoopClusterAttrName,
                 IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
     return op;
   }
@@ -74,10 +74,13 @@ public:
 };
 
 static std::pair<int, int> getStageCluster(Operation *op) {
-  auto stage =
-      cast<IntegerAttr>(op->getAttr("loop.stage")).getValue().getSExtValue();
+  auto stage = cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopStageAttrName))
+                   .getValue()
+                   .getSExtValue();
   auto clusterId =
-      cast<IntegerAttr>(op->getAttr("loop.cluster")).getValue().getSExtValue();
+      cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopClusterAttrName))
+          .getValue()
+          .getSExtValue();
   return std::make_pair(stage, clusterId);
 }
 
@@ -90,8 +93,9 @@ static bool sameStageCluster(Operation *op1, Operation *op2) {
 static void setStageCluster(scf::ForOp &forOp, Operation *op, int stage,
                             int cluster) {
   auto ctx = forOp.getContext();
-  op->setAttr("loop.stage", IntegerAttr::get(IntegerType::get(ctx, 32), stage));
-  op->setAttr("loop.cluster",
+  op->setAttr(mlir::triton::kLoopStageAttrName,
+              IntegerAttr::get(IntegerType::get(ctx, 32), stage));
+  op->setAttr(mlir::triton::kLoopClusterAttrName,
               IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
 }
 
@@ -99,7 +103,8 @@ static void setStageCluster(scf::ForOp &forOp, Operation *op, int stage,
 static std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp) {
   int minClusterId = -1, maxClusterId = -1;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr("loop.stage") || !op.hasAttr("loop.cluster"))
+    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
+        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
       continue;
     auto [_, cluster] = getStageCluster(&op);
     if (maxClusterId < 0) {
@@ -452,7 +457,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
     if (loadToInfo.count(&op))
       // TODO pawel: err, we'd need to verify that the distance is the same
       continue;
-    if (!op.hasAttr("loop.stage"))
+    if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;
 
     // Check stage for uses. If any use is in a different stage, treat it
@@ -710,7 +715,8 @@ static void insertDepsOfOpOnAttributes(scf::ForOp forOp, Operation *op,
     if (defOp && defOp->getBlock() == op->getBlock()) {
       // check to see if defOp has <stage, cluster>, if no, set stage, cluster
       // and call
-      if (!defOp->hasAttr("loop.stage") || !defOp->hasAttr("loop.cluster")) {
+      if (!defOp->hasAttr(mlir::triton::kLoopStageAttrName) ||
+          !defOp->hasAttr(mlir::triton::kLoopClusterAttrName)) {
         setStageCluster(forOp, defOp, stage, cluster);
         insertDepsOfOpOnAttributes(forOp, defOp, stage, cluster, includeArg);
       }
@@ -726,7 +732,8 @@ static void scheduleDependenciesOnAttributes(scf::ForOp forOp, int numStages) {
   SmallVector<SmallVector<std::tuple<Operation *, int, int>>, 8> orderClusters(
       maxClusterId + 1);
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr("loop.stage") || !op.hasAttr("loop.cluster"))
+    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
+        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
       continue;
 
     auto [stage, clusterId] = getStageCluster(&op);
@@ -757,7 +764,8 @@ getFinalSchedule(scf::ForOp &forOp, int numStages) {
   SmallVector<SmallVector<Operation *>, 8> orderClusters(maxClusterId -
                                                          minClusterId + 1);
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr("loop.stage") || !op.hasAttr("loop.cluster"))
+    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
+        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
       continue;
 
     auto [stage, clusterId] = getStageCluster(&op);
@@ -890,7 +898,8 @@ createAsyncOps(scf::ForOp &forOp,
 
   // Make sure all ops have attributes.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    assert(op.hasAttr("loop.stage") && op.hasAttr("loop.cluster"));
+    assert(op.hasAttr(mlir::triton::kLoopStageAttrName) &&
+           op.hasAttr(mlir::triton::kLoopClusterAttrName));
   }
   return allocs;
 }
