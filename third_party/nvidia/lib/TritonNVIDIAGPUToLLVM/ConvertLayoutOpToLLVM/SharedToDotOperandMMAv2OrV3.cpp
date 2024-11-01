@@ -549,7 +549,7 @@ std::vector<Value> unpackInt(const std::vector<Value> &inValues, Type elTy,
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int batch, int repOuter, int repK,
     const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter, Type eltTy, bool isHopper) {
+    ConversionPatternRewriter &rewriter, Type eltTy, bool isHopper, bool isA) {
   assert(32 >= eltTy.getIntOrFloatBitWidth() && "only support 32-bit or less");
   auto numElemsPerVec = 32 / eltTy.getIntOrFloatBitWidth();
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
@@ -675,8 +675,8 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / mmaBitwidth;
 
   int kWidth = encoding.getKWidth();
-  auto numRep = mmaLayout.getMMAv2RepForOperand(shapePerCTA, bitwidth,
-                                                encoding.getOpIdx());
+  auto numRep =
+      mmaLayout.getRepForOperand(shapePerCTA, bitwidth, encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto order = triton::gpu::getOrder(mmaLayout);
@@ -724,7 +724,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   Type eltTy = descTy.getElementType();
   return composeValuesToDotOperandLayoutStruct(vals, numRepBatch, numRepOuter,
                                                numRepK, typeConverter, loc,
-                                               rewriter, eltTy, isHopper);
+                                               rewriter, eltTy, isHopper, isA);
 }
 
 template <typename T>

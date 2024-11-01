@@ -1215,8 +1215,8 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     SmallVector<int> getMMAv1Rep(int opIdx) const;
     SmallVector<int> getMMAv1ShapePerWarp(int opIdx) const;
     int getMMAv1Vec(int opIdx) const;
-    SmallVector<int64_t> getMMAv2RepForOperand(ArrayRef<int64_t> shape,
-                                               int bitwidth, int opIdx) const;
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
+                                          int bitwidth, int opIdx) const;
 
     bool supportReduction() const {
       if (isAmpere() || isHopper()) {

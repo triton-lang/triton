@@ -956,7 +956,7 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (mma.isAmpere()) {
       auto bitwidth = getPointeeType(eltTy).getIntOrFloatBitWidth();
-      auto rep = mma.getMMAv2RepForOperand(shape, bitwidth, idx);
+      auto rep = mma.getRepForOperand(shape, bitwidth, idx);
       auto elemsPerKRep = 32 / bitwidth;
       auto kWidthRep = kWidth / elemsPerKRep;
       if (rank == 3)
@@ -2014,8 +2014,8 @@ int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
   return 2 * getMMAv1Rep(opIdx)[opIdx];
 }
 SmallVector<int64_t>
-NvidiaMmaEncodingAttr::getMMAv2RepForOperand(ArrayRef<int64_t> shape,
-                                             int bitwidth, int opIdx) const {
+NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
+                                        int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
 
