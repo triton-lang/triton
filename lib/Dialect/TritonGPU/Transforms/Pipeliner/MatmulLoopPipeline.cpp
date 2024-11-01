@@ -944,15 +944,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
     loadToInfo[loadOp].distToUse = stageUse - stage;
   }
 
-#if 0
-  for (auto &[loadOp, info] : loadToInfo) {
-    for (auto *use : getTransitiveUserInBlock(loadOp, forOp)) {
-      loadToInfo[loadOp].distToUse =
-          coarseSchedule[use].first - coarseSchedule[loadOp].first;
-    }
-  }
-#endif
-
   SmallVector<Value> barriers;
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
