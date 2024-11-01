@@ -520,7 +520,8 @@ assignMemoryLayouts(scf::ForOp &forOp,
     if (loadToInfo.count(&op))
       // TODO pawel: err, we'd need to verify that the distance is the same
       continue;
-    assert(op.hasAttr("loop.stage"));
+    if (!op.hasAttr("loop.stage"))
+      continue;
 
     // Check stage for uses. If any use is in a different stage, treat it
     // as a pipelined load.
