@@ -1,7 +1,6 @@
 import importlib.util
 import itertools
 import shutil
-import tempfile
 
 import pytest
 import torch
@@ -129,17 +128,15 @@ def test_combine_fn_change():
         seen_keys.add(key)
 
 
-def write_and_load_module(code, num_extra_lines):
-    with tempfile.NamedTemporaryFile(mode='w+', suffix='.py') as f:
-        f.write(('# extra line\n' * num_extra_lines) + code)
-        f.flush()
-        spec = importlib.util.spec_from_file_location("module.name", f.name)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+def write_and_load_module(temp_file, code, num_extra_lines):
+    temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
+    spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     return module
 
 
-def test_changed_line_numbers_invalidate_cache():
+def test_changed_line_numbers_invalidate_cache(tmp_path):
     from textwrap import dedent
     code = dedent("""
         import triton
@@ -147,10 +144,12 @@ def test_changed_line_numbers_invalidate_cache():
         def test_kernel(i):
             i = i + 1
     """)
-    orig_mod = write_and_load_module(code, 0)
+    temp_file0 = tmp_path / "test_changed_line_numbers_invalidate_cache0.py"
+    orig_mod = write_and_load_module(temp_file0, code, 0)
     orig_cache_key = orig_mod.test_kernel.cache_key
 
-    updated_mod = write_and_load_module(code, 1)
+    temp_file1 = tmp_path / "test_changed_line_numbers_invalidate_cache1.py"
+    updated_mod = write_and_load_module(temp_file1, code, 1)
     updated_cache_key = updated_mod.test_kernel.cache_key
     assert orig_cache_key != updated_cache_key
 
