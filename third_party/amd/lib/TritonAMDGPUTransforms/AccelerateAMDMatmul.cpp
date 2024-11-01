@@ -529,10 +529,10 @@ public:
     if (failed(mfmaInstr))
       return rewriter.notifyMatchFailure(dotOp, "cannot choose mfma intrinsic");
 
-    const unsigned mDim = mfmaInstr.value().getMDim();
-    const unsigned nDim = mfmaInstr.value().getNDim();
-    const unsigned kDim = mfmaInstr.value().getKDim();
-    const unsigned kBase = mfmaInstr.value().getKBase();
+    unsigned mDim = mfmaInstr.value().getMDim();
+    unsigned nDim = mfmaInstr.value().getNDim();
+    unsigned kDim = mfmaInstr.value().getKDim();
+    unsigned kBase = mfmaInstr.value().getKBase();
 
     // If A tensor contains mxfp4, we pack every two values into one int8 value
     // there. For such cases, we have different initial kWidth for LHS and RHS,

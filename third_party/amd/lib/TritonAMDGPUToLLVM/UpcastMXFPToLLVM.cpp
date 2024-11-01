@@ -146,8 +146,7 @@ public:
 private:
   SmallVector<Value> unpackFP4Elements(Location loc, RewriterBase &rewriter,
                                        ArrayRef<Value> packed) const {
-
-    // Split fp4x8 into 4 bf16x2
+    // Split every fp4x2 into 2 bf16 values.
     llvm::SmallVector<Value> unpacked;
     unpacked.reserve(packed.size() * 2);
     for (Value v : packed) {
