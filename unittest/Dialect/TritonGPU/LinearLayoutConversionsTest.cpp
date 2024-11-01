@@ -555,14 +555,14 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
                       {2, 0},
                       {4, 0},
                       {32, 0},
+                      {64, 0},
                       {0, 8},
                       {0, 16},
-                      {0, 32},
-                      {64, 0}}},
+                      {0, 32}}},
                     {S("lane"), {{8, 0}, {16, 0}, {0, 1}, {0, 2}, {0, 4}}},
                     {
                         S("warp"),
-                        {},
+                        {{0, 0}, {0, 0}},
                     },
                     {S("block"), {}},
                 },
@@ -582,11 +582,44 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
                     {S("lane"), {{8, 0}, {16, 0}, {0, 1}, {0, 2}, {0, 4}}},
                     {
                         S("warp"),
-                        {},
+                        {{0, 0}, {0, 0}},
                     },
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, DotMMAv2_split_warp_kwidth8) {
+  EXPECT_EQ(
+      toLinearLayout({32, 64}, dotMMAv2(0, 8, {2, 2})),
+      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {0, 32}}},
+                    {S("lane"), {{0, 8}, {0, 16}, {1, 0}, {2, 0}, {4, 0}}},
+                    {S("warp"), {{0, 0}, {16, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({64, 16}, dotMMAv2(1, 8, {2, 2})),
+      LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}}},
+                    {S("lane"), {{8, 0}, {16, 0}, {0, 1}, {0, 2}, {0, 4}}},
+                    {S("warp"), {{0, 8}, {0, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({64, 128}, dotMMAv2(0, 8, {2, 2})),
+            LinearLayout(
+                {{S("register"),
+                  {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {0, 32}, {0, 64}, {32, 0}}},
+                 {S("lane"), {{0, 8}, {0, 16}, {1, 0}, {2, 0}, {4, 0}}},
+                 {S("warp"), {{0, 0}, {16, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({128, 32}, dotMMAv2(1, 8, {2, 2})),
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}, {64, 0}, {0, 16}}},
+           {S("lane"), {{8, 0}, {16, 0}, {0, 1}, {0, 2}, {0, 4}}},
+           {S("warp"), {{0, 8}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
