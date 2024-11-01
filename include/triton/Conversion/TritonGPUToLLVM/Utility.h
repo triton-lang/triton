@@ -391,6 +391,15 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
   Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
+
+// -----------------------------------------------------------------------
+// MXFP utilities
+// -----------------------------------------------------------------------
+
+// Convert one int8, which contain, 2 packed mxfp4 values, into 2 bf16
+// standalone values and returns them as a pair for (high 4 bits, low 4 bits).
+std::pair<Value, Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter,
+                                               Location loc, Value v);
 } // namespace LLVM
 
 /* ------------------------------------ */
