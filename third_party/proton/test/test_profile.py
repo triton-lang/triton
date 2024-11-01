@@ -15,12 +15,12 @@ def is_hip():
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path):
     temp_file = tmp_path / "test_torch.hatchet"
-    proton.start(str(temp_file).split(".")[0], context=context)
+    proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
     torch.ones((2, 2), device="cuda")
     proton.exit_scope()
     proton.finalize()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     if context == "shadow":
         assert len(data[0]["children"]) == 1
@@ -46,14 +46,14 @@ def test_triton(tmp_path):
     x = torch.tensor([2], device="cuda")
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_triton.hatchet"
-    proton.start(str(temp_file).split(".")[0])
+    proton.start(str(temp_file.with_suffix("")))
     with proton.scope("test0"):
         with proton.scope("test1"):
             foo[(1, )](x, y)
     with proton.scope("test2"):
         foo[(1, )](x, y)
     proton.finalize()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     assert len(data[0]["children"]) == 2
     assert data[0]["children"][0]["frame"]["name"] == "test0"
@@ -77,7 +77,7 @@ def test_cudagraph(tmp_path):
         foo[(1, )](a, b, c)
 
     temp_file = tmp_path / "test_cudagraph.hatchet"
-    proton.start(str(temp_file).split(".")[0], context="shadow")
+    proton.start(str(temp_file.with_suffix("")), context="shadow")
 
     # warmup
     # four kernels
@@ -96,7 +96,7 @@ def test_cudagraph(tmp_path):
     proton.exit_scope()
     proton.finalize()
 
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     # CUDA/HIP graph may also invoke additional kernels to reset outputs
     # {torch.ones, add, foo, test}
@@ -125,11 +125,11 @@ def test_metrics(tmp_path):
     x = torch.tensor([2], device="cuda")
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics.hatchet"
-    proton.start(str(temp_file).split(".")[0])
+    proton.start(str(temp_file.with_suffix("")))
     with proton.scope("test0", {"foo": 1.0}):
         foo[(1, )](x, y)
     proton.finalize()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     assert len(data[0]["children"]) == 1
     assert data[0]["children"][0]["frame"]["name"] == "test0"
@@ -145,20 +145,20 @@ def test_metrics_ignore(tmp_path):
     x = torch.tensor([2], device="cuda")
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics_ignore.hatchet"
-    session_id = proton.start(str(temp_file).split(".")[0])
+    session_id = proton.start(str(temp_file.with_suffix("")))
     proton.deactivate(session_id)
     with proton.scope("test0", {"foo": 1.0}):
         foo[(1, )](x, y)
     proton.activate(session_id)
     proton.finalize()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     assert len(data[0]["children"]) == 0
 
 
 def test_scope_backward(tmp_path):
     temp_file = tmp_path / "test_scope_backward.hatchet"
-    proton.start(str(temp_file).split(".")[0])
+    proton.start(str(temp_file.with_suffix("")))
     with proton.scope("ones1"):
         a = torch.ones((100, 100), device="cuda", requires_grad=True)
     with proton.scope("plus"):
@@ -170,7 +170,7 @@ def test_scope_backward(tmp_path):
     with proton.scope("backward"):
         a2.backward(loss)
     proton.finalize()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     assert len(data[0]["children"]) == 4
 
@@ -193,11 +193,11 @@ def test_hook(tmp_path):
     x = torch.tensor([2], device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook.hatchet"
-    proton.start(str(temp_file).split(".")[0], hook="triton")
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
     proton.finalize()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     assert len(data[0]["children"]) == 1
     assert data[0]["children"][0]["frame"]["name"] == "test0"
@@ -221,14 +221,14 @@ def test_pcsampling(tmp_path):
             tl.store(y + offs, tl.load(x + offs))
 
     temp_file = tmp_path / "test_pcsampling.hatchet"
-    proton.start(str(temp_file).split(".")[0], hook="triton", backend="cupti_pcsampling")
+    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti_pcsampling")
     with proton.scope("init"):
         x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
     proton.finalize()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     init_frame = data[0]["children"][0]
     test_frame = data[0]["children"][1]
@@ -243,14 +243,14 @@ def test_pcsampling(tmp_path):
 
 def test_deactivate(tmp_path):
     temp_file = tmp_path / "test_deactivate.hatchet"
-    session_id = proton.start(str(temp_file).split(".")[0], hook="triton")
+    session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.deactivate(session_id)
     torch.randn((10, 10), device="cuda")
     proton.activate(session_id)
     torch.zeros((10, 10), device="cuda")
     proton.deactivate(session_id)
     proton.finalize()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     # Root shouldn't have device id
     assert "device_id" not in data[0]["metrics"]
