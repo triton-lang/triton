@@ -3,7 +3,7 @@ import triton.profiler as proton
 import pathlib
 
 
-def test_profile(tmp_path):
+def test_profile(tmp_path: pathlib.Path):
     temp_file0 = tmp_path / "test_profile0.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")))
     proton.activate()
@@ -29,7 +29,7 @@ def test_profile(tmp_path):
     pathlib.Path("test.hatchet").unlink()
 
 
-def test_profile_decorator(tmp_path):
+def test_profile_decorator(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_profile_decorator.hatchet"
 
     @proton.profile(name=str(temp_file.with_suffix("")))
@@ -51,7 +51,7 @@ def test_profile_decorator(tmp_path):
     default_file.unlink()
 
 
-def test_scope(tmp_path):
+def test_scope(tmp_path: pathlib.Path):
     # Scope can be annotated even when profiling is off
     with proton.scope("test"):
         pass
@@ -73,7 +73,7 @@ def test_scope(tmp_path):
     assert temp_file.exists()
 
 
-def test_hook(tmp_path):
+def test_hook(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_hook.hatchet"
     session_id0 = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.activate(session_id0)
@@ -82,7 +82,7 @@ def test_hook(tmp_path):
     assert temp_file.exists()
 
 
-def test_scope_metrics(tmp_path):
+def test_scope_metrics(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_scope_metrics.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")))
     # Test different scope creation methods
@@ -118,7 +118,7 @@ def test_scope_metrics(tmp_path):
             assert child["metrics"]["a"] == 2.0
 
 
-def test_scope_properties(tmp_path):
+def test_scope_properties(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     # Test different scope creation methods
@@ -150,7 +150,7 @@ def test_scope_properties(tmp_path):
             assert child["metrics"]["a"] == "1"
 
 
-def test_throw(tmp_path):
+def test_throw(tmp_path: pathlib.Path):
     # Catch an exception thrown by c++
     session_id = 100
     temp_file = tmp_path / "test_throw.hatchet"

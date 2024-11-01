@@ -4,6 +4,7 @@ import triton.profiler as proton
 import json
 import pytest
 from typing import NamedTuple
+import pathlib
 
 import triton.language as tl
 
@@ -13,7 +14,7 @@ def is_hip():
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
-def test_torch(context, tmp_path):
+def test_torch(context, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_torch.hatchet"
     proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
@@ -37,7 +38,7 @@ def test_torch(context, tmp_path):
         assert "elementwise_kernel" in prev_frame[0]["frame"]["name"]
 
 
-def test_triton(tmp_path):
+def test_triton(tmp_path: pathlib.Path):
 
     @triton.jit
     def foo(x, y):
@@ -62,7 +63,7 @@ def test_triton(tmp_path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-def test_cudagraph(tmp_path):
+def test_cudagraph(tmp_path: pathlib.Path):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -116,7 +117,7 @@ def test_cudagraph(tmp_path):
     assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
-def test_metrics(tmp_path):
+def test_metrics(tmp_path: pathlib.Path):
 
     @triton.jit
     def foo(x, y):
@@ -136,7 +137,7 @@ def test_metrics(tmp_path):
     assert data[0]["children"][0]["metrics"]["foo"] == 1.0
 
 
-def test_metrics_ignore(tmp_path):
+def test_metrics_ignore(tmp_path: pathlib.Path):
 
     @triton.jit
     def foo(x, y):
@@ -156,7 +157,7 @@ def test_metrics_ignore(tmp_path):
     assert len(data[0]["children"]) == 0
 
 
-def test_scope_backward(tmp_path):
+def test_scope_backward(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_scope_backward.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     with proton.scope("ones1"):
@@ -175,7 +176,7 @@ def test_scope_backward(tmp_path):
     assert len(data[0]["children"]) == 4
 
 
-def test_hook(tmp_path):
+def test_hook(tmp_path: pathlib.Path):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         # get arg's element size
@@ -206,7 +207,7 @@ def test_hook(tmp_path):
     assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-def test_pcsampling(tmp_path):
+def test_pcsampling(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support pc sampling")
 
@@ -241,7 +242,7 @@ def test_pcsampling(tmp_path):
     assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
-def test_deactivate(tmp_path):
+def test_deactivate(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_deactivate.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.deactivate(session_id)

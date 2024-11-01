@@ -1,6 +1,7 @@
 import importlib.util
 import itertools
 import shutil
+import pathlib
 
 import pytest
 import torch
@@ -128,7 +129,7 @@ def test_combine_fn_change():
         seen_keys.add(key)
 
 
-def write_and_load_module(temp_file, code, num_extra_lines):
+def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
     spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
     module = importlib.util.module_from_spec(spec)
@@ -136,7 +137,7 @@ def write_and_load_module(temp_file, code, num_extra_lines):
     return module
 
 
-def test_changed_line_numbers_invalidate_cache(tmp_path):
+def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
     from textwrap import dedent
     code = dedent("""
         import triton

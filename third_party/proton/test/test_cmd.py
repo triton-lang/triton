@@ -1,6 +1,7 @@
 import pytest
 import subprocess
 import json
+import pathlib
 
 
 def test_help():
@@ -10,7 +11,7 @@ def test_help():
 
 
 @pytest.mark.parametrize("mode", ["script", "python", "pytest"])
-def test_exec(mode, tmp_path):
+def test_exec(mode, tmp_path: pathlib.Path):
     file_path = __file__
     helper_file = file_path.replace("test_cmd.py", "helper.py")
     temp_file = tmp_path / "test_exec.hatchet"
