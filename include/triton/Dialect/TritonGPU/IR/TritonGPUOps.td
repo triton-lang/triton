@@ -280,7 +280,7 @@ def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<In
 def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
   let summary = "allocate a global memory buffer";
   let description = [{
-    This operation allocates a buffer in global memory.
+    This operation allocates a buffer in global memory that is private to the current program.
   }];
   let arguments = (
     ins

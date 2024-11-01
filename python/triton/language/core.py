@@ -714,6 +714,12 @@ class _value:
     def __init__(self, handle):
         self.handle = handle
 
+    def _flatten_ir(self):
+        raise NotImplementedError
+
+    def _unflatten_ir(self, handles):
+        raise NotImplementedError
+
 
 # -----------------------
 # tensor
@@ -754,6 +760,13 @@ class tensor(_value):
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
         self.shape = [constexpr(s) for s in self.shape]
+
+    def _flatten_ir(self):
+        return [self.handle]
+
+    def _unflatten_ir(self, handles):
+        assert len(handles) == 1
+        return tensor(handles[0], self.type)
 
     def __str__(self) -> str:
         # ex. "float32[16, 32]"
@@ -1140,9 +1153,24 @@ class _experimental_tensor_descriptor(_value):
         # Global shape
         self.shape = shape
         self.strides = strides
+
         self.type = type  # Tensor type (block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
+
+    def _flatten_ir(self):
+        handles = [self.handle]
+        handles.extend(s.handle for s in self.shape)
+        handles.extend(s.handle for s in self.strides)
+        return handles
+
+    def _unflatten_ir(self, handles):
+        ndim = len(self.shape)
+        assert len(handles) == 2 * ndim + 1
+        handle = handles[0]
+        shape = [tensor(handle, s.type) for handle, s in zip(handles[1:1 + ndim], self.shape)]
+        strides = [tensor(handle, s.type) for handle, s in zip(handles[1 + ndim:], self.strides)]
+        return _experimental_tensor_descriptor(handle, shape, strides, self.type)
 
     @builtin
     def _as_ptr(self, _builder):
