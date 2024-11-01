@@ -95,6 +95,7 @@ static void setStageCluster(scf::ForOp &forOp, Operation *op, int stage,
               IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
 }
 
+// Return the minClusterId and maxClusterId for the given ForOp.
 static std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp) {
   int minClusterId = -1, maxClusterId = -1;
   for (auto &op : forOp.getBody()->without_terminator()) {
@@ -684,6 +685,8 @@ static void createTMABarrierAndWait(
   }
 }
 
+// Similar to CoarseSchedule::insertDepsOfOp, we set <stage, cluster>
+// for ops that are on the def chain for the given op.
 static void insertDepsOfOpOnAttributes(scf::ForOp forOp, Operation *op,
                                        int stage, int cluster,
                                        bool includeArg) {
@@ -714,21 +717,19 @@ static void insertDepsOfOpOnAttributes(scf::ForOp forOp, Operation *op,
   }
 }
 
+// For ops that don't have <stage, cluster>, try to add them stage by stage.
+// This is similar to scheduleDependencies in loopScheduling.
 static void scheduleDependenciesOnAttributes(scf::ForOp forOp, int numStages) {
   auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
 
   SmallVector<SmallVector<std::tuple<Operation *, int, int>>, 8> orderClusters(
       maxClusterId + 1);
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (op.hasAttr("loop.stage") && op.hasAttr("loop.cluster")) {
-      auto clusterId = cast<IntegerAttr>(op.getAttr("loop.cluster"))
-                           .getValue()
-                           .getSExtValue();
-      auto stage =
-          cast<IntegerAttr>(op.getAttr("loop.stage")).getValue().getSExtValue();
-      orderClusters[clusterId].push_back(
-          std::make_tuple(&op, stage, clusterId));
-    }
+    if (!op.hasAttr("loop.stage") || !op.hasAttr("loop.cluster"))
+      continue;
+
+    auto [stage, clusterId] = getStageCluster(&op);
+    orderClusters[clusterId].push_back(std::make_tuple(&op, stage, clusterId));
   }
 
   SmallVector<std::tuple<Operation *, int, int>> opsInOrder;
@@ -746,6 +747,30 @@ static void scheduleDependenciesOnAttributes(scf::ForOp forOp, int numStages) {
       insertDepsOfOpOnAttributes(forOp, op, stage, cluster, false);
     }
   }
+}
+
+// This is similar to CoarseSchedule.createFinalSchedule.
+static std::vector<std::pair<Operation *, unsigned>>
+getFinalSchedule(scf::ForOp &forOp, int numStages) {
+  auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
+  SmallVector<SmallVector<Operation *>, 8> orderClusters(maxClusterId -
+                                                         minClusterId + 1);
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (!op.hasAttr("loop.stage") || !op.hasAttr("loop.cluster"))
+      continue;
+
+    auto [stage, clusterId] = getStageCluster(&op);
+    assert(stage < numStages && "Op with invalid stage!");
+    orderClusters[clusterId - minClusterId].push_back(&op);
+  }
+  std::vector<std::pair<Operation *, unsigned>> fSchedule;
+  for (int i = 0; i < orderClusters.size(); i++) {
+    for (auto op : orderClusters[i]) {
+      auto [stage, _] = getStageCluster(op);
+      fSchedule.push_back({op, stage});
+    }
+  }
+  return fSchedule;
 }
 
 // Convert load ops into their asyn version and apply multi-buffering based on
@@ -887,29 +912,6 @@ static void invalidateBarriers(OpBuilder &builder,
       builder.create<ttng::InvalBarrierOp>(barrier.getLoc(), barrierView);
     }
   }
-}
-
-static std::vector<std::pair<Operation *, unsigned>>
-getFinalSchedule(scf::ForOp &forOp, int numStages) {
-  auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
-  SmallVector<SmallVector<Operation *>, 8> orderClusters(maxClusterId -
-                                                         minClusterId + 1);
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr("loop.stage") || !op.hasAttr("loop.cluster"))
-      continue;
-
-    auto [stage, clusterId] = getStageCluster(&op);
-    assert(stage < numStages && "Op with invalid stage!");
-    orderClusters[clusterId - minClusterId].push_back(&op);
-  }
-  std::vector<std::pair<Operation *, unsigned>> fSchedule;
-  for (int i = 0; i < orderClusters.size(); i++) {
-    for (auto op : orderClusters[i]) {
-      auto [stage, _] = getStageCluster(op);
-      fSchedule.push_back({op, stage});
-    }
-  }
-  return fSchedule;
 }
 
 bool mlir::triton::preProcessLoopAndGetSchedule(
