@@ -520,29 +520,6 @@ assignMemoryLayouts(scf::ForOp &forOp,
   return loadToInfo;
 }
 
-static std::vector<std::pair<Operation *, unsigned>>
-getFinalSchedule(scf::ForOp &forOp, int numStages) {
-  auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
-  SmallVector<SmallVector<Operation *>, 8> orderClusters(maxClusterId -
-                                                         minClusterId + 1);
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr("loop.stage") || !op.hasAttr("loop.cluster"))
-      continue;
-
-    auto [stage, clusterId] = getStageCluster(&op);
-    assert(stage < numStages && "Op with invalid stage!");
-    orderClusters[clusterId - minClusterId].push_back(&op);
-  }
-  std::vector<std::pair<Operation *, unsigned>> fSchedule;
-  for (int i = 0; i < orderClusters.size(); i++) {
-    for (auto op : orderClusters[i]) {
-      auto [stage, _] = getStageCluster(op);
-      fSchedule.push_back({op, stage});
-    }
-  }
-  return fSchedule;
-}
-
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
                          ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
@@ -910,6 +887,29 @@ static void invalidateBarriers(OpBuilder &builder,
       builder.create<ttng::InvalBarrierOp>(barrier.getLoc(), barrierView);
     }
   }
+}
+
+static std::vector<std::pair<Operation *, unsigned>>
+getFinalSchedule(scf::ForOp &forOp, int numStages) {
+  auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
+  SmallVector<SmallVector<Operation *>, 8> orderClusters(maxClusterId -
+                                                         minClusterId + 1);
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (!op.hasAttr("loop.stage") || !op.hasAttr("loop.cluster"))
+      continue;
+
+    auto [stage, clusterId] = getStageCluster(&op);
+    assert(stage < numStages && "Op with invalid stage!");
+    orderClusters[clusterId - minClusterId].push_back(&op);
+  }
+  std::vector<std::pair<Operation *, unsigned>> fSchedule;
+  for (int i = 0; i < orderClusters.size(); i++) {
+    for (auto op : orderClusters[i]) {
+      auto [stage, _] = getStageCluster(op);
+      fSchedule.push_back({op, stage});
+    }
+  }
+  return fSchedule;
 }
 
 bool mlir::triton::preProcessLoopAndGetSchedule(
