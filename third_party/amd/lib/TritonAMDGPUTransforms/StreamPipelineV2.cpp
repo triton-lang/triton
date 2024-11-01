@@ -19,7 +19,7 @@
 // modulo schedule and an expander that rewrites the loop and emits a prologue
 // and epilogue. This pass first calls a helper that will pre-process the IR
 // to create stream operations and create a modulo schedule. Then we call the
-// expander to generate the prologue and new loop.
+// expander to generate the prologue and new loop and epilogue.
 //===----------------------------------------------------------------------===//
 
 #define GEN_PASS_CLASSES
@@ -56,23 +56,49 @@ static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
 
 namespace {
 
-// Encapsulate stream pipelining
-// For each `scf.for` create a StreamPipeliner manager.
+//===----------------------------------------------------------------------===//
+// Software pipelining generally works by anchoring on global load ops in the
+// main loop and rotating the loop to schedule global load ops for future loop
+// iterations together with compute for the current iteration. In this way, we
+// can 1) issue memory operations earlier to hide the latency and 2) break the
+// strong dependency inside on loop iteration to give backends flexiblity to
+// better interleave instructions for better instruction-level parallelism.
+// 
+// This StreamPipeliner class creates the pipelining schedule and calls the
+// PipelineExpander to rewrite the `scf.for` loop accordingly. A schedule consists
+// of multiple stages, where ops from different stages can overlap executions
+// because the dependencies are loop carried.
+//
+// The general flow of this process is:
+//
+// 1. The user provides a `num_stages` that specifies how many stages the
+//    pipeline will have. The number of stages must be larger than the distance
+//    from the first independent load to the compute in order to pipeline.
+// 2. A schedule is created based on the distance between the global loads
+//    in the first stages and the compute that uses the loaded values in the
+//    last stage (num_stages - 1). Each operation will be clustered in the
+//    order to best overlap with other operations (see details below in the
+//    initSchedule method).
+// 3. When the compute is a tt.dot, the scheduler will insert a shared
+//    memory allocation between the global load and tt.dot. The ttg.local_store
+//    will save the global load value to shared memory and the ttg.local_load
+//    will load the relevant tiles for the tt.dot. These operations will be
+//    scheduled according to various scheduling schemes outlined below in the
+//    initSchedule method (see details there).
+// 4. Finally the schedule will be passed to the PipelineExpander to rewrite
+//    accordingly. The new implementation will consist of:
+//    a. Prologue: containing the ramp-up of num_stages-1 stages for
+//       iteratorions i=0 to num_stages-1.
+//    b. New loop: ordered by cluster and iterated on each operation by
+//       `i + (num_stages-op_stage)`.
+//    c. Epilogue: ramp-down of the last `num_stages-1` iterations for the
+//       ops in stages 1 to last_stage. This must consider that the loop
+//       bounds may be shorter than num_stages. In this case, the epilogue
+//       iterations must align with the prologue.
+// 
 class StreamPipeliner {
 public:
-  enum SchedType {
-    SCHED_GLOBAL_LOAD,
-    SCHED_LOCAL_STORE,
-    SCHED_LOCAL_LOAD,
-    SCHED_COMPUTE,
-    SCHED_TAIL
-  };
-  struct ScheduleConfig {
-    int stage;
-    tt::CoarseSchedule::Cluster cluster;
-  };
-
-  StreamPipeliner(scf::ForOp _forOp, int _numStages, int _prefetch)
+  StreamPipeliner(scf::ForOp _forOp, int _numStages, bool _prefetch)
       : forOp(_forOp), prefetch(_prefetch ? 1 : 0),
         numStages(_numStages + prefetch), schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
@@ -81,11 +107,10 @@ public:
     options.predicateFn = streamPredication;
   }
 
-  void scheduleOp(Operation *op, SchedType type, int stage = -1) {
-    if (stage < 0)
-      stage = config[type].stage;
-    schedule.insert(op, stage, config[type].cluster);
-  }
+  LogicalResult pipelineLoop();
+
+private:
+  void initSchedule(int maxIndirectionLevel);
 
   void computeLoadOpsToIndirectionLevelAndUse();
   void assignMemoryLayouts();
@@ -95,23 +120,49 @@ public:
   void scheduleRemainingToLastStage();
 
   LogicalResult preprocessLoopAndBuildSchedule();
-  bool pipelineLoop();
 
   Value createAlloc(Operation *loadOp, ttg::SharedEncodingAttr sharedEnc,
                     unsigned numBuffers);
   void createStreamCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamOps();
 
-  void initSchedule(int maxIndirectionLevel);
+  // Define categories of scheduling details per Operation types.
+  // The StreamPipeliner schedules 5 types of operations:
+  // 1. GLOBAL_LOAD: tt.load
+  // 2. LOCAL_STORE: ttg.local_store (created by the StreamPipeliner)
+  // 3. LOCAL_LOAD:  ttg.local_load (created by the StreamPipeliner)
+  // 4. COMPUTE:     ops that use the loaded data
+  // 5. TAIL:        everything else in the loop
+  enum SchedType {
+    SCHED_GLOBAL_LOAD,
+    SCHED_LOCAL_STORE,
+    SCHED_LOCAL_LOAD,
+    SCHED_COMPUTE,
+    SCHED_TAIL
+  };
+
+  void scheduleOp(Operation *op, SchedType type, int stage = -1) {
+    if (stage < 0)
+      stage = config[type].stage;
+    schedule.insert(op, stage, config[type].cluster);
+  }
 
 private:
+  // Data members
   scf::ForOp forOp;
-  int prefetch;
+
   int numStages;
+  bool prefetch;
 
   // Scheduling clusters
   tt::CoarseSchedule schedule;
-  SmallVector<ScheduleConfig, 4> config;
+
+  // ScheduleConfig lookup by SchedType to get the stage and cluster.
+  struct ScheduleConfig {
+    int stage;
+    tt::CoarseSchedule::Cluster cluster;
+  };
+  SmallVector<ScheduleConfig, 5> config;
 
   // Mapping and indirection level for each `tt.load` to its use.
   SmallVector<std::tuple<Operation *, int, Operation *>> loadOpToIndLevelAndUse;
@@ -139,21 +190,61 @@ private:
 
 } // namespace
 
+// Init Schedule Config based on settings and loop characteristics.
+// Create clusters in order of ops in loop.
+//   WARNING: do not reorder schedule.clusters.newAtBack() calls
+//            unless you want a different operation order in the loop.
 void StreamPipeliner::initSchedule(int maxIndirectionLevel) {
-  SmallVector<tt::CoarseSchedule::Cluster, 4> clusters;
-  for (int i = 0; i < 4 + prefetch; ++i)
-    clusters.push_back(schedule.clusters.newAtBack());
-
   int lastStage = numStages - 1;
-  int prefetchOrMultibuf = prefetch || numStages > (2 + maxIndirectionLevel);
+  config.resize(SCHED_TAIL + 1);
 
-  config.resize(5);
-  config[SCHED_GLOBAL_LOAD] = {0, clusters[prefetchOrMultibuf]};
-  config[SCHED_LOCAL_STORE] = {lastStage - 1,
-                               clusters[prefetchOrMultibuf ? 0 : 2]};
-  config[SCHED_LOCAL_LOAD] = {lastStage - prefetch, clusters[prefetch + 1]};
-  config[SCHED_COMPUTE] = {lastStage, clusters[prefetchOrMultibuf]};
-  config[SCHED_TAIL] = {lastStage, clusters.back()};
+  bool isMultibuf = numStages > (2 + maxIndirectionLevel);
+  if (prefetch) {
+    // Prefetch Schema cluster order and staging.
+    // for i in (...):
+    //   local_stores: stage=i+1
+    //   global_loads: stage=i+2
+    //   compute:      stage=i
+    //   local_load:   stage=i+1
+    //   tail:         stage=i
+    config[SCHED_LOCAL_STORE] = {lastStage - 1,
+        schedule.clusters.newAtBack()};
+    auto cluster1 = schedule.clusters.newAtBack();
+    config[SCHED_GLOBAL_LOAD] = {0, cluster1};
+    config[SCHED_COMPUTE] = {lastStage, cluster1};
+    config[SCHED_LOCAL_LOAD] = {lastStage - 1,
+        schedule.clusters.newAtBack()};
+    config[SCHED_TAIL] = {lastStage,
+        schedule.clusters.newAtBack()};
+  } else if (isMultibuf) {
+    // Streaming Schema cluster order and staging for multi-buffer.
+    // for i in (...):
+    //   local_stores: stage=i+1
+    //   global_loads: stage=i+2
+    //   local_load:   stage=i
+    //   compute:      stage=i
+    //   tail:         stage=i
+    config[SCHED_LOCAL_STORE] = {lastStage - 1, schedule.clusters.newAtBack()};
+    auto cluster1 = schedule.clusters.newAtBack();
+    config[SCHED_GLOBAL_LOAD] = {0, cluster1};
+    config[SCHED_LOCAL_LOAD] = {lastStage, cluster1};
+    config[SCHED_COMPUTE] = {lastStage, cluster1};
+    config[SCHED_TAIL] = {lastStage, schedule.clusters.newAtBack()};
+  } else {
+    // Streaming Schema cluster order and staging for single-buffer.
+    // for i in (...):
+    //   global_loads: stage=i+1
+    //   local_load:   stage=i
+    //   compute:      stage=i
+    //   local_stores: stage=i+1
+    //   tail:         stage=i
+    auto cluster0 = schedule.clusters.newAtBack();
+    config[SCHED_GLOBAL_LOAD] = {0, cluster0};
+    config[SCHED_LOCAL_LOAD] = {lastStage, schedule.clusters.newAtBack()};
+    config[SCHED_COMPUTE] = {lastStage, cluster0};
+    config[SCHED_LOCAL_STORE] = {lastStage - 1, schedule.clusters.newAtBack()};
+    config[SCHED_TAIL] = {lastStage, schedule.clusters.newAtBack()};
+  }
 }
 
 void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
@@ -208,15 +299,6 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   Value result = sharedLoad.getResult();
   if (prefetch)
     scheduleOp(sharedLoad, SCHED_LOCAL_LOAD);
-
-  // Create a select for non-zero other values.
-  if (other && !isZeroConst(other)) {
-    auto select = builder.create<arith::SelectOp>(
-        loc, loadOp.getType(), mask, sharedLoad.getResult(), other);
-    if (prefetch)
-      scheduleOp(select, SCHED_LOCAL_LOAD);
-    result = select.getResult();
-  }
 
   // If the currently processed `LoadOp` is labeled with an index regarding
   // to which `DotOp` operand the corresponding data belongs to, then label the
@@ -365,14 +447,18 @@ void StreamPipeliner::assignMemoryLayouts() {
         cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
     unsigned width = vec * pointeeTy.getIntOrFloatBitWidth();
 
+    // Limit shared memory sharing to width >= 32 elements.
+    LDBG("Load " << *loadOp << " has width " << width);
+    if (width < 32) {
+      LDBG("Skip width<32 load " << *loadOp);
+      continue;
+    }
+
     if (use->hasTrait<OpTrait::DotLike>()) {
       // Only use shared memory when feeding into a dot op.
       loadInfo.usedByDot = true;
-      // Limit shared memory sharing to width >= 32 elements.
-      if (width >= 32) {
-        loadInfo.sharedEncoding =
-            getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
-      }
+      loadInfo.sharedEncoding =
+          getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
     } else if (auto useOp = dyn_cast<tt::LoadOp>(use)) {
       // The use of this loadOp is another loadOp. If the use is not in the
       // loadToInfo already, it means that the use is not valid for pipelining
@@ -503,15 +589,10 @@ void StreamPipeliner::scheduleDistanceOneDependencies() {
   // Mapping from the cluster to the cluster before it.
   DenseMap<tt::CoarseSchedule::Cluster *, tt::CoarseSchedule::Cluster>
       dist1Cluster;
-  int current_stage = 0;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0) {
-      if (isa<gpu::BarrierOp>(&op))
-        scheduleOp(&op, SCHED_GLOBAL_LOAD, current_stage);
+    if (schedule.count(&op) == 0)
       continue;
-    }
     auto [stage, cluster] = schedule[&op];
-    current_stage = stage;
     // Can't schedule past the last stage.
     if (stage == numStages - 1)
       continue;
@@ -541,20 +622,22 @@ void StreamPipeliner::scheduleDistanceOneDependencies() {
 }
 
 void StreamPipeliner::scheduleRemainingToLastStage() {
+  int lastStage = numStages - 1;
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
-  auto cluster = config[SCHED_TAIL].cluster;
   DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0)
-      opToCluster[&op] = cluster;
+    if (schedule.count(&op) == 0) {
+      auto schedType = isa<gpu::BarrierOp>(op) ? SCHED_COMPUTE : SCHED_TAIL;
+      opToCluster[&op] = config[schedType].cluster;
+    }
   }
   SmallVector<Operation *> queue;
   for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
     // We really only care about the producers from the last stage.
     // Others will be scheduled before these ops anyway.
-    if (stage == numStages - 1) {
+    if (stage == lastStage) {
       queue.push_back(op);
     }
   }
@@ -572,7 +655,7 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
     }
   }
   for (auto [op, cluster] : opToCluster) {
-    schedule.insert(op, numStages - 1, cluster);
+    schedule.insert(op, lastStage, cluster);
   }
 }
 
@@ -710,6 +793,16 @@ LogicalResult StreamPipeliner::preprocessLoopAndBuildSchedule() {
   return success();
 }
 
+LogicalResult StreamPipeliner::pipelineLoop() {
+  if (failed(preprocessLoopAndBuildSchedule()))
+    return failure();
+  LDBG("Loop before sending to expander:\n" << *forOp);
+
+  IRRewriter rewriter(forOp->getContext());
+  rewriter.setInsertionPoint(forOp);
+  return tt::pipelineForLoop(rewriter, forOp, options);
+}
+
 // Return true if the preconditions for pipelining the loop are met.
 static bool checkPrecondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
@@ -725,19 +818,6 @@ static bool checkPrecondition(scf::ForOp forOp) {
     return WalkResult::advance();
   };
   return !forOp->walk(hasNestedLoopInside).wasInterrupted();
-}
-
-bool StreamPipeliner::pipelineLoop() {
-  if (!checkPrecondition(forOp))
-    return false;
-
-  if (failed(preprocessLoopAndBuildSchedule()))
-    return false;
-  LDBG("Loop before sending to expander:\n" << *forOp);
-
-  IRRewriter rewriter(forOp->getContext());
-  rewriter.setInsertionPoint(forOp);
-  return succeeded(tt::pipelineForLoop(rewriter, forOp, options));
 }
 
 namespace {
@@ -793,8 +873,11 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineV2Base<PipelinePass> {
     });
 
     for (scf::ForOp forOp : loops) {
+      if (!checkPrecondition(forOp))
+        continue;
       StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), prefetch);
-      sp.pipelineLoop();
+      if (failed(sp.pipelineLoop()))
+        continue;
     }
   }
 

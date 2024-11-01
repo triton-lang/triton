@@ -21,7 +21,7 @@ def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir
            "Number of Pipeline stages">,
     Option<"prefetch", "prefetch",
            "int32_t", /*default*/"0",
-           "Enable prefetch(V3)">
+           "Enable prefetch from shared memory">
   ];
 }
 
