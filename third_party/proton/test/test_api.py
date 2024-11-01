@@ -32,7 +32,7 @@ def test_profile(tmp_path):
 def test_profile_decorator(tmp_path):
     temp_file = tmp_path / "test_profile_decorator.hatchet"
 
-    @proton.profile(name=str(temp_file).split(".")[0])
+    @proton.profile(name=str(temp_file.with_suffix("")))
     def foo0(a, b):
         return a + b
 
@@ -110,7 +110,7 @@ def test_scope_metrics(tmp_path):
 
     proton.finalize()
     assert temp_file.exists()
-    with open(str(temp_file)) as f:
+    with temp_file.open() as f:
         data = json.load(f)
     assert len(data[0]["children"]) == 3
     for child in data[0]["children"]:

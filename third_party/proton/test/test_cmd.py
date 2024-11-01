@@ -24,7 +24,7 @@ def test_exec(mode, tmp_path):
         ret = subprocess.check_call(["proton", "-n", name, "pytest", "-k", "test_main", helper_file],
                                     stdout=subprocess.DEVNULL)
     assert ret == 0
-    with open(name) as f:
+    with temp_file.open() as f:
         data = json.load(f, )
     kernels = data[0]["children"]
     assert len(kernels) == 2
