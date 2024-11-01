@@ -93,3 +93,39 @@ into LLVM AMDGPU instruction scheduling primitives, which are meant to control
 how different kinds of instructions (valu/mfma, global/shared memory, etc.) should
 interleave for better instruction level parallelism.
 
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>numDsReadsA</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
+    The attribute holds the number of issued LLVM instructions of a specific kind as well as
+    the data type.
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>numDsReadsB</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
+    The attribute holds the number of issued LLVM instructions of a specific kind as well as
+    the data type.
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>numDsWritesA</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
+    The attribute holds the number of issued LLVM instructions of a specific kind as well as
+    the data type.
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>numDsWritesB</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
+    The attribute holds the number of issued LLVM instructions of a specific kind as well as
+    the data type.
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>numGlobalLoadsA</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
+    The attribute holds the number of issued LLVM instructions of a specific kind as well as
+    the data type.
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>numGlobalLoadsB</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
+    The attribute holds the number of issued LLVM instructions of a specific kind as well as
+    the data type.
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>isBufferLoadsAEnabled</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>isBufferLoadsBEnabled</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+<tr><td><code>numMMAs</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
+    The attribute holds the number of issued LLVM instructions of a specific kind as well as
+    the data type.
+  {{% /markdown %}}</details></td></tr>
+</table>
+

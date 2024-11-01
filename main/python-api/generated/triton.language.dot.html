@@ -22,7 +22,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.language.load" href="triton.language.load.html" />
+    <link rel="next" title="triton.language.dot_scaled" href="triton.language.dot_scaled.html" />
     <link rel="prev" title="triton.language.view" href="triton.language.view.html" /> 
 </head>
 
@@ -63,6 +63,7 @@
 <li class="toctree-l4"><a class="reference internal" href="#triton.language.dot"><code class="docutils literal notranslate"><span class="pre">dot()</span></code></a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="triton.language.dot_scaled.html">triton.language.dot_scaled</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#memory-pointer-ops">Memory/Pointer Ops</a></li>
@@ -129,8 +130,8 @@ where the first dimension of each block represents the batch dimension.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>input</strong> (2D or 3D tensor of scalar-type in {<code class="code docutils literal notranslate"><span class="pre">int8</span></code>, :code: <cite>float8_e5m2</cite>, <code class="code docutils literal notranslate"><span class="pre">float16</span></code>, <code class="code docutils literal notranslate"><span class="pre">bfloat16</span></code>, <code class="code docutils literal notranslate"><span class="pre">float32</span></code>}) – The first tensor to be multiplied.</p></li>
-<li><p><strong>other</strong> (2D or 3D tensor of scalar-type in {<code class="code docutils literal notranslate"><span class="pre">int8</span></code>, :code: <cite>float8_e5m2</cite>, <code class="code docutils literal notranslate"><span class="pre">float16</span></code>, <code class="code docutils literal notranslate"><span class="pre">bfloat16</span></code>, <code class="code docutils literal notranslate"><span class="pre">float32</span></code>}) – The second tensor to be multiplied.</p></li>
+<li><p><strong>input</strong> (2D or 3D tensor of scalar-type in {<code class="code docutils literal notranslate"><span class="pre">int8</span></code>, <code class="code docutils literal notranslate"><span class="pre">float8_e5m2</span></code>, <code class="code docutils literal notranslate"><span class="pre">float16</span></code>, <code class="code docutils literal notranslate"><span class="pre">bfloat16</span></code>, <code class="code docutils literal notranslate"><span class="pre">float32</span></code>}) – The first tensor to be multiplied.</p></li>
+<li><p><strong>other</strong> (2D or 3D tensor of scalar-type in {<code class="code docutils literal notranslate"><span class="pre">int8</span></code>, <code class="code docutils literal notranslate"><span class="pre">float8_e5m2</span></code>, <code class="code docutils literal notranslate"><span class="pre">float16</span></code>, <code class="code docutils literal notranslate"><span class="pre">bfloat16</span></code>, <code class="code docutils literal notranslate"><span class="pre">float32</span></code>}) – The second tensor to be multiplied.</p></li>
 <li><p><strong>acc</strong> (2D or 3D tensor of scalar-type in {<code class="code docutils literal notranslate"><span class="pre">float16</span></code>, <code class="code docutils literal notranslate"><span class="pre">float32</span></code>, <code class="code docutils literal notranslate"><span class="pre">int32</span></code>}) – The accumulator tensor. If not None, the result is added to this tensor.</p></li>
 <li><p><strong>input_precision</strong> (string. Available options for nvidia: <code class="code docutils literal notranslate"><span class="pre">&quot;tf32&quot;</span></code>, <code class="code docutils literal notranslate"><span class="pre">&quot;tf32x3&quot;</span></code>, <code class="code docutils literal notranslate"><span class="pre">&quot;ieee&quot;</span></code>. Default: <code class="code docutils literal notranslate"><span class="pre">&quot;tf32&quot;</span></code>. Avaliable options for amd: <code class="code docutils literal notranslate"><span class="pre">&quot;ieee&quot;</span></code>.) – How to exercise the Tensor Cores for f32 x f32. If
 the device does not have Tensor Cores or the inputs are not of dtype f32,
@@ -151,7 +152,7 @@ specified (i.e. at least one must be <code class="code docutils literal notransl
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="triton.language.view.html" class="btn btn-neutral float-left" title="triton.language.view" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.language.load.html" class="btn btn-neutral float-right" title="triton.language.load" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.language.dot_scaled.html" class="btn btn-neutral float-right" title="triton.language.dot_scaled" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

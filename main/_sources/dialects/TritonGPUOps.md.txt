@@ -340,12 +340,13 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>fp_type</code></td><td>::mlir::triton::F8F6F4TypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
+<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5</summary>{{% markdown %}}Enum cases:
 * e4m3 (`E4M3`)
 * e5m2 (`E5M2`)
 * e2m3 (`E2M3`)
 * e3m2 (`E3M2`)
-* e2m1 (`E2M1`){{% /markdown %}}</details></td></tr>
+* e2m1 (`E2M1`)
+* bf16 (`BF16`){{% /markdown %}}</details></td></tr>
 </table>
 
 #### Operands:

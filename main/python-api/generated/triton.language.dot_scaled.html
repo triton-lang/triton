@@ -6,7 +6,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>triton.language.load &mdash; Triton  documentation</title>
+  <title>triton.language.dot_scaled &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
@@ -22,8 +22,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.language.store" href="triton.language.store.html" />
-    <link rel="prev" title="triton.language.dot_scaled" href="triton.language.dot_scaled.html" /> 
+    <link rel="next" title="triton.language.load" href="triton.language.load.html" />
+    <link rel="prev" title="triton.language.dot" href="triton.language.dot.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -58,17 +58,15 @@
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#programming-model">Programming Model</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#creation-ops">Creation Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#shape-manipulation-ops">Shape Manipulation Ops</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#linear-algebra-ops">Linear Algebra Ops</a></li>
-<li class="toctree-l2 current"><a class="reference internal" href="../triton.language.html#memory-pointer-ops">Memory/Pointer Ops</a><ul class="current">
-<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.load</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#triton.language.load"><code class="docutils literal notranslate"><span class="pre">load()</span></code></a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../triton.language.html#linear-algebra-ops">Linear Algebra Ops</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="triton.language.dot.html">triton.language.dot</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.dot_scaled</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#triton.language.dot_scaled"><code class="docutils literal notranslate"><span class="pre">dot_scaled()</span></code></a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.store.html">triton.language.store</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.make_block_ptr.html">triton.language.make_block_ptr</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.advance.html">triton.language.advance</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#memory-pointer-ops">Memory/Pointer Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#reduction-ops">Reduction Ops</a></li>
@@ -110,9 +108,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../triton.language.html">triton.language</a></li>
-      <li class="breadcrumb-item active">triton.language.load</li>
+      <li class="breadcrumb-item active">triton.language.dot_scaled</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/python-api/generated/triton.language.load.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/python-api/generated/triton.language.dot_scaled.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -120,56 +118,27 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="triton-language-load">
-<h1>triton.language.load<a class="headerlink" href="#triton-language-load" title="Link to this heading">¶</a></h1>
+  <section id="triton-language-dot-scaled">
+<h1>triton.language.dot_scaled<a class="headerlink" href="#triton-language-dot-scaled" title="Link to this heading">¶</a></h1>
 <dl class="py function">
-<dt class="sig sig-object py" id="triton.language.load">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boundary_check</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding_option</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eviction_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">volatile</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.load" title="Link to this definition">¶</a></dt>
-<dd><p>Return a tensor of data whose values are loaded from memory at location defined by <cite>pointer</cite>:</p>
-<blockquote>
-<div><ol class="arabic simple">
-<li><p>If <cite>pointer</cite> is a single element pointer, a scalar is be loaded.  In
-this case:</p>
-<ul class="simple">
-<li><p><cite>mask</cite> and <cite>other</cite> must also be scalars,</p></li>
-<li><p><cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite>, and</p></li>
-<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> must be empty.</p></li>
-</ul>
-</li>
-<li><p>If <cite>pointer</cite> is an N-dimensional tensor of pointers, an
-N-dimensional tensor is loaded.  In this case:</p>
-<ul class="simple">
-<li><p><cite>mask</cite> and <cite>other</cite> are implicitly broadcast to <cite>pointer.shape</cite>,</p></li>
-<li><p><cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite>, and</p></li>
-<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> must be empty.</p></li>
-</ul>
-</li>
-<li><p>If <cite>pointer</cite> is a block pointer defined by <cite>make_block_ptr</cite>, a
-tensor is loaded.  In this case:</p>
-<ul class="simple">
-<li><p><cite>mask</cite> and <cite>other</cite> must be <cite>None</cite>, and</p></li>
-<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> can be specified to control the behavior of out-of-bound access.</p></li>
-</ul>
-</li>
-</ol>
-</div></blockquote>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>pointer</strong> (<cite>triton.PointerType</cite>, or block of <cite>dtype=triton.PointerType</cite>) – Pointer to the data to be loaded</p></li>
-<li><p><strong>mask</strong> (Block of <cite>triton.int1</cite>, optional) – if <cite>mask[idx]</cite> is false, do not load the data at address <cite>pointer[idx]</cite>
-(must be <cite>None</cite> with block pointers)</p></li>
-<li><p><strong>other</strong> (<em>Block</em><em>, </em><em>optional</em>) – if <cite>mask[idx]</cite> is false, return <cite>other[idx]</cite></p></li>
-<li><p><strong>boundary_check</strong> (<em>tuple</em><em> of </em><em>ints</em><em>, </em><em>optional</em>) – tuple of integers, indicating the dimensions which should do the boundary check</p></li>
-<li><p><strong>padding_option</strong> – should be one of {“”, “zero”, “nan”}, the padding value to use while out of bounds. “” means an undefined value.</p></li>
-<li><p><strong>cache_modifier</strong> (str, optional, should be one of {“”, “ca”, “cg”}, where “ca” stands for
-cache at all levels and “cg” stands for cache at global level (cache in L2 and below, not L1), see
-<a class="reference external" href="https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators">cache operator</a> for more details.) – changes cache option in NVIDIA PTX</p></li>
-<li><p><strong>eviction_policy</strong> (<em>str</em><em>, </em><em>optional</em>) – changes eviction policy in NVIDIA PTX</p></li>
-<li><p><strong>volatile</strong> (<em>bool</em><em>, </em><em>optional</em>) – changes volatile option in NVIDIA PTX</p></li>
-</ul>
-</dd>
-</dl>
+<dt class="sig sig-object py" id="triton.language.dot_scaled">
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">dot_scaled</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lhs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lhs_scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lhs_format</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rhs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rhs_scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rhs_format</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">acc</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dtype</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">triton.language.float32</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.dot_scaled" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the matrix product of two blocks in microscaling format.
+lhs and rhs use microscaling formats described here:
+<a class="reference external" href="https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf">https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf</a>
+:param lhs: The first tensor to be multiplied.
+:type lhs: 2D tensor representing fp4 or fp8 elements packed into uint8 for fp4 inputs, or in uint8 or the corresponding fp8 type for fp8 inputs.
+:param lhs_scale: Scale factor for lhs tensor.
+:type lhs_scale: e8m0 type represented as an uint8 tensor.
+:param lhs_format: format of the lhs tensor. Available formats: {<code class="code docutils literal notranslate"><span class="pre">e2m1</span></code>, <code class="code docutils literal notranslate"><span class="pre">e4m3</span></code>, <code class="code docutils literal notranslate"><span class="pre">e5m2</span></code>}.
+:type lhs_format: str
+:param rhs: The second tensor to be multiplied.
+:type rhs: 2D tensor representing fp8 or bf16 elements in uint8 or the corresponding fp8 type for fp8 inputs or bf16 for bf16 inputs.
+:param rhs_scale: Scale factor for rhs tensor.
+:type rhs_scale: e8m0 type represented as an uint8 tensor.
+:param rhs_format: format of the rhs tensor. Available formats: {<code class="code docutils literal notranslate"><span class="pre">e4m3</span></code>, <code class="code docutils literal notranslate"><span class="pre">e5m2</span></code>, <code class="code docutils literal notranslate"><span class="pre">bf16</span></code>}.
+:type rhs_format: str
+:param acc: The accumulator tensor. If not None, the result is added to this tensor.</p>
 </dd></dl>
 
 </section>
@@ -178,8 +147,8 @@ cache at all levels and “cg” stands for cache at global level (cache in L2 a
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.language.dot_scaled.html" class="btn btn-neutral float-left" title="triton.language.dot_scaled" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.language.store.html" class="btn btn-neutral float-right" title="triton.language.store" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.language.dot.html" class="btn btn-neutral float-left" title="triton.language.dot" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.language.load.html" class="btn btn-neutral float-right" title="triton.language.load" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
