@@ -511,8 +511,9 @@ public:
           aElemType == ScaleDotElemType::E5M2))
       return rewriter.notifyMatchFailure(dotOp, "NYI: non-mxfp8 LHS");
     if (!(bElemType == ScaleDotElemType::E4M3 ||
-          bElemType == ScaleDotElemType::E5M2))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: non-fp8 RHS");
+          bElemType == ScaleDotElemType::E5M2 ||
+          bElemType == ScaleDotElemType::BF16))
+      return rewriter.notifyMatchFailure(dotOp, "NYI: non-fp8/bf16 RHS");
 
     MLIRContext *ctx = dotOp.getContext();
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
@@ -568,21 +569,25 @@ public:
 
     auto toMMABf16 = [&](TensorValue v, int idx,
                          ScaleDotElemType type) -> TensorValue {
-      assert(type == ScaleDotElemType::E5M2 || type == ScaleDotElemType::E4M3);
-      auto vType = v.getType();
-      auto newVEnc = DotOperandEncodingAttr::get(
-          ctx, idx, newRetType.getEncoding(), kWdith);
-      auto newVType = RankedTensorType::get(vType.getShape(),
-                                            vType.getElementType(), newVEnc);
-      v = rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
+      assert(type == ScaleDotElemType::E5M2 || type == ScaleDotElemType::E4M3 ||
+             type == ScaleDotElemType::BF16);
 
-      auto vTypeFp8 =
-          RankedTensorType::get(vType.getShape(), enumToType(type), newVEnc);
+      auto vType = v.getType();
+      auto newVEncoding = DotOperandEncodingAttr::get(
+          ctx, idx, newRetType.getEncoding(), kWdith);
+      auto newVType = RankedTensorType::get(
+          vType.getShape(), vType.getElementType(), newVEncoding);
+      v = rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
+      if (type == ScaleDotElemType::BF16)
+        return v;
+
+      auto vTypeFp8 = RankedTensorType::get(vType.getShape(), enumToType(type),
+                                            newVEncoding);
       v = cast<TensorValue>(
           rewriter.create<BitcastOp>(v.getLoc(), vTypeFp8, v).getResult());
 
-      auto vTypeBf16 = RankedTensorType::get(vType.getShape(),
-                                             rewriter.getBF16Type(), newVEnc);
+      auto vTypeBf16 = RankedTensorType::get(
+          vType.getShape(), rewriter.getBF16Type(), newVEncoding);
       return rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v);
     };
     a = toMMABf16(a, 0, aElemType);
