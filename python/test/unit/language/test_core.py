@@ -3324,17 +3324,18 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
 
-@pytest.mark.parametrize("M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack",
-                         [(M, N, K, col_a, col_b, type_a, type_b, 4, mma, kpack)
-                          for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
-                          for col_a, col_b in itertools.product([False], repeat=2)
-                          for type_a in ["e4m3"]
-                          for type_b in ["e4m3"]
-                          #for col_a, col_b in itertools.product([True, False], repeat=2)
-                          #for type_a in ["e2m1", "e4m3", "e5m2"]
-                          #for type_b in ["e4m3", "e5m2", "bf16"]
-                          for mma in ([32, 16] if is_hip() else [16])
-                          for kpack in ([1, 2] if is_hip() else [1])])
+@pytest.mark.parametrize("M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack", [
+    (M, N, K, col_a, col_b, type_a, type_b, 4, mma, kpack)
+    for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
+    for col_a, col_b in itertools.product([False], repeat=2)
+    for type_a in ["e4m3"]
+    for type_b in ["e4m3"]
+    #for col_a, col_b in itertools.product([True, False], repeat=2)
+    #for type_a in ["e2m1", "e4m3", "e5m2"]
+    #for type_b in ["e4m3", "e5m2", "bf16"]
+    for mma in ([32, 16] if is_hip() else [16])
+    for kpack in ([1, 2] if is_hip() else [1])
+])
 def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
@@ -3492,7 +3493,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
     # sample scales that don't overflow as otherwise it's implementation defined (underflowing is alright)
     # Max scale= 2**15
     scale_x = make_arg((M, K // 32), "e8m0", max_val=127 + 15)
-    scale_x.fill_(127)
 
     def make_finite(x, dtype):
         # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and

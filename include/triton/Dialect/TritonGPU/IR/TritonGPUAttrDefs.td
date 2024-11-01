@@ -50,13 +50,29 @@ Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
 - T[1,1] is owned by both cuda thread 3 and 7
 
 Right now, Triton implements two main classes of layouts: shared, and distributed.
+
+It should be clear from the example above that this definition makes us work with **arbitrary**
+functions into **sets**, which are not the most natural objects. A more principled approach was
+introduced by the concept of **linear layouts** (see LinearLayout.h header for details).
+
+Linear layouts define a function in the opposite direction: from the hardware into the tensor
+they represent.
+
+More specifically, linear layouts define a (F_2-linear) function from the hardware, that is,
+ - (register, lane, warp, block) for Distributed Layouts,
+ - (offset, iteration) for Shared Layouts,
+into the tensor they represent.
+
+In other words, for a distributed layout, given a binary representation of the
+register, lane, warp and block, a linear layout is a matrix of ones and zeros that when multiplied
+by the vector of the binary representation of the register, lane, warp and block gives the binary
+representation of coordinates of the element in the matrix it holds.
   }];
   let attrName = "triton.gpu." # attrMnemonic;
 
   code extraBaseClassDeclaration = [{
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
-    ::mlir::LogicalResult verifyLayoutForArg(::mlir::Operation* op, unsigned argNo) const;
   }];
 }
 
@@ -146,6 +162,22 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
 
   let genVerifyDecl = 1;
   let skipDefaultBuilders = 1;
+}
+
+class LinearLayoutAttr : TritonGPU_Attr<"LinearLayout", "linear_layout"> {
+  let mnemonic = "linear";
+
+  let description = [{
+    See the docs in LinearLayout.h for the definition of linear layouts.
+  }];
+
+  let parameters = (
+    ins
+    "LinearLayout":$ll
+  );
+
+  let extraClassDeclaration = extraBaseClassDeclaration;
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
