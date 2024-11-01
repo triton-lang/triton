@@ -29,7 +29,6 @@ def builtin(fn: T) -> T:
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
-            print(kwargs)
             raise ValueError("Did you forget to add @triton.jit ? "
                              "(`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
