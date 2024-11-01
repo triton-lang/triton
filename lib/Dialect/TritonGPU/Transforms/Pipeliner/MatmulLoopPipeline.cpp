@@ -51,17 +51,17 @@ struct LoadInfo {
 
 } // namespace
 
-class OpBuilderWrapper : public OpBuilder {
+class OpBuilderWithStage : public OpBuilder {
 public:
-  explicit OpBuilderWrapper(Operation *op,
-                            OpBuilder::Listener *listener = nullptr)
+  explicit OpBuilderWithStage(Operation *op,
+                              OpBuilder::Listener *listener = nullptr)
       : OpBuilder(op, listener) {}
-  explicit OpBuilderWrapper(Region &region, Listener *listener = nullptr)
+  explicit OpBuilderWithStage(Region &region, Listener *listener = nullptr)
       : OpBuilder(region, listener) {}
 
   template <typename OpTy, typename... Args>
-  OpTy createWrapper(Location location, int stage, int cluster,
-                     Args &&...args) {
+  OpTy createWithStage(Location location, int stage, int cluster,
+                       Args &&...args) {
     OpTy op = OpBuilder::create<OpTy>(location, std::forward<Args>(args)...);
     auto ctx = getContext();
     op->setAttr(mlir::triton::kLoopStageAttrName,
@@ -145,12 +145,12 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                            llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                            int numStages, int maxClusterId) {
   int retCode = -1;
-  OpBuilderWrapper builder(forOp);
+  OpBuilderWithStage builder(forOp);
   auto [stage, clusterId] = getStageCluster(loadOp);
   auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
   auto [stageForFirstUse, clusterForFirstUse] = getStageCluster(firstUse);
 
-  Value zero = builder.createWrapper<arith::ConstantIntOp>(
+  Value zero = builder.createWithStage<arith::ConstantIntOp>(
       forOp.getLoc(), stage, clusterId, 0, 32);
   // Replace the load with insert/extract slice.
   builder.setInsertionPoint(loadOp);
@@ -166,7 +166,7 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       auto ty = cast<RankedTensorType>(src.getType());
       auto newTy =
           RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
-      auto cvt = builder.createWrapper<ttg::ConvertLayoutOp>(
+      auto cvt = builder.createWithStage<ttg::ConvertLayoutOp>(
           loadOp->getLoc(), stage, clusterId, newTy, src);
       return cvt.getResult();
     };
@@ -185,14 +185,14 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
-  auto view = builder.createWrapper<ttg::MemDescSubviewOp>(
+  auto view = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stage, clusterId, subviewTy, alloc, copyOffsets);
-  Operation *copy = builder.createWrapper<ttg::AsyncCopyGlobalToLocalOp>(
+  Operation *copy = builder.createWithStage<ttg::AsyncCopyGlobalToLocalOp>(
       loc, stage, clusterId, src, view, mask, other, loadOp.getCache(),
       loadOp.getEvict(), loadOp.getIsVolatile());
-  Operation *commmit = builder.createWrapper<ttg::AsyncCommitGroupOp>(
+  Operation *commmit = builder.createWithStage<ttg::AsyncCommitGroupOp>(
       loc, stage, clusterId, copy->getResult(0));
-  Operation *wait = builder.createWrapper<ttg::AsyncWaitOp>(
+  Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
       loc, stageForFirstUse, clusterForFirstUse, commmit->getResult(0), 0);
 
   bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
@@ -200,7 +200,7 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
-  auto viewLoad = builder.createWrapper<ttg::MemDescSubviewOp>(
+  auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
@@ -218,7 +218,7 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       alloc.erase();
     }
 
-    auto sharedLoad = builder.createWrapper<ttg::LocalLoadOp>(
+    auto sharedLoad = builder.createWithStage<ttg::LocalLoadOp>(
         loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(), viewLoad,
         wait->getResult(0));
     auto result = sharedLoad->getResults();
@@ -227,7 +227,7 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     // AsyncCopyGlobalToLocalOp for now.
     Value other = loadOp.getOther();
     if (other && !isZeroConst(other)) {
-      auto select = builder.createWrapper<arith::SelectOp>(
+      auto select = builder.createWithStage<arith::SelectOp>(
           loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(), mask,
           sharedLoad.getResult(), other);
       result = select->getResults();
@@ -254,14 +254,14 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
                    llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                    int numStages) {
   assert(phase && "Phase value is required for TMA async copy.");
-  OpBuilderWrapper builder(forOp);
+  OpBuilderWithStage builder(forOp);
   auto [stage, clusterId] = getStageCluster(loadOp);
   auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
   auto [stageForFirstUse, clusterForFirstUse] = getStageCluster(firstUse);
 
   Attribute sharedMemorySpace =
       triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
-  Value zero = builder.createWrapper<arith::ConstantIntOp>(
+  Value zero = builder.createWithStage<arith::ConstantIntOp>(
       forOp.getLoc(), stage, clusterId, 0, 32);
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
@@ -271,12 +271,12 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
-  auto view = builder.createWrapper<ttg::MemDescSubviewOp>(
+  auto view = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stage, clusterId, subviewTy, alloc, copyOffsets);
 
-  Value pred =
-      builder.createWrapper<arith::ConstantIntOp>(loc, stage, clusterId, 1, 1);
-  Operation *copy = builder.createWrapper<ttng::AsyncTMACopyGlobalToLocalOp>(
+  Value pred = builder.createWithStage<arith::ConstantIntOp>(loc, stage,
+                                                             clusterId, 1, 1);
+  Operation *copy = builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
       loc, stage, clusterId, loadOp.getDescPtr(), loadOp.getIndices(), barrier,
       view, pred);
 
@@ -286,7 +286,7 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
-  auto viewLoad = builder.createWrapper<ttg::MemDescSubviewOp>(
+  auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
@@ -304,7 +304,7 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
       alloc.erase();
     }
 
-    auto sharedLoad = builder.createWrapper<ttg::LocalLoadOp>(
+    auto sharedLoad = builder.createWithStage<ttg::LocalLoadOp>(
         loc, stage, clusterId, loadOp.getType(),
         viewLoad /*,wait->getResult(0)*/);
     auto result = sharedLoad->getResults();
@@ -659,7 +659,7 @@ static void createTMABarrierAndWait(
     Value barrierAlloc = createBarrierAlloc(forOp, numBuffers);
     barriers.push_back(barrierAlloc);
     Location loc = forOp.getLoc();
-    OpBuilderWrapper builder(forOp);
+    OpBuilderWithStage builder(forOp);
     Attribute sharedMemorySpace =
         triton::gpu::SharedMemorySpaceAttr::get(builder.getContext());
     tt::MemDescType barrierTy = tt::MemDescType::get(
@@ -668,19 +668,19 @@ static void createTMABarrierAndWait(
         sharedMemorySpace,
         /*mutableMemory=*/true);
     builder.setInsertionPoint(group[0]->loadOp);
-    Value barrier = builder.createWrapper<ttg::MemDescSubviewOp>(
+    Value barrier = builder.createWithStage<ttg::MemDescSubviewOp>(
         loc, stage, cluster, barrierTy, barrierAlloc,
         ArrayRef<Value>({insertIdx}));
-    Value pred =
-        builder.createWrapper<arith::ConstantIntOp>(loc, stage, cluster, 1, 1);
-    Operation *expect = builder.createWrapper<ttng::BarrierExpectOp>(
+    Value pred = builder.createWithStage<arith::ConstantIntOp>(loc, stage,
+                                                               cluster, 1, 1);
+    Operation *expect = builder.createWithStage<ttng::BarrierExpectOp>(
         forOp.getLoc(), stage, cluster, barrier, sizeInBytes, pred);
 
     builder.setInsertionPointAfter(group.back()->loadOp);
-    Value barrierViewWait = builder.createWrapper<ttg::MemDescSubviewOp>(
+    Value barrierViewWait = builder.createWithStage<ttg::MemDescSubviewOp>(
         loc, group[0]->firstUseStage, group[0]->firstUseCluster, barrierTy,
         barrierAlloc, ArrayRef<Value>({extractIdx}));
-    Operation *wait = builder.createWrapper<ttng::WaitBarrierOp>(
+    Operation *wait = builder.createWithStage<ttng::WaitBarrierOp>(
         loc, group[0]->firstUseStage, group[0]->firstUseCluster,
         barrierViewWait, phase);
     // Update the async loads info.
