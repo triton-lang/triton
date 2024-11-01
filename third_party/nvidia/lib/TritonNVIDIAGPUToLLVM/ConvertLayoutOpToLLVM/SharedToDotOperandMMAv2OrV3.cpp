@@ -662,7 +662,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
       shapePerCTA, mmaBitwidth, kWidth, encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-  auto warpOrder = encoding.getWarpOrder();
+  auto warpOrder = mmaLayout.getWarpOrder();
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
 
