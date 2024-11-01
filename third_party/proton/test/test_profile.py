@@ -15,7 +15,7 @@ def is_hip():
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path):
     temp_file = tmp_path / "test_torch.hatchet"
-    proton.start(str(temp_file), context=context)
+    proton.start(str(temp_file).split(".")[0], context=context)
     proton.enter_scope("test")
     torch.ones((2, 2), device="cuda")
     proton.exit_scope()
@@ -46,7 +46,7 @@ def test_triton(tmp_path):
     x = torch.tensor([2], device="cuda")
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_triton.hatchet"
-    proton.start(str(temp_file))
+    proton.start(str(temp_file).split(".")[0])
     with proton.scope("test0"):
         with proton.scope("test1"):
             foo[(1, )](x, y)
@@ -77,7 +77,7 @@ def test_cudagraph(tmp_path):
         foo[(1, )](a, b, c)
 
     temp_file = tmp_path / "test_cudagraph.hatchet"
-    proton.start(str(temp_file), context="shadow")
+    proton.start(str(temp_file).split(".")[0], context="shadow")
 
     # warmup
     # four kernels
@@ -125,7 +125,7 @@ def test_metrics(tmp_path):
     x = torch.tensor([2], device="cuda")
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics.hatchet"
-    proton.start(str(temp_file))
+    proton.start(str(temp_file).split(".")[0])
     with proton.scope("test0", {"foo": 1.0}):
         foo[(1, )](x, y)
     proton.finalize()
@@ -145,7 +145,7 @@ def test_metrics_ignore(tmp_path):
     x = torch.tensor([2], device="cuda")
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics_ignore.hatchet"
-    session_id = proton.start(str(temp_file))
+    session_id = proton.start(str(temp_file).split(".")[0])
     proton.deactivate(session_id)
     with proton.scope("test0", {"foo": 1.0}):
         foo[(1, )](x, y)
@@ -158,7 +158,7 @@ def test_metrics_ignore(tmp_path):
 
 def test_scope_backward(tmp_path):
     temp_file = tmp_path / "test_scope_backward.hatchet"
-    proton.start(str(temp_file))
+    proton.start(str(temp_file).split(".")[0])
     with proton.scope("ones1"):
         a = torch.ones((100, 100), device="cuda", requires_grad=True)
     with proton.scope("plus"):
@@ -193,7 +193,7 @@ def test_hook(tmp_path):
     x = torch.tensor([2], device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook.hatchet"
-    proton.start(str(temp_file), hook="triton")
+    proton.start(str(temp_file).split(".")[0], hook="triton")
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
     proton.finalize()
@@ -221,7 +221,7 @@ def test_pcsampling(tmp_path):
             tl.store(y + offs, tl.load(x + offs))
 
     temp_file = tmp_path / "test_pcsampling.hatchet"
-    proton.start(str(temp_file), hook="triton", backend="cupti_pcsampling")
+    proton.start(str(temp_file).split(".")[0], hook="triton", backend="cupti_pcsampling")
     with proton.scope("init"):
         x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
@@ -243,7 +243,7 @@ def test_pcsampling(tmp_path):
 
 def test_deactivate(tmp_path):
     temp_file = tmp_path / "test_deactivate.hatchet"
-    session_id = proton.start(str(temp_file), hook="triton")
+    session_id = proton.start(str(temp_file).split(".")[0], hook="triton")
     proton.deactivate(session_id)
     torch.randn((10, 10), device="cuda")
     proton.activate(session_id)

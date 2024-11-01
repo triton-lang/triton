@@ -14,7 +14,7 @@ def test_exec(mode, tmp_path):
     file_path = __file__
     helper_file = file_path.replace("test_cmd.py", "helper.py")
     temp_file = tmp_path / "test_exec.hatchet"
-    name = str(temp_file)
+    name = str(temp_file).split(".")[0]
     if mode == "script":
         ret = subprocess.check_call(["proton", "-n", name, helper_file, "test"], stdout=subprocess.DEVNULL)
     elif mode == "python":
