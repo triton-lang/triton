@@ -48,6 +48,8 @@ def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
     M, N, K = args["M"], args["N"], args["K"]
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
+    if "tiles_per_update" in args:
+        ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}, tiles_per_update={args['tiles_per_update']:02}]"
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
     else:
@@ -550,6 +552,14 @@ def proton_context():
         proton.deactivate(0)
 
 
+def bench_fn(reps, warmup_reps, fn, *args):
+    for _ in range(warmup_reps):
+        fn(*args)
+    with proton_context():
+        for _ in range(reps):
+            fn(*args)
+
+
 def bench(K, dtype, tiles_per_update, reps=1000, warmup_reps=10000):
     M = 8192
     N = 8192
@@ -559,41 +569,14 @@ def bench(K, dtype, tiles_per_update, reps=1000, warmup_reps=10000):
     b = b.T.contiguous()
 
     if cublas is not None:
-        for _ in range(warmup_reps):
-            cublas_matmul(a, b)
-        with proton_context():
-            for _ in range(reps):
-                cublas_matmul(a, b)
+        bench_fn(reps, warmup_reps, cublas_matmul, a, b)
     if dtype == torch.float16:
-        for _ in range(warmup_reps):
-            torch_matmul(a, b)
-        with proton_context():
-            for _ in range(reps):
-                torch_matmul(a, b)
-    for _ in range(warmup_reps):
-        matmul(a, b.T)
-    with proton_context():
-        for _ in range(reps):
-            matmul(a, b.T)
-    for _ in range(warmup_reps):
-        matmul_persistent(a, b.T)
-    with proton_context():
-        for _ in range(reps):
-            matmul_persistent(a, b.T)
+        bench_fn(reps, warmup_reps, torch_matmul, a, b)
+    bench_fn(reps, warmup_reps, matmul, a, b.T)
+    bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
     if supports_tma():
-        for _ in range(warmup_reps):
-            matmul_tma_persistent(a, b)
-        with proton_context():
-            for _ in range(reps):
-                matmul_tma_persistent(a, b)
-        for _ in range(warmup_reps):
-            matmul_device_tma_persistent(a, b, tiles_per_update)
-        with proton_context():
-            with proton.scope(
-                    f"matmul_kernel_device_tma_persistent [M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}]"
-            ):
-                for _ in range(reps):
-                    matmul_device_tma_persistent(a, b, tiles_per_update)
+        bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
+        bench_fn(reps, warmup_reps, matmul_device_tma_persistent, a, b, tiles_per_update)
 
 
 def validate(M, N, K, dtype, tiles_per_update):
