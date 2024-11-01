@@ -860,6 +860,17 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return ret;
 }
 
+// TODO Have order be a mandatory argument of standardOutDimNames.
+SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
+                                        const SmallVector<unsigned> &order) {
+  assert(names.size() == order.size());
+  SmallVector<StringAttr> ret;
+  for (unsigned i : order) {
+    ret.push_back(names[i]);
+  }
+  return ret;
+}
+
 LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
                                      DotOperandEncodingAttr dot) {
   // Note that, even though MMAv2 looks similar to this layout, they are just
