@@ -659,7 +659,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
 
   int kWidth = encoding.getKWidth();
   auto numRep = mmaLayout.getMMAv2OrV3RepForOperand(
-      shapePerCTA, bitwidth, kWidth, encoding.getOpIdx());
+      shapePerCTA, mmaBitwidth, kWidth, encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto order = triton::gpu::getOrder(mmaLayout);
