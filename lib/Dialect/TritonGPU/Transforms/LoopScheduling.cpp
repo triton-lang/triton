@@ -35,28 +35,52 @@ namespace mlir {
 namespace triton {
 namespace gpu {
 
-// The same helper exists in SWP, we can consider moving this to
-// PipeliningUtility.h.
-static bool loadIsMMAv3(Operation *loadOp) {
-  if (!loadOp->hasOneUse())
-    return false;
-  auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
-  if (!alloc)
-    return false;
-  auto sharedEnc = cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
-  if (!sharedEnc.getHasLeadingOffset())
-    return false;
+// Create a map from load ops to their indirection level and the
+// final use of the load op (another load op, or a dot op).
+// Indirection level is "0" for the load op directly used by the dot op,
+// "1" for the load op used by the load op used by the dot op, and so on.
+static llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
+  llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
+      loadOpToIndLevelAndUse;
+  DenseSet<Operation *> seen;
 
-  // MMA V3 case.
-  auto newOrder = sharedEnc.getOrder();
-  auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-  auto oldOrder = ttg::getOrder(ty.getEncoding());
+  std::function<void(Operation * op, int, Operation *)> dfs =
+      [&](Operation *op, int distance, Operation *use) {
+        if (!seen.insert(op).second)
+          return;
+        if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
+          // TODO: What if there are multiple uses at different distances?
+          loadOpToIndLevelAndUse.push_back(std::make_tuple(op, distance, use));
+          use = op;
+          distance++;
+        }
+        for (Value operand : op->getOperands()) {
+          Value v = operand;
+          Operation *defOp = v.getDefiningOp();
+          if (defOp && defOp->getBlock() == op->getBlock()) {
+            dfs(defOp, distance, use);
+          }
+        }
+      };
 
-  // The operand of MMAv3 is in SharedEncoding and its order should not
-  // be changed after FuseTranspositions Pass. So we only pipeline the
-  // load if the order of the loaded BlockedEncoding is the same as the
-  // order of the SharedEncoding it is converted to.
-  return oldOrder == newOrder;
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!op.hasTrait<OpTrait::DotLike>())
+      continue;
+    seen.clear();
+    dfs(&op, 0, &op);
+  }
+
+  // If the loop has numStages attribute, also consider pipelining other loads
+  // that are not directly used by dot ops.
+  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
+    for (Operation &op : forOp.getBody()->without_terminator()) {
+      if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op))
+        dfs(&op, 0, &op);
+    }
+  }
+
+  return loadOpToIndLevelAndUse;
 }
 
 static bool hasSharedEncodingHelper(Operation *loadOp) {
@@ -164,54 +188,6 @@ filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
     loadsToPipeline.insert(op);
   }
   return loadsToPipeline;
-}
-
-/// Create a map from load ops to their indirection level and the
-/// final use of the load op (another load op, or a dot op).
-/// Indirection level is "0" for the load op directly used by the dot op,
-/// "1" for the load op used by the load op used by the dot op, and so on.
-static llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
-loadOpsToIndirectionLevelAndUse(scf::ForOp forOp) {
-  llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
-      loadOpToIndLevelAndUse;
-  DenseSet<Operation *> seen;
-
-  std::function<void(Operation * op, int, Operation *)> dfs =
-      [&](Operation *op, int distance, Operation *use) {
-        if (!seen.insert(op).second)
-          return;
-        if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
-          // TODO: What if there are multiple uses at different distances?
-          loadOpToIndLevelAndUse.push_back(std::make_tuple(op, distance, use));
-          use = op;
-          distance++;
-        }
-        for (Value operand : op->getOperands()) {
-          Value v = operand;
-          Operation *defOp = v.getDefiningOp();
-          if (defOp && defOp->getBlock() == op->getBlock()) {
-            dfs(defOp, distance, use);
-          }
-        }
-      };
-
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasTrait<OpTrait::DotLike>())
-      continue;
-    seen.clear();
-    dfs(&op, 0, &op);
-  }
-
-  // If the loop has numStages attribute, also consider pipelining other loads
-  // that are not directly used by dot ops.
-  if (forOp->hasAttr(tt::kNumStagesAttrName)) {
-    for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op))
-        dfs(&op, 0, &op);
-    }
-  }
-
-  return loadOpToIndLevelAndUse;
 }
 
 static void scheduleLoads(scf::ForOp forOp, tt::CoarseSchedule &schedule,

@@ -194,6 +194,8 @@ int getNVIDIAComputeCapability(Operation *module);
 
 std::optional<mlir::triton::gpu::SharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
+
+bool loadIsMMAv3(Operation *loadOp);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

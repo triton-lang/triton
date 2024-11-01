@@ -976,6 +976,28 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   return attr;
 }
 
+bool loadIsMMAv3(Operation *loadOp) {
+  if (!loadOp->hasOneUse())
+    return false;
+  auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
+  if (!alloc)
+    return false;
+  auto sharedEnc = cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
+  if (!sharedEnc.getHasLeadingOffset())
+    return false;
+
+  // MMA V3 case.
+  auto newOrder = sharedEnc.getOrder();
+  auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+  auto oldOrder = ttg::getOrder(ty.getEncoding());
+
+  // The operand of MMAv3 is in SharedEncoding and its order should not
+  // be changed after FuseTranspositions Pass. So we only pipeline the
+  // load if the order of the loaded BlockedEncoding is the same as the
+  // order of the SharedEncoding it is converted to.
+  return oldOrder == newOrder;
+}
+
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and
