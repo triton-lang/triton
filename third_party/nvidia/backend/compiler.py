@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, nvidia
+from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
 import functools
@@ -361,9 +362,9 @@ class CUDABackend(BaseBackend):
                 else:
                     error = f'`ptxas` failed with error code {e.returncode}'
 
-                raise RuntimeError(f'{error}\n'
-                                   f'`ptxas` stderr:\n{log}\n'
-                                   f'Repro command: {" ".join(ptxas_cmd)}\n')
+                raise PTXASError(f"{error}\n"
+                                 f"`ptxas` stderr:\n{log}\n"
+                                 f'Repro command: {" ".join(ptxas_cmd)}\n')
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()

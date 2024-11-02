@@ -164,21 +164,21 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
 
 // -----
 
-// Verify that dot_scaled (mxfp8 x fp8) decomposes as expected
+// Verify that dot_scaled (mxfp4 x bf16) decomposes as expected
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: dot_scaled
   tt.func @dot_scaled(
-    %a: tensor<128x64xi8, #blocked2>,
+    %a: tensor<128x32xi8, #blocked2>,
     %scale: tensor<128x2xi8, #blocked1>,
-    %b: tensor<64x128xi8, #blocked>)
+    %b: tensor<64x128xbf16, #blocked>)
     -> tensor<128x128xf32, #blocked> {
     // CHECK: triton_gpu.upcast_mxfp
     // CHECK: tt.dot
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %result = tt.dot_scaled %a, %scale, %b, %cst lhs = e4m3 rhs = e4m3 : tensor<128x64xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xi8, #blocked> -> tensor<128x128xf32, #blocked>
+    %result = tt.dot_scaled %a, %scale, %b, %cst lhs = e2m1 rhs = bf16 : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xbf16, #blocked> -> tensor<128x128xf32, #blocked>
     tt.return %result : tensor<128x128xf32, #blocked>
   }
 }

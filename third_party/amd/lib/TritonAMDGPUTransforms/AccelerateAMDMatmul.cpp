@@ -504,13 +504,17 @@ public:
     TensorValue a = dotOp.getLhs();
     TensorValue b = dotOp.getRhs();
     TensorValue aScale = dotOp.getLhsScale();
-    F8F6F4Type aElemType = dotOp.getLhsType();
-    F8F6F4Type bElemType = dotOp.getRhsType();
+    ScaleDotElemType aElemType = dotOp.getLhsType();
+    ScaleDotElemType bElemType = dotOp.getRhsType();
 
-    if (!(aElemType == F8F6F4Type::E4M3 || aElemType == F8F6F4Type::E5M2))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: non-mxfp8 LHS");
-    if (!(bElemType == F8F6F4Type::E4M3 || bElemType == F8F6F4Type::E5M2))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: non-fp8 RHS");
+    if (!(aElemType == ScaleDotElemType::E2M1 ||
+          aElemType == ScaleDotElemType::E4M3 ||
+          aElemType == ScaleDotElemType::E5M2))
+      return rewriter.notifyMatchFailure(dotOp, "NYI: non-mxfp8/mxfp4 LHS");
+    if (!(bElemType == ScaleDotElemType::E4M3 ||
+          bElemType == ScaleDotElemType::E5M2 ||
+          bElemType == ScaleDotElemType::BF16))
+      return rewriter.notifyMatchFailure(dotOp, "NYI: non-fp8/bf16 RHS");
 
     MLIRContext *ctx = dotOp.getContext();
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
@@ -529,7 +533,16 @@ public:
     unsigned nDim = mfmaInstr.value().getNDim();
     unsigned kDim = mfmaInstr.value().getKDim();
     unsigned kBase = mfmaInstr.value().getKBase();
-    unsigned kWdith = kBase *= kPack;
+
+    // If A tensor contains mxfp4, we pack every two values into one int8 value
+    // there. For such cases, we have different initial kWidth for LHS and RHS,
+    // which will be "fixed" later by using upcast_mxfp to convert LHS to
+    // unpacked values. For such packed cases, we cannot support flexible kPack
+    // choices from the developer--it just does not apply here. So mandate the
+    // choice here.
+    bool isPacked = aElemType == ScaleDotElemType::E2M1;
+    unsigned kWdiths[] = {isPacked ? 4 : kBase * kPack,
+                          isPacked ? 8 : kBase * kPack};
 
     // For A tensor, 32 consecutive elements along K dim share the same scale.
     // We'd like to keep the scale values together with the base values in the
@@ -550,37 +563,23 @@ public:
     auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         dotOp.getC().getLoc(), newRetType, dotOp.getC());
 
-    // OCP mxfp8 requires implementations to follow OCP fp8 elements. We are
-    // doing software emulation using bf16 here, so we map to OCP fp8 f8E4M3FN
-    // and f8E5M2.
-    auto enumToType = [&rewriter](F8F6F4Type type) {
-      switch (type) {
-      case F8F6F4Type::E4M3:
-        return rewriter.getFloat8E4M3FNType();
-      case F8F6F4Type::E5M2:
-        return rewriter.getFloat8E5M2Type();
-      default:
-        llvm_unreachable("unexpected fp type");
-      }
-    };
-
     auto toMMABf16 = [&](TensorValue v, int idx,
-                         F8F6F4Type type) -> TensorValue {
-      assert(type == F8F6F4Type::E5M2 || type == F8F6F4Type::E4M3);
+                         ScaleDotElemType type) -> TensorValue {
       auto vType = v.getType();
-      auto newVEnc = DotOperandEncodingAttr::get(
-          ctx, idx, newRetType.getEncoding(), kWdith);
-      auto newVType = RankedTensorType::get(vType.getShape(),
-                                            vType.getElementType(), newVEnc);
+      auto newVEncoding = DotOperandEncodingAttr::get(
+          ctx, idx, newRetType.getEncoding(), kWdiths[idx]);
+      auto newVType = RankedTensorType::get(
+          vType.getShape(), vType.getElementType(), newVEncoding);
       v = rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
+      if (type == ScaleDotElemType::BF16)
+        return v;
+      // Don't need to covert int8 holding mxfp4 for A--the upcast_mxfp op can
+      // take int8 tensor as input.
+      if (idx == 0 && type == ScaleDotElemType::E2M1)
+        return v;
 
-      auto vTypeFp8 =
-          RankedTensorType::get(vType.getShape(), enumToType(type), newVEnc);
-      v = cast<TensorValue>(
-          rewriter.create<BitcastOp>(v.getLoc(), vTypeFp8, v).getResult());
-
-      auto vTypeBf16 = RankedTensorType::get(vType.getShape(),
-                                             rewriter.getBF16Type(), newVEnc);
+      auto vTypeBf16 = RankedTensorType::get(
+          vType.getShape(), rewriter.getBF16Type(), newVEncoding);
       return rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v);
     };
     a = toMMABf16(a, 0, aElemType);

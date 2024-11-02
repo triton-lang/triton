@@ -23,11 +23,13 @@ from triton._internal_testing import (
     int_dtypes,
     uint_dtypes,
     float_dtypes,
+    float_dtypes_with_bfloat16,
     dtypes,
     dtypes_with_bfloat16,
     is_cuda,
     is_interpreter,
     is_hip,
+    is_hip_mi200,
     get_arch,
     torch_float8_dtypes,
     torch_dtypes,
@@ -64,6 +66,11 @@ else:
 def _bitwidth(dtype: str) -> int:
     # ex.: "int64" -> 64
     return int(re.search(r'(\d+)$', dtype).group(1))
+
+
+def _dtype(dtype: str) -> str:
+    # ex.: "int64" -> "int"
+    return re.match(r'([a-zA-Z]+)', dtype).group(0)
 
 
 def patch_kernel(template, to_replace):
@@ -267,7 +274,8 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', num_ctas=1,
-                 y_low=None, y_high=None, filter_y=None, test_broadcast=True, test_scalar=True):
+                 x_low=None, x_high=None, y_low=None, y_high=None, filter_y=None, test_broadcast=True,
+                 test_scalar=True):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
     check_type_supported(dtype_y, device)
     SIZE = 128
@@ -312,7 +320,7 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
 
     # inputs
     rs = RandomState(17)
-    x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs)
+    x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs, low=x_low, high=x_high)
     y = numpy_random(SIZE, dtype_str=dtype_y, rs=rs, low=y_low, high=y_high)
     if filter_y:
         y[filter_y(y)] = 1
@@ -346,7 +354,7 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
         kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
         err_msg = f"{expr}, {kernel_fn.__name__}"
-        np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=3e-3, rtol=0.01)
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=7e-3, rtol=0.01)
 
     def get_scalar(x, dtype, low, high, filter):
         # If dtype is int, don't choose a huge number for the scalar
@@ -380,28 +388,32 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         do_test(x, y[:1].reshape(()), kernel_broadcast_rhs)
 
 
-def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
-    # FIXME For large x, we are casting x to a floating point where it does not fit
-    #       For small y, we are computing floor(div(float(x), y)) which may not fit
-    return (dtype_x, dtype_y) in [
-        ('int32', 'bfloat16'),
-        ('int32', 'float16'),
-        ('int32', 'float32'),
-        ('int64', 'bfloat16'),
-        ('int64', 'float16'),
-        ('int64', 'float32'),
-        ('int64', 'float64'),
-        ('uint16', 'bfloat16'),
-        ('uint16', 'float16'),
-        ('uint16', 'float32'),
-        ('uint32', 'bfloat16'),
-        ('uint32', 'float16'),
-        ('uint32', 'float32'),
-        ('uint64', 'bfloat16'),
-        ('uint64', 'float16'),
-        ('uint64', 'float32'),
-        ('uint64', 'float64'),
-    ]
+def _min_max_integral_mod_value(dtype_x, dtype_y) -> Optional[int]:
+    """
+    Limit min/max values for integral types for mod values. Leads to
+    overflow/underflow when casting large integral types to floats.
+    """
+    x_bitwidth = _bitwidth(dtype_x)
+    y_bitwidth = _bitwidth(dtype_y)
+
+    # hard cap max value bit-width to 32 if 64 bit-width types
+    min_bitwidth = min(x_bitwidth, y_bitwidth, 32)
+
+    # Limit max value bit-width to be one integral type less than the min bit-width
+    # For example:
+    #   int64, float32 -> int16
+    #   uint16, float16 -> uint8
+    x_dtype = _dtype(dtype_x)
+    max_bitwidth = max(min_bitwidth >> 1, 8)
+    dtype_max = x_dtype + str(max_bitwidth)
+
+    max_info = np.iinfo(getattr(np, dtype_max))
+
+    # Still need to limit values here for uints
+    if max_bitwidth >= 16 and dtype_max in uint_dtypes:
+        return max_info.min, max_info.max // 4
+    else:
+        return max_info.min, max_info.max
 
 
 def test_dtype_codegen():
@@ -425,35 +437,35 @@ def test_dtype_codegen():
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
     expr = f'x {op} y'
-    if op == '%' and dtype_x in int_dtypes + uint_dtypes and dtype_y in int_dtypes + uint_dtypes:
-        # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
-        numpy_expr = 'np.fmod(x, y)'
-    elif op in ('/', '%') and dtype_x in ('int16', 'float16', 'bfloat16') and dtype_y in ('int16', 'float16',
-                                                                                          'bfloat16'):
-        # Triton promotes 16-bit floating-point / and % to 32-bit because there
-        # are no native div or FRem operations on float16. Since we have to
-        # convert anyway, we may as well take the accuracy bump.
-        numpy_expr = f'x.astype(np.float32) {op} y.astype(np.float32)'
+    np_expr_gen = (lambda x, y: f'{x} {op} {y}') if op != '%' else (lambda x, y: f'np.fmod({x}, {y})')
+
+    # Triton promotes 16-bit floating-point / and % to 32-bit because there
+    # are no native div or FRem operations on float16. Since we have to
+    # convert anyway, we may as well take the accuracy bump.
+    def promote_to_fp32(dtype_x, dtype_y):
+        return dtype_x in ('float16', 'bfloat16') and dtype_y not in ('float32', 'float64')
+
+    if op in ('/', '%') and (promote_to_fp32(dtype_x, dtype_y) or promote_to_fp32(dtype_y, dtype_x)):
+        numpy_expr = np_expr_gen('x.astype(np.float32)', 'y.astype(np.float32)')
     elif (dtype_x in uint_dtypes and dtype_y in int_dtypes and _bitwidth(dtype_x) >= _bitwidth(dtype_y)):
-        numpy_expr = f'x.astype(np.{dtype_x}) {op} y.astype(np.{dtype_x})'
+        numpy_expr = np_expr_gen(f'x.astype(np.{dtype_x})', f'y.astype(np.{dtype_x})')
     elif (dtype_y in uint_dtypes and dtype_x in int_dtypes and _bitwidth(dtype_y) >= _bitwidth(dtype_x)):
-        numpy_expr = f'x.astype(np.{dtype_y}) {op} y.astype(np.{dtype_y})'
+        numpy_expr = np_expr_gen(f'x.astype(np.{dtype_y})', f'y.astype(np.{dtype_y})')
+    elif op == '%':
+        # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
+        numpy_expr = np_expr_gen('x', 'y')
     else:
         numpy_expr = None
-    if op == '%' and _mod_operation_ill_conditioned(dtype_x, dtype_y):
-        with pytest.raises(AssertionError, match="Not equal to tolerance"):
-            _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
-    elif (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
-                                (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
+
+    if (op in ('%', '/') and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
+                              (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
         with pytest.raises(triton.TritonError, match='Cannot use .* because they have different signedness'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
     else:
         # skip when bfloat16, as NumPy's ref performs the computation in float32
         # while Triton performs it in bfloat16
-        # We also skip mod when it is ill-conditioned
         skip_scalar_test = ((dtype_x == "bfloat16" and "float" in dtype_y)
-                            or (expr == "x % y" and dtype_x in int_dtypes + uint_dtypes and dtype_y in float_dtypes
-                                and _mod_operation_ill_conditioned(dtype_x, "float32")))
+                            or (op in ('/', '%') and dtype_x in ("float16", "bfloat16")))
         # can't divide by zero
         not_zero = op in ('/', '%') and dtype_x in integral_dtypes and dtype_y in integral_dtypes
         # can't represent -int(max)
@@ -462,11 +474,17 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             filter_y = lambda y: not_zero * (y == 0) | not_minus_one * (y == -1)
         else:
             filter_y = None
+
+        if op == "%" and dtype_x in integral_dtypes and dtype_y in float_dtypes_with_bfloat16:
+            x_low, x_high = _min_max_integral_mod_value(dtype_x, dtype_y)
+        else:
+            x_low, x_high = None, None
+
         _test_binary(
             dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas,
             # fails with values where fmod(x, y) is roughly zero, but happens to
             # pass with the random values chosen for non-broadcast tests
-            test_broadcast=(op != "%"), filter_y=filter_y, test_scalar=not skip_scalar_test)
+            test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
 
 
 @pytest.mark.interpreter
@@ -1111,6 +1129,9 @@ def test_shapes_as_params(device):
         a = tl.arange(0, 64).reshape(2, 4, 8).trans(2, 1, 0)
         tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4), tl.constexpr(2)])
 
+        a = tl.arange(0, 64).reshape(2, 4, 8).trans((2, 1, 0))
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4), tl.constexpr(2)])
+
         a = tl.arange(0, 64).view(2, 4, 8)
         tl.static_assert(a.shape == [tl.constexpr(2), tl.constexpr(4), tl.constexpr(8)])
 
@@ -1455,8 +1476,6 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['float16', 'float32', 'uint64', 'int64', 'float64']])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
-    if is_interpreter() and dtype_x_str == 'float16':
-        pytest.skip('float16 atomic_add does not work in the interpreter mode')
     shape0, shape1 = shape
     # triton kernel
 
@@ -3327,7 +3346,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
                           for col_a, col_b in itertools.product([True, False], repeat=2)
                           for type_a in ["e2m1", "e4m3", "e5m2"]
-                          for type_b in ["e4m3", "e5m2"]
+                          for type_b in ["e4m3", "e5m2", "bf16"]
                           for mma in ([32, 16] if is_hip() else [16])
                           for kpack in ([1, 2] if is_hip() else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack, device):
@@ -3336,16 +3355,19 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if type_a != "e5m2" or type_b != "e5m2":
+        if (type_a not in ["e2m1", "e5m2"]) or (type_b not in ["e2m1", "e5m2", "bf16"]):
             pytest.skip(f"scaled_dot({type_a}, {type_b}) not yet implemented for HIP")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
+        arch = triton.runtime.driver.active.get_current_target().arch
+        if "gfx11" in arch or "gfx12" in arch:
+            pytest.skip("scaled_dot not yet implemented for gfx11 and gfx12")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, out,
                          BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
                          type_b: tl.constexpr):
-        tl.static_assert(type_b == "e4m3" or type_b == "e5m2", "type_b must be fp8")
+        tl.static_assert((type_b == "e4m3" or type_b == "e5m2") or type_b == "bf16", "type_b must be fp8 or bf16")
         IS_FP8: tl.constexpr = type_a == "e4m3" or type_a == "e5m2"
         DIV_FACTOR: tl.constexpr = 1 if IS_FP8 else 2
         PACKED_BLOCK_K_A: tl.constexpr = BLOCK_K // DIV_FACTOR
@@ -3436,7 +3458,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
 
     def dot_scale_ref(x, scale, y, type_x, type_y):
         e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
-        type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[type_y]
+        type_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2, "bf16": torch.bfloat16}[type_y]
 
         comp_dtype = torch.bfloat16
 
@@ -3449,7 +3471,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
         mxfp_to_bf16_kernel[grid](x, scale, x_upcast, scale.numel(), e_bits, m_bits, BLOCK_SIZE, num_warps=num_warps)
         assert x_upcast.isfinite().all()
 
-        y_upcast = y.view(type_fp8_y).to(comp_dtype)
+        y_upcast = y.view(type_y).to(comp_dtype)
 
         class AccumulateInFp32:
 
@@ -3461,28 +3483,30 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
                 torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = self.prev_value
 
         with AccumulateInFp32():
-            return torch.matmul(x_upcast.to(comp_dtype), y_upcast.to(comp_dtype))
+            return torch.matmul(x_upcast, y_upcast)
 
     torch.manual_seed(0)
 
-    def create_uint8(shape, col_major=False, max_val=255):
+    def make_arg(shape, ty, col_major=False, max_val=255):
         if col_major:
             shape = shape[:-2] + (shape[-1], shape[-2])
-        ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
+        if ty == "bf16":
+            ret = torch.randn(shape, dtype=torch.bfloat16, device=device)
+            # Clamp to avoid relative error issues
+            ret.clamp_(-2**15, 2**15 - 1)
+        else:
+            ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
         if col_major:
             ret = ret.mT
         return ret
 
     DIV_FACTOR = 2 if type_a == "e2m1" else 1
-    x = create_uint8((M, K // DIV_FACTOR), col_major=col_a)
-    y = create_uint8((K, N), col_major=col_b)
+    x = make_arg((M, K // DIV_FACTOR), type_a, col_major=col_a)
+    y = make_arg((K, N), type_b, col_major=col_b)
 
     # sample scales that don't overflow as otherwise it's implementation defined (underflowing is alright)
-    # We substract a reasonably high number (64) so that the sum of all the mxfp elements does not overflow
-    m_bytes = int(type_a[1])
-    bias_type_a = 1 << (m_bytes - 1) - 1
-    max_exponent_type_a = (1 << m_bytes) - 1 - bias_type_a
-    scale_x = create_uint8((M, K // 32), max_val=255 - max_exponent_type_a - 64)
+    # Max scale= 2**15
+    scale_x = make_arg((M, K // 32), "e8m0", max_val=127 + 15)
 
     def make_finite(x, dtype):
         # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
@@ -3507,8 +3531,13 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
 
     z_ref = dot_scale_ref(x, scale_x, y, type_a, type_b)
 
-    # generous rtol as we are sampling the whole range of floats
-    torch.testing.assert_close(z, z_ref, atol=1e-5, rtol=1e-2)
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and output denormal values
+    # to zero. Detailed info is at:
+    # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    atol = 2e-4 if is_hip_mi200() else 1e-5
+    rtol = 2e-2 if is_hip_mi200() else 1e-2
+    torch.testing.assert_close(z, z_ref, atol=atol, rtol=rtol)
 
     # make sure ld/st are vectorized
     if is_cuda():

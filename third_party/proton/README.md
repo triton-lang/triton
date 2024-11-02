@@ -140,8 +140,15 @@ By default, proton profiles are in the *json* format and can be read by *Hatchet
 pip install llnl-hatchet
 proton-viewer -m time/s <profile.hatchet>
 ```
-
 NOTE: `pip install hatchet` does not work because the API is slightly different.
+
+### Visualizing sorted profile data
+In addition visualizing the profile data on terminal through Hatchet. A sorted list of the kernels by the first metric can be done using the --print-sorted flag with proton-viewer
+
+```bash
+proton-viewer -m time/ns,time/% <profile.hatchet> --print-sorted
+```
+prints the sorted kernels by the time/ns since it is the first listed.
 
 More options can be found by running the following command.
 
