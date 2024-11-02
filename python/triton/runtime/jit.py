@@ -561,7 +561,7 @@ class JITFunction(KernelInterface[T]):
         ]
 
     def run(self, *args, grid, warmup, **kwargs):
-        kwargs["debug"] = kwargs.get("debug", False) or os.environ.get("TRITON_DEBUG", "0") == "1"
+        kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
 
         # parse options
         from ..compiler import make_backend
@@ -698,6 +698,7 @@ class JITFunction(KernelInterface[T]):
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel = None
+        self.debug = debug
         self.noinline = noinline
 
         # TODO(jlebar): Remove uses of these fields outside this file, then
