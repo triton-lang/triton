@@ -33,25 +33,12 @@ public:
   llvm::SmallVector<Value> unpackFP4Elements(Location loc,
                                              RewriterBase &rewriter,
                                              ArrayRef<Value> vals) const {
-
-    auto fp4x8ToBf16x2 = [&loc, &rewriter](Value v) {
-      llvm::SmallVector<Value, 4> results(4);
-      for (int i = 0; i < 4; ++i) {
-        auto v_i = trunc(i8_ty, lshr(v, i32_val(8 * i)));
-        auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v_i);
-        // Swap as they come packed in big endian
-        results[i] = or_(zext(i32_ty, e0), shl(zext(i32_ty, e1), i32_val(16)));
-      }
-      return results;
-    };
-
-    // Split fp4x8 into 4 bf16x2
     llvm::SmallVector<Value> ret;
     ret.reserve(vals.size() * 2);
     for (auto v : vals) {
-      auto [v0, v1] = fp4ToBf16(v);
-      ret.push_back(v0);
-      ret.push_back(v1);
+      auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v);
+      ret.push_back(e0);
+      ret.push_back(e1);
     }
 
     return ret;

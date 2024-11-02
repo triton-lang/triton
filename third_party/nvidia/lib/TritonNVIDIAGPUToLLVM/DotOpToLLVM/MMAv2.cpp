@@ -471,9 +471,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   for (int i = 0; i < fc.size(); ++i) {
     for (int j = 0; j < numCPackedElem; ++j) {
       results[i * numCPackedElem + j] =
-          numCPackedElem > 1 ? extract_element(fc[i], i32_val(j)),
-                                   resElemTy)
-          : bitcast(fc[i], resElemTy);
+          numCPackedElem > 1
+              ? bitcast(extract_element(fc[i], i32_val(j)), resElemTy)
+              : bitcast(fc[i], resElemTy);
     }
   }
   Value res = packLLElements(loc, typeConverter, results, rewriter, structTy);
