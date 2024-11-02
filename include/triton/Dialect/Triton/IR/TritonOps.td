@@ -891,7 +891,7 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
     `tt.assert` takes a condition tensor and a message string.
     If the condition is false, the message is printed, and the program is aborted.
   }];
-  let arguments = (ins TT_Tensor:$condition, StrAttr:$message);
+  let arguments = (ins AnyTypeOf<[I1, I1Tensor]>:$condition, StrAttr:$message);
   let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 
