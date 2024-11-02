@@ -30,20 +30,6 @@ public:
       : ConvertOpToLLVMPattern<UpcastMXFPOp>(typeConverter, benefit),
         targetInfo(targetInfo) {}
 
-  llvm::SmallVector<Value> unpackFP4Elements(Location loc,
-                                             RewriterBase &rewriter,
-                                             ArrayRef<Value> vals) const {
-    llvm::SmallVector<Value> ret;
-    ret.reserve(vals.size() * 2);
-    for (auto v : vals) {
-      auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v);
-      ret.push_back(e0);
-      ret.push_back(e1);
-    }
-
-    return ret;
-  }
-
   LogicalResult
   matchAndRewrite(UpcastMXFPOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -63,20 +49,8 @@ public:
     Value warpId = udiv(tid, warpSize);
     Value laneId = urem(tid, warpSize);
 
-    if (fpType == ScaleDotElemType::E2M1) {
+    if (fpType == ScaleDotElemType::E2M1)
       xVals = unpackFP4Elements(loc, rewriter, xVals);
-    }
-
-    auto scaleBf16Fn = [&loc, &rewriter](Value v, Value s) -> Value {
-      // Split bf16x2 into 2 bf16, scale each of them, and pack them back
-      // TODO Is it true that the bfloats are always packed as bf16x2?
-      auto nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-      auto scaleIsNan = icmp_eq(s, i8_val(0xff));
-      auto scaleBf16 = bitcast(shl(zext(i16_ty, s), i16_val(7)), bf16_ty);
-      auto scaledBf16 = fmul(v, scaleBf16);
-      // Account for NaN in the scale as per the mxfp specification.
-      return select(scaleIsNan, nanBf16, scaledBf16);
-    };
 
     // Each thread owns elements of 4 mxfp vectors so we need 4 scales
     // Letting c = tid / 4 * 2, we need the elements from threads c, c + 1, c +
@@ -95,7 +69,8 @@ public:
       };
 
       for (int j = 0; j < 32; ++j) {
-        xVals[32 * i + j] = scaleBf16Fn(xVals[32 * i + j], si[j / 8]);
+        xVals[32 * i + j] =
+            LLVM::mxfpScaleBf16(rewriter, loc, xVals[32 * i + j], si[j / 8]);
       }
     }
 
@@ -103,6 +78,21 @@ public:
         packLLElements(loc, getTypeConverter(), xVals, rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
+  }
+
+private:
+  llvm::SmallVector<Value> unpackFP4Elements(Location loc,
+                                             RewriterBase &rewriter,
+                                             ArrayRef<Value> vals) const {
+    llvm::SmallVector<Value> ret;
+    ret.reserve(vals.size() * 2);
+    for (auto v : vals) {
+      auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v);
+      ret.push_back(e0);
+      ret.push_back(e1);
+    }
+
+    return ret;
   }
 };
 } // anonymous namespace

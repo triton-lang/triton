@@ -19,17 +19,6 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v,
-                    Value scale) {
-  Value vBf16 = bitcast(v, bf16_ty);
-  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
-  Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
-  Value scaledBf16 = fmul(vBf16, scaleBf16);
-  // Account for NaN in the scale as per the mxfp specification.
-  return select(scaleIsNan, nanBf16, scaledBf16);
-};
-
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
 private:
   const TargetInfoBase &targetInfo;
@@ -110,7 +99,8 @@ public:
 
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
-          xVals[index] = mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 16]);
+          xVals[index] =
+              LLVM::mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 16]);
         }
       }
     } else {
@@ -132,7 +122,8 @@ public:
 
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
-          xVals[index] = mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 8]);
+          xVals[index] =
+              LLVM::mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 8]);
         }
       }
     }

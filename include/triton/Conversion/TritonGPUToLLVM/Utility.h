@@ -400,6 +400,10 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
 // standalone values and returns them as a pair for (high 4 bits, low 4 bits).
 std::pair<Value, Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter,
                                                Location loc, Value v);
+
+// Scale a mxfp4 value by a given scale.
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale);
+
 } // namespace LLVM
 
 /* ------------------------------------ */
