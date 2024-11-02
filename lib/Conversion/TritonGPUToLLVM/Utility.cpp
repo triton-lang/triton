@@ -862,5 +862,32 @@ SmallVector<Value> getWrappedMultiDimOffset(
   return multiDimOffsetWrapped;
 }
 
+std::pair<Value, Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter,
+                                               Location loc, Value v) {
+  auto em0 = and_(v, i8_val(0x70));
+  auto em1 = and_(v, i8_val(0x7));
+  Value v0 = or_(shl(zext(i16_ty, em0), i16_val(2)),
+                 shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
+  Value v1 = or_(shl(zext(i16_ty, em1), i16_val(6)),
+                 shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
+
+  // Three cases:
+  // 1) x is normal and non-zero: Correct bias
+  v0 = select(icmp_ne(and_(em0, i8_val(0x60)), i8_val(0)),
+              add(v0, i16_val((127 - 1) << 7)), v0);
+  v1 = select(icmp_ne(and_(em1, i8_val(0x6)), i8_val(0)),
+              add(v1, i16_val((127 - 1) << 7)), v1);
+
+  // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
+  // bf16
+  v0 = select(icmp_eq(em0, i8_val(0x10)),
+              or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0);
+  v1 = select(icmp_eq(em1, i8_val(0x1)),
+              or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1);
+  // 3) x is zero, nothing to do
+
+  return {v0, v1};
+}
+
 } // namespace LLVM
 } // namespace mlir

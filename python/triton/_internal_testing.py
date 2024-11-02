@@ -41,6 +41,11 @@ def is_hip():
     return False if target is None else target.backend == "hip"
 
 
+def is_hip_mi200():
+    target = get_current_target()
+    return target.backend == 'hip' and target.arch == 'gfx90a'
+
+
 def get_arch():
     target = get_current_target()
     return "" if target is None else str(target.arch)
