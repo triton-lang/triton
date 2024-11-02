@@ -29,6 +29,7 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hip,
+    is_hip_mi200,
     get_arch,
     torch_float8_dtypes,
     torch_dtypes,
@@ -3354,7 +3355,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if type_a != "e5m2" or (type_b != "e5m2" and type_b != "bf16"):
+        if (type_a not in ["e2m1", "e5m2"]) or (type_b not in ["e2m1", "e5m2", "bf16"]):
             pytest.skip(f"scaled_dot({type_a}, {type_b}) not yet implemented for HIP")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
@@ -3530,7 +3531,13 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
 
     z_ref = dot_scale_ref(x, scale_x, y, type_a, type_b)
 
-    torch.testing.assert_close(z, z_ref, atol=1e-5, rtol=1e-2)
+    # Bigger tolerance for AMD MI200 devices.
+    # MI200 devices use reduced precision fp16 and bf16 and flush input and output denormal values
+    # to zero. Detailed info is at:
+    # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
+    atol = 2e-4 if is_hip_mi200() else 1e-5
+    rtol = 2e-2 if is_hip_mi200() else 1e-2
+    torch.testing.assert_close(z, z_ref, atol=atol, rtol=rtol)
 
     # make sure ld/st are vectorized
     if is_cuda():
