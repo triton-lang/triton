@@ -130,6 +130,17 @@ unsigned getNumWarpsPerCTA(Attribute layout);
 
 unsigned getNumCTAs(Attribute layout);
 
+// Return the order that represents that the batch is in row-major or
+// column-major order for a batch of matrices of shape [*, m, n] with
+// len(shape) == rank.
+SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
+
+// Return the order that represents that the dot operand is in kMajor
+// (contiguous in the inner dimension) or it's contiguous on the outer
+// dimension.
+SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
+                                            bool kMajor);
+
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.
