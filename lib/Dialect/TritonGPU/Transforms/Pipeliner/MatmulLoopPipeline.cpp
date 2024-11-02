@@ -73,49 +73,10 @@ public:
   using OpBuilder::create;
 };
 
-static std::pair<int, int> getStageCluster(Operation *op) {
-  auto stage = cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopStageAttrName))
-                   .getValue()
-                   .getSExtValue();
-  auto clusterId =
-      cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopClusterAttrName))
-          .getValue()
-          .getSExtValue();
-  return std::make_pair(stage, clusterId);
-}
-
 static bool sameStageCluster(Operation *op1, Operation *op2) {
-  auto [s1, c1] = getStageCluster(op1);
-  auto [s2, c2] = getStageCluster(op2);
+  auto [s1, c1] = tt::getStageCluster(op1);
+  auto [s2, c2] = tt::getStageCluster(op2);
   return s1 == s2 && c1 == c2;
-}
-
-static void setStageCluster(scf::ForOp &forOp, Operation *op, int stage,
-                            int cluster) {
-  auto ctx = forOp.getContext();
-  op->setAttr(mlir::triton::kLoopStageAttrName,
-              IntegerAttr::get(IntegerType::get(ctx, 32), stage));
-  op->setAttr(mlir::triton::kLoopClusterAttrName,
-              IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
-}
-
-// Return the minClusterId and maxClusterId for the given ForOp.
-static std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp) {
-  int minClusterId = -1, maxClusterId = -1;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
-        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
-      continue;
-    auto [_, cluster] = getStageCluster(&op);
-    if (maxClusterId < 0) {
-      minClusterId = cluster;
-      maxClusterId = cluster;
-      continue;
-    }
-    maxClusterId = cluster > maxClusterId ? cluster : maxClusterId;
-    minClusterId = cluster < minClusterId ? cluster : minClusterId;
-  }
-  return std::make_pair(minClusterId, maxClusterId);
 }
 
 // Return user of a loadOp with the lowest stage, if two users have the
@@ -124,13 +85,13 @@ static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
   Operation *firstUser = nullptr;
   for (Operation *user : loadOp->getUsers()) {
     if (user->getBlock() == loadOp->getBlock()) {
-      auto [stage, clusterId] = getStageCluster(user);
+      auto [stage, clusterId] = tt::getStageCluster(user);
       // Update FirstUse if this use has lower stage or lower cluster.
       if (!firstUser)
         firstUser = user;
       else {
         auto [stageForFirstUse, clusterForFirstUse] =
-            getStageCluster(firstUser);
+            tt::getStageCluster(firstUser);
         if (stage < stageForFirstUse ||
             (stage == stageForFirstUse && clusterId < clusterForFirstUse))
           firstUser = user;
@@ -146,9 +107,9 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                            int numStages, int maxClusterId) {
   int retCode = -1;
   OpBuilderWithStage builder(forOp);
-  auto [stage, clusterId] = getStageCluster(loadOp);
+  auto [stage, clusterId] = tt::getStageCluster(loadOp);
   auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
-  auto [stageForFirstUse, clusterForFirstUse] = getStageCluster(firstUse);
+  auto [stageForFirstUse, clusterForFirstUse] = tt::getStageCluster(firstUse);
 
   Value zero = builder.createWithStage<arith::ConstantIntOp>(
       forOp.getLoc(), stage, clusterId, 0, 32);
@@ -238,8 +199,9 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     // Prefetch load if is not MMAV3 and is used by the dot.
     if (loadToInfo[loadOp].usedByDot) {
       assert(stageForFirstUse >= 1);
-      setStageCluster(forOp, wait, stageForFirstUse - 1, maxClusterId + 1);
-      setStageCluster(forOp, viewLoad, stageForFirstUse - 1, maxClusterId + 1);
+      tt::setStageCluster(forOp, wait, stageForFirstUse - 1, maxClusterId + 1);
+      tt::setStageCluster(forOp, viewLoad, stageForFirstUse - 1,
+                          maxClusterId + 1);
       retCode = stageForFirstUse - 1;
     }
   }
@@ -255,9 +217,9 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
                    int numStages) {
   assert(phase && "Phase value is required for TMA async copy.");
   OpBuilderWithStage builder(forOp);
-  auto [stage, clusterId] = getStageCluster(loadOp);
+  auto [stage, clusterId] = tt::getStageCluster(loadOp);
   auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
-  auto [stageForFirstUse, clusterForFirstUse] = getStageCluster(firstUse);
+  auto [stageForFirstUse, clusterForFirstUse] = tt::getStageCluster(firstUse);
 
   Attribute sharedMemorySpace =
       triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
@@ -471,9 +433,9 @@ assignMemoryLayouts(scf::ForOp &forOp,
     });
 
     bool isPipelined = false;
-    auto [sLoad, _cLoad] = getStageCluster(&op);
+    auto [sLoad, _cLoad] = tt::getStageCluster(&op);
     for (auto user : users) {
-      auto [stage, _cluster] = getStageCluster(user);
+      auto [stage, _cluster] = tt::getStageCluster(user);
       if (stage != sLoad) {
         isPipelined = true;
         break;
@@ -655,7 +617,7 @@ static void createTMABarrierAndWait(
           loadSize * tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
     }
 
-    auto [stage, cluster] = getStageCluster(group[0]->loadOp);
+    auto [stage, cluster] = tt::getStageCluster(group[0]->loadOp);
     Value barrierAlloc = createBarrierAlloc(forOp, numBuffers);
     barriers.push_back(barrierAlloc);
     Location loc = forOp.getLoc();
@@ -691,76 +653,10 @@ static void createTMABarrierAndWait(
   }
 }
 
-// Similar to CoarseSchedule::insertDepsOfOp, we set <stage, cluster>
-// for ops that are on the def chain for the given op.
-static void insertDepsOfOpOnAttributes(scf::ForOp forOp, Operation *op,
-                                       int stage, int cluster,
-                                       bool includeArg) {
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seen;
-    while (auto arg = dyn_cast<BlockArgument>(v)) {
-      if (!includeArg)
-        break;
-      if (!seen.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      // check to see if defOp has <stage, cluster>, if no, set stage, cluster
-      // and call
-      if (!defOp->hasAttr(mlir::triton::kLoopStageAttrName) ||
-          !defOp->hasAttr(mlir::triton::kLoopClusterAttrName)) {
-        setStageCluster(forOp, defOp, stage, cluster);
-        insertDepsOfOpOnAttributes(forOp, defOp, stage, cluster, includeArg);
-      }
-    }
-  }
-}
-
-// For ops that don't have <stage, cluster>, try to add them stage by stage.
-// This is similar to scheduleDependencies in loopScheduling.
-static void scheduleDependenciesOnAttributes(scf::ForOp forOp, int numStages) {
-  auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
-
-  SmallVector<SmallVector<std::tuple<Operation *, int, int>>, 8> orderClusters(
-      maxClusterId + 1);
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
-        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
-      continue;
-
-    auto [stage, clusterId] = getStageCluster(&op);
-    orderClusters[clusterId].push_back(std::make_tuple(&op, stage, clusterId));
-  }
-
-  SmallVector<std::tuple<Operation *, int, int>> opsInOrder;
-  for (int i = 0; i < orderClusters.size(); i++) {
-    for (auto [op, stage, cluster] : orderClusters[i]) {
-      opsInOrder.push_back({op, stage, cluster});
-    }
-  }
-
-  // Schedule dependencies stage by stage.
-  for (int stage = 0; stage < numStages; stage++) {
-    for (auto [op, stage_, cluster] : opsInOrder) {
-      if (stage_ != stage)
-        continue;
-      insertDepsOfOpOnAttributes(forOp, op, stage, cluster, false);
-    }
-  }
-}
-
 // This is similar to CoarseSchedule.createFinalSchedule.
 static std::vector<std::pair<Operation *, unsigned>>
 getFinalSchedule(scf::ForOp &forOp, int numStages) {
-  auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
+  auto [minClusterId, maxClusterId] = tt::getMinMaxCluster(forOp);
   SmallVector<SmallVector<Operation *>, 8> orderClusters(maxClusterId -
                                                          minClusterId + 1);
   for (auto &op : forOp.getBody()->without_terminator()) {
@@ -768,14 +664,14 @@ getFinalSchedule(scf::ForOp &forOp, int numStages) {
         !op.hasAttr(mlir::triton::kLoopClusterAttrName))
       continue;
 
-    auto [stage, clusterId] = getStageCluster(&op);
+    auto [stage, clusterId] = tt::getStageCluster(&op);
     assert(stage < numStages && "Op with invalid stage!");
     orderClusters[clusterId - minClusterId].push_back(&op);
   }
   std::vector<std::pair<Operation *, unsigned>> fSchedule;
   for (int i = 0; i < orderClusters.size(); i++) {
     for (auto op : orderClusters[i]) {
-      auto [stage, _] = getStageCluster(op);
+      auto [stage, _] = tt::getStageCluster(op);
       fSchedule.push_back({op, stage});
     }
   }
@@ -819,7 +715,7 @@ createAsyncOps(scf::ForOp &forOp,
       asyncLoads.back().isTMALoad = true;
     }
     auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
-    auto [firstUseStage, firstUseCluster] = getStageCluster(firstUse);
+    auto [firstUseStage, firstUseCluster] = tt::getStageCluster(firstUse);
     asyncLoads.back().firstUseStage = firstUseStage;
     asyncLoads.back().firstUseCluster = firstUseCluster;
   }
@@ -876,7 +772,7 @@ createAsyncOps(scf::ForOp &forOp,
   createTMABarrierAndWait(forOp, asyncLoads, insertIdx, extractIdx, phase,
                           numBuffers, barriers, loadToInfo);
 
-  auto [_, maxClusterId] = getMinMaxCluster(forOp);
+  auto [_, maxClusterId] = tt::getMinMaxCluster(forOp);
   for (AsyncLoad &asyncLoad : asyncLoads) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(asyncLoad.loadOp)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
@@ -894,7 +790,10 @@ createAsyncOps(scf::ForOp &forOp,
   // Patch the yield with the updated counters.
   appendToForOpYield(forOp, newYieldOperands);
 
-  scheduleDependenciesOnAttributes(forOp, numStages);
+  tt::CoarseSchedule coarseSchedule(numStages);
+  coarseSchedule.deSerialize(forOp);
+  scheduleDependencies(forOp, coarseSchedule, numStages);
+  coarseSchedule.serialize(forOp);
 
   // Make sure all ops have attributes.
   for (Operation &op : forOp.getBody()->without_terminator()) {
@@ -939,8 +838,8 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // Distance from the load to the use.
   for (auto &[loadOp, info] : loadToInfo) {
     auto *use = getFirstUseOfPipelinedLoad(loadOp);
-    auto [stage, _] = getStageCluster(loadOp);
-    auto [stageUse, t_] = getStageCluster(use);
+    auto [stage, _] = tt::getStageCluster(loadOp);
+    auto [stageUse, t_] = tt::getStageCluster(use);
     loadToInfo[loadOp].distToUse = stageUse - stage;
   }
 
