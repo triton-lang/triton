@@ -283,15 +283,15 @@ jobs:
             echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
           cd python/test/unit
-          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
-          python3 -m pytest -s -n 8 language/test_subprocess.py
-          python3 -m pytest -s -n 8 test_debug.py --forked
+          python3 -m pytest -vs -vvv --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
+          python3 -m pytest -vs -vvv  language/test_subprocess.py
+          python3 -m pytest -vs -vvv  test_debug.py --forked
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -vs -vvv  language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
-          python3 -m pytest -s hopper/test_flashattention.py
+          python3 -m pytest -vs -vvv  hopper/test_flashattention.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
-          python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
+          python3 -m pytest --capture=tee-sys -rfs -vs -vvv  instrumentation/test_gpuhello.py
 
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
