@@ -880,10 +880,12 @@ std::pair<Value, Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter,
 
   // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
   // bf16
-  v0 = select(icmp_eq(em0, i8_val(0x10)),
-              or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0);
-  v1 = select(icmp_eq(em1, i8_val(0x1)),
-              or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1);
+  v0 = bitcast(select(icmp_eq(em0, i8_val(0x10)),
+                      or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0),
+               bf16_ty);
+  v1 = bitcast(select(icmp_eq(em1, i8_val(0x1)),
+                      or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1),
+               bf16_ty);
   // 3) x is zero, nothing to do
 
   return {v0, v1};
