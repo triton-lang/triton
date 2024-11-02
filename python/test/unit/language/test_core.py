@@ -1738,9 +1738,11 @@ def test_cat(dtype_str, num_warps, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 @pytest.mark.parametrize("constant_field", ["value", "mask"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_store_constant(num_ctas, constant_field, device):
+def test_store_constant(num_ctas, dtype_str, constant_field, device):
+    check_type_supported(dtype_str, device)
 
     @triton.jit
     def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr, CONSTANT_FIELD: tl.constexpr):
@@ -1755,12 +1757,13 @@ def test_store_constant(num_ctas, constant_field, device):
         tl.store(output_ptr + offsets, output, mask=mask)
 
     block_size = 128
-    ref = torch.ones([block_size], dtype=getattr(torch, 'int32'), device=device)
-    output = torch.zeros([block_size], dtype=getattr(torch, 'int32'), device=device)
+    ref = torch.ones([block_size], dtype=getattr(torch, dtype_str), device=device)
+    output = torch.zeros([block_size], dtype=getattr(torch, dtype_str), device=device)
 
     kernel[(1, )](output, block_size, BLOCK_SIZE=block_size, num_ctas=num_ctas, CONSTANT_FIELD=constant_field)
 
     if constant_field == "value":
+        print(output, ref)
         assert torch.all(output == ref)
     else:
         assert torch.all(output == 0)
