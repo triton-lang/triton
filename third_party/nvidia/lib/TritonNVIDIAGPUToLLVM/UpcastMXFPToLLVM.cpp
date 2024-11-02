@@ -1,6 +1,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -12,7 +13,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/raw_ostream.h"
 #include <array>
 
 using namespace mlir;
@@ -30,42 +30,17 @@ public:
       : ConvertOpToLLVMPattern<UpcastMXFPOp>(typeConverter, benefit),
         targetInfo(targetInfo) {}
 
-  llvm::SmallVector<Value>
-  unpackFP4Elements(Location loc, ConversionPatternRewriter &rewriter,
-                    const llvm::SmallVector<Value> &vals, Value laneId) const {
-    auto fp4x2ToBf16x2 = [&loc, &rewriter](Value v) -> Value {
-      auto em0 = and_(v, i8_val(0x70));
-      auto em1 = and_(v, i8_val(0x7));
-      Value v0 = or_(shl(zext(i16_ty, em0), i16_val(2)),
-                     shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
-      Value v1 = or_(shl(zext(i16_ty, em1), i16_val(6)),
-                     shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
+  llvm::SmallVector<Value> unpackFP4Elements(Location loc,
+                                             RewriterBase &rewriter,
+                                             ArrayRef<Value> vals) const {
 
-      // Three cases:
-      // 1) x is normal and non-zero: Correct bias
-      v0 = select(icmp_ne(and_(em0, i8_val(0x60)), i8_val(0)),
-                  add(v0, i16_val((127 - 1) << 7)), v0);
-      v1 = select(icmp_ne(and_(em1, i8_val(0x6)), i8_val(0)),
-                  add(v1, i16_val((127 - 1) << 7)), v1);
-
-      // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
-      // bf16
-      v0 = select(icmp_eq(em0, i8_val(0x10)),
-                  or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0);
-      v1 = select(icmp_eq(em1, i8_val(0x1)),
-                  or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1);
-      // 3) x is zero, nothing to do
-
-      // Swap as they come packed in big endian
-      return or_(zext(i32_ty, v0), shl(zext(i32_ty, v1), i32_val(16)));
-    };
-
-    auto fp4x8ToBf16x2 = [&loc, &rewriter, &fp4x2ToBf16x2](
-                             Value v) -> llvm::SmallVector<Value, 4> {
+    auto fp4x8ToBf16x2 = [&loc, &rewriter](Value v) {
       llvm::SmallVector<Value, 4> results(4);
       for (int i = 0; i < 4; ++i) {
         auto v_i = trunc(i8_ty, lshr(v, i32_val(8 * i)));
-        results[i] = fp4x2ToBf16x2(v_i);
+        auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v_i);
+        // Swap as they come packed in big endian
+        results[i] = or_(zext(i32_ty, e0), shl(zext(i32_ty, e1), i32_val(16)));
       }
       return results;
     };
@@ -104,7 +79,7 @@ public:
     Value laneId = urem(tid, warpSize);
 
     if (fpType == ScaleDotElemType::E2M1) {
-      xVals = unpackFP4Elements(loc, rewriter, xVals, laneId);
+      xVals = unpackFP4Elements(loc, rewriter, xVals);
     }
 
     auto scaleBf16x2 = [&loc, &rewriter](Value v, Value s) -> Value {
