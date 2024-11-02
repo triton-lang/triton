@@ -1253,7 +1253,7 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
     val = cast(val, elt_ty, builder)
 
     # Build IR
-    if not mask:
+    if mask is None:
         return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
@@ -1308,7 +1308,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
         if val is not None:
             val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
     val = cast(val, ptr.type.scalar.element_ty, builder)
-    if not mask:
+    if mask is None:
         mask_ir = builder.get_int1(True)
         mask_ty = tl.int1
         if ptr.type.is_block():
