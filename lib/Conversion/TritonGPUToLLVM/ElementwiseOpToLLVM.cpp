@@ -11,25 +11,6 @@ using namespace mlir::triton::gpu;
 
 namespace mlir::triton::gpu {
 
-namespace {
-
-bool isDotOpTensorAndPacked(Type srcTy) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return false;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!encoding)
-    return false;
-  auto parentEnc = dyn_cast<NvidiaMmaEncodingAttr>(encoding.getParent());
-  // By code convention, values for Hopper's dotOp-encoded tensors are not
-  // packed
-  if (!parentEnc || parentEnc.isHopper())
-    return false;
-  return true;
-}
-
-} // namespace
-
 Type getElementType(Value value) {
   auto type = value.getType();
   if (auto tensorType = dyn_cast<RankedTensorType>(type))
@@ -60,62 +41,106 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
   if (inBitWidth == ouBitWidth)
     return values;
   if (inBitWidth == 16 && ouBitWidth == 32) {
-    // Register layout conversion:
-    //
-    //   [0, 1], [4, 5]  ⟶  [0], [1], [4], [5]
-    //   [2, 3], [6, 7]      [2], [3], [6], [7]
-    //
-    // Original access order:
-    //
-    //   [0, 1], [2, 3], [4, 5], [6, 7]
-    //
-    // Transformed access order:
-    //
-    //   [0], [2], [1], [3], [4], [6], [5], [7]
     SmallVector<Value> ret;
-    for (unsigned i = 0; i < values.size(); i += 8) {
-      ret.push_back(values[i]);
-      ret.push_back(values[i + 2]);
-      ret.push_back(values[i + 1]);
-      ret.push_back(values[i + 3]);
-      ret.push_back(values[i + 4]);
-      ret.push_back(values[i + 6]);
-      ret.push_back(values[i + 5]);
-      ret.push_back(values[i + 7]);
+    if (inEncoding.getOpIdx() == 0) {
+      // Register layout conversion:
+      //
+      //   [0, 1], [4, 5]  ⟶  [0], [1], [4], [5]
+      //   [2, 3], [6, 7]      [2], [3], [6], [7]
+      //
+      // Original access order:
+      //
+      //   [0, 1], [2, 3], [4, 5], [6, 7]
+      //
+      // Transformed access order:
+      //
+      //   [0], [2], [1], [3], [4], [6], [5], [7]
+      for (unsigned i = 0; i < values.size(); i += 8) {
+        ret.push_back(values[i]);
+        ret.push_back(values[i + 2]);
+        ret.push_back(values[i + 1]);
+        ret.push_back(values[i + 3]);
+        ret.push_back(values[i + 4]);
+        ret.push_back(values[i + 6]);
+        ret.push_back(values[i + 5]);
+        ret.push_back(values[i + 7]);
+      }
+    } else {
+      // Register layout conversion:
+      //
+      //   [0, 1]^T, [2, 3]^T  ⟶  [0], [2], [1], [3]
+      //
+      // Original access order:
+      //
+      //  [0, 1], [2, 3]
+      //
+      // Transformed access order:
+      //
+      //   [0], [2], [1], [3]
+      for (unsigned i = 0; i < values.size(); i += 4) {
+        ret.push_back(values[i]);
+        ret.push_back(values[i + 2]);
+        ret.push_back(values[i + 1]);
+        ret.push_back(values[i + 3]);
+      }
     }
     return ret;
   }
   if (inBitWidth == 8 && ouBitWidth == 16) {
-    // Register layout conversion:
-    //
-    //   [0, 1, 2, 3], [8, 9, 10, 11]  ⟶  [0, 1], [2, 3], [8, 9], [10, 11]
-    //   [4, 5, 6, 7], [12, 13, 14, 15]    [4, 5], [6, 7], [12, 13], [14, 15]
-    //
-    // Original access order:
-    //
-    //   [0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]
-    //
-    // Transformed access order:
-    //
-    //   [0, 1], [4, 5], [2, 3], [6, 7], [8, 9], [12, 13], [10, 11], [14, 15]
     SmallVector<Value> ret;
-    for (unsigned i = 0; i < values.size(); i += 16) {
-      ret.push_back(values[i]);
-      ret.push_back(values[i + 1]);
-      ret.push_back(values[i + 4]);
-      ret.push_back(values[i + 5]);
-      ret.push_back(values[i + 2]);
-      ret.push_back(values[i + 3]);
-      ret.push_back(values[i + 6]);
-      ret.push_back(values[i + 7]);
-      ret.push_back(values[i + 8]);
-      ret.push_back(values[i + 9]);
-      ret.push_back(values[i + 12]);
-      ret.push_back(values[i + 13]);
-      ret.push_back(values[i + 10]);
-      ret.push_back(values[i + 11]);
-      ret.push_back(values[i + 14]);
-      ret.push_back(values[i + 15]);
+    if (inEncoding.getOpIdx() == 0) {
+      // Register layout conversion:
+      //
+      //   [0, 1, 2, 3], [8, 9, 10, 11]  ⟶  [0, 1], [2, 3], [8, 9], [10, 11]
+      //   [4, 5, 6, 7], [12, 13, 14, 15]    [4, 5], [6, 7], [12, 13], [14, 15]
+      //
+      // Original access order:
+      //
+      //   [0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]
+      //
+      // Transformed access order:
+      //
+      //   [0, 1], [4, 5], [2, 3], [6, 7], [8, 9], [12, 13], [10, 11], [14, 15]
+      for (unsigned i = 0; i < values.size(); i += 16) {
+        ret.push_back(values[i]);
+        ret.push_back(values[i + 1]);
+        ret.push_back(values[i + 4]);
+        ret.push_back(values[i + 5]);
+        ret.push_back(values[i + 2]);
+        ret.push_back(values[i + 3]);
+        ret.push_back(values[i + 6]);
+        ret.push_back(values[i + 7]);
+        ret.push_back(values[i + 8]);
+        ret.push_back(values[i + 9]);
+        ret.push_back(values[i + 12]);
+        ret.push_back(values[i + 13]);
+        ret.push_back(values[i + 10]);
+        ret.push_back(values[i + 11]);
+        ret.push_back(values[i + 14]);
+        ret.push_back(values[i + 15]);
+      }
+    } else {
+      // Register layout conversion:
+      //
+      //   [0, 1, 2, 3]^T, [4, 5, 6, 7]^T  ⟶  [0, 1], [4, 5], [2, 3], [6, 7]
+      //
+      // Original access order:
+      //
+      //  [0, 1, 2, 3], [4, 5, 6, 7]
+      //
+      // Transformed access order:
+      //
+      //  [0, 1], [4, 5], [2, 3], [6, 7]
+      for (unsigned i = 0; i < values.size(); i += 8) {
+        ret.push_back(values[i]);
+        ret.push_back(values[i + 1]);
+        ret.push_back(values[i + 4]);
+        ret.push_back(values[i + 5]);
+        ret.push_back(values[i + 2]);
+        ret.push_back(values[i + 3]);
+        ret.push_back(values[i + 6]);
+        ret.push_back(values[i + 7]);
+      }
     }
     return ret;
   }
