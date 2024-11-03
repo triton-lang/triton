@@ -532,17 +532,43 @@ Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int batch, int repOuter, int repK,
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Type eltTy, bool isHopper, bool isA) {
-  assert(32 >= eltTy.getIntOrFloatBitWidth() && "only support 32-bit or less");
-  auto numElemsPerVec = 32 / eltTy.getIntOrFloatBitWidth();
-  auto intTy =
-      IntegerType::get(eltTy.getContext(), eltTy.getIntOrFloatBitWidth());
-  auto vecTy = vec_ty(intTy, numElemsPerVec);
+  auto bitwidth = eltTy.getIntOrFloatBitWidth();
+  assert(32 >= bitwidth && "only support 32-bit or less");
+  auto numElemsPerVec = 32 / bitwidth;
 
   std::vector<Value> elems;
   auto unpackVec = [&](Value val) {
-    auto vec = bitcast(val, vecTy);
-    for (auto i = 0; i < numElemsPerVec; ++i)
-      elems.push_back(bitcast(extract_element(vec, i32_val(i)), eltTy));
+    // The following code unfortunately does not work, not sure why
+    // auto vec = bitcast(val, vecTy);
+    // for (auto i = 0; i < numElemsPerVec; ++i)
+    //  elems.push_back(bitcast(extract_element(vec, i32_val(i)), eltTy));
+    if (bitwidth == 32) {
+      elems.push_back(val);
+    } else if (bitwidth == 16) {
+      auto valI32 = bitcast(val, i32_ty);
+      auto val0 = and_(valI32, i32_val(0xffff));
+      auto val1 = and_(lshr(valI32, i32_val(16)), i32_val(0xffff));
+      auto val0I16 = trunc(i16_ty, val0);
+      auto val1I16 = trunc(i16_ty, val1);
+      elems.push_back(val0I16);
+      elems.push_back(val1I16);
+    } else if (bitwidth == 8) {
+      auto valI32 = bitcast(val, i32_ty);
+      auto val0 = and_(valI32, i32_val(0xff));
+      auto val1 = and_(lshr(valI32, i32_val(8)), i32_val(0xff));
+      auto val2 = and_(lshr(valI32, i32_val(16)), i32_val(0xff));
+      auto val3 = and_(lshr(valI32, i32_val(24)), i32_val(0xff));
+      auto val0I8 = trunc(i8_ty, val0);
+      auto val1I8 = trunc(i8_ty, val1);
+      auto val2I8 = trunc(i8_ty, val2);
+      auto val3I8 = trunc(i8_ty, val3);
+      elems.push_back(val0I8);
+      elems.push_back(val1I8);
+      elems.push_back(val2I8);
+      elems.push_back(val3I8);
+    } else {
+      llvm_unreachable("unsupported bitwidth");
+    }
   };
 
   // Loading A tile is different from loading B tile since each tile of A is
