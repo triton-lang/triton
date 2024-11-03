@@ -528,24 +528,6 @@ Type getSharedMemTy(Type argType) {
     llvm::report_fatal_error("mma16816 data type not supported");
 }
 
-std::vector<Value> unpackInt(const std::vector<Value> &inValues, Type elTy,
-                             ConversionPatternRewriter &rewriter, Location loc,
-                             const LLVMTypeConverter *typeConverter) {
-  const int inBitWidth = inValues[0].getType().getIntOrFloatBitWidth();
-  std::vector<Value> outValues;
-  for (auto v : inValues) {
-    // cast i32 to appropriate eltType vector and extract elements
-    auto eltType = typeConverter->convertType(elTy);
-    auto vecType =
-        vec_ty(eltType, inBitWidth / eltType.getIntOrFloatBitWidth());
-    auto vec = bitcast(v, vecType);
-    for (int i = 0; i < inBitWidth / eltType.getIntOrFloatBitWidth(); i++) {
-      outValues.push_back(extract_element(vec, i32_val(i)));
-    }
-  }
-  return outValues;
-}
-
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int batch, int repOuter, int repK,
     const LLVMTypeConverter *typeConverter, Location loc,
