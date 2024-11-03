@@ -279,10 +279,10 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
       return getMatrixOrder(order.size(), /*rowMajor*/ false);
     }
   } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    // It's quite weird to talk about warp order when that the warps
+    // FIXME: It's quite weird to talk about warp order when that the warps
     // are broadcasted along the K dimension
-    llvm::report_fatal_error(
-        "DotOperandEncoding::getWarpOrder not implemented");
+    order = getOrderForDotOperand(dotOpLayout.getOpIdx(), order.size(),
+                                  /*kMajor*/ false);
   }
   return order;
 }
@@ -967,8 +967,6 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       elemsPerThread[rank - 1] =
           (idx == 0) ? std::max<int>(rep[2], kWidthRep) * 2 * elemsPerKRep
                      : rep[2];
-      llvm::errs() << "elemsPerThread[0] = " << elemsPerThread[0] << "\n";
-      llvm::errs() << "elemsPerThread[1] = " << elemsPerThread[1] << "\n";
       return elemsPerThread;
     }
   }
