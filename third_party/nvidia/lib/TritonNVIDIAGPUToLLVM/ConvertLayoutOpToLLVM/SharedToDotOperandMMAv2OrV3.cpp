@@ -544,7 +544,7 @@ Value composeValuesToDotOperandLayoutStruct(
     //  elems.push_back(bitcast(extract_element(vec, i32_val(i)), eltTy));
     Value valI32 = bitcast(val, i32_ty);
     if (bitwidth == 32) {
-      elems.push_back(valI32);
+      elems.push_back(bitcast(valI32, eltTy));
     } else if (bitwidth == 16) {
       auto val0 = and_(valI32, i32_val(0xffff));
       auto val1 = and_(lshr(valI32, i32_val(16)), i32_val(0xffff));
