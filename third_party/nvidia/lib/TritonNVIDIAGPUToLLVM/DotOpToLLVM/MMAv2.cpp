@@ -71,7 +71,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   auto packVec = [&](std::array<int, 3> dstIdx) {
     Value vec = undef(vecTy);
     for (auto i = 0; i < numElemsPerVec; ++i) {
-      vec = insert_element(vec, elems[offset + i], i32_val(i));
+      vec = insert_element(vec, bitcast(elems[offset + i], eltTy), i32_val(i));
     }
     vals[dstIdx] = bitcast(vec, i32_ty);
     offset += numElemsPerVec;

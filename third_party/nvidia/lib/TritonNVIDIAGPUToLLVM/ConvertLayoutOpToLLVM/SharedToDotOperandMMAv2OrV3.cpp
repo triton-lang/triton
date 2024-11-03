@@ -534,13 +534,15 @@ Value composeValuesToDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Type eltTy, bool isHopper, bool isA) {
   assert(32 >= eltTy.getIntOrFloatBitWidth() && "only support 32-bit or less");
   auto numElemsPerVec = 32 / eltTy.getIntOrFloatBitWidth();
-  auto vecTy = vec_ty(eltTy, numElemsPerVec);
+  auto intTy =
+      IntegerType::get(eltTy.getContext(), eltTy.getIntOrFloatBitWidth());
+  auto vecTy = vec_ty(intTy, numElemsPerVec);
 
   std::vector<Value> elems;
   auto unpackVec = [&](Value val) {
     auto vec = bitcast(val, vecTy);
     for (auto i = 0; i < numElemsPerVec; ++i)
-      elems.push_back(extract_element(vec, i32_val(i)));
+      elems.push_back(bitcast(extract_element(vec, i32_val(i)), eltTy));
   };
 
   // Loading A tile is different from loading B tile since each tile of A is
