@@ -542,26 +542,25 @@ Value composeValuesToDotOperandLayoutStruct(
     // auto vec = bitcast(val, vecTy);
     // for (auto i = 0; i < numElemsPerVec; ++i)
     //  elems.push_back(bitcast(extract_element(vec, i32_val(i)), eltTy));
+    Value valI32 = bitcast(val, i32_ty);
     if (bitwidth == 32) {
-      elems.push_back(val);
+      elems.push_back(valI32);
     } else if (bitwidth == 16) {
-      auto valI32 = bitcast(val, i32_ty);
       auto val0 = and_(valI32, i32_val(0xffff));
       auto val1 = and_(lshr(valI32, i32_val(16)), i32_val(0xffff));
-      auto val0I16 = trunc(i16_ty, val0);
-      auto val1I16 = trunc(i16_ty, val1);
+      auto val0I16 = bitcast(trunc(i16_ty, val0), eltTy);
+      auto val1I16 = bitcast(trunc(i16_ty, val1), eltTy);
       elems.push_back(val0I16);
       elems.push_back(val1I16);
     } else if (bitwidth == 8) {
-      auto valI32 = bitcast(val, i32_ty);
       auto val0 = and_(valI32, i32_val(0xff));
       auto val1 = and_(lshr(valI32, i32_val(8)), i32_val(0xff));
       auto val2 = and_(lshr(valI32, i32_val(16)), i32_val(0xff));
       auto val3 = and_(lshr(valI32, i32_val(24)), i32_val(0xff));
-      auto val0I8 = trunc(i8_ty, val0);
-      auto val1I8 = trunc(i8_ty, val1);
-      auto val2I8 = trunc(i8_ty, val2);
-      auto val3I8 = trunc(i8_ty, val3);
+      auto val0I8 = bitcast(trunc(i8_ty, val0), eltTy);
+      auto val1I8 = bitcast(trunc(i8_ty, val1), eltTy);
+      auto val2I8 = bitcast(trunc(i8_ty, val2), eltTy);
+      auto val3I8 = bitcast(trunc(i8_ty, val3), eltTy);
       elems.push_back(val0I8);
       elems.push_back(val1I8);
       elems.push_back(val2I8);
