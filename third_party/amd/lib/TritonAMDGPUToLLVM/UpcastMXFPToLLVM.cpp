@@ -72,7 +72,7 @@ public:
     Value laneId = urem(tid, warpSize);
 
     if (isPacked)
-      xVals = unpackFP4Elements(loc, rewriter, xVals);
+      xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
 
     // Given that MFMA layout for the A tensor arranges thread in a column-major
     // manner, for the current tid, it's at row (tid % mDim). When we set up
@@ -132,20 +132,6 @@ public:
         packLLElements(loc, getTypeConverter(), xVals, rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
-  }
-
-private:
-  SmallVector<Value> unpackFP4Elements(Location loc, RewriterBase &rewriter,
-                                       ArrayRef<Value> packed) const {
-    // Split every fp4x2 into 2 bf16 values.
-    llvm::SmallVector<Value> unpacked;
-    unpacked.reserve(packed.size() * 2);
-    for (Value v : packed) {
-      auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v);
-      unpacked.push_back(e0);
-      unpacked.push_back(e1);
-    }
-    return unpacked;
   }
 };
 } // anonymous namespace

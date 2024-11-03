@@ -396,10 +396,10 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
 // MXFP utilities
 // -----------------------------------------------------------------------
 
-// Convert one int8, which contain, 2 packed mxfp4 values, into 2 bf16
-// standalone values and returns them as a pair for (high 4 bits, low 4 bits).
-std::pair<Value, Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter,
-                                               Location loc, Value v);
+// Convert each value, which is an int8 containing 2 packed mxfp4 values,
+// into 2 standalone bf16 values
+SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
+                                          ArrayRef<Value> values);
 
 // Scale a mxfp4 value by a given scale.
 Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale);

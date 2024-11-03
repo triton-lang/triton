@@ -50,7 +50,7 @@ public:
     Value laneId = urem(tid, warpSize);
 
     if (fpType == ScaleDotElemType::E2M1)
-      xVals = unpackFP4Elements(loc, rewriter, xVals);
+      xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
 
     // Each thread owns elements of 4 mxfp vectors so we need 4 scales
     // Letting c = tid / 4 * 2, we need the elements from threads c, c + 1, c +
@@ -78,21 +78,6 @@ public:
         packLLElements(loc, getTypeConverter(), xVals, rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
-  }
-
-private:
-  llvm::SmallVector<Value> unpackFP4Elements(Location loc,
-                                             RewriterBase &rewriter,
-                                             ArrayRef<Value> vals) const {
-    llvm::SmallVector<Value> ret;
-    ret.reserve(vals.size() * 2);
-    for (auto v : vals) {
-      auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v);
-      ret.push_back(e0);
-      ret.push_back(e1);
-    }
-
-    return ret;
   }
 };
 } // anonymous namespace

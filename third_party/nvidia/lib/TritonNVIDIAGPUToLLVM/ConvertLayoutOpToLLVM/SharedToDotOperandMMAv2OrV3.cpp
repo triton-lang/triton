@@ -722,9 +722,9 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
 
   // Format the values to LLVM::Struct to passing to mma codegen.
   Type eltTy = descTy.getElementType();
-  return composeValuesToDotOperandLayoutStruct(vals, numRepBatch, numRepOuter,
-                                               numRepK, typeConverter, loc,
-                                               rewriter, eltTy, isHopper, isA);
+  return composeValuesToDotOperandLayoutStruct(
+      vals, numRepBatch, isA ? numRep[1] : numRep[2], numRepK, typeConverter,
+      loc, rewriter, eltTy, isHopper, isA);
 }
 
 template <typename T>

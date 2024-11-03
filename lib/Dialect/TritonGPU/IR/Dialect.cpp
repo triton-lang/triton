@@ -967,6 +967,8 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       elemsPerThread[rank - 1] =
           (idx == 0) ? std::max<int>(rep[2], kWidthRep) * 2 * elemsPerKRep
                      : rep[2];
+      llvm::errs() << "elemsPerThread[0] = " << elemsPerThread[0] << "\n";
+      llvm::errs() << "elemsPerThread[1] = " << elemsPerThread[1] << "\n";
       return elemsPerThread;
     }
   }
