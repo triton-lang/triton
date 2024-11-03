@@ -125,24 +125,13 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
 int getNumElementsPerThreads(Type type,
                              const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
-  auto tensorTy = dyn_cast<RankedTensorType>(type);
-  if (!tensorTy)
-    return numElemsPerThread;
-  auto structType =
-      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
-  if (structType) {
-    numElemsPerThread = structType.getBody().size();
+  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
+    auto structType =
+        dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
+    if (structType)
+      numElemsPerThread = structType.getBody().size();
   }
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return numElemsPerThread;
-  auto eltType = tensorTy.getElementType();
-  assert(eltType.getIntOrFloatBitWidth() <= 32 &&
-         "Only support element type with bit width <= 32 in dot operand mma "
-         "layout");
-  // dot operand data are packed into i32 elements so use the following formula
-  // to get the number of elements per thread.
-  return (32 / eltType.getIntOrFloatBitWidth()) * numElemsPerThread;
+  return numElemsPerThread;
 }
 
 } // namespace mlir::triton::gpu
