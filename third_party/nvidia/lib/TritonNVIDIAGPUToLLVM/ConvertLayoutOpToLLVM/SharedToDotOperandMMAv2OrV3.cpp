@@ -582,10 +582,9 @@ Value composeValuesToDotOperandLayoutStruct(
   }
   assert(!elems.empty());
 
-  Type elemTy = elems[0].getType();
-  MLIRContext *ctx = elemTy.getContext();
+  MLIRContext *ctx = eltTy.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(elems.size(), elemTy));
+      ctx, SmallVector<Type>(elems.size(), eltTy));
   auto result = packLLElements(loc, typeConverter, elems, rewriter, structTy);
   return result;
 }
@@ -721,7 +720,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
         loadFn(b, 2 * m, 2 * k);
 
   // Format the values to LLVM::Struct to passing to mma codegen.
-  Type eltTy = descTy.getElementType();
+  Type eltTy = typeConverter->convertType(descTy.getElementType());
   return composeValuesToDotOperandLayoutStruct(
       vals, numRepBatch, isA ? numRep[1] : numRep[2], numRepK, typeConverter,
       loc, rewriter, eltTy, isHopper, isA);

@@ -276,7 +276,7 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
     if (mmaLayout.isHopper()) {
       // Hopper MMA instructions force warps to be column-major
       // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#matrix-fragments-for-wgmma-mma-async-m64nnk8
-      return getMatrixOrder(order.size(), /*rowMajor*/ false);
+      order = getMatrixOrder(order.size(), /*rowMajor*/ false);
     }
   } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     // FIXME: It's quite weird to talk about warp order when that the warps
