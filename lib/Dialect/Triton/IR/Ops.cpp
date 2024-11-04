@@ -5,7 +5,6 @@
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -729,20 +728,27 @@ LogicalResult ReshapeOp::verify() {
 }
 
 //-- FpToFpOp --
+
+// Fold FpToFpOp when the input operand is a constant zero.
 OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
   auto srcVal = getSrc();
-  if (!isZeroConst(srcVal)) {
-    return {};
+  auto dstTy = getType();
+
+  const llvm::fltSemantics &semantic =
+      llvm::cast<FloatType>(dstTy.getElementType()).getFloatSemantics();
+
+  if (matchPattern(srcVal, m_PosZeroFloat())) {
+    llvm::APFloat posZero =
+        llvm::APFloat::getZero(semantic, /*negative=*/false);
+    return DenseFPElementsAttr::get(dstTy, posZero);
   }
 
-  auto srcConstant = srcVal.getDefiningOp<arith::ConstantOp>();
-  assert(srcConstant && "Expected srcVal to be a zero constant");
+  if (matchPattern(srcVal, m_NegZeroFloat())) {
+    llvm::APFloat negZero = llvm::APFloat::getZero(semantic, /*negative=*/true);
+    return DenseFPElementsAttr::get(dstTy, negZero);
+  }
 
-  auto dstTy = getType();
-  OpBuilder builder(srcConstant);
-  auto newConstant = builder.create<mlir::arith::ConstantOp>(
-      srcConstant.getLoc(), dstTy, builder.getZeroAttr(dstTy));
-  return newConstant.getResult();
+  return {};
 }
 
 LogicalResult FpToFpOp::verify() {
