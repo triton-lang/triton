@@ -267,24 +267,19 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
       return getWarpOrder(dotLayout.getParent());
     }
   }
-  auto order = getOrder(layout);
-  // FIXME: At the moment, warpOrder in Ampere is N-major but in Hopper it's
-  // M-major This is awkward. Since we can choose any warpOrder in Ampere, we
-  // should probably choose M-major and change `LinearLayoutConversion.cpp` and
-  // `MMAv2.cpp` to match.
-  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-    if (mmaLayout.isHopper()) {
-      // Hopper MMA instructions force warps to be column-major
-      // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#matrix-fragments-for-wgmma-mma-async-m64nnk8
-      return getMatrixOrder(order.size(), /*rowMajor*/ false);
-    }
+
+  auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
+  if (nvidiaMma && nvidiaMma.isHopper()) {
+    auto rank = nvidiaMma.getWarpsPerCTA().size();
+    return getMatrixOrder(rank, /*rowMajor*/ false);
   } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     // It's quite weird to talk about warp order when that the warps
     // are broadcasted along the K dimension
     llvm::report_fatal_error(
         "DotOperandEncoding::getWarpOrder not implemented");
   }
-  return order;
+
+  return getOrder(layout);
 }
 
 SmallVector<unsigned> getOrder(Attribute layout) {
@@ -293,7 +288,11 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   }
   if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
     // Order doesn't really matter. We just have to be consistent when unpacking
-    // the elements in the MMAv2/V3 lowerings. We choose row-major
+    // the output elements in the LLVM lowerings. We choose row-major
+    auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
+    if (nvidiaMma && nvidiaMma.isHopper()) {
+      llvm::report_fatal_error("Testing");
+    }
     auto distributedLayout = cast<DistributedEncodingTrait>(layout);
     auto rank = distributedLayout.getWarpsPerCTA().size();
     return getMatrixOrder(rank, /*rowMajor*/ true);
@@ -1914,7 +1913,8 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadsPerWarp() const {
       "getThreadsPerWarp not implemented for unknown Mma version ");
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadOrder() const {
-  return ::getOrder(*this);
+  auto rank = getThreadsPerWarp().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getSizePerThread() const {
   auto rank = ::getOrder(*this).size();
