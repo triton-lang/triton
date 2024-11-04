@@ -48,11 +48,11 @@ class HIPOptions:
     backend_name: str = 'hip'
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. The "default" variant preserves the default
+    # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
     # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
     # The option is experimental and may change at any time regarding its semantics and/or may
     # be gone entirely anytime.
-    instruction_sched_variant: str = 'default'
+    instruction_sched_variant: str = 'none'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'

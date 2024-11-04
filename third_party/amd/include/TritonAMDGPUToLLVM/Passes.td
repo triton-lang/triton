@@ -78,7 +78,7 @@ def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-in
     let options = [
         Option<"numStages", "num_stages", "int32_t", /*default*/"2",
                 "number of pipeline stages">,
-        Option<"variant", "variant", "std::string", /*default*/"\"default\"",
+        Option<"variant", "variant", "std::string", /*default*/"\"none\"",
                "instruction scheduling variant">,
     ];
 }

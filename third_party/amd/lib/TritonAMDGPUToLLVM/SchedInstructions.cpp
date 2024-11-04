@@ -156,7 +156,7 @@ struct InstructionSchedHintsRewriter
                    [](unsigned char c) { return std::tolower(c); });
 
     this->schedulingType = llvm::StringSwitch<SchedulingType>(variant)
-                               .Case("default", SchedulingType::NONE)
+                               .Case("none", SchedulingType::NONE)
                                .Case("iglp0", SchedulingType::IGLP0)
                                .Case("iglp1", SchedulingType::IGLP1)
                                .Case("ck_v3", SchedulingType::CK_V3)
