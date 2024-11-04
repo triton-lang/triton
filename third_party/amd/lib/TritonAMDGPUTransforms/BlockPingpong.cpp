@@ -20,7 +20,7 @@ class Pingponger {
   SmallVector<Operation *> dotOps;
 
 public:
-  Pingponger(scf::ForOp forOp) : forOp(forOp) {};
+  Pingponger(scf::ForOp forOp) : forOp(forOp){};
   void getDotPingponged();
 };
 
@@ -38,8 +38,13 @@ void Pingponger::getDotPingponged() {
   forOp->walk([&](Operation *op) {
     if (isa<triton::LoadOp>(op))
       gLoadOps.push_back(op);
-    if (isa<ttg::LocalLoadOp>(op))
-      lLoadOps.push_back(op);
+    if (isa<ttg::LocalLoadOp>(op)) {
+      // Check if this is loading from pipeline
+      auto src = op->getOperand(0);
+      if (auto arg = mlir::dyn_cast<BlockArgument>(src))
+        if (forOp.getTiedLoopInit(arg)->get())
+          lLoadOps.push_back(op);
+    }
     if (isa<triton::DotOp>(op))
       dotOps.push_back(op);
   });
