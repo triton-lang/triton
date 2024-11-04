@@ -270,9 +270,9 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     # ('float8e4b15', 'bfloat16'), # Unsupported conversion from f8E4M3B11FNUZ to bf16
     ('float8e4b15', 'float32'),
 
-    # ('float8e4nv', 'float16'), # Unsupported conversion from fp8E4M3FN to f16
+    ('float8e4nv', 'float16'),
     ('float8e4nv', 'bfloat16'),
-    # ('float8e4nv', 'float32'), # Unsupported conversion from fp8E4M3FN to f32
+    ('float8e4nv', 'float32'),
 
     ('float8e4b8', 'float32'),
     ('float8e4b8', 'float16'),
@@ -281,6 +281,10 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e5b16', 'float16'),
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
+
+    if src_dtype == 'float8e4nv' and dst_dtype != 'bfloat16' and is_hip():
+        pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in HIP")
+
     if ((src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (8, 9))
        or (src_dtype in ('float8e4b15') and is_hip())
        or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()))):
@@ -309,16 +313,16 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     ('float32', 'bfloat16', 'rtz', 0x7f7f0000),
     ('float32', 'float8e5', 'rtne', 0x47600000),
     ('float32', 'float8e5', 'rtz', 0x47600000),
-    # ('float32', 'float8e4nv', 'rtne', 0x43e00000), # fp8E4M3FN downcasting not yet supported
+    ('float32', 'float8e4nv', 'rtne', 0x43e00000),
     ('float32', 'float8e4b8', 'rtne', 0x43700000),
     ('float32', 'float8e5b16', 'rtne', 0x47600000),
     # ('float32', 'float8e4b15', 'rtne', 0x3fe00000), # Skip, no HW rtne conversion from f32 to f8e4b15
 
     ('bfloat16', 'float8e5', 'rtne', 0x4760),
-    # ('bfloat16', 'float8e4nv', 'rtne', 0x43e0), # fp8E4M3FN downcasting not yet supported
+    ('bfloat16', 'float8e4nv', 'rtne', 0x43e0),
 
     ('float16', 'float8e5', 'rtne', 0x7b00),
-    # ('float16', 'float8e4nv', 'rtne', 0x5f00), # fp8E4M3FN downcasting not yet supported
+    ('float16', 'float8e4nv', 'rtne', 0x5f00),
 
     ('bfloat16', 'float8e5b16', 'rtne', 0x4760),
     ('bfloat16', 'float8e4b8', 'rtne', 0x4370),
@@ -336,6 +340,9 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_on_mi300()):
         pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
+
+    if dst_dtype == 'float8e4nv' and is_hip():
+        pytest.skip(f"{dst_dtype} downcast not supported in HIP")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
