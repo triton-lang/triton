@@ -975,8 +975,7 @@ struct FpToFpOpConversion
       return outVals;
     }
     size_t numElements = 4;
-    if (srcElementType.isFloat8E4M3FN() ||
-        dstElementType.isFloat8E4M3FN() ||
+    if (srcElementType.isFloat8E4M3FN() || dstElementType.isFloat8E4M3FN() ||
         srcElementType.isFloat8E4M3FNUZ() ||
         dstElementType.isFloat8E4M3FNUZ() ||
         srcElementType.isFloat8E5M2FNUZ() ||
