@@ -256,6 +256,30 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 
     src_emulated_to_float32 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
+    if not (torch.equal(src_emulated_to_float32, dst_to_float32)):
+        print('Error!!!')
+        src = src.cpu().detach().numpy()
+        src_emulated_to_float32 = src_emulated_to_float32.cpu().detach().numpy()
+        dst = dst.cpu().detach().numpy()
+        dst_to_float32 = dst_to_float32.cpu().detach().numpy()
+        print("{:32b}".format(src[0]))
+
+        print("PY%s: %x" % ("src", src[0]))
+        print("PY%s: %x" % ("src_emulated_to_float32", src_emulated_to_float32[0]))
+        print("PY%s: %x" % ("dst", dst[0]))
+        print("PY%s: %x" % ("dst_to_float32", dst_to_float32[0]))
+        print(src[src_emulated_to_float32 != dst_to_float32][0])
+        print(src_emulated_to_float32[src_emulated_to_float32 != dst_to_float32][0])
+        print(dst_to_float32[src_emulated_to_float32 != dst_to_float32][0])
+        print(hex(src[src_emulated_to_float32 != dst_to_float32][0]))
+        print(hex(src_emulated_to_float32[src_emulated_to_float32 != dst_to_float32][0]))
+        print(hex(dst_to_float32[src_emulated_to_float32 != dst_to_float32][0]))
+        #print(hex(src.view(np.uint32)[dst != dst2][0]))
+        #print(hex(dst.view(np.uint32)[dst != dst2][0]))
+        #print(hex(dst2.view(np.uint32)[dst != dst2][0]))
+        #print('')
+        raise ValueError('%d elements mismatch' % (src_emulated_to_float32 != dst_to_float32).sum())
+    
     assert(torch.equal(src_emulated_to_float32, dst_to_float32))
 
 

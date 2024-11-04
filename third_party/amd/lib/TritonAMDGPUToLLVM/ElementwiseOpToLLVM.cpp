@@ -6,6 +6,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <iostream>
+#include <bitset>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -544,51 +546,209 @@ static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
 // ROCM type conversion between fp8 and bf16
 
 /****************************************************************************/
+/*
+Fp8E4M3nv
+  E4   M3  B7
+S.EEEE.MMM
 
+ - bias of 7
+ - no infinities
+ - 2 NaNs like normal
+ - 2 zeros like normal
+
+bf16
+  E8       M7      B127
+S.EEEEEEEE.MMMMMMM
+
+S.EEEE.MMM00000000
+S.EEEEEEEE.MMMMMMM
+
+
+
+*/
 // Fp8E4M3FN (nv) to bf16
-//static Value Fp8E4M3FNUZ_to_Fp16_oneValue(Location loc,
+// this should be based on Fp8E5M2_to_Bf16
 static Value Fp8E4M3FN_to_Bf16_oneValue(Location loc,
                                         ConversionPatternRewriter &rewriter,
                                         Value v) {
-  printf("Fp8E4M3FN_to_Bf16_oneValue - NEED TO IMPLEMENT");
+                                      
+  printf("Fp8E4M3FN_to_Bf16_oneValue - DEBUG");
+  mlir::triton::AMD::TargetInfo targetInfo("gfx942");
+  targetInfo.printf(rewriter, "v: 0x%x", v);
+
   auto fp8x2VecTy = vec_ty(i8_ty, 2);
   Value a = undef(fp8x2VecTy);
-  a = insert_element(fp8x2VecTy, a, int_val(8, 0), i32_val(0));
-  a = insert_element(fp8x2VecTy, a, v, i32_val(1));
+  a = insert_element(fp8x2VecTy, a, int_val(8, 0), i32_val(0)); // 00000000 at loc[0]
+  a = insert_element(fp8x2VecTy, a, v, i32_val(1)); // v at loc[1]
   a = bitcast(a, i16_ty);
+  targetInfo.printf(rewriter, "a: 0x%x", a);
 
-  auto e_mask = int_val(16, 0x7A00);
-  auto e = and_(i16_ty, a, e_mask);
+  auto e = and_(i16_ty, a, int_val(16, 0x7800));
+  //Value tmp_e = e;
 
+  //targetInfo.printf(rewriter, "e: 0x%x", (Value)e);
   auto m = and_(i16_ty, a, int_val(16, 0x0700));
-  auto sign = and_(i16_ty, a, int_val(16, 0x8000));
-
+  //targetInfo.printf(rewriter, "m: 0x%x", (Value)m);
+  auto s = and_(i16_ty, a, int_val(16, 0x8000));
+  //targetInfo.printf(rewriter, "s: 0x%x", (Value)s);
   // check whether all exponents are zeros
   auto e_is_zero = icmp_eq(e, int_val(16, 0x0));
-  auto b = and_(i16_ty, a, int_val(16, 0x7FFF));
+  auto b = and_(i16_ty, a, int_val(16, 0x7FFF)); // all but sign
+  targetInfo.printf(rewriter, "b: 0x%x", (Value)b);
+
+/*
+lshr
+0.EEEE.MMM00000000
+
+0.EEEEEEEE.MMMMMMM
+*/
   auto b1 = lshr(i16_ty, b, int_val(16, 1));
+  targetInfo.printf(rewriter, "b1: 0x%x", (Value)b1);
 
   // case 1, e is nonzero, add exponent by 6
   auto o0v = add(i16_ty, b1, int_val(16, 0x0C00));
-  auto o0 = or_(i16_ty, o0v, sign);
+  targetInfo.printf(rewriter, "o0V: 0x%x", (Value)o0v);
+  auto o0 = or_(i16_ty, o0v, s);
+  targetInfo.printf(rewriter, "o0: 0x%x", (Value)o0);
 
   // case 2, e is nonzero, add exponent by 7
   auto o1v = add(i16_ty, b1, int_val(16, 0x1C00));
-  auto o1 = or_(i16_ty, o1v, sign);
+  auto o1 = or_(i16_ty, o1v, s); // reapply sign
 
   auto io = select(e_is_zero, o0, o1);
-  return bitcast(io, f16_ty);
+  return bitcast(io, bf16_ty);
 }
 
-// fp8e4m3fnuz to bf16 ***
+// coppied from Fp8E5M2_to_Bf16()
+static SmallVector<Value> Fp8E4M3FN_to_Bf16_v2(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          const SmallVector<Value> &v) {
+  mlir::triton::AMD::TargetInfo targetInfo("gfx942");
+  targetInfo.printf(rewriter, "v: 0x%x", v);
+
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value a0 = undef(fp8x4VecTy);
+  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(0));
+  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
+  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
+  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
+  a0 = bitcast(a0, i32_ty);
+  targetInfo.printf(rewriter, "a0: 0x%x", (Value)a0);
+
+/*
+  Value a1 = undef(fp8x4VecTy);
+  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(0));
+  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
+  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(2));
+  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
+  a1 = bitcast(a1, i32_ty);
+*/
+/*
+0x7fff7fff = 01111111111111110111111111111111
+0xFFFF0000 = 11111111111111110000000000000000
+
+*/
+
+  Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
+  targetInfo.printf(rewriter, "b0: 0x%x", (Value)b0);
+  //Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
+
+/*
+lshr
+before: SEEEEMMM00000000
+after : 0000SEEEEMMM00000000
+target: SEEEEEEEEMMMMMMM
+*/
+  b0 = lshr(i32_ty, b0, i32_val(4)); // shift right
+  targetInfo.printf(rewriter, "b0b: 0x%x", (Value)b0);
+  //b1 = lshr(i32_ty, b1, i32_val(3));
+
+  Value c0 = shl(i32_ty, b0, i32_val(16)); // shift left
+  targetInfo.printf(rewriter, "c0: 0x%x", (Value)c0);
+
+  Value c1 = and_(i32_ty, b0, i32_val(0xFFFF0000));
+  targetInfo.printf(rewriter, "c1: 0x%x", (Value)c1);
+
+  //Value c2 = shl(i32_ty, b1, i32_val(16));
+  //Value c3 = and_(i32_ty, b1, i32_val(0xFFFF0000));
+
+  c0 = bitcast(c0, f32_ty);
+  targetInfo.printf(rewriter, "c0b: 0x%x", (Value)c0);
+
+  c1 = bitcast(c1, f32_ty);
+  //targetInfo.printf(rewriter, "d1: 0x%x", (Value)d1);
+
+  //c2 = bitcast(c2, f32_ty);
+  //c3 = bitcast(c3, f32_ty);
+
+/*
+fmul to shift mantissa to the right
+before: S0000EEEEMMM0000
+target: SEEEEEEEE0000MMM
+*/
+  Value d0 = fmul(f32_ty, c0, f32_val(0x1p+120)); // exponent bias 2**(127-7)
+  targetInfo.printf(rewriter, "d0: 0x%x", (Value)d0);
+
+  // bf16 has exponent bias of 127
+  // fp8e5m2 has exponent bias of 15
+  // therefore scale by 2**(127-15)
+  // fp8nv has exponent bias of 7; therefore scale by 2**(127-7)
+  Value d1 = fmul(f32_ty, c1, f32_val(0x1p+120));
+  //targetInfo.printf(rewriter, "d1: 0x%x", (Value)d1);
+
+  //Value d2 = fmul(f32_ty, c2, f32_val(0x1p+112));
+  //Value d3 = fmul(f32_ty, c3, f32_val(0x1p+112));
+
+  d0 = bitcast(d0, i32_ty);
+  targetInfo.printf(rewriter, "d0b: 0x%x", (Value)d0);
+
+  d1 = bitcast(d1, i32_ty);
+  //targetInfo.printf(rewriter, "f1: 0x%x", (Value)f1);
+
+  //d2 = bitcast(d2, i32_ty);
+  //d3 = bitcast(d3, i32_ty);
+
+  Value out0 = or_(i32_ty, lshr(i32_ty, d0, i32_val(16)), d1);
+  //Value out1 = or_(i32_ty, lshr(i32_ty, d2, i32_val(16)), d3);
+
+  Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
+
+  //Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
+
+  out0 = or_(i32_ty, out0, sign0);
+  targetInfo.printf(rewriter, "out0: 0x%x", (Value)out0);
+  //out1 = or_(i32_ty, out1, sign1);
+
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+  out0 = bitcast(out0, bf16x2VecTy);
+  //out1 = bitcast(out1, bf16x2VecTy);
+
+  return {extract_element(bf16_ty, out0, i32_val(0)),
+          extract_element(bf16_ty, out0, i32_val(1))
+          //extract_element(bf16_ty, out1, i32_val(0)),
+          //extract_element(bf16_ty, out1, i32_val(1))
+          };
+}
+
+
+
+
+
+
+
+
+
+
+// fp8e4m3fnuz to bf16
 static SmallVector<Value>
 Fp8E4M3FN_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
-  printf("Fp8E4M3FN_to_Bf16\n");
+  printf("Fp8E4M3FN_to_Bf16 - new\n");
   assert(v.size() == 2);
   SmallVector<Value> result(2);
-  result[0] = Fp8E4M3FN_to_Bf16_oneValue(loc, rewriter, v[0]);
-  result[1] = Fp8E4M3FN_to_Bf16_oneValue(loc, rewriter, v[1]);
+  //result[0] = Fp8E4M3FN_to_Bf16_oneValue(loc, rewriter, v[0]);
+  //result[1] = Fp8E4M3FN_to_Bf16_oneValue(loc, rewriter, v[1]);
+  result = Fp8E4M3FN_to_Bf16_v2(loc, rewriter, v);
   return result;
 }
 
@@ -598,7 +758,7 @@ Fp8E4M3FN_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
 static Value Bf16_to_Fp8E4M3FN_oneValue(Location loc,
                                         ConversionPatternRewriter &rewriter,
                                         Value v) {
-  printf("Bf16_to_Fp8E4M3FN_oneValue - NEED TO IMPLEMENT\n");
+  printf("Bf16_to_Fp8E4M3FN_oneValue - DEBUG\n");
   auto vi16 = bitcast(v, i16_ty);
   auto e10 = and_(vi16, int_val(16, 0x7C00));
   auto e = lshr(i16_ty, e10, int_val(16, 10));
@@ -633,18 +793,41 @@ static Value Bf16_to_Fp8E4M3FN_oneValue(Location loc,
 static SmallVector<Value>
 Bf16_to_Fp8E4M3FN(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
-  printf("Bf16_to_Fp8E4M3FN");
+  printf("Bf16_to_Fp8E4M3FN - new");
   SmallVector<Value> result(2);
   result[0] = Bf16_to_Fp8E4M3FN_oneValue(loc, rewriter, v[0]);
   result[1] = Bf16_to_Fp8E4M3FN_oneValue(loc, rewriter, v[1]);
   return result;
 }
 
+//TODO(dtanner)
+// fp8nv -> bf16 -> fp32
+static SmallVector<Value>
+Fp8E4M3FN_to_Fp32(Location loc, ConversionPatternRewriter &rewriter,
+                  const SmallVector<Value> &v) {
+  printf("Fp8E4M3FN_to_Fp32 - new\n");
+  assert(v.size() == 2);
+  SmallVector<Value> ret = Fp8E4M3FN_to_Bf16(loc, rewriter, v);
+  ret[0] = convertBf16ToFp32(loc, rewriter, ret[0]);
+  ret[1] = convertBf16ToFp32(loc, rewriter, ret[1]);
+  return ret;
+}
+
+// TODO(dtanner)
+// fp32 -> bf16 -> fp8nv
+static SmallVector<Value>
+Fp32_to_Fp8E4M3FN(Location loc, ConversionPatternRewriter &rewriter,
+                    const SmallVector<Value> &v) {
+  printf("Fp32_to_Fp8E4M3FN - new\n");
+  assert(v.size() == 2);
+  SmallVector<Value> ret(2);
+  ret[0] = convertFp32ToBf16(loc, rewriter, v[0], RoundingMode::RTNE);
+  ret[1] = convertFp32ToBf16(loc, rewriter, v[1], RoundingMode::RTNE);
+  ret = Bf16_to_Fp8E4M3FN(loc, rewriter, ret);
+  return ret;
+}
+
 /****************************************************************************/
-
-
-
-
 
 // fp8e4m3fnuz to bf16
 static SmallVector<Value>
@@ -986,6 +1169,8 @@ struct FpToFpOpConversion
     static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, ConverterT>
         srcMap = {
             // F8 -> F16
+            //{{F8E4M3FNTyID, F16TyID, undefRounding},
+            // Fp8E4M3FN_to_Fp16(isaFamily)}, // nv
             {{F8E4M3FNUZTyID, F16TyID, undefRounding},
              Fp8E4M3FNUZ_to_Fp16(isaFamily)},
             {{F8E5M2FNUZTyID, F16TyID, undefRounding},
@@ -994,6 +1179,8 @@ struct FpToFpOpConversion
             // F16 -> F8
             {{F16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
              Fp16_to_Fp8E5M2FNUZ(isaFamily)},
+            //{{F16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+            // Fp16_to_Fp8E4M3FN(isaFamily)}, // nv
             {{F16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
              Fp16_to_Fp8E4M3FNUZ(isaFamily)},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp16_to_Fp8E5M2_RTNE},
@@ -1012,10 +1199,13 @@ struct FpToFpOpConversion
             {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
              Bf16_to_Fp8E4M3FNUZ},
             // F32 <-> F8
-            {{F32TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
+            {{F32TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+             Fp32_to_Fp8E4M3FN}, // nv
+             {{F32TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
              Fp32_to_Fp8E4M3FNUZ},
             {{F32TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
              Fp32_to_Fp8E5M2FNUZ},
+            {{F8E4M3FNTyID, F32TyID, undefRounding}, Fp8E4M3FN_to_Fp32}, // nv
             {{F8E4M3FNUZTyID, F32TyID, undefRounding}, Fp8E4M3FNUZ_to_Fp32},
             {{F8E5M2FNUZTyID, F32TyID, undefRounding}, Fp8E5M2FNUZ_to_Fp32},
         };
