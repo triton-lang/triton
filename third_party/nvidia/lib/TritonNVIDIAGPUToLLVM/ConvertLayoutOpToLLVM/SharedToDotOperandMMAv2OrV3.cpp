@@ -535,39 +535,13 @@ Value composeValuesToDotOperandLayoutStruct(
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   assert(32 >= bitwidth && "only support 32-bit or less");
   auto numElemsPerVec = 32 / bitwidth;
+  auto vecTy = vec_ty(eltTy, numElemsPerVec);
 
   std::vector<Value> elems;
   auto unpackVec = [&](Value val) {
-    // The following code unfortunately does not work, not sure why
-    // auto vec = bitcast(val, vecTy);
-    // for (auto i = 0; i < numElemsPerVec; ++i)
-    //  elems.push_back(bitcast(extract_element(vec, i32_val(i)), eltTy));
-    Value valI32 = bitcast(val, i32_ty);
-    if (bitwidth == 32) {
-      elems.push_back(bitcast(valI32, eltTy));
-    } else if (bitwidth == 16) {
-      auto val0 = and_(valI32, i32_val(0xffff));
-      auto val1 = and_(lshr(valI32, i32_val(16)), i32_val(0xffff));
-      auto val0I16 = bitcast(trunc(i16_ty, val0), eltTy);
-      auto val1I16 = bitcast(trunc(i16_ty, val1), eltTy);
-      elems.push_back(val0I16);
-      elems.push_back(val1I16);
-    } else if (bitwidth == 8) {
-      auto val0 = and_(valI32, i32_val(0xff));
-      auto val1 = and_(lshr(valI32, i32_val(8)), i32_val(0xff));
-      auto val2 = and_(lshr(valI32, i32_val(16)), i32_val(0xff));
-      auto val3 = and_(lshr(valI32, i32_val(24)), i32_val(0xff));
-      auto val0I8 = bitcast(trunc(i8_ty, val0), eltTy);
-      auto val1I8 = bitcast(trunc(i8_ty, val1), eltTy);
-      auto val2I8 = bitcast(trunc(i8_ty, val2), eltTy);
-      auto val3I8 = bitcast(trunc(i8_ty, val3), eltTy);
-      elems.push_back(val0I8);
-      elems.push_back(val1I8);
-      elems.push_back(val2I8);
-      elems.push_back(val3I8);
-    } else {
-      llvm_unreachable("unsupported bitwidth");
-    }
+    auto vec = bitcast(val, vecTy);
+    for (auto i = 0; i < numElemsPerVec; ++i)
+      elems.push_back(extract_element(vec, i32_val(i), eltTy));
   };
 
   // Loading A tile is different from loading B tile since each tile of A is
