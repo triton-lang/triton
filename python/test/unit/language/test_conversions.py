@@ -308,6 +308,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     if ((src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (8, 9))
        or (src_dtype in ('float8e4b15') and is_hip())
+       or (src_dtype in ('float8e4nv') and is_hip() and dst_dtype in ('float16', 'float32'))
        or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()))):
         # If the dtype should error out in the given device, we assert that and return
         with pytest.raises(triton.CompilationError, match="not supported in this architecture"):

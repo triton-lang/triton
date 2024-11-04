@@ -624,7 +624,7 @@ static SmallVector<Value> Fp8E4M3FN_to_Bf16_v2(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           const SmallVector<Value> &v) {
   mlir::triton::AMD::TargetInfo targetInfo("gfx942");
-  targetInfo.printf(rewriter, "v: 0x%x", v);
+  //targetInfo.printf(rewriter, "v: 0x%x", v);
 
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = undef(fp8x4VecTy);
@@ -633,100 +633,50 @@ static SmallVector<Value> Fp8E4M3FN_to_Bf16_v2(Location loc,
   a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
   a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
   a0 = bitcast(a0, i32_ty);
-  targetInfo.printf(rewriter, "a0: 0x%x", (Value)a0);
-
-/*
-  Value a1 = undef(fp8x4VecTy);
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
-  a1 = bitcast(a1, i32_ty);
-*/
-/*
-0x7fff7fff = 01111111111111110111111111111111
-0xFFFF0000 = 11111111111111110000000000000000
-
-*/
+  //targetInfo.printf(rewriter, "a0: 0x%x", (Value)a0);
 
   Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-  targetInfo.printf(rewriter, "b0: 0x%x", (Value)b0);
-  //Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
+  //targetInfo.printf(rewriter, "b0: 0x%x", (Value)b0);
 
-/*
-lshr
-before: SEEEEMMM00000000
-after : 0000SEEEEMMM00000000
-target: SEEEEEEEEMMMMMMM
-*/
   b0 = lshr(i32_ty, b0, i32_val(4)); // shift right
-  targetInfo.printf(rewriter, "b0b: 0x%x", (Value)b0);
-  //b1 = lshr(i32_ty, b1, i32_val(3));
+  //targetInfo.printf(rewriter, "b0b: 0x%x", (Value)b0);
 
   Value c0 = shl(i32_ty, b0, i32_val(16)); // shift left
-  targetInfo.printf(rewriter, "c0: 0x%x", (Value)c0);
-
+  //targetInfo.printf(rewriter, "c0: 0x%x", (Value)c0);
   Value c1 = and_(i32_ty, b0, i32_val(0xFFFF0000));
-  targetInfo.printf(rewriter, "c1: 0x%x", (Value)c1);
-
-  //Value c2 = shl(i32_ty, b1, i32_val(16));
-  //Value c3 = and_(i32_ty, b1, i32_val(0xFFFF0000));
+  //targetInfo.printf(rewriter, "c1: 0x%x", (Value)c1);
 
   c0 = bitcast(c0, f32_ty);
-  targetInfo.printf(rewriter, "c0b: 0x%x", (Value)c0);
-
+  //targetInfo.printf(rewriter, "c0b: %f", (Value)c0); // these prints aren't working in hex or decimal
   c1 = bitcast(c1, f32_ty);
-  //targetInfo.printf(rewriter, "d1: 0x%x", (Value)d1);
-
-  //c2 = bitcast(c2, f32_ty);
-  //c3 = bitcast(c3, f32_ty);
-
-/*
-fmul to shift mantissa to the right
-before: S0000EEEEMMM0000
-target: SEEEEEEEE0000MMM
-*/
-  Value d0 = fmul(f32_ty, c0, f32_val(0x1p+120)); // exponent bias 2**(127-7)
-  targetInfo.printf(rewriter, "d0: 0x%x", (Value)d0);
+  //targetInfo.printf(rewriter, "c1b: %f", (Value)c1);
 
   // bf16 has exponent bias of 127
   // fp8e5m2 has exponent bias of 15
   // therefore scale by 2**(127-15)
   // fp8nv has exponent bias of 7; therefore scale by 2**(127-7)
+  Value d0 = fmul(f32_ty, c0, f32_val(0x1p+120)); // exponent bias 2**(127-7)
+  //targetInfo.printf(rewriter, "d0: 0x%x", (Value)d0);
   Value d1 = fmul(f32_ty, c1, f32_val(0x1p+120));
   //targetInfo.printf(rewriter, "d1: 0x%x", (Value)d1);
 
-  //Value d2 = fmul(f32_ty, c2, f32_val(0x1p+112));
-  //Value d3 = fmul(f32_ty, c3, f32_val(0x1p+112));
-
   d0 = bitcast(d0, i32_ty);
-  targetInfo.printf(rewriter, "d0b: 0x%x", (Value)d0);
-
+  //targetInfo.printf(rewriter, "d0b: 0x%x", (Value)d0);
   d1 = bitcast(d1, i32_ty);
-  //targetInfo.printf(rewriter, "f1: 0x%x", (Value)f1);
-
-  //d2 = bitcast(d2, i32_ty);
-  //d3 = bitcast(d3, i32_ty);
+  //targetInfo.printf(rewriter, "d1b: 0x%x", (Value)d1);
 
   Value out0 = or_(i32_ty, lshr(i32_ty, d0, i32_val(16)), d1);
-  //Value out1 = or_(i32_ty, lshr(i32_ty, d2, i32_val(16)), d3);
-
   Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
-
-  //Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
-
   out0 = or_(i32_ty, out0, sign0);
-  targetInfo.printf(rewriter, "out0: 0x%x", (Value)out0);
-  //out1 = or_(i32_ty, out1, sign1);
+  //targetInfo.printf(rewriter, "out0: 0x%x", (Value)out0);
 
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   out0 = bitcast(out0, bf16x2VecTy);
-  //out1 = bitcast(out1, bf16x2VecTy);
+  //targetInfo.printf(rewriter, "out0b: 0x%x", (Value)out0);
+
 
   return {extract_element(bf16_ty, out0, i32_val(0)),
           extract_element(bf16_ty, out0, i32_val(1))
-          //extract_element(bf16_ty, out1, i32_val(0)),
-          //extract_element(bf16_ty, out1, i32_val(1))
           };
 }
 
