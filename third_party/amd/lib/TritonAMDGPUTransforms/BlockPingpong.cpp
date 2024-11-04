@@ -20,7 +20,7 @@ class Pingponger {
   SmallVector<Operation *> dotOps;
 
 public:
-  Pingponger(scf::ForOp forOp) : forOp(forOp){};
+  Pingponger(scf::ForOp forOp) : forOp(forOp) {};
   void getDotPingponged();
 };
 
