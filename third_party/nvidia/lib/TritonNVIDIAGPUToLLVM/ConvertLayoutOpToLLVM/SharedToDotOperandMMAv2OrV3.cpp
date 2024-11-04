@@ -541,7 +541,7 @@ Value composeValuesToDotOperandLayoutStruct(
   auto unpackVec = [&](Value val) {
     auto vec = bitcast(val, vecTy);
     for (auto i = 0; i < numElemsPerVec; ++i)
-      elems.push_back(extract_element(vec, i32_val(i), eltTy));
+      elems.push_back(extract_element(eltTy, vec, i32_val(i)));
   };
 
   // Loading A tile is different from loading B tile since each tile of A is
