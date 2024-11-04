@@ -121,19 +121,15 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     }
 
     if (dot.getOpIdx() == 1) {
-      // there are kWidth * 2 elems packed as bf16x2
       int elemsInTile = dot.getKWidth();
-      // n0 and n1 are unrolled in the legacy path
-      // Unrolling n1 makes some sense, but unrolling n0 makes absolutely no
-      // sense IMO
+      // n0 is unrolled in the legacy path, which makes no sense
       n0 *= 2;
-      n1 *= 2;
       for (auto b = 0; b < batch; ++b)
-        for (auto j = 0; j < n1 / elemsInTile; ++j)
-          for (auto i = 0; i < n0; ++i)
-            for (auto k = 0; k < elemsInTile; ++k) {
-              vals[{b, i, elemsInTile * j + k}] = elems[offset++];
-            }
+        for (auto i = 0; i < n0; ++i)
+          for (auto j = 0; j < n1; ++j) {
+            vals[{b, i, 2 * j}] = elems[offset++];
+            vals[{b, i, 2 * j + 1}] = elems[offset++];
+          }
       return vals;
     }
   }
