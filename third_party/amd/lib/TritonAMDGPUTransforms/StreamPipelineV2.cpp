@@ -151,8 +151,9 @@ private:
   // Data members
   scf::ForOp forOp;
 
-  int numStages;
+  // User settings
   bool prefetch;
+  int numStages;
 
   // Scheduling clusters
   tt::CoarseSchedule schedule;
