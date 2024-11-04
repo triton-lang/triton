@@ -65,7 +65,8 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   auto eltTy = type.getElementType();
   int offset{};
   ValueTableV2 vals;
-  auto numElemsPerVec = 32 / eltTy.getIntOrFloatBitWidth();
+  auto bitwidth = eltTy.getIntOrFloatBitWidth();
+  auto numElemsPerVec = 32 / bitwidth;
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
 
   auto packVec = [&](std::array<int, 3> dstIdx) {
@@ -80,13 +81,13 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   // FIXME [Dot LL]
   // [ez] Generalize the logic below for kWidth * elemBitWidth > 32
   auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
-  auto largeK = dot.getKWidth() == 8 &&
-                cast<NvidiaMmaEncodingAttr>(dot.getParent()).isAmpere();
+  auto kWidth = dot.getKWidth();
+  auto largeK = bitwidth * kWidth > 32;
   if (largeK) {
     llvm::SmallVector<unsigned> si;
 
-    // For kWidth = 8, split the mma into 4 mmas with "stride 4" along K
     if (dot.getOpIdx() == 0) {
+      // For kWidth = 8, split the mma into 4 mmas with "stride 4" along K
       // Original register layout:
       //
       //   [0, 1, 2, 3, 4, 5, 6, 7], [16, 17, 18, 19, 20, 21, 22, 23, 23]
@@ -101,9 +102,11 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       //  2nd MMA: [[2, 3], [10, 11], [18, 19], [26, 27]]
       //  3rd MMA: [[4, 5], [12, 13], [20, 21], [28, 29]]
       //  4th MMA: [[6, 7], [14, 15], [22, 23], [30, 31]]
-      si = llvm::SmallVector<unsigned>{
-          0, 1, 8,  9,  16, 17, 24, 25, 2, 3, 10, 11, 18, 19, 26, 27,
-          4, 5, 12, 13, 20, 21, 28, 29, 6, 7, 14, 15, 22, 23, 30, 31};
+      for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+        for (size_t tile = 0; tile < 4; ++tile)
+          for (size_t e = 0; e < numElemsPerVec; ++e) {
+            si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+          }
     } else {
       // Original register layout:
       //
@@ -115,8 +118,11 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       //  2nd MMA: [[2, 3], [10, 11]]
       //  3rd MMA: [[4, 5], [12, 13]]
       //  4th MMA: [[6, 7], [14, 15]]
-      si = llvm::SmallVector<unsigned>{0, 1, 8,  9,  2, 3, 10, 11,
-                                       4, 5, 12, 13, 6, 7, 14, 15};
+      for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+        for (size_t tile = 0; tile < 2; ++tile)
+          for (size_t e = 0; e < numElemsPerVec; ++e) {
+            si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+          }
     }
 
     auto step = si.size();

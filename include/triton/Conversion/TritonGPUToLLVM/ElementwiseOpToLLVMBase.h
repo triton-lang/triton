@@ -199,10 +199,6 @@ public:
       }
       it += curr.size();
     }
-    if (op->getNumOperands() > 0) {
-      auto argTy = op->getOperand(0).getType();
-      resultVals = reorderValues(resultVals, argTy, resultTy);
-    }
     resultVals = maybeDeduplicate(op, resultVals);
     Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
                                 rewriter, resultTy);

@@ -540,13 +540,6 @@ struct ElementwiseInlineAsmOpConversion
     // Reorder and pack the results.
     SmallVector<Value> outs;
     for (int i = 0; i < unpackedResults.size(); i++) {
-      // We reordered all the inputs so they match operand 0.  Reorder the
-      // outputs accordingly.
-      if (op->getNumOperands() > 0) {
-        unpackedResults[i] = reorderValues(
-            unpackedResults[i], /*inType=*/op->getOperand(0).getType(),
-            /*ouType=*/op->getResult(i).getType());
-      }
       outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
                                     rewriter, op->getResult(i).getType()));
     }
