@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# remember where we started
-ROOT="$(pwd)"
 MODEL_SPEC=$1
 
 # torchinductor venv
@@ -29,15 +27,15 @@ pip3 install --force-reinstall torchtext
 # pytorch nightly
 pip3 install --force-reinstall --pre torch torchvision torchaudio torchrec --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 # pytorch source to get torchbench for dynamo
-cd /tmp || exit
+pushd /tmp || exit
 # cleanup old pytorch
 rm -rf pytorch
 git clone --recursive https://github.com/pytorch/pytorch
-cd pytorch || exit
+pushd pytorch || exit
 # if you are updating an existing checkout
 git submodule sync
 git submodule update --init --recursive
-cd ..
+popd || exit
 
 # required packages
 # https://github.com/pytorch/benchmark/blob/main/docker/gcp-a100-runner-dind.dockerfile#L17
@@ -50,9 +48,9 @@ if [ "$MODEL_SPEC" == "torchbench" ] || [ "$MODEL_SPEC" != "all" ]; then
 	rm -rf benchmark
 	pip3 install pyyaml
 	git clone https://github.com/pytorch/benchmark.git
-	cd benchmark || exit
+	pushd benchmark || exit
 	python3 install.py
-	cd ..
+	popd || exit
 fi
 
 # timm
@@ -60,9 +58,9 @@ if [ "$MODEL_SPEC" == "timm_models" ] || [ "$MODEL_SPEC" != "all" ]; then
 	# clean up old timm
 	rm -rf pytorch-image-models
 	git clone https://github.com/huggingface/pytorch-image-models.git
-	cd pytorch-image-models || exit
+	pushd pytorch-image-models || exit
 	pip3 install -e .
-	cd ..
+	popd || exit
 fi
 
 # clean up cache
@@ -71,4 +69,4 @@ rm -rf ~/.triton/cache
 rm -rf "$TEST_REPORTS_DIR"
 
 # go back to where we started
-cd "$ROOT" || exit
+popd || exit

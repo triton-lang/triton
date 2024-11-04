@@ -14,7 +14,7 @@ source "$INDUCTOR"/scripts/common.sh
 sudo nvidia-smi -i 0 -pm 1
 sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
 
-cd "$PYTORCH_DIR" || exit
+pushd "$PYTORCH_DIR" || exit
 TRITON_TEST_REPORTS_DIR=$TEST_REPORTS_DIR/perf
 BASE_TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc
 mkdir -p "$TRITON_TEST_REPORTS_DIR"
@@ -50,7 +50,7 @@ done
 # uninstall pytorch-triton
 pip3 uninstall pytorch-triton -y
 
-cd "$ROOT" || exit
+popd || exit
 for model in "${MODELS[@]}"; do
   if [ "$model" != "$MODEL_SPEC" ] && [ "$MODEL_SPEC" != "all" ]; then
     continue
@@ -68,4 +68,4 @@ done
 sudo nvidia-smi -i 0 -rgc
 
 # go back to where we started
-cd "$ROOT" || exit
+popd || exit

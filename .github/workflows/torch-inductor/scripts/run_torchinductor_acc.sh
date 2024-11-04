@@ -15,7 +15,7 @@ pip3 install --upgrade z3-solver
 
 # Install our own triton.
 pip3 uninstall pytorch-triton -y
-cd $ROOT/python || exit
+pushd python || exit
 if [ -d "./dist" ]; then
   pip3 install dist/triton*.whl
 else
@@ -23,7 +23,7 @@ else
   pip3 install -e .
 fi
 
-cd "$PYTORCH_DIR" || exit
+pushd "$PYTORCH_DIR" || exit
 TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc
 mkdir -p "$TEST_REPORTS_DIR"
 
@@ -40,7 +40,7 @@ for model in "${MODELS[@]}"; do
     --output "$TEST_REPORTS_DIR"/dynamic_shapes_"$model".csv
 done
 
-cd "$ROOT" || exit
+popd || exit
 for model in "${MODELS[@]}"; do
   if [ "$model" != "$MODEL_SPEC" ] && [ "$MODEL_SPEC" != "all" ]; then
     continue
@@ -52,4 +52,4 @@ for model in "${MODELS[@]}"; do
 done
 
 # go back to where we started
-cd "$ROOT" || exit
+popd || exit
