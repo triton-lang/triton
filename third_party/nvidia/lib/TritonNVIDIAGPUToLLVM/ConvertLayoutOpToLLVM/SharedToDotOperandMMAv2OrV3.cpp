@@ -658,15 +658,15 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
 
   int kWidth = encoding.getKWidth();
   auto numRep =
-      mmaLayout.getRepForOperand(shapePerCTA, bitwidth, encoding.getOpIdx());
+      mmaLayout.getRepForOperand(shapePerCTA, mmaBitwidth, encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-  auto order = triton::gpu::getOrder(mmaLayout);
+  auto warpOrder = mmaLayout.getWarpOrder();
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
 
   SmallVector<Value> multiDimWarpId =
-      delinearize(rewriter, loc, warp, warpsPerCTA, order);
+      delinearize(rewriter, loc, warp, warpsPerCTA, warpOrder);
   Value warpB = urem(multiDimWarpId[0], i32_val(shapePerCTA[0]));
   int warpsPerTile;
   Value warpM = urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / 16));

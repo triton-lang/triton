@@ -7,6 +7,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -77,28 +78,33 @@ SmallVector<unsigned> warpsPerTileV2(DotOp dotOp, const ArrayRef<int64_t> shape,
     }
   }
 
-  SmallVector<unsigned> ret(rank, 1);
-  SmallVector<int64_t> shapePerWarp(rank, 1);
-  shapePerWarp[rank - 1] = 8;
-  shapePerWarp[rank - 2] = 16;
-  // TODO (@daadaada): double-check.
-  // original logic in
-  // https://github.com/triton-lang/triton/blob/master/lib/codegen/analysis/layout.cc#L252
-  // seems buggy for shape = [32, 16] ?
-  do {
-    if (ret[0] * ret[1] >= numWarps)
-      break;
-    if (shape[0] / shapePerWarp[0] / ret[0] >=
-        shape[1] / (shapePerWarp[1] * 2) / ret[1]) {
-      if (ret[0] < shape[0] / shapePerWarp[0]) {
-        ret[0] *= 2;
-      } else
-        ret[1] *= 2;
+  assert(rank == 2);
+  SmallVector<int64_t> shapePerWarp = {16, 8};
+  SmallVector<int64_t> warps = {1, 1};
+  // Compute repM and repN
+  SmallVector<int64_t> reps = {ceil(shape[0], shapePerWarp[0]),
+                               ceil(shape[1], shapePerWarp[1])};
+  // The formula for the number of registers given the reps is
+  // repM * 4 * repK + repN * 2 * repK + regsC
+  // where regsC = repM * repN * 4, which does not depend on the warp shape
+  //
+  // As such, to minimize the register pressure, we need to balance
+  // repM and repN. We then untie towards M, as the lhs tile has 4 elements,
+  // and the rhs tile has just 2.
+  while (product(warps) < numWarps) {
+    if (reps[0] >= reps[1]) {
+      warps[0] *= 2;
+      // Too many warps for this mma (repM == repN == 1).
+      // We allocate the remainin warps to the left (arbitrary choice)
+      if (reps[0] != 1) {
+        reps[0] /= 2;
+      }
     } else {
-      ret[1] *= 2;
+      warps[1] *= 2;
+      reps[1] /= 2;
     }
-  } while (true);
-  return ret;
+  }
+  return {(unsigned)warps[0], (unsigned)warps[1]};
 }
 
 SmallVector<unsigned, 2>
