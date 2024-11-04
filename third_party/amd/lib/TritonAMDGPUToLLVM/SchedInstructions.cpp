@@ -5,6 +5,7 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_TRITONAMDGPUINSERTINSTRUCTIONSCHEDHINTS
@@ -146,12 +147,83 @@ Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
   return rewriter.create<ROCDL::IglpOpt>(loc, iglpValue);
 }
 
+// The following structs represent in-source database regarding a target
+// machine. It provides instructions execution and issue cycles needed for
+// scheduling.
+struct MachineDescr {
+  virtual ~MachineDescr() = default;
+  virtual uint32_t getDsReadIssueCycle(uint32_t instrWidth) = 0;
+  virtual FailureOr<uint32_t> getMmaExecCycle(llvm::ArrayRef<int64_t> dims) = 0;
+  virtual uint32_t getMmaIssueCycle() = 0;
+  virtual uint32_t getNumLdsDataPaths() = 0;
+  static std::unique_ptr<MachineDescr> get(std::string arch);
+};
+
+template <typename Derived> struct MachineDescrImpl : MachineDescr {
+  uint32_t getDsReadIssueCycle(uint32_t instrWidth) final {
+    return instrWidth == 16 ? 8 : 4;
+  }
+
+  FailureOr<uint32_t> getMmaExecCycle(llvm::ArrayRef<int64_t> dims) final {
+    if (dims.size() != 3)
+      return failure();
+    auto it =
+        Derived::mmaTable.find(std::make_tuple(dims[0], dims[1], dims[2]));
+    if (it != Derived::mmaTable.end())
+      return it->second;
+    return failure();
+  }
+
+  uint32_t getMmaIssueCycle() final { return Derived::mmaIssueCycle; };
+  uint32_t getNumLdsDataPaths() final { return Derived::numLdsDataPaths; }
+
+  using MmaTable =
+      llvm::DenseMap<std::tuple<int64_t, int64_t, int64_t>, uint32_t>;
+};
+
+struct MI200Kind : public MachineDescrImpl<MI200Kind> {
+  static const inline MmaTable mmaTable{{{32, 32, 8}, 64}, {{16, 16, 16}, 32}};
+  static const inline uint32_t mmaIssueCycle{4};
+  static const inline uint32_t numLdsDataPaths{2};
+};
+
+struct MI300Kind : public MachineDescrImpl<MI300Kind> {
+  static const inline MmaTable mmaTable{{{32, 32, 8}, 32}, {{16, 16, 16}, 16}};
+  static const inline uint32_t mmaIssueCycle{4};
+  static const inline uint32_t numLdsDataPaths{2};
+};
+
+std::unique_ptr<MachineDescr> MachineDescr::get(std::string arch) {
+  llvm::AMDGPU::GPUKind archKind = llvm::AMDGPU::parseArchAMDGCN(arch);
+
+  switch (archKind) {
+  case llvm::AMDGPU::GPUKind::GK_GFX940: {
+    [[fallthrough]];
+  };
+  case llvm::AMDGPU::GPUKind::GK_GFX941: {
+    [[fallthrough]];
+  };
+  case llvm::AMDGPU::GPUKind::GK_GFX942: {
+    return std::make_unique<MachineDescrImpl<MI300Kind>>();
+  }
+  case llvm::AMDGPU::GPUKind::GK_GFX90A: {
+    return std::make_unique<MachineDescrImpl<MI200Kind>>();
+  }
+  default: {
+    return nullptr;
+  }
+  }
+  return nullptr;
+}
+
 struct InstructionSchedHintsRewriter
     : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
-  InstructionSchedHintsRewriter(MLIRContext *ctx, int32_t numStages,
-                                std::string variant)
+  InstructionSchedHintsRewriter(MLIRContext *ctx, std::string arch,
+                                int32_t numStages, std::string variant)
       : OpRewritePattern(ctx), numStages(numStages) {
+
+    this->machineDescr = MachineDescr::get(arch);
     std::transform(variant.begin(), variant.end(), variant.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
@@ -194,6 +266,9 @@ struct InstructionSchedHintsRewriter
       return;
     }
 
+    if (!machineDescr)
+      schedHint.emitError("unknown target architecture detected");
+
     const uint32_t numDsReadInstA = schedHint.getNumDsReadsA().getValue();
     const uint32_t numDsReadInstB = schedHint.getNumDsReadsB().getValue();
 
@@ -211,32 +286,41 @@ struct InstructionSchedHintsRewriter
     if (numBufferLoadInstB == 0)
       schedHint.emitError("buffer load count for tile B must be initialized");
 
-    const uint32_t numMfmaInst = schedHint.getNumMMAs().getValue();
+    const uint32_t numMmaInst = schedHint.getNumMMAs().getValue();
 
-    auto mfmaType = cast<RankedTensorType>(schedHint.getNumMMAs().getType());
-    const uint32_t nPerXDL = mfmaType.getShape()[1];
-    const uint32_t mfmaCycle = nPerXDL == 16 ? 16 : 32;
+    auto mmaType = cast<RankedTensorType>(schedHint.getNumMMAs().getType());
+    auto maybeMmaExecCycle = machineDescr->getMmaExecCycle(mmaType.getShape());
+    if (llvm::failed(maybeMmaExecCycle))
+      schedHint.emitError("unknown mma instruction type");
+    const uint32_t mmaExecCycle = maybeMmaExecCycle.value();
 
     auto dsReadsAType = cast<VectorType>(schedHint.getNumDsReadsA().getType());
     auto dsReadsBType = cast<VectorType>(schedHint.getNumDsReadsB().getType());
 
-    const uint32_t dsReadAIssueCycle = dsReadsAType.getShape()[0] == 16 ? 8 : 4;
-    const uint32_t dsReadBIssueCycle = dsReadsBType.getShape()[0] == 16 ? 8 : 4;
+    const uint32_t dsReadAIssueCycle =
+        machineDescr->getDsReadIssueCycle(dsReadsAType.getShape()[0]);
+    const uint32_t dsReadBIssueCycle =
+        machineDescr->getDsReadIssueCycle(dsReadsBType.getShape()[0]);
 
-    const auto dsReadAMfmaRate =
-        (mfmaCycle - 4 + 2 * dsReadAIssueCycle - 1) / (2 * dsReadAIssueCycle);
-    const auto dsReadBMfmaRate =
-        (mfmaCycle - 4 + 2 * dsReadBIssueCycle - 1) / (2 * dsReadBIssueCycle);
+    const uint32_t mmaIssueCycle = this->machineDescr->getMmaIssueCycle();
+    const uint32_t numLdsDataPaths = this->machineDescr->getNumLdsDataPaths();
 
-    const auto numDsreadAMfma =
-        (numDsReadInstA + dsReadAMfmaRate - 1) / dsReadAMfmaRate;
-    const auto numDsreadBMfma =
-        (numDsReadInstB + dsReadBMfmaRate - 1) / dsReadBMfmaRate;
+    const auto dsReadAMmaRate = (mmaExecCycle - mmaIssueCycle +
+                                 numLdsDataPaths * dsReadAIssueCycle - 1) /
+                                (numLdsDataPaths * dsReadAIssueCycle);
+    const auto dsReadBMmaRate = (mmaExecCycle - mmaIssueCycle +
+                                 numLdsDataPaths * dsReadBIssueCycle - 1) /
+                                (numLdsDataPaths * dsReadBIssueCycle);
+
+    const auto numDsreadAMma =
+        (numDsReadInstA + dsReadAMmaRate - 1) / dsReadAMmaRate;
+    const auto numDsreadBMma =
+        (numDsReadInstB + dsReadBMmaRate - 1) / dsReadBMmaRate;
 
     // stage 1
-    const auto numMfmaStage1 = numMfmaInst - (numDsreadAMfma + numDsreadBMfma);
-    const auto numMfmaPerIssue =
-        numMfmaStage1 / (numBufferLoadInstA + numBufferLoadInstB);
+    const auto numMmaStage1 = numMmaInst - (numDsreadAMma + numDsreadBMma);
+    const auto numMmaPerIssue =
+        numMmaStage1 / (numBufferLoadInstA + numBufferLoadInstB);
 
     const auto numDswritePerIssueA = numDsWriteInstA / numBufferLoadInstA;
     const auto numDswritePerIssueB = numDsWriteInstB / numBufferLoadInstB;
@@ -254,7 +338,7 @@ struct InstructionSchedHintsRewriter
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
       createSchedGroupBarrier(rewriter, loc,
                               mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
-                              numMfmaPerIssue - numDswritePerIssueA, 0);
+                              numMmaPerIssue - numDswritePerIssueA, 0);
     }
 
     for (size_t i = 0; i < numBufferLoadInstB; ++i) {
@@ -270,33 +354,33 @@ struct InstructionSchedHintsRewriter
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
       createSchedGroupBarrier(rewriter, loc,
                               mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
-                              numMfmaPerIssue - numDswritePerIssueB, 0);
+                              numMmaPerIssue - numDswritePerIssueB, 0);
     }
 
     // stage 2
-    for (size_t i = 0; i < numDsreadAMfma; ++i) {
-      if ((numDsReadInstA - (i + 1) * dsReadAMfmaRate) >= dsReadAMfmaRate) {
+    for (size_t i = 0; i < numDsreadAMma; ++i) {
+      if ((numDsReadInstA - (i + 1) * dsReadAMmaRate) >= dsReadAMmaRate) {
         createSchedGroupBarrier(rewriter, loc,
                                 mlir::amdgpu::sched_barrier_opt_enum::ds_read,
-                                dsReadAMfmaRate, 0);
+                                dsReadAMmaRate, 0);
       } else {
         createSchedGroupBarrier(
             rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::ds_read,
-            numDsReadInstA - (numDsreadAMfma - 1) * dsReadAMfmaRate, 0);
+            numDsReadInstA - (numDsreadAMma - 1) * dsReadAMmaRate, 0);
       }
       createSchedGroupBarrier(
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma, 1, 0);
     }
 
-    for (size_t i = 0; i < numDsreadBMfma; ++i) {
-      if ((numDsReadInstB - (i + 1) * dsReadBMfmaRate) >= dsReadBMfmaRate) {
+    for (size_t i = 0; i < numDsreadBMma; ++i) {
+      if ((numDsReadInstB - (i + 1) * dsReadBMmaRate) >= dsReadBMmaRate) {
         createSchedGroupBarrier(rewriter, loc,
                                 mlir::amdgpu::sched_barrier_opt_enum::ds_read,
-                                dsReadBMfmaRate, 0);
+                                dsReadBMmaRate, 0);
       } else {
         createSchedGroupBarrier(
             rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::ds_read,
-            numDsReadInstB - (numDsreadBMfma - 1) * dsReadBMfmaRate, 0);
+            numDsReadInstB - (numDsreadBMma - 1) * dsReadBMmaRate, 0);
       }
       createSchedGroupBarrier(
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma, 1, 0);
@@ -390,14 +474,17 @@ struct InstructionSchedHintsRewriter
 private:
   int32_t numStages;
   SchedulingType schedulingType;
+  std::unique_ptr<MachineDescr> machineDescr;
 };
 
 struct TritonAMDGPULowerInstructionSchedHints
     : public triton::impl::TritonAMDGPULowerInstructionSchedHintsBase<
           TritonAMDGPULowerInstructionSchedHints> {
 
-  explicit TritonAMDGPULowerInstructionSchedHints(int32_t numStages,
+  explicit TritonAMDGPULowerInstructionSchedHints(std::string arch,
+                                                  int32_t numStages,
                                                   std::string variant) {
+    this->arch = arch;
     this->numStages = numStages;
     this->variant = variant;
   }
@@ -415,9 +502,8 @@ struct TritonAMDGPULowerInstructionSchedHints
 
     RewritePatternSet patterns(ctx);
 
-    patterns.add<InstructionSchedHintsRewriter>(ctx, this->numStages,
-
-                                                this->variant);
+    patterns.add<InstructionSchedHintsRewriter>(ctx, this->arch,
+                                                this->numStages, this->variant);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns)))) {
@@ -451,10 +537,11 @@ struct TritonAMDGPUInsertInstructionSchedHints
 
 namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPULowerInstructionSchedHintsPass(int32_t numStages,
+createTritonAMDGPULowerInstructionSchedHintsPass(std::string arch,
+                                                 int32_t numStages,
                                                  std::string variant) {
-  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(numStages,
-                                                                  variant);
+  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(
+      arch, numStages, variant);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>
