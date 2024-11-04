@@ -163,8 +163,11 @@ struct DotOpMFMAConversionHelper {
   }
 
   // Conduct the Dot conversion.
-  LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
-                           Operation *prev) const {
+  LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+    // Check if this dot has priority set. Obtain previous op before we insert
+    // any
+    Operation *prevOp = op->getPrevNode();
+
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
@@ -229,8 +232,8 @@ struct DotOpMFMAConversionHelper {
 
     // check if we want to set prirority of this dot
     ROCDL::SetPrioOp setPrioOp;
-    if (prev)
-      setPrioOp = dyn_cast<ROCDL::SetPrioOp>(prev);
+    if (prevOp)
+      setPrioOp = dyn_cast<ROCDL::SetPrioOp>(prevOp);
     Value firstMfma;
 
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
@@ -269,7 +272,7 @@ struct DotOpMFMAConversionHelper {
     }
 
     // move setprio after the first mfma in the group.
-    if (setPrioOp)
+    if (setPrioOp && firstMfma)
       setPrioOp->moveAfter(firstMfma.getDefiningOp());
 
     // replace with new packed result
@@ -402,8 +405,6 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
 
-  // Check if this dot has priority set. Obtain previous op before we insert any
-  Operation *prev = op->getPrevNode();
-  return helper.convertDot(op, adaptor, prev);
+  return helper.convertDot(op, adaptor);
 }
 } // namespace mlir::triton::AMD

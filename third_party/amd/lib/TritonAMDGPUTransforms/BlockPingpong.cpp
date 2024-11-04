@@ -35,9 +35,14 @@ void Pingponger::getDotPingponged() {
   IntegerAttr highPrioAttr = IntegerAttr::get(IntegerType::get(ctx, 16), 1);
   auto f16_ty = builder.getF16Type();
 
-  forOp->walk([&](triton::LoadOp op) { gLoadOps.push_back(op); });
-  forOp->walk([&](ttg::LocalLoadOp op) { lLoadOps.push_back(op); });
-  forOp->walk([&](triton::DotOp op) { dotOps.push_back(op); });
+  forOp->walk([&](Operation *op) {
+    if (isa<triton::LoadOp>(op))
+      gLoadOps.push_back(op);
+    if (isa<ttg::LocalLoadOp>(op))
+      lLoadOps.push_back(op);
+    if (isa<triton::DotOp>(op))
+      dotOps.push_back(op);
+  });
 
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2 || dotOps.size() != 1)
     return;
