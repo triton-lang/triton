@@ -23,6 +23,8 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
+#include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
 #include <memory>
 #include <pybind11/pybind11.h>
@@ -379,6 +381,14 @@ void init_triton_llvm(py::module &&m) {
               fpm.addPass(BreakStructPhiNodesPass());
               fpm.addPass(InstCombinePass());
             });
+	for (llvm::Function &f : mod->functions()){
+	    if(f.isIntrinsic()) continue;
+        if (f.getCallingConv() == CallingConv::AMDGPU_KERNEL)
+            f.addFnAttr("target-features", "+xnack");
+     	f.addFnAttr(llvm::Attribute::SanitizeAddress);
+	    }	
+    AddressSanitizerOptions Opts;
+    mpm.addPass(AddressSanitizerPass(Opts));	
         mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
         mpm.run(*mod, mam);
       },

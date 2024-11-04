@@ -60,7 +60,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["ocml", "ockl"]
+        libs = ["asanrtl", "ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -287,7 +287,7 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
-        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, '')
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, "+xnack")
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -341,7 +341,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        hsaco = amd.assemble_amdgcn(src, options.arch, '')
+        hsaco = amd.assemble_amdgcn(src, options.arch, '+xnack')
 
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
