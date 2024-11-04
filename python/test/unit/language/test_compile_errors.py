@@ -368,7 +368,7 @@ def test_fp8_support(dtype):
             supported_dtypes.append(tl.float8e4nv)
     elif is_hip():
         if is_on_mi300():
-            supported_dtypes += [tl.float8e4b8, tl.float8e5b16]
+            supported_dtypes += [tl.float8e4nv, tl.float8e4b8, tl.float8e5b16]
     elif is_interpreter():
         supported_dtypes = [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15]
 
