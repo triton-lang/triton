@@ -277,7 +277,7 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     // Order doesn't really matter. We just have to be consistent when unpacking
     // the output elements in the LLVM lowerings. We choose row-major
     auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
-    if (nvidiaMma && nvidiaMma.isHopper()) {
+    if (nvidiaMma) {
       llvm::report_fatal_error("Testing");
     }
     auto distributedLayout = cast<DistributedEncodingTrait>(layout);
@@ -285,6 +285,9 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     return getMatrixOrder(rank, /*rowMajor*/ true);
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+    if (isa<NvidiaMmaEncodingAttr>(dotLayout.getParent())) {
+      llvm::report_fatal_error("Testing DotOperand");
+    }
     auto rank = dotLayout.getWarpsPerCTA().size();
     return getOrderForDotOperand(dotLayout.getOpIdx(), rank, /*kMajor*/ true);
   }

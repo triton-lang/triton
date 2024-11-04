@@ -288,8 +288,10 @@ private:
     if (sliceLayout)
       mma = cast<NvidiaMmaEncodingAttr>(sliceLayout.getParent());
 
-    auto order = getOrder(layout);
     auto rank = type.getRank();
+    // TODO Revert
+    // auto order = getOrder(layout);
+    auto order = getMatrixOrder(rank, /*rowMajor*/ true);
     int accumSizePerThread = vals.size();
 
     SmallVector<unsigned> numCTAs(rank, 1);
