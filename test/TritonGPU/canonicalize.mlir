@@ -138,11 +138,40 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
-  tt.func @fp_to_fp_0_fold() -> tensor<32x128xf8E4M3FNUZ, #blocked> {
-    // CHECK-LABEL: fp_to_fp_0_fold
+  tt.func @fp_to_fp_pos_zero_fold() -> tensor<32x128xf8E4M3FNUZ, #blocked> {
+    // CHECK-LABEL: fp_to_fp_pos_zero_fold
     // CHECK-NEXT: %[[cst_folded:.+]] = arith.constant dense<0.000000e+00> : tensor<32x128xf8E4M3FNUZ, #blocked>
     // CHECK-NEXT: tt.return %[[cst_folded]]
     %cst = arith.constant dense<0.00e+00> : tensor<32x128xf32, #blocked>
+    %cst_converted = tt.fp_to_fp %cst, rounding = rtne : tensor<32x128xf32, #blocked> -> tensor<32x128xf8E4M3FNUZ, #blocked>
+    tt.return %cst_converted : tensor<32x128xf8E4M3FNUZ, #blocked>
+  }
+}  // end module
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  tt.func @fp_to_fp_neg_zero_fold() -> tensor<32x128xf8E4M3FN, #blocked> {
+    // CHECK-LABEL: fp_to_fp_neg_zero_fold
+    // CHECK-NEXT: %[[cst_folded:.+]] = arith.constant dense<-0.000000e+00> : tensor<32x128xf8E4M3FN, #blocked>
+    // CHECK-NEXT: tt.return %[[cst_folded]]
+    %cst = arith.constant dense<-0.00e+00> : tensor<32x128xf32, #blocked>
+    %cst_converted = tt.fp_to_fp %cst, rounding = rtne : tensor<32x128xf32, #blocked> -> tensor<32x128xf8E4M3FN, #blocked>
+    tt.return %cst_converted : tensor<32x128xf8E4M3FN, #blocked>
+  }
+}  // end module
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  tt.func @fp_to_fp_neg_zero_fold() -> tensor<32x128xf8E4M3FNUZ, #blocked> {
+    // CHECK-LABEL: fp_to_fp_neg_zero_fold
+    // We fold to the positive zero here given by definition f8E4M3FNUZ does not have negative zero encoding.
+    // CHECK-NEXT: %[[cst_folded:.+]] = arith.constant dense<0.000000e+00> : tensor<32x128xf8E4M3FNUZ, #blocked>
+    // CHECK-NEXT: tt.return %[[cst_folded]]
+    %cst = arith.constant dense<-0.00e+00> : tensor<32x128xf32, #blocked>
     %cst_converted = tt.fp_to_fp %cst, rounding = rtne : tensor<32x128xf32, #blocked> -> tensor<32x128xf8E4M3FNUZ, #blocked>
     tt.return %cst_converted : tensor<32x128xf8E4M3FNUZ, #blocked>
   }
