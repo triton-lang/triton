@@ -15,7 +15,6 @@ def is_cuda():
     return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 def is_hip():
-    print("Yes is HIP")
     return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "hip"
 
 def is_on_mi300():
@@ -256,30 +255,6 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 
     src_emulated_to_float32 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
-    if not (torch.equal(src_emulated_to_float32, dst_to_float32)):
-        print('Error!!!')
-        src = src.cpu().detach().numpy()
-        src_emulated_to_float32 = src_emulated_to_float32.cpu().detach().numpy()
-        dst = dst.cpu().detach().numpy()
-        dst_to_float32 = dst_to_float32.cpu().detach().numpy()
-        print("{:32b}".format(src[0]))
-
-        print("PY%s: %x" % ("src", src[0]))
-        print("PY%s: %x" % ("src_emulated_to_float32", src_emulated_to_float32[0]))
-        print("PY%s: %x" % ("dst", dst[0]))
-        print("PY%s: %x" % ("dst_to_float32", dst_to_float32[0]))
-        print(src[src_emulated_to_float32 != dst_to_float32][0])
-        print(src_emulated_to_float32[src_emulated_to_float32 != dst_to_float32][0])
-        print(dst_to_float32[src_emulated_to_float32 != dst_to_float32][0])
-        print(hex(src[src_emulated_to_float32 != dst_to_float32][0]))
-        print(hex(src_emulated_to_float32[src_emulated_to_float32 != dst_to_float32][0]))
-        print(hex(dst_to_float32[src_emulated_to_float32 != dst_to_float32][0]))
-        #print(hex(src.view(np.uint32)[dst != dst2][0]))
-        #print(hex(dst.view(np.uint32)[dst != dst2][0]))
-        #print(hex(dst2.view(np.uint32)[dst != dst2][0]))
-        #print('')
-        raise ValueError('%d elements mismatch' % (src_emulated_to_float32 != dst_to_float32).sum())
-    
     assert(torch.equal(src_emulated_to_float32, dst_to_float32))
 
 
@@ -295,9 +270,9 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     # ('float8e4b15', 'bfloat16'), # Unsupported conversion from f8E4M3B11FNUZ to bf16
     ('float8e4b15', 'float32'),
 
-    ('float8e4nv', 'float16'),
+    # ('float8e4nv', 'float16'), # Unsupported conversion from fp8E4M3FN to f16
     ('float8e4nv', 'bfloat16'),
-    ('float8e4nv', 'float32'),
+    # ('float8e4nv', 'float32'), # Unsupported conversion from fp8E4M3FN to f32
 
     ('float8e4b8', 'float32'),
     ('float8e4b8', 'float16'),
@@ -308,7 +283,6 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     if ((src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (8, 9))
        or (src_dtype in ('float8e4b15') and is_hip())
-       or (src_dtype in ('float8e4nv') and is_hip() and dst_dtype in ('float16', 'float32'))
        or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()))):
         # If the dtype should error out in the given device, we assert that and return
         with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
@@ -318,9 +292,9 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
         'float8e4b15': (4, 3, 15, 0x7e),
-        'float8e4nv': (4, 3, 7, 0x7e), # fp8E4M3FN
+        'float8e4nv': (4, 3, 7, 0x7e),
         'float8e5': (5, 2, 15, 0x7b),
-        'float8e4b8': (4, 3, 8, 0x7f), # fp8E4M3FNUZ
+        'float8e4b8': (4, 3, 8, 0x7f),
         'float8e5b16': (5, 2, 16, 0x7f),
         'float16': (5, 10, 15, 0x7bff),
         'bfloat16': (8, 7, 127, 0x7f7f),
@@ -335,16 +309,16 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     ('float32', 'bfloat16', 'rtz', 0x7f7f0000),
     ('float32', 'float8e5', 'rtne', 0x47600000),
     ('float32', 'float8e5', 'rtz', 0x47600000),
-    ('float32', 'float8e4nv', 'rtne', 0x43e00000),
+    # ('float32', 'float8e4nv', 'rtne', 0x43e00000), # fp8E4M3FN downcasting not yet supported
     ('float32', 'float8e4b8', 'rtne', 0x43700000),
     ('float32', 'float8e5b16', 'rtne', 0x47600000),
     # ('float32', 'float8e4b15', 'rtne', 0x3fe00000), # Skip, no HW rtne conversion from f32 to f8e4b15
 
     ('bfloat16', 'float8e5', 'rtne', 0x4760),
-    ('bfloat16', 'float8e4nv', 'rtne', 0x43e0),
+    # ('bfloat16', 'float8e4nv', 'rtne', 0x43e0), # fp8E4M3FN downcasting not yet supported
 
     ('float16', 'float8e5', 'rtne', 0x7b00),
-    ('float16', 'float8e4nv', 'rtne', 0x5f00),
+    # ('float16', 'float8e4nv', 'rtne', 0x5f00), # fp8E4M3FN downcasting not yet supported
 
     ('bfloat16', 'float8e5b16', 'rtne', 0x4760),
     ('bfloat16', 'float8e4b8', 'rtne', 0x4370),
@@ -357,7 +331,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
     if src_dtype != 'float32' and is_cuda() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
 
-    if dst_dtype in ('float8e5') and rounding == 'rtne' and (is_hip() or torch.cuda.get_device_capability(0) < (9, 0)):
+    if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and (is_hip() or torch.cuda.get_device_capability(0) < (9, 0)):
         pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
     if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_on_mi300()):
@@ -369,8 +343,8 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
         'bfloat16': (8, 7, 127),
         'float8e5': (5, 2, 15),
         'float8e4b15': (4, 3, 15),
-        'float8e4nv': (4, 3, 7), # fp8E4M3FN
-        'float8e4b8': (4, 3, 8), # fp8E4M3FNUZ
+        'float8e4nv': (4, 3, 7),
+        'float8e4b8': (4, 3, 8),
         'float8e5b16': (5, 2, 16),
     }[dst_dtype]
 
