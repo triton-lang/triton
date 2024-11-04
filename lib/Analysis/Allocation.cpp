@@ -46,6 +46,9 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
   auto dstShapePerCTATile =
       gpu::getShapePerCTATile(dstLayout, dstTy.getShape());
 
+  assert(srcTy.getRank() == dstTy.getRank() &&
+         "src and dst must have the same rank");
+
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> repShape(rank);
   for (unsigned d = 0; d < rank; ++d) {

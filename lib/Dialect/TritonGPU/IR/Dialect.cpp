@@ -217,7 +217,7 @@ bool isExpensiveView(Type srcType, Type dstType) {
   return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
 }
 
-/* Utility function used by getOrder and getCTAOrder of SliceEncodingAttr.
+/* Utility function used by get.*Order methods of SliceEncodingAttr.
  * Erase dim and decrease all values larger than dim by 1.
  * Example:    order = [0, 2, 4, 3, 1], dim = 2
  *          resOrder = [0,    3, 2, 1]
@@ -262,24 +262,11 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
 }
 
 SmallVector<unsigned> getWarpOrder(Attribute layout) {
-  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
-      return getWarpOrder(dotLayout.getParent());
-    }
-  }
-
-  auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
-  if (nvidiaMma && nvidiaMma.isHopper()) {
-    auto rank = nvidiaMma.getWarpsPerCTA().size();
-    return getMatrixOrder(rank, /*rowMajor*/ false);
-  } else if (auto dotOpLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
-    // It's quite weird to talk about warp order when that the warps
-    // are broadcasted along the K dimension
-    llvm::report_fatal_error(
-        "DotOperandEncoding::getWarpOrder not implemented");
-  }
-
-  return getOrder(layout);
+  if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
+    return distributedLayout.getWarpOrder();
+  else
+    llvm::report_fatal_error("Unimplemented usage of getThreadOrder");
+  return {};
 }
 
 SmallVector<unsigned> getOrder(Attribute layout) {
@@ -317,7 +304,7 @@ SmallVector<unsigned> getOrder(Attribute layout) {
 
   llvm::report_fatal_error("Unimplemented usage of getOrder");
   return {};
-};
+}
 
 SmallVector<unsigned> getThreadOrder(Attribute layout) {
   if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
@@ -325,7 +312,7 @@ SmallVector<unsigned> getThreadOrder(Attribute layout) {
   else
     llvm::report_fatal_error("Unimplemented usage of getThreadOrder");
   return {};
-};
+}
 
 CTALayoutAttr getCTALayout(Attribute layout) {
   if (auto distributedLayout =
@@ -768,7 +755,8 @@ SmallVector<unsigned> SliceEncodingAttr::getWarpsPerCTA() const {
   return warpsPerCTA;
 }
 SmallVector<unsigned> SliceEncodingAttr::getWarpOrder() const {
-  return ::getWarpOrder(*this);
+  auto parentWarpOrder = ::getWarpOrder(getParent());
+  return eraseOrder(parentWarpOrder, getDim());
 }
 SmallVector<unsigned> SliceEncodingAttr::getThreadsPerWarp() const {
   auto parent = getParent();
@@ -780,7 +768,8 @@ SmallVector<unsigned> SliceEncodingAttr::getThreadsPerWarp() const {
   return threadsPerWarp;
 }
 SmallVector<unsigned> SliceEncodingAttr::getThreadOrder() const {
-  return ::getOrder(*this);
+  auto parentThreadOrder = ::getThreadOrder(getParent());
+  return eraseOrder(parentThreadOrder, getDim());
 }
 SmallVector<unsigned> SliceEncodingAttr::getSizePerThread() const {
   auto sizePerThread = ::getSizePerThread(getParent());
@@ -1048,7 +1037,14 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
   return warps;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
-  return ::getWarpOrder(*this);
+  // FIXME(Lezcano): Preexisting. Do we want to have this path at all?
+  if (mlir::isa<AMDMfmaEncodingAttr>(getParent())) {
+    return ::getWarpOrder(getParent());
+  }
+  // It's quite weird to talk about warp order when that the warps
+  // are broadcasted along the K dimension
+  llvm::report_fatal_error("DotOperandEncoding::getWarpOrder not implemented");
+  return {};
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadOrder() const {
   return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
@@ -1596,7 +1592,7 @@ SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpOrder() const {
-  return ::getWarpOrder(*this);
+  return ::getOrder(*this);
 }
 SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadOrder() const {
   auto order = ::getOrder(*this);
@@ -1765,7 +1761,7 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpOrder() const {
-  return ::getWarpOrder(*this);
+  return ::getOrder(*this);
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
@@ -1889,7 +1885,11 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpOrder() const {
-  return ::getWarpOrder(*this);
+  auto rank = getWarpsPerCTA().size();
+  // Hopper (wgmma) uses column-major as this is embeded in the instruction
+  // For Ampere we can choose either row-major or column-major.
+  // We choose row-major as the legacy path did so
+  return getMatrixOrder(rank, /*rowMajor*/ !isHopper());
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadsPerWarp() const {
   auto rank = getWarpsPerCTA().size();
@@ -1913,11 +1913,11 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadsPerWarp() const {
       "getThreadsPerWarp not implemented for unknown Mma version ");
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadOrder() const {
-  auto rank = getThreadsPerWarp().size();
+  auto rank = getWarpsPerCTA().size();
   return getMatrixOrder(rank, /*rowMajor*/ true);
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getSizePerThread() const {
-  auto rank = ::getOrder(*this).size();
+  auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
   if (isAmpere()) {
     res[rank - 2] = 2;
@@ -2158,11 +2158,10 @@ NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
   if (opIdx == 0) {
     sizePerThread[rank - 2] = 2;
     sizePerThread[rank - 1] = 2 * kWidth;
-  } else if (opIdx == 1) {
+  } else {
+    assert(opIdx == 1);
     sizePerThread[rank - 2] = 2 * kWidth;
     sizePerThread[rank - 1] = 1;
-  } else {
-    llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
   }
   return sizePerThread;
 }
