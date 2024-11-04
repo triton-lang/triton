@@ -228,16 +228,9 @@ public:
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
     // without transpose for other data types.)
-    // TODO Revert
-    auto getCvtOrder = [](Attribute encoding) {
-      if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
-        return getThreadOrder(nvidiaMma);
-      }
-      return getOrder(encoding);
-    };
-    auto newInnerCvtOrder = getCvtOrder(srcTy.getEncoding());
+    auto newInnerCvtOrder = getOrder(srcTy.getEncoding());
     if (auto cvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
-      newInnerCvtOrder = getCvtOrder(cvt.getSrc().getType().getEncoding());
+      newInnerCvtOrder = getOrder(cvt.getSrc().getType().getEncoding());
     }
     auto srcElemTy = allocType.getElementType();
     if (!srcElemTy.isF16() && !srcElemTy.isBF16()) {
