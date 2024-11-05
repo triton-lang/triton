@@ -240,7 +240,7 @@ class BaseBackend(metaclass=ABCMeta):
         ]
         for path in paths:
             if os.path.exists(path) and os.path.isfile(path):
-                result = subprocess.check_output([binary, "--version"], stderr=subprocess.STDOUT)
+                result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
                 if result is not None:
                     version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                     if version is not None:
