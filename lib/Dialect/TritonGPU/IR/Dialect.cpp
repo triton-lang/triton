@@ -1214,6 +1214,13 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "}>";
 }
 
+void LinearEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  // We don't use the default implementation as it's a bit too verbose
+  auto ll = getLinearLayout();
+}
+
+Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) { return {}; }
+
 //===----------------------------------------------------------------------===//
 // MMA encoding
 //===----------------------------------------------------------------------===//

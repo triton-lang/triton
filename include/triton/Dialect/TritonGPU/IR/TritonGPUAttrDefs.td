@@ -49,7 +49,8 @@ Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
 - T[1,0] is owned by both cuda thread 2 and 6
 - T[1,1] is owned by both cuda thread 3 and 7
 
-Right now, Triton implements two main classes of layouts: shared, and distributed.
+Right now, Triton implements three main classes of layouts: shared, distributed and the more
+general, linear layouts.
 
 It should be clear from the example above that this definition makes us work with **arbitrary**
 functions into **sets**, which are not the most natural objects. A more principled approach was
@@ -65,8 +66,8 @@ into the tensor they represent.
 
 In other words, for a distributed layout, given a binary representation of the
 register, lane, warp and block, a linear layout is a matrix of ones and zeros that when multiplied
-by the vector of the binary representation of the register, lane, warp and block gives the binary
-representation of coordinates of the element in the matrix it holds.
+by the vector of the binary representation of the register, lane, warp and block gives the
+(binary representation of) indices of the element in the matrix it holds.
   }];
   let attrName = "triton.gpu." # attrMnemonic;
 
@@ -164,7 +165,7 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
   let skipDefaultBuilders = 1;
 }
 
-class LinearLayoutAttr : TritonGPU_Attr<"LinearLayout", "linear_layout"> {
+class LinearEncodingAttr : TritonGPU_Attr<"LinearEncoding", "linear_encoding"> {
   let mnemonic = "linear";
 
   let description = [{
@@ -173,7 +174,7 @@ class LinearLayoutAttr : TritonGPU_Attr<"LinearLayout", "linear_layout"> {
 
   let parameters = (
     ins
-    "LinearLayout":$ll
+    "LinearLayout":$linearLayout
   );
 
   let extraClassDeclaration = extraBaseClassDeclaration;
