@@ -75,7 +75,10 @@ bool LoadStoreMemSpace::runOnModule(Module &M) {
   for (auto &F : M) {
     if (F.isIntrinsic())
       continue;
-    if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL) {
+    StringRef functionName = F.getName();
+    if (F.getCallingConv() == CallingConv::AMDGPU_KERNEL ||
+        F.getCallingConv() == CallingConv::PTX_Kernel ||
+        functionName.contains("kernel")) {
       for (Function::iterator BB = F.begin(); BB != F.end(); BB++) {
         for (BasicBlock::iterator I = BB->begin(); I != BB->end(); I++) {
           if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
