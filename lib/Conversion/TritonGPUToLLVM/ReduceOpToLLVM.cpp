@@ -162,13 +162,6 @@ private:
 
     auto mod = op->getParentOfType<ModuleOp>();
     unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    if (iWarpSize > numLaneToReduce) {
-      Value threadId = getThreadId(rewriter, loc);
-      Value warpSize = i32_val(iWarpSize);
-      Value laneId = urem(threadId, warpSize);
-      Value lanePred = icmp_slt(laneId, i32_val(numLaneToReduce));
-      pred = pred ? and_(pred, lanePred) : lanePred;
-    }
 
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
