@@ -69,18 +69,22 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   }
 
   unsigned threadOffset = 1;
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto threadsPerWarp = getThreadsPerWarp(parentLayout);
-    threadOffset = threadsPerWarp[sliceLayout.getDim()];
-  } else {
-    auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-    auto order = getThreadOrder(srcLayout);
-    for (unsigned i = 0; i < order.size(); i++) {
-      if (order[i] == axis)
-        break;
-      threadOffset *= threadsPerWarp[order[i]];
-    }
+  SmallVector<int> dimsRemoved;
+  while (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
+    dimsRemoved.push_back(sliceLayout.getDim());
+    srcLayout = sliceLayout.getParent();
+  }
+  int adjustedAxis = axis;
+  for (auto dim : dimsRemoved) {
+    if (dim <= adjustedAxis)
+      adjustedAxis++;
+  }
+  auto threadsPerWarp = getThreadsPerWarp(srcLayout);
+  auto order = getThreadOrder(srcLayout);
+  for (unsigned i = 0; i < order.size(); i++) {
+    if (order[i] == adjustedAxis)
+      break;
+    threadOffset *= threadsPerWarp[order[i]];
   }
   return threadOffset;
 }
