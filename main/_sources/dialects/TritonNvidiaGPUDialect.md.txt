@@ -14,10 +14,12 @@ Triton Nvidia GPU Dialect.
 Syntax: `!triton_nvidia_gpu.mutex`
 
 
+
 ### TokenType
 
 
 
 Syntax: `!triton_nvidia_gpu.token`
+
 
 

@@ -127,15 +127,15 @@ python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<spa
 <p>Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅
 M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅
-175.718 5475.108 ROOT
+176.306 5456.836 ROOT
 ├─ nan 0.049 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
 ├─ nan 0.044 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-├─ 176.596 4280.473 cublas [M=8192, N=8192, K=512]
-│  └─ nan 4280.473 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 169.556 405.290 matmul_kernel [M=8192, N=8192, K=512]
-├─ 169.931 404.397 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 178.560 384.855 torch [M=8192, N=8192, K=512]
-   └─ nan 384.855 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 177.143 4267.245 cublas [M=8192, N=8192, K=512]
+│  └─ nan 4267.245 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 169.520 405.378 matmul_kernel [M=8192, N=8192, K=512]
+├─ 171.120 401.587 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 179.644 382.532 torch [M=8192, N=8192, K=512]
+   └─ nan 382.532 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -788,7 +788,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 19.372 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 19.369 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>

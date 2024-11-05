@@ -2,6 +2,7 @@
 # 'tt' Dialect
 
 The Triton IR in MLIR
+
 Triton Dialect.
 
 Dependent Dialects:
@@ -22,7 +23,9 @@ Dependent Dialects:
 
 
 
+
 ### ptr
+
 
 
 
