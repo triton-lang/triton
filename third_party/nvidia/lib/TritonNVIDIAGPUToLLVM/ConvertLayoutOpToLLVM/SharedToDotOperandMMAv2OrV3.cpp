@@ -537,7 +537,7 @@ Value composeValuesToDotOperandLayoutStruct(
   assert(32 >= bitwidth && "only support 32-bit or less");
   auto numElemsPerVec = 32 / bitwidth;
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
-  auto kIters = kWidth / (32 / bitwidth);
+  auto kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
 
   std::vector<Value> elems;
   auto unpackVec = [&](int b, int m, int k) {
