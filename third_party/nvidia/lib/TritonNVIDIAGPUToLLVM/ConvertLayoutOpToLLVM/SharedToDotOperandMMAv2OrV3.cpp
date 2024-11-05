@@ -408,8 +408,9 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     int canonWidth = (8 * elemBytes * inc) / canonBits;
     Type canonInt = int_ty(canonBits);
     std::array<Value, 4> retElems;
-    // don't pack to 32b for Hopper
-    int vecSize = isHopper ? 1 : 32 / canonBits;
+    // Hopper may not contain 32b contiguously along k-dimension
+    int kBits = isHopper ? (8 * elemBytes * kWidth) : 32;
+    int vecSize = kBits / canonBits;
     retElems.fill(undef(vec_ty(canonInt, vecSize)));
     for (int r = 0; r < 2; ++r) {
       for (int em = 0; em < 2 * vecWidth; em += inc) {
@@ -430,7 +431,7 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     if (isActualTrans)
       std::swap(retElems[1], retElems[2]);
 
-    auto iTy = isHopper ? int_ty(8 * elemBytes * inc) : i32_ty;
+    auto iTy = isHopper ? int_ty(kBits) : i32_ty;
 
     return {bitcast(retElems[0], iTy), bitcast(retElems[1], iTy),
             bitcast(retElems[2], iTy), bitcast(retElems[3], iTy)};
