@@ -44,7 +44,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     SmallVector<unsigned> warpOrder(rank);
     if (auto enc = dyn_cast<DotOperandEncodingAttr>(layout)) {
       warpOrder =
-          triton::gpu::getMatrixOrder(rank, /*rowMajor=*/enc.getOpIdx() == 0);
+          triton::gpu::getMatrixOrder(rank, /*rowMajor=*/enc.getOpIdx() == 1);
     } else {
       warpOrder = triton::gpu::getWarpOrder(layout);
     }
