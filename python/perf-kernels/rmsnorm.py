@@ -57,7 +57,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
         input_ptrs = row_start_ptr + col_offsets
         input_ptrs = tl.multiple_of(input_ptrs, (16, ))
         row = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg")
-        g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0, cache_modifier=".cg")
+        g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0)
         row_norm = row * row  #square each value
         row_norm = tl.sum(row_norm, axis=-1)  #sum across columns(axis=-1)
         row_norm = row_norm / n_cols  #divide by n_cols
@@ -72,12 +72,11 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
         tl.store(output_ptrs, rms_norm, mask=mask)
 
 
-def rmsnorm(x, epsilon=1e-6):
+def triton_rmsnorm(x, g, epsilon=1e-6):
     n_rows, n_cols = x.shape
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
     y = torch.empty_like(x, device='cuda')
-    g = torch.ones((1, n_cols), device='cuda')
 
     num_programs = n_rows
     grid = lambda meta: (num_programs, )
@@ -86,12 +85,15 @@ def rmsnorm(x, epsilon=1e-6):
     return y
 
 
-def run_rmsnorm(M, N):
-    torch.manual_seed(0)
-    x = torch.randn(M, N, device='cuda')
-    y_triton = rmsnorm(x)
-
-    return y_triton
+def torch_rmsnorm(x, g):
+    M, N = x.shape
+    if hasattr(torch.nn, 'RMSNorm'):
+        rms_norm = torch.nn.RMSNorm(N, device='cuda')
+        return rms_norm(x)
+    else:
+        rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1 / N)
+        rms_norm = torch.div(x, rms.unsqueeze(1).repeat(1, N)) * g
+        return rms_norm
 
 
 @pytest.mark.parametrize('M, N', [
@@ -105,24 +107,16 @@ def run_rmsnorm(M, N):
 def test_rmsnorm(M, N):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
-    y_triton = rmsnorm(x)
+    g = torch.ones((1, N), device='cuda')
+    y_triton = triton_rmsnorm(x, g)
 
-    rms_norm = torch.nn.RMSNorm(N, device='cuda')
-    y_torch = rms_norm(x)
+    y_torch = torch_rmsnorm(x, g)
 
     assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 
 
 #Benchmark
 arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
-
-
-def torch_rmsnorm(x):
-    M, N = x.shape
-    rms_norm = torch.nn.RMSNorm(N, device='cuda')
-    y_torch = rms_norm(x)
-
-    return y_torch
 
 
 def run_benchmark(args):
@@ -165,10 +159,11 @@ def run_benchmark(args):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         stream = torch.cuda.Stream()
         torch.cuda.set_stream(stream)
+        g = torch.ones((1, N), device='cuda')
         if provider == 'torch':
-            ms = triton.testing.do_bench(lambda: torch_rmsnorm(x))
+            ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
         if provider == 'triton':
-            ms = triton.testing.do_bench(lambda: rmsnorm(x))
+            ms = triton.testing.do_bench(lambda: triton_rmsnorm(x, g))
         gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
         return gbps(ms)
 
@@ -199,7 +194,9 @@ def parse_args():
 def main():
     args = parse_args()
     if args.no_benchmark:
-        run_rmsnorm(args.M_start, args.N_start)
+        x = torch.randn(args.M_start, args.N_start)
+        g = torch.ones((1, args.N_start), device='cuda')
+        triton_rmsnorm(x, g)
     else:
         run_benchmark(args)
 
