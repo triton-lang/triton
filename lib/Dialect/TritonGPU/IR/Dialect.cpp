@@ -942,7 +942,7 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       auto bitwidth = getPointeeType(eltTy).getIntOrFloatBitWidth();
       auto rep = mma.getRepForOperand(shape, bitwidth, idx);
       auto sizePerThread = getSizePerThread();
-      auto elemsPerKRep = 32 / bitwidth;
+      auto elemsPerKRep = 32 / bitwidth * 2;
       if (rank == 3)
         elemsPerThread[0] = rep[0];
       elemsPerThread[rank - 2] =
