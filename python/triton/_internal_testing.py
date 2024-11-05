@@ -36,6 +36,10 @@ def is_cuda():
     return False if target is None else target.backend == "cuda"
 
 
+def is_hopper():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+
+
 def is_hip():
     target = get_current_target()
     return False if target is None else target.backend == "hip"
@@ -44,6 +48,15 @@ def is_hip():
 def is_hip_mi200():
     target = get_current_target()
     return target.backend == 'hip' and target.arch == 'gfx90a'
+
+
+def is_hip_mi300():
+    target = get_current_target()
+    return target.backend == 'hip' and target.arch in ('gfx940', 'gfx941', 'gfx942')
+
+
+def is_hip_cdna():
+    return is_hip_mi200() or is_hip_mi300()
 
 
 def get_arch():
