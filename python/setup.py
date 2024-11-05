@@ -460,15 +460,16 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_CXX_FLAGS=-fsanitize=address",
             ]
 
-        if check_env_flag("TRITON_BUILD_WITH_CCACHE"):
-            cmake_args += [
-                "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-            ]
+        # environment variables we will pass through to cmake
+        passthrough_args = [
+            "TRITON_BUILD_PROTON",
+            "TRITON_BUILD_TUTORIALS",
+            "TRITON_BUILD_WITH_CCACHE",
+        ]
+        cmake_args += [f"-D{option}={os.getenv(option)}" for option in passthrough_args if option in os.environ]
 
         if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
             cmake_args += self.get_proton_cmake_args()
-        else:
-            cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
 
         if is_offline_build():
             # unit test builds fetch googletests from GitHub
