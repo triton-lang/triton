@@ -555,7 +555,7 @@ Value composeValuesToDotOperandLayoutStruct(
   if (isA) {
     for (int b = 0; b < batch; ++b)
       for (int m = 0; m < repOuter; ++m)
-        for (int k = 0; k < repK; ++k) {
+        for (int k = 0; k < std::max<int>(repK / kIters, 1); ++k) {
           unpackVec(b, 2 * m, kIters * 2 * k);
           unpackVec(b, 2 * m + 1, kIters * 2 * k);
           unpackVec(b, 2 * m, kIters * (2 * k + 1));
@@ -564,7 +564,7 @@ Value composeValuesToDotOperandLayoutStruct(
   } else {
     for (int b = 0; b < batch; ++b)
       for (int n = 0; n < repOuter; ++n)
-        for (int k = 0; k < repK; ++k) {
+        for (int k = 0; k < std::max<int>(repK / kIters, 1); ++k) {
           unpackVec(b, n, kIters * 2 * k);
           unpackVec(b, n, kIters * (2 * k + 1));
         }
