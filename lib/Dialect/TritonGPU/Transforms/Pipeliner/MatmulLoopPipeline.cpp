@@ -366,6 +366,18 @@ static bool hasSharedEncodingHelper(Operation *loadOp) {
   return true;
 }
 
+static llvm::SmallVector<Operation *> getDirectUserInBlock(Operation *loadOp) {
+  llvm::SmallVector<Operation *> users;
+  DenseSet<Operation *> seen;
+  for (Operation *user : loadOp->getUsers()) {
+    if (!seen.insert(user).second)
+      continue;
+    if (user->getBlock() == loadOp->getBlock())
+      users.push_back(user);
+  }
+  return users;
+}
+
 // When loop doesn't have num_stages attributes, we will look for any load or
 // dot (only the first one in the chain). With the attribute we should look for
 // any op, but also only the first one.
@@ -395,10 +407,11 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
           if (user->getBlock() == op->getBlock())
             dfs(user, baseOp, anyOp);
       };
+  // We are matching the behavior before refactoring:
+  //   For loops without num_stage attributes, we check for dot users.
+  //   For loops with num_stage attributes, we check for dot users, if there are
+  //   no dot users, we check for direct users.
   dfs(baseOp, baseOp, false /*anyOp*/);
-  // For now, this needs to be aligned with loadOpsToIndirectionLevelAndUse
-  // since only those uses are in the schedule. Once we move all scheduling to
-  // happen before lowering, any direct use will have a stage assigned.
   if (loopHasAttribute) {
     seen.clear();
     dfs(baseOp, baseOp, true /*anyOp*/);
@@ -422,19 +435,16 @@ assignMemoryLayouts(scf::ForOp &forOp,
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;
 
-    // Check stage for uses. If any use is in a different stage, treat it
+    // Check stage for uses. If any direct use is in a different stage, treat it
     // as a pipelined load.
-    auto users = getTransitiveUserInBlock(&op, forOp);
-    LLVM_DEBUG({
-      LDBG("TransitiveUser for load " << op);
-      for (const auto user : users) {
-        LDBG("  - use: " << *user);
-      }
-    });
-
     bool isPipelined = false;
     auto [sLoad, _cLoad] = tt::getStageCluster(&op);
-    for (auto user : users) {
+    auto directUsers = getDirectUserInBlock(&op);
+    LDBG("DirectUser for load " << op);
+    for (auto user : directUsers) {
+      LDBG("  - use: " << *user);
+      if (!user->hasAttr(mlir::triton::kLoopStageAttrName))
+        continue;
       auto [stage, _cluster] = tt::getStageCluster(user);
       if (stage != sLoad) {
         isPipelined = true;
@@ -443,6 +453,15 @@ assignMemoryLayouts(scf::ForOp &forOp,
     }
     if (!isPipelined)
       continue;
+
+    // Try to set shared encoding etc for the pipelined load.
+    auto users = getTransitiveUserInBlock(&op, forOp);
+    LLVM_DEBUG({
+      LDBG("TransitiveUser for load " << op);
+      for (const auto user : users) {
+        LDBG("  - use: " << *user);
+      }
+    });
 
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
