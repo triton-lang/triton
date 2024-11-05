@@ -107,9 +107,10 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                            int numStages, int maxClusterId) {
   int retCode = -1;
   OpBuilderWithStage builder(forOp);
-  auto [stage, clusterId] = tt::getStageCluster(loadOp);
+  auto opPair = tt::getStageCluster(loadOp);
   auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
   auto [stageForFirstUse, clusterForFirstUse] = tt::getStageCluster(firstUse);
+  int stage = opPair.first, clusterId = opPair.second;
 
   Value zero = builder.createWithStage<arith::ConstantIntOp>(
       forOp.getLoc(), stage, clusterId, 0, 32);
