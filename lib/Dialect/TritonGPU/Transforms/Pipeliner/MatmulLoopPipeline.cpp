@@ -1224,6 +1224,9 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
 //
 //  1. All operands that touch shared memory are multi-buffered, i.e. can't read
 //     an incomplete value while it's being written asynchronously by a load.
+//     1a. If operand A is in registers, these registers cannot be updated inside
+//         the loop.
+//
 //
 //  2. If the dot is used by any op in the loop, it must be used under an `if`,
 //     and will be synced with a `wait 0` at the beginning of the `if` block.
@@ -1259,7 +1262,10 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
   auto checkOperand = [&](Value operand) {
     if (!isa<ttg::SharedEncodingAttr>(
             cast<TensorOrMemDesc>(operand.getType()).getEncoding())) {
-      return true;
+      // Rule 1a: Register operands must not be modified within the loop.
+      // For now, do a stricter-than-necessary check that the operand
+      // is defined outside the loop.
+      return forOp.isDefinedOutsideOfLoop(operand);
     }
 
     // If it's a shmem operand, it must either be defined outside the loop, or
