@@ -2545,7 +2545,20 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
 @pytest.mark.parametrize("M, N", [[32, 16], [32, 32], [32, 64], [64, 32]])
 @pytest.mark.parametrize("src_layout", scan_layouts)
 @pytest.mark.parametrize("axis", [0, 1])
-def test_scan_layouts(M, N, src_layout, axis, device, tmp_path: pathlib.Path):
+@pytest.mark.parametrize("add_overflow_check", [False, True])
+def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_path: pathlib.Path):
+
+    overflow_check = """
+        %17 = arith.extsi %arg2 : i32 to i64
+        %18 = arith.extsi %arg3 : i32 to i64
+        %19 = arith.addi %17, %18 : i64
+        %i32.min = arith.constant -2147483648: i64
+        %i32.max = arith.constant 2147483647: i64
+        %20 = arith.cmpi slt, %19, %i32.max : i64
+        %21 = arith.cmpi sge, %19, %i32.min : i64
+        %22 = arith.andi %20, %21 : i1
+        tt.assert %22, "overflow detected" : i1
+    """
 
     ir = f"""
     #blocked = {src_layout}
@@ -2565,7 +2578,7 @@ def test_scan_layouts(M, N, src_layout, axis, device, tmp_path: pathlib.Path):
       %10 = tt.load %9 : tensor<{M}x{N}x!tt.ptr<i32>, #blocked>
       %11 = "tt.scan"(%10) <{{axis = {axis} : i32, reverse = false}}> ({{
       ^bb0(%arg2: i32, %arg3: i32):
-        %16 = arith.addi %arg2, %arg3 : i32
+        %16 = arith.addi %arg2, %arg3 : i32{overflow_check if add_overflow_check else ""}
         tt.scan.return %16 : i32
       }}) : (tensor<{M}x{N}xi32, #blocked>) -> tensor<{M}x{N}xi32, #blocked>
       %12 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<{M}x1x!tt.ptr<i32>, #blocked>
@@ -2627,9 +2640,11 @@ layouts = [
 @pytest.mark.parametrize("src_layout", filter_layouts(layouts))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
-@pytest.mark.parametrize("dtype_str", ["int32", "float32", "float16"])
+@pytest.mark.parametrize("dtype_str,add_overflow_check", [("int32", False), ("int32", True), ("float32", False),
+                                                          ("float16", False)])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
-def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce_op, device, tmp_path: pathlib.Path):
+def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_overflow_check, reduce_op, device,
+                        tmp_path: pathlib.Path):
     if isinstance(src_layout,
                   (MfmaLayout, MmaLayout)) and (M < src_layout.instr_shape[0] or N < src_layout.instr_shape[1]):
         pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
@@ -2640,6 +2655,18 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout[2] = 16 if dtype_str == "float16" else 8
+
+    overflow_check = """
+        %18 = arith.extsi %arg3 : i32 to i64
+        %19 = arith.extsi %arg4 : i32 to i64
+        %20 = arith.addi %18, %19 : i64
+        %i32.min = arith.constant -2147483648: i64
+        %i32.max = arith.constant 2147483647: i64
+        %21 = arith.cmpi slt, %20, %i32.max : i64
+        %22 = arith.cmpi sge, %20, %i32.min : i64
+        %23 = arith.andi %21, %22 : i1
+        tt.assert %23, "overflow detected" : i1
+    """
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
@@ -2673,7 +2700,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         f"""
         %14 = "tt.reduce"(%13) ({{
         ^bb0(%arg3: {ty}, %arg4: {ty}):
-          %17 = {arith_op} %arg3, %arg4 : {ty}
+          %17 = {arith_op} %arg3, %arg4 : {ty}{overflow_check if add_overflow_check else ""}
           tt.reduce.return %17 : {ty}
         }}) {{axis = 0 : i32}} : (tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>) -> {ty}
         tt.store %arg2, %14 : !tt.ptr<{ty}>
@@ -2685,7 +2712,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         %14 = tt.expand_dims %13 {{axis = {axis} : i32}} : tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>> -> tensor<{expanded_shape}x{ty}, #src>
         %15 = "tt.reduce"(%14) ({{
         ^bb0(%arg3: {ty}, %arg4: {ty}):
-          %17 = {arith_op} %arg3, %arg4 : {ty}
+          %17 = {arith_op} %arg3, %arg4 : {ty}{overflow_check if add_overflow_check else ""}
           tt.reduce.return %17 : {ty}
         }}) {{axis = {other_axis} : i32}} : (tensor<{expanded_shape}x{ty}, #src>) -> (tensor<1x{ty}, #{GPU_DIALECT}.slice<{{dim = {other_axis}, parent = #src}}>>)
         %16 = triton_gpu.convert_layout %15 : tensor<1x{ty}, #{GPU_DIALECT}.slice<{{dim = {other_axis}, parent = #src}}>> -> tensor<1x{ty}, #one_d_layout>
@@ -2718,7 +2745,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         %12 = {GPU_DIALECT}.convert_layout %11 : tensor<{M}x{N}x{ty}, #blocked> -> tensor<{M}x{N}x{ty}, #src>
         %13 = "tt.reduce"(%12) ({{
         ^bb0(%arg3: {ty}, %arg4: {ty}):
-          %17 = {arith_op} %arg3, %arg4 : {ty}
+          %17 = {arith_op} %arg3, %arg4 : {ty}{overflow_check if add_overflow_check else ""}
           tt.reduce.return %17 : {ty}
         }}) {{axis = {axis} : i32}} : (tensor<{M}x{N}x{ty}, #src>) -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>
     """ + epilogue
