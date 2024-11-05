@@ -5939,6 +5939,30 @@ def test_side_effectful_reduction(device):
     torch.testing.assert_close(Z, X.sum().to(torch.int32))
 
 
+@pytest.mark.parametrize("reduce_dim", [0, 1])
+def test_side_effectful_reduction_2d(device, reduce_dim):
+    if device != "cuda":
+        pytest.skip()
+
+    @triton.jit(debug=True)
+    def sanitize_sum_2d_kernel(Z, X, BLOCK_0: tl.constexpr, BLOCK_1: tl.constexpr, reduce_dim: tl.constexpr,
+                               NON_REDUCE_DIM: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_0)[:, None] * BLOCK_1 + tl.arange(0, BLOCK_1)[None, :]
+        vals = tl.load(X + offsets)
+        z = tl.reduce(vals, reduce_dim, sanitize_add)
+        tl.store(Z + tl.arange(0, NON_REDUCE_DIM), z)
+
+    BLOCK_0 = 16
+    BLOCK_1 = 32
+    NON_REDUCE_DIM = BLOCK_1 if reduce_dim == 0 else BLOCK_0
+    torch.manual_seed(42)
+    X = torch.randint(0, 10, [BLOCK_0, BLOCK_1], device="cuda", dtype=torch.int32)
+    Z = torch.zeros([NON_REDUCE_DIM], device="cuda", dtype=torch.int32)
+    sanitize_sum_2d_kernel[(1, )](Z, X, BLOCK_0=BLOCK_0, BLOCK_1=BLOCK_1, reduce_dim=reduce_dim,
+                                  NON_REDUCE_DIM=NON_REDUCE_DIM)
+    torch.testing.assert_close(Z, X.sum(reduce_dim).to(torch.int32))
+
+
 def test_side_effectful_scan(device):
     if device != "cuda":
         pytest.skip()
