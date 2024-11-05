@@ -32,9 +32,9 @@ int getParentAxis(Attribute layout, int axis) {
   return axis;
 }
 
-SmallVector<unsigned> getParentOrder(Attribute layout) {
+SmallVector<unsigned> getParentThreadOrder(Attribute layout) {
   if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    return getParentOrder(sliceEncoding.getParent());
+    return getParentThreadOrder(sliceEncoding.getParent());
   }
   return getThreadOrder(layout);
 }
@@ -44,12 +44,12 @@ SmallVector<unsigned> getParentOrder(Attribute layout) {
 // TODO(jlebar): Move this class into namespace triton.
 bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
   return getParentAxis(getSrcLayout(), axis) ==
-         getParentOrder(getSrcLayout())[0];
+         getParentThreadOrder(getSrcLayout())[0];
 }
 
-SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
+SmallVector<unsigned> ReduceOpHelper::getThreadOrderWithAxisAtBeginning() {
   auto srcLayout = getSrcLayout();
-  auto order = getOrder(srcLayout);
+  auto order = getThreadOrder(srcLayout);
   auto it = std::find(order.begin(), order.end(), axis);
   // delete the axis from order
   order.erase(it);

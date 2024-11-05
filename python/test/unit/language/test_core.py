@@ -1720,6 +1720,7 @@ def test_store_constant(dtype_str, num_ctas, device):
 
     assert torch.all(output == ref)
 
+<<<<<<< HEAD
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
