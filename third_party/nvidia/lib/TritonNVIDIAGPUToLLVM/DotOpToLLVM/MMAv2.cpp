@@ -429,7 +429,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto batchOffset =
       elemsPerThread[rank - 2] * elemsPerThread[rank - 1] / numCPackedElem;
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
-    unsigned colsPerThread = repN > 1 ? repN * 2 : repN;
+    unsigned colsPerThread = repN * 2;
     PTXBuilder builder;
     auto &mma = *builder.create(mmaInstructions.at(mmaType));
     // using =r for float32 works but leads to less readable ptx.
