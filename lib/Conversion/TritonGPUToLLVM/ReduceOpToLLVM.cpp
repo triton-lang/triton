@@ -283,7 +283,7 @@ private:
         getMultiDimWarpId(helper, warpId, loc, rewriter);
     Value warpIdAxis = multiDimWarpId[axis];
 
-    auto smemOrder = helper.getOrderWithAxisAtBeginning();
+    auto smemOrder = helper.getThreadOrderWithAxisAtBeginning();
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = it.second;
@@ -370,7 +370,7 @@ private:
     Location loc = op.getLoc();
     auto srcLayout = helper.getSrcLayout();
     auto axis = op.getAxis();
-    auto smemOrder = helper.getOrderWithAxisAtBeginning();
+    auto smemOrder = helper.getThreadOrderWithAxisAtBeginning();
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto elemTy = getElementType(op, i);

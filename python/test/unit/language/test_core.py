@@ -1765,7 +1765,6 @@ def test_store_constant(num_ctas, dtype_str, constant_field, device):
     kernel[(1, )](output, block_size, BLOCK_SIZE=block_size, num_ctas=num_ctas, CONSTANT_FIELD=constant_field)
 
     if constant_field == "value":
-        print(output, ref)
         assert torch.all(output == ref)
     else:
         assert torch.all(output == 0)
