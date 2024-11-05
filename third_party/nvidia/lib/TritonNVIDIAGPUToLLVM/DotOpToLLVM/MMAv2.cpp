@@ -410,10 +410,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
 
-  // FIXME [Dot LL]
-  // max(repN / 2, 1) is wrong for repN = 1!
-  // This is also wrong in
-  // NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
   auto fc = unpackLLElements(loc, loadedC, rewriter);

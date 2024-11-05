@@ -941,16 +941,18 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     if (mma.isAmpere()) {
       auto bitwidth = getPointeeType(eltTy).getIntOrFloatBitWidth();
       auto rep = mma.getRepForOperand(shape, bitwidth, idx);
+      auto sizePerThread = getSizePerThread();
       auto elemsPerKRep = 32 / bitwidth;
-      auto kWidthRep = kWidth / elemsPerKRep;
       if (rank == 3)
         elemsPerThread[0] = rep[0];
       elemsPerThread[rank - 2] =
-          (idx == 0) ? rep[1] * 2
-                     : std::max<int>(kWidthRep, rep[1]) * 2 * elemsPerKRep;
+          (idx == 0)
+              ? rep[1] * sizePerThread[rank - 2]
+              : std::max<int>(rep[1] * elemsPerKRep, sizePerThread[rank - 2]);
       elemsPerThread[rank - 1] =
-          (idx == 0) ? std::max<int>(rep[2], kWidthRep) * 2 * elemsPerKRep
-                     : rep[2];
+          (idx == 0)
+              ? std::max<int>(rep[2] * elemsPerKRep, sizePerThread[rank - 1])
+              : rep[2] * sizePerThread[rank - 1];
       return elemsPerThread;
     }
   }
