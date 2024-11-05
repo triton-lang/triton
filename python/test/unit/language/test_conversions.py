@@ -1,24 +1,14 @@
 # fmt: off
 
 
-import os
 import numpy as np
 import torch
 import pytest
 import triton
 import triton.language as tl
 
-def is_interpreter():
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi300
 
-def is_cuda():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-def is_hip():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "hip"
-
-def is_on_mi300():
-    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942')
 
 def matching_int(dtype):
     if dtype.primitive_bitwidth == 8:
@@ -288,7 +278,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
     if ((src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (8, 9))
        or (src_dtype in ('float8e4b15') and is_hip())
-       or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()))):
+       or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_hip_mi300()))):
         # If the dtype should error out in the given device, we assert that and return
         with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
             launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
@@ -339,7 +329,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
     if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and (is_hip() or torch.cuda.get_device_capability(0) < (9, 0)):
         pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
-    if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_on_mi300()):
+    if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_hip_mi300()):
         pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
 
     if dst_dtype == 'float8e4nv' and is_hip():

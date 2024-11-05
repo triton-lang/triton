@@ -327,6 +327,7 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   assert(n == 8 || n == 16 || n == 32 || n == 64 || n == 128 || n == 256);
   assert(k == 8 || k == 16 || k == 32);
 
+  // TODO Make the getOrder of Hopper explicit here via an assert
   MLIRContext *ctx = mma.getContext();
   LinearLayout ctaLayout(
       {{S("register"), {{1, 0}, {0, 8}}},
