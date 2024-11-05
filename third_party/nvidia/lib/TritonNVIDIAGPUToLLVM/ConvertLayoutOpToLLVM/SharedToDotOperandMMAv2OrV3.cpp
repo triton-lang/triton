@@ -531,17 +531,23 @@ Type getSharedMemTy(Type argType) {
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int batch, int repOuter, int repK,
     const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter, Type eltTy, bool isHopper, bool isA) {
+    ConversionPatternRewriter &rewriter, Type eltTy, int kWidth, bool isHopper,
+    bool isA) {
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   assert(32 >= bitwidth && "only support 32-bit or less");
   auto numElemsPerVec = 32 / bitwidth;
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
+  auto kIters = kWidth / (32 / bitwidth);
 
   std::vector<Value> elems;
-  auto unpackVec = [&](Value val) {
-    auto vec = bitcast(val, vecTy);
-    for (auto i = 0; i < numElemsPerVec; ++i)
-      elems.push_back(extract_element(eltTy, vec, i32_val(i)));
+  auto unpackVec = [&](int b, int m, int k) {
+    for (auto kIter = 0; kIter < kIters; ++kIter) {
+      auto val = vals.at({b, m, k + kIter});
+      auto vec = bitcast(val, vecTy);
+      for (auto i = 0; i < numElemsPerVec; ++i) {
+        elems.push_back(extract_element(eltTy, vec, i32_val(i)));
+      }
+    }
   };
 
   // Loading A tile is different from loading B tile since each tile of A is
@@ -550,17 +556,17 @@ Value composeValuesToDotOperandLayoutStruct(
     for (int b = 0; b < batch; ++b)
       for (int m = 0; m < repOuter; ++m)
         for (int k = 0; k < repK; ++k) {
-          unpackVec(vals.at({b, 2 * m, 2 * k}));
-          unpackVec(vals.at({b, 2 * m + 1, 2 * k}));
-          unpackVec(vals.at({b, 2 * m, 2 * k + 1}));
-          unpackVec(vals.at({b, 2 * m + 1, 2 * k + 1}));
+          unpackVec(b, 2 * m, kIters * 2 * k);
+          unpackVec(b, 2 * m + 1, kIters * 2 * k);
+          unpackVec(b, 2 * m, kIters * (2 * k + 1));
+          unpackVec(b, 2 * m + 1, kIters * (2 * k + 1));
         }
   } else {
     for (int b = 0; b < batch; ++b)
       for (int n = 0; n < repOuter; ++n)
         for (int k = 0; k < repK; ++k) {
-          unpackVec(vals.at({b, n, 2 * k}));
-          unpackVec(vals.at({b, n, 2 * k + 1}));
+          unpackVec(b, n, kIters * 2 * k);
+          unpackVec(b, n, kIters * (2 * k + 1));
         }
   }
   assert(!elems.empty());
@@ -706,7 +712,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   Type eltTy = typeConverter->convertType(descTy.getElementType());
   return composeValuesToDotOperandLayoutStruct(
       vals, numRepBatch, isA ? numRep[1] : numRep[2], numRepK, typeConverter,
-      loc, rewriter, eltTy, isHopper, isA);
+      loc, rewriter, eltTy, kWidth, isHopper, isA);
 }
 
 template <typename T>
