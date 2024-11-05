@@ -15,9 +15,6 @@ namespace mlir::triton {
 
 namespace gpu {
 
-SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
-                                 Type ouType);
-
 Type getElementType(Value value);
 
 class MultipleOperandsRange

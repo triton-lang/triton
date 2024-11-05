@@ -78,8 +78,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     offset += numElemsPerVec;
   };
 
-  // FIXME [Dot LL]
-  // [ez] Generalize the logic below for kWidth * elemBitWidth > 32
   auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
   auto kWidth = dot.getKWidth();
   auto largeK = bitwidth * kWidth > 32;
