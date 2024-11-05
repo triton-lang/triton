@@ -9,6 +9,7 @@ from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
 from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300
 
+
 def test_err_undefined_variable():
 
     @triton.jit

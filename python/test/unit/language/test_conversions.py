@@ -1,14 +1,13 @@
 # fmt: off
 
 
-import os
 import numpy as np
 import torch
 import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi300
 
 
 def matching_int(dtype):
