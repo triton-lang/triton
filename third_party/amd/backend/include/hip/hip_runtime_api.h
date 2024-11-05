@@ -102,7 +102,7 @@ typedef struct hipDeviceProp_t {
     char luid[8];                     ///< 8-byte unique identifier. Only valid on windows
     unsigned int luidDeviceNodeMask;  ///< LUID node mask
     size_t totalGlobalMem;            ///< Size of global memory region (in bytes).
-    size_t sharedMemPerBlock;         ///< Size of shared memory region (in bytes).
+    size_t sharedMemPerBlock;         ///< Size of shared memory per block (in bytes).
     int regsPerBlock;                 ///< Registers per block.
     int warpSize;                     ///< Warp size.
     size_t memPitch;                  ///< Maximum pitch in bytes allowed by memory copies
@@ -111,7 +111,8 @@ typedef struct hipDeviceProp_t {
     int maxThreadsDim[3];             ///< Max number of threads in each dimension (XYZ) of a block.
     int maxGridSize[3];               ///< Max grid dimensions (XYZ).
     int clockRate;                    ///< Max clock frequency of the multiProcessors in khz.
-    size_t totalConstMem;             ///< Size of shared memory region (in bytes).
+    size_t totalConstMem;             ///< Size of shared constant memory region on the device
+                                      ///< (in bytes).
     int major;  ///< Major compute capability.  On HCC, this is an approximation and features may
                 ///< differ from CUDA CC.  See the arch feature flags for portable ways to query
                 ///< feature caps.
@@ -538,6 +539,12 @@ typedef enum hipDeviceAttribute_t {
     // Extended attributes for vendors
 } hipDeviceAttribute_t;
 
+typedef enum hipDriverProcAddressQueryResult {
+    HIP_GET_PROC_ADDRESS_SUCCESS = 0,
+    HIP_GET_PROC_ADDRESS_SYMBOL_NOT_FOUND = 1,
+    HIP_GET_PROC_ADDRESS_VERSION_NOT_SUFFICIENT = 2
+} hipDriverProcAddressQueryResult;
+
 enum hipComputeMode {
     hipComputeModeDefault = 0,
     hipComputeModeExclusive = 1,
@@ -740,6 +747,9 @@ enum hipLimit_t {
 /** Memory allocated will be uncached. */
 #define hipDeviceMallocUncached 0x3
 
+/** Memory allocated will be contiguous. */
+#define hipDeviceMallocContiguous 0x4
+
 //Flags that can be used with hipHostRegister.
 /** Memory is Mapped and Portable.*/
 #define hipHostRegisterDefault 0x0
@@ -797,6 +807,8 @@ enum hipLimit_t {
 // Stream per thread
 /** Implicit stream per application thread.*/
 #define hipStreamPerThread ((hipStream_t)2)
+
+#define hipStreamLegacy ((hipStream_t)1)
 
 // Indicates that the external memory object is a dedicated resource
 #define hipExternalMemoryDedicated 0x1
@@ -973,7 +985,8 @@ typedef struct hipMemPoolProps {
      * Windows-specific LPSECURITYATTRIBUTES required when @p hipMemHandleTypeWin32 is specified
      */
     void*                       win32SecurityAttributes;
-    unsigned char               reserved[64]; ///< Reserved for future use, must be 0
+    size_t                      maxSize;  ///< Maximum pool size. When set to 0, defaults to a system dependent value
+    unsigned char               reserved[56];  ///< Reserved for future use, must be 0
 } hipMemPoolProps;
 /**
  * Opaque data structure for exporting a pool allocation
@@ -1269,13 +1282,7 @@ typedef struct hipMemAllocNodeParams {
     void*   dptr;                       ///< Returned device address of the allocation
 } hipMemAllocNodeParams;
 
-/**
- * Kernel node attributeID
- */
-typedef enum hipKernelNodeAttrID {
-    hipKernelNodeAttributeAccessPolicyWindow = 1,
-    hipKernelNodeAttributeCooperative = 2,
-} hipKernelNodeAttrID;
+
 typedef enum hipAccessProperty {
     hipAccessPropertyNormal = 0,
     hipAccessPropertyStreaming  = 1,
@@ -1288,10 +1295,39 @@ typedef struct hipAccessPolicyWindow {
     hipAccessProperty missProp;
     size_t num_bytes;
 } hipAccessPolicyWindow;
-typedef union hipKernelNodeAttrValue {
-    hipAccessPolicyWindow accessPolicyWindow;
-    int cooperative;
-} hipKernelNodeAttrValue;
+
+/**
+ *  Launch Attribute ID
+ */
+typedef enum hipLaunchAttributeID {
+    hipLaunchAttributeAccessPolicyWindow = 1, /**< Valid for Streams, graph nodes, launches*/
+    hipLaunchAttributeCooperative = 2, /**< Valid for graph nodes, launches */
+    hipLaunchAttributePriority = 8, /**< Valid for graph node, streams, launches */
+} hipLaunchAttributeID;
+
+/**
+ *  Launch Attribute Value
+ */
+typedef union hipLaunchAttributeValue {
+    hipAccessPolicyWindow accessPolicyWindow; /**< Value of launch attribute::
+                          hipLaunchAttributePolicyWindow. */
+    int cooperative; /**< Value of launch attribute ::hipLaunchAttributeCooperative */
+    int priority; /**< Value of launch attribute :: hipLaunchAttributePriority. Execution
+                      priority of kernel. */
+} hipLaunchAttributeValue;
+
+/**
+ * Kernel node attributeID
+ */
+#define hipKernelNodeAttrID hipLaunchAttributeID
+#define hipKernelNodeAttributeAccessPolicyWindow hipLaunchAttributeAccessPolicyWindow
+#define hipKernelNodeAttributeCooperative hipLaunchAttributeCooperative
+#define hipKernelNodeAttributePriority hipLaunchAttributePriority
+
+/**
+ * Kernel node attribute value
+ */
+#define hipKernelNodeAttrValue hipLaunchAttributeValue
 
 /**
  * Memset node params
@@ -1383,6 +1419,34 @@ enum hipGraphDebugDotFlags {
   hipGraphDebugDotFlagsHandles = 1
       << 10 /**< Adds node handles and every kernel function handle to output */
 };
+
+/**
+* hipGraphInstantiateWithParams results
+*/
+typedef enum hipGraphInstantiateResult {
+    hipGraphInstantiateSuccess = 0, /**< Instantiation Success */
+    hipGraphInstantiateError = 1, /**< Instantiation failed for an
+    unexpected reason which is described in the return value of the function */
+    hipGraphInstantiateInvalidStructure = 2, /**< Instantiation failed due
+    to invalid structure, such as cycles */
+    hipGraphInstantiateNodeOperationNotSupported = 3, /**< Instantiation for device launch failed
+    because the graph contained an unsupported operation */
+    hipGraphInstantiateMultipleDevicesNotSupported = 4, /**< Instantiation for device launch failed
+    due to the nodes belonging to different contexts */
+}hipGraphInstantiateResult;
+
+/**
+ * Graph Instantiation parameters
+*/
+typedef struct hipGraphInstantiateParams {
+    hipGraphNode_t errNode_out; /**< The node which caused instantiation to fail, if any*/
+    unsigned long long flags; /**< Instantiation flags */
+    hipGraphInstantiateResult result_out; /**< Whether instantiation was successful.
+    If it failed, the reason why */
+    hipStream_t uploadStream; /**< Upload stream */
+} hipGraphInstantiateParams;
+
+
 /**
  * Memory allocation properties
  */
@@ -1557,6 +1621,44 @@ typedef struct hipGraphNodeParams {
 
     long long reserved2;
 } hipGraphNodeParams;
+
+/**
+ * This port activates when the kernel has finished executing.
+ */
+#define hipGraphKernelNodePortDefault 0
+
+/**
+ * This port activates when all blocks of the kernel have begun execution.
+ */
+#define hipGraphKernelNodePortLaunchCompletion 2
+
+/**
+ * This port activates when all blocks of the kernel have performed
+ * hipTriggerProgrammaticLaunchCompletion() or have terminated.
+ * It must be used with edge type hipGraphDependencyTypeProgrammatic.
+ */
+#define hipGraphKernelNodePortProgrammatic 1
+
+typedef enum hipGraphDependencyType {
+  hipGraphDependencyTypeDefault = 0,
+  hipGraphDependencyTypeProgrammatic = 1
+}hipGraphDependencyType;
+
+typedef struct hipGraphEdgeData {
+  unsigned char
+      from_port;  ///< This indicates when the dependency is triggered from the upstream node on the
+                  ///< edge. The meaning is specfic to the node type. A value of 0 in all cases
+                  ///< means full completion of the upstream node, with memory visibility to the
+                  ///< downstream node or portion thereof (indicated by to_port). Only kernel nodes
+                  ///< define non-zero ports. A kernel node can use the following output port types:
+                  ///< hipGraphKernelNodePortDefault, hipGraphKernelNodePortProgrammatic, or
+                  ///< hipGraphKernelNodePortLaunchCompletion.
+  unsigned char reserved[5];  ///< These bytes are unused and must be zeroed
+  unsigned char
+      to_port;  ///< Currently no node types define non-zero ports. This field must be set to zero.
+  unsigned char type;  ///< This should be populated with a value from hipGraphDependencyType
+} hipGraphEdgeData;
+
 // Doxygen end group GlobalDefs
 /**
 * @}
@@ -1585,6 +1687,7 @@ typedef struct hipGraphNodeParams {
  */
 // TODO-ctx - more description on error codes.
 hipError_t hipInit(unsigned int flags);
+
 /**
  * @brief Returns the approximate HIP driver version.
  *
@@ -1755,6 +1858,18 @@ hipError_t hipDeviceReset(void);
  * @see #hipGetDevice, #hipGetDeviceCount
  */
 hipError_t hipSetDevice(int deviceId);
+/**
+ * @brief Set a list of devices that can be used.
+ *
+ * @param[in] device_arr List of devices to try
+ * @param[in] len Number of devices in specified list
+ *
+ * @returns #hipSuccess, #hipErrorInvalidDevice, #hipErrorInvalidValue
+ *
+ * @see #hipGetDevice, #hipGetDeviceCount. #hipSetDevice. #hipGetDeviceProperties. #hipSetDeviceFlags. #hipChooseDevice
+ *
+ * */
+hipError_t hipSetValidDevices(int* device_arr, int len);
 /**
  * @brief Return the default device id for the calling host thread.
  *
@@ -2100,7 +2215,7 @@ hipError_t hipIpcGetEventHandle(hipIpcEventHandle_t* handle, hipEvent_t event);
 /**
  * @brief Opens an interprocess event handles.
  *
- * Opens an interprocess event handle exported from another process with cudaIpcGetEventHandle. The returned
+ * Opens an interprocess event handle exported from another process with hipIpcGetEventHandle. The returned
  * hipEvent_t behaves like a locally created event with the hipEventDisableTiming flag specified. This event
  * need be freed with hipEventDestroy. Operations on the imported event after the exported event has been freed
  * with hipEventDestroy will result in undefined behavior. If the function is called within the same process where
@@ -2276,7 +2391,7 @@ hipError_t hipDrvGetErrorString(hipError_t hipError, const char** errorString);
  * Create a new asynchronous stream.  @p stream returns an opaque handle that can be used to
  * reference the newly created stream in subsequent hipStream* commands.  The stream is allocated on
  * the heap and will remain allocated even if the handle goes out-of-scope.  To release the memory
- * used by the stream, applicaiton must call hipStreamDestroy.
+ * used by the stream, application must call hipStreamDestroy.
  *
  * @return #hipSuccess, #hipErrorInvalidValue
  *
@@ -2293,7 +2408,7 @@ hipError_t hipStreamCreate(hipStream_t* stream);
  * Create a new asynchronous stream.  @p stream returns an opaque handle that can be used to
  * reference the newly created stream in subsequent hipStream* commands.  The stream is allocated on
  * the heap and will remain allocated even if the handle goes out-of-scope.  To release the memory
- * used by the stream, applicaiton must call hipStreamDestroy. Flags controls behavior of the
+ * used by the stream, application must call hipStreamDestroy. Flags controls behavior of the
  * stream.  See #hipStreamDefault, #hipStreamNonBlocking.
  *
  *
@@ -2311,7 +2426,7 @@ hipError_t hipStreamCreateWithFlags(hipStream_t* stream, unsigned int flags);
  * Create a new asynchronous stream with the specified priority.  @p stream returns an opaque handle
  * that can be used to reference the newly created stream in subsequent hipStream* commands.  The
  * stream is allocated on the heap and will remain allocated even if the handle goes out-of-scope.
- * To release the memory used by the stream, applicaiton must call hipStreamDestroy. Flags controls
+ * To release the memory used by the stream, application must call hipStreamDestroy. Flags controls
  * behavior of the stream.  See #hipStreamDefault, #hipStreamNonBlocking.
  *
  *
@@ -2329,7 +2444,7 @@ hipError_t hipStreamCreateWithPriority(hipStream_t* stream, unsigned int flags, 
  * and greatest stream priority respectively. Stream priorities follow a convention where lower numbers
  * imply greater priorities. The range of meaningful stream priorities is given by
  * [*greatestPriority, *leastPriority]. If the user attempts to create a stream with a priority value
- * that is outside the the meaningful range as specified by this API, the priority is automatically
+ * that is outside the meaningful range as specified by this API, the priority is automatically
  * clamped to within the valid range.
  */
 hipError_t hipDeviceGetStreamPriorityRange(int* leastPriority, int* greatestPriority);
@@ -2401,8 +2516,8 @@ hipError_t hipStreamSynchronize(hipStream_t stream);
  * All future work submitted to @p stream will wait until @p event reports completion before
  * beginning execution.
  *
- * This function only waits for commands in the current stream to complete.  Notably,, this function
- * does not impliciy wait for commands in the default stream to complete, even if the specified
+ * This function only waits for commands in the current stream to complete.  Notably, this function
+ * does not implicitly wait for commands in the default stream to complete, even if the specified
  * stream is created with hipStreamNonBlocking = 0.
  *
  * @see hipStreamCreate, hipStreamCreateWithFlags, hipStreamCreateWithPriority, hipStreamSynchronize, hipStreamDestroy
@@ -2688,7 +2803,7 @@ hipError_t hipEventCreate(hipEvent_t* event);
  *
  * If hipEventRecord() has been previously called on this event, then this call will overwrite any
  * existing state in event.
- * 
+ *
  * If this function is called on an event that is currently being recorded, results are undefined
  * - either outstanding recording may save state into the event, and the order is not guaranteed.
  *
@@ -2730,7 +2845,6 @@ hipError_t hipEventDestroy(hipEvent_t event);
  *  If hipEventRecord() has not been called on @p event, this function returns #hipSuccess when no
  *  event is captured.
  *
- *  This function needs to support hipEventBlockingSync parameter.
  *
  *  @param[in] event Event on which to wait.
  *
@@ -3252,7 +3366,7 @@ hipError_t hipStreamAttachMemAsync(hipStream_t stream,
  *
  * Inserts a memory allocation operation into @p stream.
  * A pointer to the allocated memory is returned immediately in *dptr.
- * The allocation must not be accessed until the the allocation operation completes.
+ * The allocation must not be accessed until the allocation operation completes.
  * The allocation comes from the memory pool associated with the stream's device.
  *
  * @note The default memory pool of a device contains device memory from that device.
@@ -3504,7 +3618,7 @@ hipError_t hipMemPoolDestroy(hipMemPool_t mem_pool);
  *
  * Inserts an allocation operation into @p stream.
  * A pointer to the allocated memory is returned immediately in @p dev_ptr.
- * The allocation must not be accessed until the the allocation operation completes.
+ * The allocation must not be accessed until the allocation operation completes.
  * The allocation comes from the specified memory pool.
  *
  * @note The specified memory pool may be from a device different than that of the specified @p stream.
@@ -3916,6 +4030,68 @@ hipError_t hipMemcpyDtoH(void* dst, hipDeviceptr_t src, size_t sizeBytes);
  */
 hipError_t hipMemcpyDtoD(hipDeviceptr_t dst, hipDeviceptr_t src, size_t sizeBytes);
 /**
+ *  @brief Copies from one 1D array to device memory.
+ *
+ *  @param[out]  dstDevice Destination device pointer
+ *  @param[in]   srcArray Source array
+ *  @param[in]   srcOffset Offset in bytes of source array
+ *  @param[in]   ByteCount Size of memory copy in bytes
+ *
+ *  @return #hipSuccess, #hipErrorDeinitialized, #hipErrorNotInitialized, #hipErrorInvalidContext,
+ * #hipErrorInvalidValue
+ *
+ *  @see hipArrayCreate, hipArrayDestroy, hipArrayGetDescriptor, hipMemAlloc, hipMemAllocHost,
+ * hipMemAllocPitch, hipMemcpy2D, hipMemcpy2DAsync, hipMemcpy2DUnaligned, hipMemcpyAtoA,
+ * hipMemcpyAtoD, hipMemcpyAtoH, hipMemcpyAtoHAsync, hipMemcpyDtoA, hipMemcpyDtoD,
+ * hipMemcpyDtoDAsync, hipMemcpyDtoH, hipMemcpyDtoHAsync, hipMemcpyHtoA, hipMemcpyHtoAAsync,
+ * hipMemcpyHtoDAsync, hipMemFree, hipMemFreeHost, hipMemGetAddressRange, hipMemGetInfo,
+ * hipMemHostAlloc, hipMemHostGetDevicePointer
+ */
+hipError_t hipMemcpyAtoD(hipDeviceptr_t dstDevice, hipArray_t srcArray, size_t srcOffset,
+                         size_t ByteCount);
+/**
+ *  @brief Copies from device memory to a 1D array.
+ *
+ *  @param[out]  dstArray Destination array
+ *  @param[in]   dstOffset Offset in bytes of destination array
+ *  @param[in]   srcDevice Source device pointer
+ *  @param[in]   ByteCount Size of memory copy in bytes
+ *
+ *  @return #hipSuccess, #hipErrorDeinitialized, #hipErrorNotInitialized, #hipErrorInvalidContext,
+ * #hipErrorInvalidValue
+ *
+ *  @see hipArrayCreate, hipArrayDestroy, hipArrayGetDescriptor, hipMemAlloc, hipMemAllocHost,
+ * hipMemAllocPitch, hipMemcpy2D, hipMemcpy2DAsync, hipMemcpy2DUnaligned, hipMemcpyAtoA,
+ * hipMemcpyAtoD, hipMemcpyAtoH, hipMemcpyAtoHAsync, hipMemcpyDtoA, hipMemcpyDtoD,
+ * hipMemcpyDtoDAsync, hipMemcpyDtoH, hipMemcpyDtoHAsync, hipMemcpyHtoA, hipMemcpyHtoAAsync,
+ * hipMemcpyHtoDAsync, hipMemFree, hipMemFreeHost, hipMemGetAddressRange, hipMemGetInfo,
+ * hipMemHostAlloc, hipMemHostGetDevicePointer
+ */
+hipError_t hipMemcpyDtoA(hipArray_t dstArray, size_t dstOffset, hipDeviceptr_t srcDevice,
+                         size_t ByteCount);
+
+/**
+ *  @brief Copies from one 1D array to another.
+ *
+ *  @param[out]  dstArray Destination array
+ *  @param[in]   dstOffset Offset in bytes of destination array
+ *  @param[in]   srcArray Source array
+ *  @param[in]   srcOffset Offset in bytes of source array
+ *  @param[in]   ByteCount Size of memory copy in bytes
+ *
+ *  @return #hipSuccess, #hipErrorDeinitialized, #hipErrorNotInitialized, #hipErrorInvalidContext,
+ * #hipErrorInvalidValue
+ *
+ *  @see hipArrayCreate, hipArrayDestroy, hipArrayGetDescriptor, hipMemAlloc, hipMemAllocHost,
+ * hipMemAllocPitch, hipMemcpy2D, hipMemcpy2DAsync, hipMemcpy2DUnaligned, hipMemcpyAtoA,
+ * hipMemcpyAtoD, hipMemcpyAtoH, hipMemcpyAtoHAsync, hipMemcpyDtoA, hipMemcpyDtoD,
+ * hipMemcpyDtoDAsync, hipMemcpyDtoH, hipMemcpyDtoHAsync, hipMemcpyHtoA, hipMemcpyHtoAAsync,
+ * hipMemcpyHtoDAsync, hipMemFree, hipMemFreeHost, hipMemGetAddressRange, hipMemGetInfo,
+ * hipMemHostAlloc, hipMemHostGetDevicePointer
+ */
+hipError_t hipMemcpyAtoA(hipArray_t dstArray, size_t dstOffset, hipArray_t srcArray,
+                         size_t srcOffset, size_t ByteCount);
+/**
  *  @brief Copy data from Host to Device asynchronously
  *
  *  @param[out]  dst  Data being copy to
@@ -3973,7 +4149,48 @@ hipError_t hipMemcpyDtoHAsync(void* dst, hipDeviceptr_t src, size_t sizeBytes, h
  */
 hipError_t hipMemcpyDtoDAsync(hipDeviceptr_t dst, hipDeviceptr_t src, size_t sizeBytes,
                               hipStream_t stream);
-
+/**
+ * @brief Copies from one 1D array to host memory.
+ *
+ *  @param[out]  dstHost Destination pointer
+ *  @param[in]   srcArray Source array
+ *  @param[in]   srcOffset Offset in bytes of source array
+ *  @param[in]   ByteCount Size of memory copy in bytes
+ *  @param[in]   stream Stream identifier
+ *
+ *  @return #hipSuccess, #hipErrorDeinitialized, #hipErrorNotInitialized, #hipErrorInvalidContext,
+ * #hipErrorInvalidValue
+ *
+ *  @see hipArrayCreate, hipArrayDestroy, hipArrayGetDescriptor, hipMemAlloc, hipMemAllocHost,
+ * hipMemAllocPitch, hipMemcpy2D, hipMemcpy2DAsync, hipMemcpy2DUnaligned, hipMemcpyAtoA,
+ * hipMemcpyAtoD, hipMemcpyAtoH, hipMemcpyAtoHAsync, hipMemcpyDtoA, hipMemcpyDtoD,
+ * hipMemcpyDtoDAsync, hipMemcpyDtoH, hipMemcpyDtoHAsync, hipMemcpyHtoA, hipMemcpyHtoAAsync,
+ * hipMemcpyHtoDAsync, hipMemFree, hipMemFreeHost, hipMemGetAddressRange, hipMemGetInfo,
+ * hipMemHostAlloc, hipMemHostGetDevicePointer
+ */
+hipError_t hipMemcpyAtoHAsync(void* dstHost, hipArray_t srcArray, size_t srcOffset,
+                              size_t ByteCount, hipStream_t stream);
+/**
+ * @brief Copies from host memory to a 1D array.
+ *
+ *  @param[out]  dstArray Destination array
+ *  @param[in]   dstOffset Offset in bytes of destination array
+ *  @param[in]   srcHost Source host pointer
+ *  @param[in]   ByteCount Size of memory copy in bytes
+ *  @param[in]   stream Stream identifier
+ *
+ *  @return #hipSuccess, #hipErrorDeinitialized, #hipErrorNotInitialized, #hipErrorInvalidContext,
+ * #hipErrorInvalidValue
+ *
+ *  @see hipArrayCreate, hipArrayDestroy, hipArrayGetDescriptor, hipMemAlloc, hipMemAllocHost,
+ * hipMemAllocPitch, hipMemcpy2D, hipMemcpy2DAsync, hipMemcpy2DUnaligned, hipMemcpyAtoA,
+ * hipMemcpyAtoD, hipMemcpyAtoH, hipMemcpyAtoHAsync, hipMemcpyDtoA, hipMemcpyDtoD,
+ * hipMemcpyDtoDAsync, hipMemcpyDtoH, hipMemcpyDtoHAsync, hipMemcpyHtoA, hipMemcpyHtoAAsync,
+ * hipMemcpyHtoDAsync, hipMemFree, hipMemFreeHost, hipMemGetAddressRange, hipMemGetInfo,
+ * hipMemHostAlloc, hipMemHostGetDevicePointer
+ */
+hipError_t hipMemcpyHtoAAsync(hipArray_t dstArray, size_t dstOffset, const void* srcHost,
+                              size_t ByteCount, hipStream_t stream);
 /**
  *  @brief Returns a global pointer from a module.
  *  Returns in *dptr and *bytes the pointer and size of the global of name name located in module hmod.
@@ -4002,6 +4219,8 @@ hipError_t hipModuleGetGlobal(hipDeviceptr_t* dptr, size_t* bytes,
  */
 hipError_t hipGetSymbolAddress(void** devPtr, const void* symbol);
 
+
+
 /**
  *  @brief Gets the size of the given symbol on the device.
  *
@@ -4014,13 +4233,37 @@ hipError_t hipGetSymbolAddress(void** devPtr, const void* symbol);
 hipError_t hipGetSymbolSize(size_t* size, const void* symbol);
 
 /**
+ * @brief Gets the pointer of requested HIP driver function.
+ *
+ * @param[in] symbol  The Symbol name of the driver function to request.
+ * @param[out] pfn  Output pointer to the requested driver function.
+ * @param[in] hipVersion  The HIP version for the requested driver function symbol.
+ * HIP version is defined as 100*version_major + version_minor. For example, in HIP 6.1, the
+ * hipversion is 601, for the symbol function "hipGetDeviceProperties", the specified hipVersion 601
+ * is greater or equal to the version 600, the symbol function will be handle properly as backend
+ * compatible function.
+ *
+ * @param[in] flags  Currently only default flag is suppported.
+ * @param[out] symbolStatus  Optional enumeration for returned status of searching for symbol driver
+ * function based on the input hipVersion.
+ *
+ * Returns hipSuccess if the returned pfn is addressed to the pointer of found driver function.
+ *
+ * @return #hipSuccess, #hipErrorInvalidValue.
+ */
+hipError_t hipGetProcAddress(const char* symbol, void** pfn, int  hipVersion, uint64_t flags,
+                             hipDriverProcAddressQueryResult* symbolStatus);
+
+/**
  *  @brief Copies data to the given symbol on the device.
  * Symbol HIP APIs allow a kernel to define a device-side data symbol which can be accessed on
  * the host side. The symbol can be in __constant or device space.
  * Note that the symbol name needs to be encased in the HIP_SYMBOL macro.
  * This also applies to hipMemcpyFromSymbol, hipGetSymbolAddress, and hipGetSymbolSize.
- * For detail usage, see the example at
- * https://github.com/ROCm/HIP/blob/develop/docs/user_guide/hip_porting_guide.md
+ * For detailed usage, see the 
+ * <a href="https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_porting_guide.html#memcpytosymbol">memcpyToSymbol example</a>
+ * in the HIP Porting Guide.
+ * 
  *
  *  @param[out]  symbol  pointer to the device symbole
  *  @param[in]   src  pointer to the source address
@@ -4523,6 +4766,27 @@ hipError_t hipMemcpy2DToArrayAsync(hipArray_t dst, size_t wOffset, size_t hOffse
 /**
  *  @brief Copies data between host and device.
  *
+ *  @param[in]   dst Destination memory address
+ *  @param[in]   wOffsetDst Destination starting X offset
+ *  @param[in]   hOffsetDst Destination starting Y offset
+ *  @param[in]   src  Source memory address
+ *  @param[in]   wOffsetSrc Source starting X offset
+ *  @param[in]   hOffsetSrc Source starting Y offset (columns in bytes)
+ *  @param[in]   width  Width of matrix transfer (columns in bytes)
+ *  @param[in]   height  Height of matrix transfer (rows)
+ *  @param[in]   kind Type of transfer
+ *
+ *  @returns      #hipSuccess, #hipErrorInvalidValue, #hipErrorInvalidMemcpyDirection
+ *
+ *  @see hipMemcpy, hipMemcpyToArray, hipMemcpy2D, hipMemcpyFromArray, hipMemcpyToSymbol,
+ * hipMemcpyAsync
+ */
+hipError_t hipMemcpy2DArrayToArray(hipArray_t dst, size_t wOffsetDst, size_t hOffsetDst,
+                                   hipArray_const_t src, size_t wOffsetSrc, size_t hOffsetSrc,
+                                   size_t width, size_t height, hipMemcpyKind kind);
+/**
+ *  @brief Copies data between host and device.
+ *
  *  @param[in]   dst     Destination memory address
  *  @param[in]   wOffset Destination starting X offset
  *  @param[in]   hOffset Destination starting Y offset
@@ -4734,7 +4998,7 @@ hipError_t hipDeviceDisablePeerAccess(int peerDeviceId);
  * @param [out] psize - Size of allocation
  * @param [in]  dptr- Device Pointer
  *
- * @returns #hipSuccess, #hipErrorInvalidDevicePointer
+ * @returns #hipSuccess, #hipErrorNotFound
  *
  * @see hipCtxCreate, hipCtxDestroy, hipCtxGetFlags, hipCtxPopCurrent, hipCtxGetCurrent,
  * hipCtxSetCurrent, hipCtxPushCurrent, hipCtxSetCacheConfig, hipCtxSynchronize, hipCtxGetDevice
@@ -5226,6 +5490,16 @@ hipError_t hipFuncGetAttributes(struct hipFuncAttributes* attr, const void* func
  */
 hipError_t hipFuncGetAttribute(int* value, hipFunction_attribute attrib, hipFunction_t hfunc);
 /**
+ * @brief Gets pointer to device entry function that matches entry function symbolPtr.
+ *
+ * @param [out] functionPtr  Device entry function
+ * @param [in]  symbolPtr  Pointer to device entry function to search for
+ *
+ * @returns #hipSuccess, #hipErrorInvalidDeviceFunction
+ *
+ */
+hipError_t hipGetFuncBySymbol(hipFunction_t* functionPtr, const void* symbolPtr);
+/**
  * @brief returns the handle of the texture reference with the name from the module.
  *
  * @param [in] hmod  Module
@@ -5646,12 +5920,26 @@ hipError_t hipLaunchKernel(const void* function_address,
 /**
  * @brief Enqueues a host function call in a stream.
  *
- * @param [in] stream - stream to enqueue work to.
- * @param [in] fn - function to call once operations enqueued preceeding are complete.
+ * @param [in] stream - The stream to enqueue work in.
+ * @param [in] fn - The function to call once enqueued preceeding operations are complete.
  * @param [in] userData - User-specified data to be passed to the function.
+ *
  * @returns #hipSuccess, #hipErrorInvalidResourceHandle, #hipErrorInvalidValue,
  * #hipErrorNotSupported
- * @warning : This API is marked as beta, meaning, while this is feature complete,
+ *
+ * The host function to call in this API will be executed after the preceding operations in
+ * the stream are complete. The function is a blocking operation that blocks operations in the
+ * stream that follow it, until the function is returned.
+ * Event synchronization and internal callback functions make sure enqueued operations will
+ * execute in order, in the stream.
+ *
+ * The host function must not make any HIP API calls. The host function is non-reentrant. It must
+ * not perform sychronization with any operation that may depend on other processing execution
+ * but is not enqueued to run earlier in the stream.
+ *
+ * Host functions that are enqueued respectively in different non-blocking streams can run concurrently.
+ *
+ * @warning  This API is marked as beta, meaning, while this is feature complete,
  * it is still open to changes and may have outstanding issues.
  */
 hipError_t hipLaunchHostFunc(hipStream_t stream, hipHostFn_t fn, void* userData);
@@ -6181,7 +6469,7 @@ hipError_t hipGetTextureAlignmentOffset(
 DEPRECATED(DEPRECATED_MSG)
 hipError_t hipUnbindTexture(const textureReference* tex);
 /**
- * @brief Gets the the address for a texture reference.
+ * @brief Gets the address for a texture reference.
  *
  * @param [out] dev_ptr  Pointer of device address.
  * @param [in] texRef  Pointer of texture reference.
@@ -6565,6 +6853,30 @@ int hipGetStreamDeviceId(hipStream_t stream);
 hipError_t hipStreamBeginCapture(hipStream_t stream, hipStreamCaptureMode mode);
 
 /**
+* @brief Begins graph capture on a stream to an existing graph.
+*
+* @param [in] stream - Stream to initiate capture.
+* @param [in] graph - Graph to capture into.
+* @param [in] dependencies - Dependencies of the first node captured in the stream. Can be NULL if
+* numDependencies is 0.
+* @param [in] dependencyData - Optional array of data associated with each dependency.
+* @param [in] numDependencies - Number of dependencies.
+* @param [in] mode - Controls the interaction of this capture sequence with other API calls that
+are not safe.
+*
+* @returns #hipSuccess, #hipErrorInvalidValue
+*
+* @warning : param "const hipGraphEdgeData* dependencyData" is currently not supported and has to
+passed as nullptr. This API is marked as beta, meaning, while this is feature complete, it is still
+open to changes and may have outstanding issues.
+*
+*/
+hipError_t hipStreamBeginCaptureToGraph(hipStream_t stream, hipGraph_t graph,
+                                        const hipGraphNode_t* dependencies,
+                                        const hipGraphEdgeData* dependencyData,
+                                        size_t numDependencies, hipStreamCaptureMode mode);
+
+/**
  * @brief Ends capture on a stream, returning the captured graph.
  *
  * @param [in] stream - Stream to end capture.
@@ -6903,6 +7215,19 @@ hipError_t hipGraphInstantiateWithFlags(hipGraphExec_t* pGraphExec, hipGraph_t g
                                         unsigned long long flags);
 
 /**
+ * @brief Creates an executable graph from a graph.
+ *
+ * @param [out] pGraphExec - pointer to instantiated executable graph that is created.
+ * @param [in] graph - instance of graph to instantiate.
+ * @param [in] instantiateParams - Graph Instantiate Params
+ * @returns #hipSuccess, #hipErrorInvalidValue
+ *
+ * @warning : This API is marked as beta, meaning, while this is feature complete,
+ * it is still open to changes and may have outstanding issues.
+ */
+hipError_t hipGraphInstantiateWithParams(hipGraphExec_t* pGraphExec, hipGraph_t graph,
+                                        hipGraphInstantiateParams *instantiateParams);
+/**
  * @brief launches an executable graph in a stream
  *
  * @param [in] graphExec - instance of executable graph to launch.
@@ -6925,6 +7250,22 @@ hipError_t hipGraphLaunch(hipGraphExec_t graphExec, hipStream_t stream);
  * it is still open to changes and may have outstanding issues.
  */
 hipError_t hipGraphUpload(hipGraphExec_t graphExec, hipStream_t stream);
+
+/**
+ * @brief Creates a kernel execution node and adds it to a graph.
+ *
+ * @param [out] pGraphNode - pointer to graph node to create.
+ * @param [in] graph - instance of graph to add the created node.
+ * @param [in] pDependencies - pointer to the dependencies on the kernel execution node.
+ * @param [in] numDependencies - the number of the dependencies.
+ * @param [in] nodeParams - pointer to the parameters for the node.
+ * @returns #hipSuccess, #hipErrorInvalidValue.
+ * @warning : This API is marked as beta, meaning, while this is feature complete,
+ * it is still open to changes and may have outstanding issues.
+ */
+hipError_t hipGraphAddNode(hipGraphNode_t *pGraphNode, hipGraph_t graph,
+                           const hipGraphNode_t *pDependencies, size_t numDependencies,
+                           hipGraphNodeParams *nodeParams);
 
 /**
  * @brief Destroys an executable graph
@@ -8905,6 +9246,7 @@ static inline hipError_t hipMallocManaged(T** devPtr, size_t size,
                                        unsigned int flags = hipMemAttachGlobal) {
     return hipMallocManaged((void**)devPtr, size, flags);
 }
+
 
 #endif
 #endif

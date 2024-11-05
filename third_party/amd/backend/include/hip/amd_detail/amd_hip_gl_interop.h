@@ -50,7 +50,7 @@ typedef enum hipGLDeviceList {
 typedef unsigned int GLuint;
 /** GLenum as uint.*/
 typedef unsigned int GLenum;
-/*
+/**
 * @}
 */
 
@@ -99,7 +99,7 @@ hipError_t hipGraphicsGLRegisterBuffer(hipGraphicsResource** resource, GLuint bu
  */
 hipError_t hipGraphicsGLRegisterImage(hipGraphicsResource** resource, GLuint image,
                                       GLenum target, unsigned int flags);
-/*
+/**
 * @}
 */
 #if defined(__cplusplus)
