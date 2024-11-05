@@ -1,14 +1,8 @@
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/raw_ostream.h"
-#include <iomanip>
-#include <iostream>
 #include <map>
-#include <sstream>
-#include <vector>
 
 using namespace llvm;
 using namespace std;
@@ -49,8 +43,6 @@ void InstrumentationFunction(const BasicBlock::iterator &I, const Function &F,
   auto LSI = dyn_cast<LoadOrStoreInst>(I);
   if (not LSI)
     return;
-  IRBuilder<> Builder(dyn_cast<Instruction>(I));
-  Value *Addr = LSI->getPointerOperand();
   Value *Op = LSI->getPointerOperand()->stripPointerCasts();
   uint32_t AddrSpace = cast<PointerType>(Op->getType())->getAddressSpace();
   DILocation *DL = dyn_cast<Instruction>(I)->getDebugLoc();
