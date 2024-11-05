@@ -728,6 +728,29 @@ LogicalResult ReshapeOp::verify() {
 }
 
 //-- FpToFpOp --
+
+// Fold FpToFpOp when the input operand is a constant zero.
+OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
+  auto srcVal = getSrc();
+  auto dstTy = getType();
+
+  const llvm::fltSemantics &semantic =
+      llvm::cast<FloatType>(dstTy.getElementType()).getFloatSemantics();
+
+  if (matchPattern(srcVal, m_PosZeroFloat())) {
+    llvm::APFloat posZero =
+        llvm::APFloat::getZero(semantic, /*negative=*/false);
+    return DenseFPElementsAttr::get(dstTy, posZero);
+  }
+
+  if (matchPattern(srcVal, m_NegZeroFloat())) {
+    llvm::APFloat negZero = llvm::APFloat::getZero(semantic, /*negative=*/true);
+    return DenseFPElementsAttr::get(dstTy, negZero);
+  }
+
+  return {};
+}
+
 LogicalResult FpToFpOp::verify() {
   auto dstType = getType().getElementType();
   auto srcType = getSrc().getType().getElementType();
