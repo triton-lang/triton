@@ -48,7 +48,7 @@ def execute_as_main(script, args, instrumentation_pass=None):
     sys.path.append(os.path.dirname(script_path))
 
     if (instrumentation_pass == "print-mem-spaces"):
-        instrumentation_pass_path = str(next(pathlib.Path("../../../").rglob("libPrintGPUKernelsLib.so"), None))
+        instrumentation_pass_path = str(next(pathlib.Path("../../../").rglob("libPrintLoadStoreMemSpaces.so"), None))
         #print(instrumentation_pass_path)
         os.environ['TRITON_ALWAYS_COMPILE'] = str(1)
         os.environ['TRITON_DISABLE_LINE_INFO'] = str(0)

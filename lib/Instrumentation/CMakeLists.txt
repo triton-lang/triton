@@ -1,8 +1,8 @@
 set(GPU_INSTRUMENTATION_PASSES
-	PrintLoadStoreMemSpacesLib
+	PrintLoadStoreMemSpaces
     )
 
-set(PrintLoadStoreMemSpacesLib_SOURCES
+set(PrintLoadStoreMemSpaces_SOURCES
     PrintLoadStoreMemSpaces.cpp
     )
 
