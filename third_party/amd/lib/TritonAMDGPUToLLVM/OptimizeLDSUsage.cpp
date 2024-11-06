@@ -111,10 +111,14 @@ class OptimizeAMDLDSUsage
     SmallVector<unsigned> elemsPerThread(rank, 1);
     SmallVector<unsigned> threadsPerWarp(rank, 1);
 
-    threadsPerWarp[rank - 1] = warpSize / 8;
-    // Skip this if the rank is 1
-    if (rank > 1)
+    // Special case for rank == 1
+    if (rank == 1) {
+      threadsPerWarp[0] = warpSize;
+    } else {
+      assert(rank > 1);
+      threadsPerWarp[rank - 1] = warpSize / 8;
       threadsPerWarp[rank - 2] = warpSize / threadsPerWarp[rank - 1];
+    }
 
     auto layoutCTA = triton::gpu::getCTALayout(srcEnc);
     auto order = triton::gpu::getOrder(srcEnc);
