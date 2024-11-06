@@ -9,6 +9,7 @@ def test_help():
     ret = subprocess.check_call(["proton", "-h"], stdout=subprocess.DEVNULL)
     assert ret == 0
 
+
 @pytest.mark.parametrize("mode", ["script", "python", "pytest"])
 def test_exec(mode, tmp_path: pathlib.Path):
     file_path = __file__
@@ -29,6 +30,8 @@ def test_exec(mode, tmp_path: pathlib.Path):
     kernels = data[0]["children"]
     assert len(kernels) == 2
     assert kernels[0]["frame"]["name"] == "test" or kernels[1]["frame"]["name"] == "test"
+
+
 def test_instrument_exec():
 
     test_stderr = '0     matmul_kernel     instrument.py:43:20     SHARED     STORE\n'\
@@ -39,4 +42,3 @@ def test_instrument_exec():
     out = subprocess.Popen(["proton", "--instrument=print-mem-spaces", "instrument.py"], stderr=subprocess.PIPE,
                            stdout=subprocess.PIPE)
     assert test_stderr == out.stderr.read().decode()
-
