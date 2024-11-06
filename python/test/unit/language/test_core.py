@@ -31,6 +31,7 @@ from triton._internal_testing import (
     is_hip,
     is_hip_cdna,
     is_hip_mi200,
+    is_hip_mi300,
     get_arch,
     torch_float8_dtypes,
     torch_dtypes,
@@ -3371,8 +3372,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
     if is_hip():
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
-        if (type_a not in ["e2m1", "e5m2"]) or (type_b not in ["e2m1", "e5m2", "bf16"]):
-            pytest.skip(f"scaled_dot({type_a}, {type_b}) not yet implemented for HIP")
+        if "e4m3" in (type_a, type_b) and not is_hip_mi300():
+            pytest.skip(f"scaled_dot({type_a}, {type_b}) only implemented for MI300")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
