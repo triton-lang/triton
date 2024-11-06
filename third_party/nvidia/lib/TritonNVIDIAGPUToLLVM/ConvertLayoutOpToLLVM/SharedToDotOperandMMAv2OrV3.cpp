@@ -537,6 +537,13 @@ Value composeValuesToDotOperandLayoutStruct(
   assert(32 >= bitwidth && "only support 32-bit or less");
   auto numElemsPerVec = 32 / bitwidth;
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
+  // FIXME: Fix the hopper path
+  // FIXME: [DOT LL]
+  // `kWidth` specifies the number of contiguous elements each thread will load.
+  // Loaded elements are packed into a vector of int32, which will then be
+  // unpacked into individual elements.
+  // `kIters` specifies the number of contiguous int32 elements each thread
+  // should load.
   auto kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
 
   std::vector<Value> elems;
