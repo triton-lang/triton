@@ -1,5 +1,6 @@
 #include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -156,7 +157,7 @@ struct MachineDescr {
   virtual FailureOr<uint32_t> getMmaExecCycle(llvm::ArrayRef<int64_t> dims) = 0;
   virtual uint32_t getMmaIssueCycle() = 0;
   virtual uint32_t getNumLdsDataPaths() = 0;
-  static std::unique_ptr<MachineDescr> get(std::string arch);
+  static std::unique_ptr<MachineDescr> get(StringRef arch);
 };
 
 template <typename Derived> struct MachineDescrImpl : MachineDescr {
@@ -181,33 +182,26 @@ template <typename Derived> struct MachineDescrImpl : MachineDescr {
       llvm::DenseMap<std::tuple<int64_t, int64_t, int64_t>, uint32_t>;
 };
 
-struct MI200Kind : public MachineDescrImpl<MI200Kind> {
+struct CDNA2Kind : public MachineDescrImpl<CDNA2Kind> {
   static const inline MmaTable mmaTable{{{32, 32, 8}, 64}, {{16, 16, 16}, 32}};
   static const inline uint32_t mmaIssueCycle{4};
   static const inline uint32_t numLdsDataPaths{2};
 };
 
-struct MI300Kind : public MachineDescrImpl<MI300Kind> {
+struct CDNA3Kind : public MachineDescrImpl<CDNA3Kind> {
   static const inline MmaTable mmaTable{{{32, 32, 8}, 32}, {{16, 16, 16}, 16}};
   static const inline uint32_t mmaIssueCycle{4};
   static const inline uint32_t numLdsDataPaths{2};
 };
 
-std::unique_ptr<MachineDescr> MachineDescr::get(std::string arch) {
-  llvm::AMDGPU::GPUKind archKind = llvm::AMDGPU::parseArchAMDGCN(arch);
-
-  switch (archKind) {
-  case llvm::AMDGPU::GPUKind::GK_GFX940: {
-    [[fallthrough]];
-  };
-  case llvm::AMDGPU::GPUKind::GK_GFX941: {
-    [[fallthrough]];
-  };
-  case llvm::AMDGPU::GPUKind::GK_GFX942: {
-    return std::make_unique<MachineDescrImpl<MI300Kind>>();
+std::unique_ptr<MachineDescr> MachineDescr::get(StringRef arch) {
+  AMD::ISAFamily family = AMD::deduceISAFamily(arch);
+  switch (family) {
+  case AMD::ISAFamily::CDNA3: {
+    return std::make_unique<MachineDescrImpl<CDNA3Kind>>();
   }
-  case llvm::AMDGPU::GPUKind::GK_GFX90A: {
-    return std::make_unique<MachineDescrImpl<MI200Kind>>();
+  case AMD::ISAFamily::CDNA2: {
+    return std::make_unique<MachineDescrImpl<CDNA2Kind>>();
   }
   default: {
     return nullptr;
@@ -219,7 +213,7 @@ std::unique_ptr<MachineDescr> MachineDescr::get(std::string arch) {
 struct InstructionSchedHintsRewriter
     : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
-  InstructionSchedHintsRewriter(MLIRContext *ctx, std::string arch,
+  InstructionSchedHintsRewriter(MLIRContext *ctx, StringRef arch,
                                 int32_t numStages, std::string variant)
       : OpRewritePattern(ctx), numStages(numStages) {
 
@@ -266,8 +260,10 @@ struct InstructionSchedHintsRewriter
       return;
     }
 
-    if (!machineDescr)
+    if (!machineDescr) {
       schedHint.emitError("unknown target architecture detected");
+      return;
+    }
 
     const uint32_t numDsReadInstA = schedHint.getNumDsReadsA().getValue();
     const uint32_t numDsReadInstB = schedHint.getNumDsReadsB().getValue();
@@ -280,18 +276,24 @@ struct InstructionSchedHintsRewriter
     const uint32_t numBufferLoadInstB =
         schedHint.getNumGlobalLoadsB().getValue();
 
-    if (numBufferLoadInstA == 0)
+    if (numBufferLoadInstA == 0) {
       schedHint.emitError("buffer load count for tile A must be initialized");
+      return;
+    }
 
-    if (numBufferLoadInstB == 0)
+    if (numBufferLoadInstB == 0) {
       schedHint.emitError("buffer load count for tile B must be initialized");
+      return;
+    }
 
     const uint32_t numMmaInst = schedHint.getNumMMAs().getValue();
 
     auto mmaType = cast<RankedTensorType>(schedHint.getNumMMAs().getType());
     auto maybeMmaExecCycle = machineDescr->getMmaExecCycle(mmaType.getShape());
-    if (llvm::failed(maybeMmaExecCycle))
+    if (llvm::failed(maybeMmaExecCycle)) {
       schedHint.emitError("unknown mma instruction type");
+      return;
+    }
     const uint32_t mmaExecCycle = maybeMmaExecCycle.value();
 
     auto dsReadsAType = cast<VectorType>(schedHint.getNumDsReadsA().getType());
@@ -481,12 +483,12 @@ struct TritonAMDGPULowerInstructionSchedHints
     : public triton::impl::TritonAMDGPULowerInstructionSchedHintsBase<
           TritonAMDGPULowerInstructionSchedHints> {
 
-  explicit TritonAMDGPULowerInstructionSchedHints(std::string arch,
+  explicit TritonAMDGPULowerInstructionSchedHints(StringRef arch,
                                                   int32_t numStages,
-                                                  std::string variant) {
-    this->arch = arch;
+                                                  StringRef variant) {
+    this->arch = std::move(arch.str());
     this->numStages = numStages;
-    this->variant = variant;
+    this->variant = std::move(variant.str());
   }
 
   void runOnOperation() override {
@@ -537,9 +539,9 @@ struct TritonAMDGPUInsertInstructionSchedHints
 
 namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPULowerInstructionSchedHintsPass(std::string arch,
+createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
                                                  int32_t numStages,
-                                                 std::string variant) {
+                                                 StringRef variant) {
   return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(
       arch, numStages, variant);
 }

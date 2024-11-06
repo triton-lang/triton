@@ -47,12 +47,12 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm) {
     pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass());
   });
-  m.def("lower_instruction_sched_hints", [](mlir::PassManager &pm,
-                                            std::string arch, int32_t numStages,
-                                            std::string variant) {
-    pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(arch, numStages,
-                                                                variant));
-  });
+  m.def("lower_instruction_sched_hints",
+        [](mlir::PassManager &pm, const std::string &arch, int32_t numStages,
+           const std::string &variant) {
+          pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
+              arch, numStages, variant));
+        });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
                                                     const std::string &arch) {
     pm.addPass(
