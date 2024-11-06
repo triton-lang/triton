@@ -474,7 +474,15 @@ layout = [0  4  8  12]
          [3  7  11 15]
 
 For the Threads Per Warp and Values Per Thread level, the linear id distribution is variant for each sub-class encoding.
+
+If the layout does not completely cover the tensor, we tile it until we cover the entire tensor.
+The order of this tiling is not defined explicitly in the language at the time of this writing.
+In most cases, it is the same as the order of the elements, but there are exceptions like
   }];
+// FIXME: See the sentence above and the comment in
+// https://github.com/triton-lang/triton/pull/5089#discussion_r1832243393
+// We need to add a getTilingOrder method to this class that returns the order used
+// to tile the tensor when the layout is not large enough.
 
   let methods = [
     // Interface for the meta information about the multiple thread hierarchy.

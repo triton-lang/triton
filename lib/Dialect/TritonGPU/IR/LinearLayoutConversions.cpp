@@ -292,9 +292,9 @@ LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
 
   MLIRContext *ctx = mma.getContext();
   SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
-  auto orderedDimNames = permuteDimNames(dimNames, getOrder(mma));
-  // By using `reverse(dimNames)` below, we set the order to be row-major
-  assert(getOrder(mma) == getMatrixOrder(rank, /*rowMajor=*/true));
+  // Mma is tiled in a row-major fashion
+  auto orderedDimNames =
+      permuteDimNames(dimNames, getMatrixOrder(rank, /*rowMajor=*/true));
 
   LinearLayout ctaLayout(
       {{S("register"), {{1, 0}, {0, 8}}},
@@ -327,7 +327,6 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   assert(n == 8 || n == 16 || n == 32 || n == 64 || n == 128 || n == 256);
   assert(k == 8 || k == 16 || k == 32);
 
-  // TODO Make the getOrder of Hopper explicit here via an assert
   MLIRContext *ctx = mma.getContext();
   LinearLayout ctaLayout(
       {{S("register"), {{1, 0}, {0, 8}}},
@@ -875,14 +874,17 @@ LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
   assert(mma.isAmpere());
 
   MLIRContext *ctx = mma.getContext();
-  // A and B have kMajor order
-  assert(getOrder(dot) ==
-         getOrderForDotOperand(dot.getOpIdx(), rank, /*kMajor=*/true));
+
+  // The A and B operands are tiled in a kMajor fashion
+  auto kMajorOrder =
+      getOrderForDotOperand(dot.getOpIdx(), rank, /*kMajor=*/true);
 
   auto kMajorDims =
-      permuteDimNames(standardOutDimNames(ctx, rank), getOrder(dot));
+      permuteDimNames(standardOutDimNames(ctx, rank), kMajorOrder);
+  // This agrees with the order of the elements, which means that we can share
+  // the code below for both A and B without having to perform any swaps
+  assert(getOrder(dot) == kMajorOrder);
 
-  // Implement A. For B transpose in the end
   std::vector<std::vector<int32_t>> registers;
   std::vector<std::vector<int32_t>> lanes;
   int32_t i = 1;

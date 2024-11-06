@@ -269,13 +269,13 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
   return {};
 }
 
+// Returns the order of the elements in a layout from the fastest running
+// dimension to the slowest
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     return llvm::to_vector(blockedLayout.getOrder());
   }
   if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
-    // Order doesn't really matter. We just have to be consistent when unpacking
-    // the output elements in the LLVM lowerings. We choose row-major
     auto distributedLayout = cast<DistributedEncodingTrait>(layout);
     auto rank = distributedLayout.getWarpsPerCTA().size();
     return getMatrixOrder(rank, /*rowMajor*/ true);
