@@ -87,7 +87,7 @@ bool LoadStoreMemSpace::runOnModule(Module &M) {
 
 PassPluginLibraryInfo getPassPluginInfo() {
   const auto callback = [](PassBuilder &PB) {
-    PB.registerOptimizerLastEPCallback([&](ModulePassManager &MPM, auto) {
+    PB.registerOptimizerLastEPCallback([&](ModulePassManager &MPM, auto, auto) {
       MPM.addPass(LoadStoreMemSpace());
       return true;
     });
