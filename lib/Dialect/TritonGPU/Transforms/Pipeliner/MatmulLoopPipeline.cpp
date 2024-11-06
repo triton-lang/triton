@@ -468,6 +468,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
     LoadInfo loadInfo;
     for (auto use : users) {
       if (use->hasTrait<OpTrait::DotLike>()) {
+        LDBG("set shared encoding with dot user: " << *use);
         loadInfo.usedByDot = true;
         if (loadIsMMAv3(&op)) {
           loadInfo.loadIsMMAV3 = true;
@@ -487,6 +488,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
       // If we still don't have a shared encoding, try a "generic" shared
       // encoding.
       if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
+        LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
             getSharedEncoding(&op, /*isMMAV3=*/loadInfo.loadIsMMAV3)
                 .value_or(nullptr);
@@ -494,10 +496,6 @@ assignMemoryLayouts(scf::ForOp &forOp,
           loadInfo.blockedEncoding =
               getBlockedEncoding(loadOp, axisInfoAnalysis);
       }
-
-      // If that still didn't work, bail on pipelining this load.
-      if (!loadInfo.sharedEncoding)
-        continue;
     }
     loadToInfo[&op] = loadInfo;
   }
@@ -867,6 +865,7 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
       createAsyncOps(forOp, loadToInfo, barriers, numStages);
+  LDBG("after lowering: " << forOp->getParentOfType<ModuleOp>());
 
   // Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.

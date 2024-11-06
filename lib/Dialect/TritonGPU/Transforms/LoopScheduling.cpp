@@ -457,13 +457,13 @@ public:
       tt::CoarseSchedule::Cluster afterPrologue = schedulePrologueAndEpilogue(
           forOp, coarseSchedule, rootUsers, loopNumStages);
 
-      scheduleDependencies(forOp, coarseSchedule, numStages);
+      scheduleDependencies(forOp, coarseSchedule, loopNumStages);
       LLVM_DEBUG({
         LDBG("Coarse schedule with dependencies:");
         coarseSchedule.dump();
       });
 
-      scheduleDistanceOneDependencies(forOp, coarseSchedule, numStages);
+      scheduleDistanceOneDependencies(forOp, coarseSchedule, loopNumStages);
       LLVM_DEBUG({
         LDBG("Coarse schedule with dist 1:");
         coarseSchedule.dump();
@@ -471,7 +471,7 @@ public:
 
       LDBG("afterPrologue = " << *afterPrologue);
       scheduleRemainingToLastStage(forOp, coarseSchedule, afterPrologue,
-                                   numStages);
+                                   loopNumStages);
       LLVM_DEBUG({
         LDBG("Final coarse schedule:");
         coarseSchedule.dump();
