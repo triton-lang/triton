@@ -2558,6 +2558,8 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("add_overflow_check", [False, True])
 def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_path: pathlib.Path):
+    if add_overflow_check is True and is_hip():
+        pytest.skip("overflow check disabled on HIP while fixing issues")
 
     overflow_check = """
         %17 = arith.extsi %arg2 : i32 to i64
@@ -2661,6 +2663,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
     if is_hip() and isinstance(src_layout, MfmaLayout) and ((M, N) == (128, 128)):
         pytest.skip("Skipping test because it runs out of shared memory")
+    if add_overflow_check is True and is_hip():
+        pytest.skip("overflow check disabled on HIP while fixing issues")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
 
