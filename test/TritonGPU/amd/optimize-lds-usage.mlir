@@ -119,6 +119,8 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
   }
 }
 
+// -----
+
 // Checks that optimization do not crash on 1d tensor
 // CHECK-LABEL: convert_1d
 // CHECK: triton_gpu.local_alloc
