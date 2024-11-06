@@ -2795,6 +2795,11 @@ inline static std::ostream& operator<<(std::ostream& out, const hipMemPoolProps&
       roctracer::hip_support::detail::operator<<(out, 0);
       std::operator<<(out, ", ");
     }
+    if (std::string("hipMemPoolProps::maxSize").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "maxSize=");
+      roctracer::hip_support::detail::operator<<(out, v.maxSize);
+      std::operator<<(out, ", ");
+    }
     if (std::string("hipMemPoolProps::location").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "location=");
       roctracer::hip_support::detail::operator<<(out, v.location);
@@ -3229,17 +3234,22 @@ inline static std::ostream& operator<<(std::ostream& out, const hipAccessPolicyW
   std::operator<<(out, '}');
   return out;
 }
-inline static std::ostream& operator<<(std::ostream& out, const hipKernelNodeAttrValue& v)
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchAttributeValue& v)
 {
   std::operator<<(out, '{');
   HIP_depth_max_cnt++;
   if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
-    if (std::string("hipKernelNodeAttrValue::cooperative").find(HIP_structs_regex) != std::string::npos)   {
+    if (std::string("hipLaunchAttributeValue::priority").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "priority=");
+      roctracer::hip_support::detail::operator<<(out, v.priority);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchAttributeValue::cooperative").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "cooperative=");
       roctracer::hip_support::detail::operator<<(out, v.cooperative);
       std::operator<<(out, ", ");
     }
-    if (std::string("hipKernelNodeAttrValue::accessPolicyWindow").find(HIP_structs_regex) != std::string::npos)   {
+    if (std::string("hipLaunchAttributeValue::accessPolicyWindow").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "accessPolicyWindow=");
       roctracer::hip_support::detail::operator<<(out, v.accessPolicyWindow);
     }
@@ -3281,6 +3291,35 @@ inline static std::ostream& operator<<(std::ostream& out, const HIP_MEMSET_NODE_
     if (std::string("HIP_MEMSET_NODE_PARAMS::dst").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "dst=");
       roctracer::hip_support::detail::operator<<(out, v.dst);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipGraphInstantiateParams& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipGraphInstantiateParams::uploadStream").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "uploadStream=");
+      roctracer::hip_support::detail::operator<<(out, v.uploadStream);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipGraphInstantiateParams::result_out").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "result_out=");
+      roctracer::hip_support::detail::operator<<(out, v.result_out);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipGraphInstantiateParams::flags").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hip_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipGraphInstantiateParams::errNode_out").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "errNode_out=");
+      roctracer::hip_support::detail::operator<<(out, v.errNode_out);
     }
   };
   HIP_depth_max_cnt--;
@@ -3507,6 +3546,35 @@ inline static std::ostream& operator<<(std::ostream& out, const hipGraphNodePara
     if (std::string("hipGraphNodeParams::type").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "type=");
       roctracer::hip_support::detail::operator<<(out, v.type);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipGraphEdgeData& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipGraphEdgeData::type").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "type=");
+      roctracer::hip_support::detail::operator<<(out, v.type);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipGraphEdgeData::to_port").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "to_port=");
+      roctracer::hip_support::detail::operator<<(out, v.to_port);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipGraphEdgeData::reserved").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved=");
+      roctracer::hip_support::detail::operator<<(out, 0);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipGraphEdgeData::from_port").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "from_port=");
+      roctracer::hip_support::detail::operator<<(out, v.from_port);
     }
   };
   HIP_depth_max_cnt--;
@@ -4352,13 +4420,19 @@ inline static std::ostream& operator<<(std::ostream& out, const hipAccessPolicyW
   return out;
 }
 
-inline static std::ostream& operator<<(std::ostream& out, const hipKernelNodeAttrValue& v)
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchAttributeValue& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;
 }
 
 inline static std::ostream& operator<<(std::ostream& out, const HIP_MEMSET_NODE_PARAMS& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipGraphInstantiateParams& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;
@@ -4419,6 +4493,12 @@ inline static std::ostream& operator<<(std::ostream& out, const hipMemFreeNodePa
 }
 
 inline static std::ostream& operator<<(std::ostream& out, const hipGraphNodeParams& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipGraphEdgeData& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;
