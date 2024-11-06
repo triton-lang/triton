@@ -218,7 +218,7 @@ class CodeGenerator(ast.NodeVisitor):
 
             module_name = getattr(v, "__module__", "")
             if module_name in module_map:
-                self.gscope[k] = getattr(module_map[module_name], k)
+                self.gscope[k] = getattr(module_map[module_name], v.__name__)
             else:
                 self.gscope[k] = v
 
