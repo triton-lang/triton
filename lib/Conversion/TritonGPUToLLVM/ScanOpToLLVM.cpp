@@ -187,7 +187,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
       }
       Value mask = icmp_sge(warpId, i32_val(i + 1));
       accumulator.acc =
-          accumulate(helper, rewriter, accumulator.acc, partialReduce, mask);
+          accumulate(helper, rewriter, accumulator.acc, partialReduce);
       for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
         accumulator.maskedAcc[j] =
             select(mask, accumulator.acc[j], accumulator.maskedAcc[j]);

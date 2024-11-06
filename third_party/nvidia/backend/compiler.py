@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, nvidia
+from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
 import functools
@@ -12,6 +13,7 @@ import signal
 import os
 import subprocess
 from pathlib import Path
+import sysconfig
 
 
 def min_dot_size(target: GPUTarget):
@@ -20,18 +22,19 @@ def min_dot_size(target: GPUTarget):
 
 @functools.lru_cache()
 def _path_to_binary(binary: str):
+    binary += sysconfig.get_config_var("EXE")
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
         os.path.join(os.path.dirname(__file__), "bin", binary),
     ]
 
-    for bin in paths:
-        if os.path.exists(bin) and os.path.isfile(bin):
-            result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
+    for path in paths:
+        if os.path.exists(path) and os.path.isfile(path):
+            result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                 if version is not None:
-                    return bin, version.group(1)
+                    return path, version.group(1)
     raise RuntimeError(f"Cannot find {binary}")
 
 
@@ -361,9 +364,9 @@ class CUDABackend(BaseBackend):
                 else:
                     error = f'`ptxas` failed with error code {e.returncode}'
 
-                raise RuntimeError(f'{error}\n'
-                                   f'`ptxas` stderr:\n{log}\n'
-                                   f'Repro command: {" ".join(ptxas_cmd)}\n')
+                raise PTXASError(f"{error}\n"
+                                 f"`ptxas` stderr:\n{log}\n"
+                                 f'Repro command: {" ".join(ptxas_cmd)}\n')
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()

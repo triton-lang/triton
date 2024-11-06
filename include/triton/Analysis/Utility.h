@@ -66,7 +66,7 @@ public:
   // The shape of the shared memory space needed for the reduction.
   SmallVector<unsigned> getScratchRepShape();
 
-  SmallVector<unsigned> getOrderWithAxisAtBeginning();
+  SmallVector<unsigned> getThreadOrderWithAxisAtBeginning();
 
   unsigned getScratchSizeInBytes();
 
@@ -213,10 +213,6 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 bool atomicNeedsSharedMemory(Value result);
 
 bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
-
-bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
-
-bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 // Return true if the src and dst layout match.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,

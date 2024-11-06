@@ -38,7 +38,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto sizePerThread = triton::gpu::getSizePerThread(layout);
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-    auto order = triton::gpu::getOrder(layout);
+    auto threadOrder = triton::gpu::getThreadOrder(layout);
     auto warpOrder = triton::gpu::getWarpOrder(layout);
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
     Value warpSize = i32_val(32);
@@ -47,7 +47,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
     SmallVector<Value> multiDimThreadId =
-        delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+        delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
     for (unsigned dim = 0; dim < rank; ++dim) {
       // if there is no data replication across threads on this dimension
       if (shape[dim] >= shapePerCTATile[dim])

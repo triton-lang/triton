@@ -115,56 +115,6 @@ private:
   }
 };
 
-struct ConvertLayoutOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
-public:
-  using ConvertOpToLLVMPattern<
-      triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value src = op.getSrc();
-    Value dst = op.getResult();
-    auto srcTy = cast<RankedTensorType>(src.getType());
-    auto dstTy = cast<RankedTensorType>(dst.getType());
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
-
-    if (isa<AMDMfmaEncodingAttr>(srcLayout) &&
-        isa<DotOperandEncodingAttr>(dstLayout)) {
-      return lowerMfmaToDotOperand(op, adaptor, rewriter);
-    }
-    return failure();
-  }
-
-private:
-  LogicalResult
-  lowerMfmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
-                        ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    RankedTensorType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
-    if (isMfmaToDotShortcut(srcTy, dstTy)) {
-      // vecSize is an number of sequential elements stored by one thread
-      // - For MFMA encoding (encoding of the result tensor of dot
-      // operation) it is 4
-      // - For MFMA operand encoding it is
-      // dotOperandEncoding::kWidth,
-      //   which is 4 in certain cases (e.g. fp16 and bfloat16 dtypes with kpack
-      //   = 1)
-      //
-      // For cases where these two values are equal MFMA and MFMA operand
-      // layouts are the same.
-      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      Value view =
-          packLLElements(loc, getTypeConverter(), vals, rewriter, dstTy);
-      rewriter.replaceOp(op, view);
-      return success();
-    }
-    return failure();
-  }
-};
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -172,7 +122,6 @@ void populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD

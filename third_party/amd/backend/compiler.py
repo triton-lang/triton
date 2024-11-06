@@ -127,7 +127,7 @@ class HIPBackend(BaseBackend):
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
             if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
-                supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
+                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
@@ -274,7 +274,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.instruction_sched_variant)
+        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.num_stages, options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)

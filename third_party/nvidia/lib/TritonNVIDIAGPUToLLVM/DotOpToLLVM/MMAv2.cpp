@@ -121,19 +121,15 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     }
 
     if (dot.getOpIdx() == 1) {
-      // there are kWidth * 2 elems packed as bf16x2
       int elemsInTile = dot.getKWidth();
-      // n0 and n1 are unrolled in the legacy path
-      // Unrolling n1 makes some sense, but unrolling n0 makes absolutely no
-      // sense IMO
+      // n0 is unrolled in the legacy path, which makes no sense
       n0 *= 2;
-      n1 *= 2;
       for (auto b = 0; b < batch; ++b)
-        for (auto j = 0; j < n1 / elemsInTile; ++j)
-          for (auto i = 0; i < n0; ++i)
-            for (auto k = 0; k < elemsInTile; ++k) {
-              vals[{b, i, elemsInTile * j + k}] = elems[offset++];
-            }
+        for (auto i = 0; i < n0; ++i)
+          for (auto j = 0; j < n1; ++j) {
+            vals[{b, i, 2 * j}] = elems[offset++];
+            vals[{b, i, 2 * j + 1}] = elems[offset++];
+          }
       return vals;
     }
   }
@@ -393,13 +389,15 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-                  .getMMAv2RepForOperand(aShapePerCTA, bitwidth,
-                                         dotOpA.getKWidth(), dotOpA.getOpIdx());
+  auto repA =
+      cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+          .getMMAv2OrV3RepForOperand(aShapePerCTA, bitwidth, dotOpA.getKWidth(),
+                                     dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-                  .getMMAv2RepForOperand(bShapePerCTA, bitwidth,
-                                         dotOpB.getKWidth(), dotOpB.getOpIdx());
+  auto repB =
+      cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+          .getMMAv2OrV3RepForOperand(bShapePerCTA, bitwidth, dotOpB.getKWidth(),
+                                     dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);

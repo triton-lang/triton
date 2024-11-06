@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -20,6 +21,7 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -72,8 +74,9 @@ struct ConvertTritonAMDGPUToLLVM
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect, NVVM::NVVMDialect,
-                    mlir::ROCDL::ROCDLDialect>();
+    registry
+        .insert<LLVM::LLVMDialect, NVVM::NVVMDialect, mlir::ROCDL::ROCDLDialect,
+                mlir::triton::amdgpu::TritonAMDGPUDialect>();
   }
 
   void runOnOperation() override {
@@ -193,8 +196,12 @@ struct ConvertTritonAMDGPUToLLVM
                       commonBenefit);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns,
                       commonBenefit);
-    mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, targetInfo,
-                                                patterns, commonBenefit);
+
+    mlir::triton::BackendCallbacks callbacks;
+    callbacks.localStoreOpConversion = storeOpConversionCallback;
+
+    mlir::triton::populateMemoryOpToLLVMPattern(
+        typeConverter, targetInfo, patterns, commonBenefit, callbacks);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, commonBenefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
@@ -207,6 +214,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(typeConverter,
                                                           patterns, AMDBenefit);
+    mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
+                                                        targetInfo, AMDBenefit);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -223,6 +232,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
+
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }

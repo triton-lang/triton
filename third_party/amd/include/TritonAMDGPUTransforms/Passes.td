@@ -13,7 +13,7 @@ def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir
 
   let constructor = "mlir::createTritonAMDGPUStreamPipelineV2Pass()";
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"numStages", "num_stages",

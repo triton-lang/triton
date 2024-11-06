@@ -1,4 +1,5 @@
 #include "mlir/IR/Dominance.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -14,8 +15,52 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUCOMBINETENSORSELECTANDIF
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-// Return true if the select could be merged into the If without breaking SSA
-// rules.
+/// The user of select maybe inside either the ThenRegion or ElseRegion of
+/// the scf.if. So, canonicalize user of select in scf.if first.
+static void canonicalizeSelectUsersInSCFIf(ModuleOp input) {
+  llvm::MapVector<std::pair<Value, Value>, SmallVector<Operation *>>
+      usersNeedreplaced;
+  input.walk([&](arith::SelectOp selectOp) {
+    auto *parentBlock = selectOp->getBlock();
+    Value condition = selectOp.getOperand(0);
+    Value trueVal = selectOp.getOperand(1);
+    Value falseVal = selectOp.getOperand(2);
+    Value resVal = selectOp.getResult();
+    for (auto *condUser : condition.getUsers()) {
+      if (!llvm::isa<scf::IfOp>(condUser))
+        continue;
+      scf::IfOp ifOp = llvm::cast<scf::IfOp>(condUser);
+      for (auto *resUser : resVal.getUsers()) {
+        if (ifOp->isProperAncestor(resUser)) {
+          if (ifOp.getThenRegion().findAncestorOpInRegion(*resUser) !=
+              nullptr) {
+            // The user is inside the ThenRegion of the scf.if.
+            usersNeedreplaced[std::make_pair(resVal, trueVal)].push_back(
+                resUser);
+          } else {
+            // The user is inside the ElseRegion of the scf.if.
+            usersNeedreplaced[std::make_pair(resVal, falseVal)].push_back(
+                resUser);
+          }
+        }
+      }
+    }
+  });
+
+  // Replace the operand of user.
+  for (auto [replacedSrcAndDst, users] :
+       llvm::make_early_inc_range(usersNeedreplaced)) {
+    Value srcVal = replacedSrcAndDst.first;
+    Value dstVal = replacedSrcAndDst.second;
+    for (Operation *user : llvm::make_early_inc_range(users)) {
+      srcVal.replaceUsesWithIf(
+          dstVal, [&](OpOperand &use) { return use.getOwner() == user; });
+    }
+  }
+}
+
+/// Return true if the select could be merged into the If without breaking SSA
+/// rules.
 static bool canMergeIntoIf(arith::SelectOp selectOp, scf::IfOp ifOp,
                            DominanceInfo &dom) {
   // If needs to be dominated by the select.
@@ -38,10 +83,11 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-    DominanceInfo dom(m);
+    canonicalizeSelectUsersInSCFIf(m);
 
     // Go over the arith.select ops, look if there is an if
     // with the same condition.
+    DominanceInfo dom(m);
     llvm::MapVector<scf::IfOp, SmallVector<arith::SelectOp>> selectToIf;
     m.walk([&](arith::SelectOp selectOp) {
       // Look if there is an if in the same block, with the same condition.

@@ -823,24 +823,104 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 // -----
 
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#mma = #triton_gpu.nvidia_mma<{versionMajor = 1, versionMinor = 3, warpsPerCTA = [2, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 16]}>
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#dot1 = #triton_gpu.dot_op<{opIdx=0, parent=#mma, kWidth=2}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: convert_layout_mmav2_dot_reg
+  tt.func @convert_layout_mmav2_dot_reg(%arg0: tensor<16x16xf16, #mma>) {
+    // CHECK-NOT: st.shared
+    // CHECK-NOT: llvm.load
+    %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf16, #mma> -> tensor<16x16xf16, #dot1>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#dot1 = #triton_gpu.dot_op<{opIdx=0, parent=#mma, kWidth=2}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: convert_layout_mmav2_dot_reg
+  tt.func @convert_layout_mmav2_dot_reg(%arg0: tensor<1x16xf16, #mma>) {
+    // CHECK-NOT: st.shared
+    // CHECK-NOT: llvm.load
+    %0 = triton_gpu.convert_layout %arg0 : tensor<1x16xf16, #mma> -> tensor<1x16xf16, #dot1>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#slice = #triton_gpu.slice<{dim = 0, parent = #mma}>
+
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.mlir.global external @global_smem
-  // CHECK-LABEL: convert_layout_mmav1_block
-  tt.func @convert_layout_mmav1_blocked(%arg0: tensor<32x64xf32, #mma>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<3>
-    // CHECK: nvvm.barrier0
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3>
-    %0 = triton_gpu.convert_layout %arg0 : tensor<32x64xf32, #mma> -> tensor<32x64xf32, #blocked>
+  // CHECK-LABEL: convert_layout_slice_mmav2_blocked_reg
+  tt.func @convert_layout_slice_mmav2_blocked_reg(%arg0: tensor<1xf16, #slice>) {
+    // CHECK-NOT: st.shared
+    // CHECK-NOT: llvm.load
+    %0 = triton_gpu.convert_layout %arg0 : tensor<1xf16, #slice> -> tensor<1xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#mma0 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
+#mma1 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: convert_layout_mmav3_mmav3_0
+  tt.func @convert_layout_mmav3_mmav3_0(%arg0: tensor<64x64xf16, #mma0>) {
+    // CHECK-NOT: st.shared
+    // CHECK-NOT: llvm.load
+    %0 = triton_gpu.convert_layout %arg0 : tensor<64x64xf16, #mma0> -> tensor<64x64xf16, #mma1>
+    tt.return
+  }
+}
+
+// -----
+
+#mma0 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
+#mma1 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: convert_layout_mmav3_mmav3_1
+  tt.func @convert_layout_mmav3_mmav3_1(%arg0: tensor<64x64xf16, #mma1>) {
+    // CHECK-NOT: st.shared
+    // CHECK-NOT: llvm.load
+    %0 = triton_gpu.convert_layout %arg0 : tensor<64x64xf16, #mma1> -> tensor<64x64xf16, #mma0>
+    tt.return
+  }
+}
+
+// -----
+
+#mma0 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
+#mma1 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: convert_layout_mmav3_mmav3_2
+  tt.func @convert_layout_mmav3_mmav3_2(%arg0: tensor<16x16xf16, #mma1>) {
+    // CHECK-NOT: st.shared
+    // CHECK-NOT: llvm.load
+    %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf16, #mma1> -> tensor<16x16xf16, #mma0>
+    tt.return
+  }
+}
+
+// -----
+
+#mma0 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
+#mma1 = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: convert_layout_mmav3_mmav3_3
+  tt.func @convert_layout_mmav3_mmav3_3(%arg0: tensor<1x64xf16, #mma1>) {
+    // CHECK-NOT: st.shared
+    // CHECK-NOT: llvm.load
+    %0 = triton_gpu.convert_layout %arg0 : tensor<1x64xf16, #mma1> -> tensor<1x64xf16, #mma0>
     tt.return
   }
 }
@@ -1015,31 +1095,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %30 = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x1x!tt.ptr<f32>, #blocked>
     %36 = tt.broadcast %30 : tensor<128x1x!tt.ptr<f32>, #blocked> -> tensor<128x256x!tt.ptr<f32>, #blocked>
     tt.store %36, %38 : tensor<128x256x!tt.ptr<f32>, #blocked>
-    tt.return
-  }
-}
-
-// -----
-
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared0 = #triton_gpu.shared<{vec = 4, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared1 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#mma = #triton_gpu.nvidia_mma<{versionMajor = 1, versionMinor = 3, warpsPerCTA = [2, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 16]}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  tt.func @matmul884_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
-  %a:!tt.memdesc<32x64xf16, #shared0, #triton_gpu.shared_memory>, %b:!tt.memdesc<64x64xf16, #shared1, #triton_gpu.shared_memory>) {
-    %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #mma>
-    // CHECK: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    %a_mat = triton_gpu.local_load %a : !tt.memdesc<32x64xf16, #shared0, #triton_gpu.shared_memory> -> tensor<32x64xf16, #dot_operand_a>
-    %b_mat = triton_gpu.local_load %b : !tt.memdesc<64x64xf16, #shared1, #triton_gpu.shared_memory> -> tensor<64x64xf16, #dot_operand_b>
-
-    %28 = tt.dot %a_mat, %b_mat, %cst : tensor<32x64xf16, #dot_operand_a> * tensor<64x64xf16, #dot_operand_b> -> tensor<32x64xf32, #mma>
-    %38 = triton_gpu.convert_layout %28 : tensor<32x64xf32, #mma> -> tensor<32x64xf32, #blocked>
-    %30 = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x1x!tt.ptr<f32>, #blocked>
-    %36 = tt.broadcast %30 : tensor<32x1x!tt.ptr<f32>, #blocked> -> tensor<32x64x!tt.ptr<f32>, #blocked>
-    tt.store %36, %38 : tensor<32x64x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
@@ -1560,21 +1615,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 // -----
 
-//  CHECK-LABEL: volta_dot
-#mma = #triton_gpu.nvidia_mma<{versionMajor = 1, versionMinor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 16]}>
-module attributes {"triton_gpu.target" = "cuda:70", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  tt.func @volta_dot() {
-    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
-    %a = arith.constant dense<0.000000e+00> : tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
-    %b = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>
-
-    %87 = tt.dot %a, %b, %cst : tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>> -> tensor<32x32xf32, #mma>
-    tt.return
-  }
-}
-
-// -----
-
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #shared0 = #triton_gpu.shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
@@ -1802,6 +1842,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // CHECK-DAG: llvm.mlir.global internal constant @assertFunc_0("unknown\00") {addr_space = 0 : i32}
 // CHECK-DAG: llvm.mlir.global internal constant @assertFile_0("inner_call\00") {addr_space = 0 : i32}
 // CHECK-DAG: llvm.mlir.global internal constant @assertMessage_0("assert text\00") {addr_space = 0 : i32}
+// CHECK: llvm.call @__assertfail
+// CHECK: nvvm.barrier0
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @add_kernel(%arg0: tensor<1xi1, #blocked>) {
     tt.assert %arg0, "assert text" : tensor<1xi1, #blocked> loc(#loc5)

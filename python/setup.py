@@ -429,12 +429,10 @@ class CMakeBuild(build_ext):
         cfg = get_build_type()
         build_args = ["--config", cfg]
 
+        cmake_args += [f"-DCMAKE_BUILD_TYPE={cfg}"]
         if platform.system() == "Windows":
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
-            if sys.maxsize > 2**32:
-                cmake_args += ["-A", "x64"]
         else:
-            cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
             build_args += ['-j' + max_jobs]
 
@@ -462,15 +460,16 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_CXX_FLAGS=-fsanitize=address",
             ]
 
-        if check_env_flag("TRITON_BUILD_WITH_CCACHE"):
-            cmake_args += [
-                "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-            ]
+        # environment variables we will pass through to cmake
+        passthrough_args = [
+            "TRITON_BUILD_PROTON",
+            "TRITON_BUILD_TUTORIALS",
+            "TRITON_BUILD_WITH_CCACHE",
+        ]
+        cmake_args += [f"-D{option}={os.getenv(option)}" for option in passthrough_args if option in os.environ]
 
         if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
             cmake_args += self.get_proton_cmake_args()
-        else:
-            cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
 
         if is_offline_build():
             # unit test builds fetch googletests from GitHub
@@ -499,8 +498,9 @@ def get_platform_dependent_src_path(subdir):
          if int(version_major) >= 12 and int(version_minor1) >= 5 else subdir)(*version.split('.')))
 
 
+exe_extension = sysconfig.get_config_var("EXE")
 download_and_copy(
-    name="ptxas", src_path="bin/ptxas", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
+    name="ptxas", src_path=f"bin/ptxas{exe_extension}", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["ptxas"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-nvcc-tools/{version}/download/{system}-{arch}/cuda-nvcc-tools-{version}-0.tar.bz2"
@@ -509,7 +509,7 @@ download_and_copy(
      (*version.split('.'))))
 download_and_copy(
     name="cuobjdump",
-    src_path="bin/cuobjdump",
+    src_path=f"bin/cuobjdump{exe_extension}",
     dst_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
@@ -518,7 +518,7 @@ download_and_copy(
 )
 download_and_copy(
     name="nvdisasm",
-    src_path="bin/nvdisasm",
+    src_path=f"bin/nvdisasm{exe_extension}",
     dst_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
@@ -695,7 +695,7 @@ def get_git_commit_hash(length=8):
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.0.0" + get_git_commit_hash() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="3.2.0" + get_git_commit_hash() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
