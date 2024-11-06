@@ -884,6 +884,13 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   options.annotateFn = [](Operation *op,
                           mlir::triton::PipeliningOption::PipelinerPart part,
                           unsigned iteration) {};
+
+  // Clean up the attributes.
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    op.removeAttr(mlir::triton::kLoopStageAttrName);
+    op.removeAttr(mlir::triton::kLoopClusterAttrName);
+  }
+
   // Insert a wait 0 after the loop
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);

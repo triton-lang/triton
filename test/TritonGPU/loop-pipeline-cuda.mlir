@@ -33,14 +33,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %14 = tt.broadcast %11 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
-    // CHECK: triton_gpu.async_wait {{.*}} {{{.*}}num = 1 : i32}
+    // CHECK: triton_gpu.async_wait {{.*}} {num = 1 : i32}
     // CHECK: scf.for
     // CHECK:   tt.dot
     // CHECK:   tt.dot
     // CHECK:   triton_gpu.async_copy_global_to_local
-    // CHECK:   triton_gpu.async_wait {{.*}} {{{.*}}num = 1 : i32}
+    // CHECK:   triton_gpu.async_wait {{.*}} {num = 1 : i32}
     // CHECK:   scf.yield
-    // CHECK: triton_gpu.async_wait {{{.*}}num = 0 : i32}
+    // CHECK: triton_gpu.async_wait {num = 0 : i32}
 
     %17:2 = scf.for %arg2 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg3 = %cst_1, %arg4 = %cst_2) -> (tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>)  : i32 {
       %18 = tt.load %16 : tensor<64x16x!tt.ptr<f16>, #blocked>

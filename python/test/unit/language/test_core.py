@@ -3698,9 +3698,9 @@ def test_dot_mulbroadcasted(in_dtype, device):
     # value is in rowmajor. But MMAv3 requires its second operand is in colmajor
     # because transpose is not supported for MMAv3 with float32 input.
     if capability[0] >= 9:
-        assert re.search(r"triton_gpu.async_wait %.* {.*num = 1 : i32}", h.asm["ttgir"]) is not None
+        assert re.search(r"triton_gpu.async_wait %.* {num = 1 : i32}", h.asm["ttgir"]) is not None
     else:
-        assert re.search(r"triton_gpu.async_wait %.* {.*num = 2 : i32}", h.asm["ttgir"]) is not None
+        assert re.search(r"triton_gpu.async_wait %.* {num = 2 : i32}", h.asm["ttgir"]) is not None
 
 
 @pytest.mark.interpreter
