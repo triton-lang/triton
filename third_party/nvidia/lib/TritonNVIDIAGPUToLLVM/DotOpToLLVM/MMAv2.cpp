@@ -62,7 +62,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type) {
   auto elems = unpackLLElements(loc, value, rewriter);
-  auto eltTy = type.getElementType();
+  auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
   ValueTableV2 vals;
   auto bitwidth = eltTy.getIntOrFloatBitWidth();

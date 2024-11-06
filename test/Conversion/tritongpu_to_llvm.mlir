@@ -804,6 +804,34 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // -----
 
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared0 = #triton_gpu.shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#mma0 = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma0, kWidth=4}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0, kWidth=4}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: convert_dot_fp8
+  tt.func @convert_dot_fp8(%A: tensor<16x16xf8E5M2, #blocked0>, %B: tensor<16x16xf8E5M2, #blocked0>) {
+    %AA = triton_gpu.local_alloc %A : (tensor<16x16xf8E5M2, #blocked0>) -> !tt.memdesc<16x16xf8E5M2, #shared0, #triton_gpu.shared_memory>
+    %BB = triton_gpu.local_alloc %B : (tensor<16x16xf8E5M2, #blocked0>) -> !tt.memdesc<16x16xf8E5M2, #shared0, #triton_gpu.shared_memory>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
+    %AA_DOT = triton_gpu.local_load %AA : !tt.memdesc<16x16xf8E5M2, #shared0, #triton_gpu.shared_memory> -> tensor<16x16xf8E5M2, #dot_operand_a>
+    %BB_DOT = triton_gpu.local_load %BB : !tt.memdesc<16x16xf8E5M2, #shared0, #triton_gpu.shared_memory> -> tensor<16x16xf8E5M2, #dot_operand_b>
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma0>
+
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32
+    %D = tt.dot %AA_DOT, %BB_DOT, %cst0 : tensor<16x16xf8E5M2, #dot_operand_a> * tensor<16x16xf8E5M2, #dot_operand_b> -> tensor<16x16xf32, #mma0>
+
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [2, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
