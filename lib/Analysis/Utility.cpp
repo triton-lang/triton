@@ -74,6 +74,9 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
     dimsRemoved.push_back(sliceLayout.getDim());
     srcLayout = sliceLayout.getParent();
   }
+  // In case of slice layout we want to know the axis dimension relative to the
+  // most inner parent layout. `adjustedAxis` is the matching axis dim in the
+  // parent layout.
   int adjustedAxis = axis;
   for (auto dim : dimsRemoved) {
     if (dim <= adjustedAxis)

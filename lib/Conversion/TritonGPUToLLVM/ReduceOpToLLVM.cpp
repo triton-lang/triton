@@ -219,8 +219,9 @@ private:
   }
 
   // For slice layout some ids are duplicated on multiple lanes, so we need to
-  // handle the delinearization of laneId in a special way. We need to general
-  // this part of the logic to work on any kind of linear layout uniformely.
+  // handle the delinearization of laneId in a special way. We need to
+  // generalize this part of the logic to work on any kind of linear layout
+  // uniformely.
   SmallVector<Value>
   getMultiDimLaneId(ReduceOpHelper &helper, Value &laneId, Location &loc,
                     ConversionPatternRewriter &rewriter) const {
