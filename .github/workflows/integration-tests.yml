@@ -280,7 +280,7 @@ jobs:
       - name: Run Proton tests
         run: |
           cd third_party/proton
-          python3 -m pytest -s test --ignore=test_cmd.py
+          python3 -m pytest -s test --ignore=test/test_cmd.py
           cd test
           python3 -m pytest test_cmd.py
           cd ..
@@ -429,7 +429,7 @@ jobs:
       - name: Run Proton tests
         run: |
           cd third_party/proton
-          python3 -m pytest -s test --ignore=test_cmd.py
+          python3 -m pytest -s test --ignore=test/test_cmd.py
           cd test
           python3 -m pytest test_cmd.py
           cd ..
