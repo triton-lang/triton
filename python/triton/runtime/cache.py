@@ -258,8 +258,9 @@ __cache_cls_nme = "DEFAULT"
 
 def _base64(key):
     # Assume key is a hex string.
-    encoded =  base64.urlsafe_b64encode(bytes.fromhex(key)).decode("utf-8").rstrip("=")
+    encoded = base64.urlsafe_b64encode(bytes.fromhex(key)).decode("utf-8").rstrip("=")
     return _ensure_safe_filename(encoded)
+
 
 def _ensure_safe_filename(encoded):
     """
@@ -269,6 +270,7 @@ def _ensure_safe_filename(encoded):
     if encoded.startswith('-'):
         return f"_{encoded}"
     return encoded
+
 
 def get_cache_manager(key) -> CacheManager:
     import os
