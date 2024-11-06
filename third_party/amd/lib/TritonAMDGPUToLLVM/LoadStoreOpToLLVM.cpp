@@ -41,11 +41,22 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
     auto threadOrder = triton::gpu::getThreadOrder(layout);
-    auto warpOrder = triton::gpu::getWarpOrder(layout);
+    SmallVector<unsigned> warpOrder(rank);
+    if (auto enc = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      warpOrder =
+          triton::gpu::getMatrixOrder(rank, /*rowMajor=*/enc.getOpIdx() == 1);
+    } else {
+      warpOrder = triton::gpu::getWarpOrder(layout);
+    }
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
     Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
+    // TODO: [DOT LL]
+    // The delinearize function is not entirely correct for certain layouts,
+    // such as wgmma. The correct approach is to convert a legacy layout to its
+    // corresponding linear layout and use the linear layout's
+    // getFreeVariableMasks to identify redundant elements.
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
     SmallVector<Value> multiDimThreadId =

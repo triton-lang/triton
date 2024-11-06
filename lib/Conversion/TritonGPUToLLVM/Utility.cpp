@@ -862,32 +862,49 @@ SmallVector<Value> getWrappedMultiDimOffset(
   return multiDimOffsetWrapped;
 }
 
-std::pair<Value, Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter,
-                                               Location loc, Value v) {
-  auto em0 = and_(v, i8_val(0x70));
-  auto em1 = and_(v, i8_val(0x7));
-  Value v0 = or_(shl(zext(i16_ty, em0), i16_val(2)),
-                 shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
-  Value v1 = or_(shl(zext(i16_ty, em1), i16_val(6)),
-                 shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
+SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
+                                          ArrayRef<Value> values) {
+  SmallVector<Value> results;
+  for (auto v : values) {
+    auto em0 = and_(v, i8_val(0x70));
+    auto em1 = and_(v, i8_val(0x7));
+    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(2)),
+                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
+    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(6)),
+                   shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
 
-  // Three cases:
-  // 1) x is normal and non-zero: Correct bias
-  v0 = select(icmp_ne(and_(em0, i8_val(0x60)), i8_val(0)),
-              add(v0, i16_val((127 - 1) << 7)), v0);
-  v1 = select(icmp_ne(and_(em1, i8_val(0x6)), i8_val(0)),
-              add(v1, i16_val((127 - 1) << 7)), v1);
+    // Three cases:
+    // 1) x is normal and non-zero: Correct bias
+    v0 = select(icmp_ne(and_(em0, i8_val(0x60)), i8_val(0)),
+                add(v0, i16_val((127 - 1) << 7)), v0);
+    v1 = select(icmp_ne(and_(em1, i8_val(0x6)), i8_val(0)),
+                add(v1, i16_val((127 - 1) << 7)), v1);
 
-  // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
-  // bf16
-  v0 = select(icmp_eq(em0, i8_val(0x10)),
-              or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0);
-  v1 = select(icmp_eq(em1, i8_val(0x1)),
-              or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1);
-  // 3) x is zero, nothing to do
-
-  return {v0, v1};
+    // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
+    // bf16
+    v0 = bitcast(select(icmp_eq(em0, i8_val(0x10)),
+                        or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0),
+                 bf16_ty);
+    v1 = bitcast(select(icmp_eq(em1, i8_val(0x1)),
+                        or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1),
+                 bf16_ty);
+    // 3) x is zero, nothing to do
+    results.push_back(v0);
+    results.push_back(v1);
+  }
+  return results;
 }
+
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v,
+                    Value scale) {
+  Value vBf16 = bitcast(v, bf16_ty);
+  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
+  Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
+  Value scaledBf16 = fmul(vBf16, scaleBf16);
+  // Account for NaN in the scale as per the mxfp specification.
+  return select(scaleIsNan, nanBf16, scaledBf16);
+};
 
 } // namespace LLVM
 } // namespace mlir

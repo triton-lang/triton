@@ -30,35 +30,6 @@ public:
       : ConvertOpToLLVMPattern<UpcastMXFPOp>(typeConverter, benefit),
         targetInfo(targetInfo) {}
 
-  llvm::SmallVector<Value> unpackFP4Elements(Location loc,
-                                             RewriterBase &rewriter,
-                                             ArrayRef<Value> vals) const {
-
-    auto fp4x8ToBf16x2 = [&loc, &rewriter](Value v) {
-      llvm::SmallVector<Value, 4> results(4);
-      for (int i = 0; i < 4; ++i) {
-        auto v_i = trunc(i8_ty, lshr(v, i32_val(8 * i)));
-        auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v_i);
-        // Swap as they come packed in big endian
-        results[i] = or_(zext(i32_ty, e0), shl(zext(i32_ty, e1), i32_val(16)));
-      }
-      return results;
-    };
-
-    // Split fp4x8 into 4 bf16x2
-    llvm::SmallVector<Value> ret;
-    ret.reserve(vals.size() * 4);
-    for (int i = 0; i < vals.size(); ++i) {
-      auto vs = fp4x8ToBf16x2(vals[i]);
-      assert(vs.size() == 4);
-      for (auto v : vs) {
-        ret.push_back(v);
-      }
-    }
-
-    return ret;
-  }
-
   LogicalResult
   matchAndRewrite(UpcastMXFPOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -78,27 +49,8 @@ public:
     Value warpId = udiv(tid, warpSize);
     Value laneId = urem(tid, warpSize);
 
-    if (fpType == ScaleDotElemType::E2M1) {
-      xVals = unpackFP4Elements(loc, rewriter, xVals);
-    }
-
-    auto scaleBf16x2 = [&loc, &rewriter](Value v, Value s) -> Value {
-      // Split bf16x2 into 2 bf16, scale each of them, and pack them back
-      // TODO Is it true that the bfloats are always packed as bf16x2?
-      auto bf16_0 = bitcast(trunc(i16_ty, v), bf16_ty);
-      auto bf16_1 = bitcast(trunc(i16_ty, lshr(v, i32_val(16))), bf16_ty);
-      auto scaleIsNan = icmp_eq(s, i8_val(0xff));
-      auto scaleBf16 = bitcast(shl(zext(i16_ty, s), i16_val(7)), bf16_ty);
-      auto scaledBf16_0 = fmul(bf16_0, scaleBf16);
-      auto scaledBf16_1 = fmul(bf16_1, scaleBf16);
-      auto i16_0 = bitcast(scaledBf16_0, i16_ty);
-      auto i16_1 = bitcast(scaledBf16_1, i16_ty);
-      auto packed =
-          or_(zext(i32_ty, i16_0), shl(zext(i32_ty, i16_1), i32_val(16)));
-      // Account for NaN in the scale as per the mxfp specification
-      auto packed_nan = select(scaleIsNan, i32_val(0x7fff7fff), packed);
-      return packed_nan;
-    };
+    if (fpType == ScaleDotElemType::E2M1)
+      xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
 
     // Each thread owns elements of 4 mxfp vectors so we need 4 scales
     // Letting c = tid / 4 * 2, we need the elements from threads c, c + 1, c +
@@ -116,8 +68,9 @@ public:
           targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[3]),
       };
 
-      for (int j = 0; j < 16; ++j) {
-        xVals[16 * i + j] = scaleBf16x2(xVals[16 * i + j], si[j / 4]);
+      for (int j = 0; j < 32; ++j) {
+        xVals[32 * i + j] =
+            LLVM::mxfpScaleBf16(rewriter, loc, xVals[32 * i + j], si[j / 8]);
       }
     }
 

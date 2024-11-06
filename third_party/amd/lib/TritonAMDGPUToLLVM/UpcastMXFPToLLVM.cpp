@@ -19,17 +19,6 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v,
-                    Value scale) {
-  Value vBf16 = bitcast(v, bf16_ty);
-  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
-  Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
-  Value scaledBf16 = fmul(vBf16, scaleBf16);
-  // Account for NaN in the scale as per the mxfp specification.
-  return select(scaleIsNan, nanBf16, scaledBf16);
-};
-
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
 private:
   const TargetInfoBase &targetInfo;
@@ -83,7 +72,7 @@ public:
     Value laneId = urem(tid, warpSize);
 
     if (isPacked)
-      xVals = unpackFP4Elements(loc, rewriter, xVals);
+      xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
 
     // Given that MFMA layout for the A tensor arranges thread in a column-major
     // manner, for the current tid, it's at row (tid % mDim). When we set up
@@ -110,7 +99,8 @@ public:
 
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
-          xVals[index] = mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 16]);
+          xVals[index] =
+              LLVM::mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 16]);
         }
       }
     } else {
@@ -132,7 +122,8 @@ public:
 
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
-          xVals[index] = mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 8]);
+          xVals[index] =
+              LLVM::mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 8]);
         }
       }
     }
@@ -141,20 +132,6 @@ public:
         packLLElements(loc, getTypeConverter(), xVals, rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
-  }
-
-private:
-  SmallVector<Value> unpackFP4Elements(Location loc, RewriterBase &rewriter,
-                                       ArrayRef<Value> packed) const {
-    // Split every fp4x2 into 2 bf16 values.
-    llvm::SmallVector<Value> unpacked;
-    unpacked.reserve(packed.size() * 2);
-    for (Value v : packed) {
-      auto [e0, e1] = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, v);
-      unpacked.push_back(e0);
-      unpacked.push_back(e1);
-    }
-    return unpacked;
   }
 };
 } // anonymous namespace
