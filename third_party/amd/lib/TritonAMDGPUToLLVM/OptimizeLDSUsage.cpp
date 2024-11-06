@@ -96,7 +96,15 @@ class OptimizeAMDLDSUsage
     auto dstEnc = dstType.getEncoding();
 
     auto ctx = srcEnc.getContext();
-    auto rank = srcType.getShape().size();
+    auto rank = srcType.getRank();
+
+    // TODO: This function currently crashes with rank == 1 and seems to assume
+    // rank == 2.
+    //       This should probably be generalized to other ranks, but for now
+    //       check the rank.
+    if (rank != 2)
+      return;
+
     unsigned numWarps = triton::gpu::getNumWarpsPerCTA(srcEnc);
     auto warpSize = triton::gpu::getWarpSize(srcEnc);
 
@@ -109,11 +117,14 @@ class OptimizeAMDLDSUsage
     // Create a list of temporary layouts
     SmallVector<unsigned> elemsPerThread(rank, 1);
     SmallVector<unsigned> threadsPerWarp(rank, 1);
+
     threadsPerWarp[rank - 1] = warpSize / 8;
     threadsPerWarp[rank - 2] = warpSize / threadsPerWarp[rank - 1];
+
     auto layoutCTA = triton::gpu::getCTALayout(srcEnc);
     auto order = triton::gpu::getOrder(srcEnc);
     SmallVector<unsigned> dummyWarpsPerCTA(rank, 1);
+
     auto baseFallbackLayout = triton::gpu::BlockedEncodingAttr::get(
         ctx, elemsPerThread, threadsPerWarp, dummyWarpsPerCTA, order,
         layoutCTA);
