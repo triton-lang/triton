@@ -75,7 +75,8 @@ enum {
   ELFABIVERSION_AMDGPU_HSA_V2 = 0,
   ELFABIVERSION_AMDGPU_HSA_V3 = 1,
   ELFABIVERSION_AMDGPU_HSA_V4 = 2,
-  ELFABIVERSION_AMDGPU_HSA_V5 = 3
+  ELFABIVERSION_AMDGPU_HSA_V5 = 3,
+  ELFABIVERSION_AMDGPU_HSA_V6 = 4,
 };
 
 // AMDGPU specific e_flags.
@@ -87,6 +88,7 @@ enum : unsigned {
   EF_AMDGPU_MACH_NONE = 0x000,
 
   // AMDGCN-based processors.
+  // clang-format off
   EF_AMDGPU_MACH_AMDGCN_GFX600        = 0x020,
   EF_AMDGPU_MACH_AMDGCN_GFX601        = 0x021,
   EF_AMDGPU_MACH_AMDGCN_GFX700        = 0x022,
@@ -127,13 +129,25 @@ enum : unsigned {
   EF_AMDGPU_MACH_AMDGCN_GFX1036       = 0x045,
   EF_AMDGPU_MACH_AMDGCN_GFX1101       = 0x046,
   EF_AMDGPU_MACH_AMDGCN_GFX1102       = 0x047,
+  EF_AMDGPU_MACH_AMDGCN_GFX1200       = 0x048,
+  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X49 = 0x049,
   EF_AMDGPU_MACH_AMDGCN_GFX1151       = 0x04a,
   EF_AMDGPU_MACH_AMDGCN_GFX941        = 0x04b,
   EF_AMDGPU_MACH_AMDGCN_GFX942        = 0x04c,
+  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X4D = 0x04d,
+  EF_AMDGPU_MACH_AMDGCN_GFX1201       = 0x04e,
+  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X4F = 0x04f,
+  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X50 = 0x050,
+  EF_AMDGPU_MACH_AMDGCN_GFX9_GENERIC      = 0x051,
+  EF_AMDGPU_MACH_AMDGCN_GFX10_1_GENERIC   = 0x052,
+  EF_AMDGPU_MACH_AMDGCN_GFX10_3_GENERIC   = 0x053,
+  EF_AMDGPU_MACH_AMDGCN_GFX11_GENERIC     = 0x054,
+  EF_AMDGPU_MACH_AMDGCN_RESERVED_0X55 = 0x055,
+  // clang-format on
 
   // First/last AMDGCN-based processors.
   EF_AMDGPU_MACH_AMDGCN_FIRST = EF_AMDGPU_MACH_AMDGCN_GFX600,
-  EF_AMDGPU_MACH_AMDGCN_LAST = EF_AMDGPU_MACH_AMDGCN_GFX942,
+  EF_AMDGPU_MACH_AMDGCN_LAST = EF_AMDGPU_MACH_AMDGCN_GFX11_GENERIC,
 
   // Indicates if the "xnack" target feature is enabled for all code contained
   // in the object.
@@ -159,8 +173,7 @@ enum : unsigned {
 
   // XNACK selection mask for EF_AMDGPU_FEATURE_XNACK_* values.
   //
-  // Only valid for ELFOSABI_AMDGPU_HSA and ELFABIVERSION_AMDGPU_HSA_V4,
-  // ELFABIVERSION_AMDGPU_HSA_V5.
+  // Only valid for ELFOSABI_AMDGPU_HSA and ELFABIVERSION_AMDGPU_HSA_V4.
   EF_AMDGPU_FEATURE_XNACK_V4 = 0x300,
   // XNACK is not supported.
   EF_AMDGPU_FEATURE_XNACK_UNSUPPORTED_V4 = 0x000,
@@ -173,8 +186,7 @@ enum : unsigned {
 
   // SRAMECC selection mask for EF_AMDGPU_FEATURE_SRAMECC_* values.
   //
-  // Only valid for ELFOSABI_AMDGPU_HSA and ELFABIVERSION_AMDGPU_HSA_V4,
-  // ELFABIVERSION_AMDGPU_HSA_V5.
+  // Only valid for ELFOSABI_AMDGPU_HSA and ELFABIVERSION_AMDGPU_HSA_V4.
   EF_AMDGPU_FEATURE_SRAMECC_V4 = 0xc00,
   // SRAMECC is not supported.
   EF_AMDGPU_FEATURE_SRAMECC_UNSUPPORTED_V4 = 0x000,
@@ -184,6 +196,21 @@ enum : unsigned {
   EF_AMDGPU_FEATURE_SRAMECC_OFF_V4 = 0x800,
   // SRAMECC is on.
   EF_AMDGPU_FEATURE_SRAMECC_ON_V4 = 0xc00,
+
+  // Generic target versioning. This is contained in the list byte of EFLAGS.
+  EF_AMDGPU_GENERIC_VERSION = 0xff000000,
+  EF_AMDGPU_GENERIC_VERSION_OFFSET = 24,
+  EF_AMDGPU_GENERIC_VERSION_MIN = 1,
+  EF_AMDGPU_GENERIC_VERSION_MAX = 0xff,
+};
+
+// ELF Relocation types for AMDGPU.
+enum : unsigned {
+  R_AMDGPU_ABS32_LO = 1,
+  R_AMDGPU_ABS32_HI = 2,
+  R_AMDGPU_ABS64 = 3,
+  R_AMDGPU_ABS32 = 6,
+  R_AMDGPU_RELATIVE64 = 13,
 };
 
 } // end namespace ELF
@@ -245,14 +272,14 @@ typedef enum {
 // ELF Symbol Flag Enumeration Values.
 #define STF_AMDGPU_HSA_CONST AMDGPU_HSA_SYMBOL_FLAG_CONST
 
-// AMD GPU Relocation Type Enumeration Values.
-#define R_AMDGPU_NONE         0
-#define R_AMDGPU_32_LOW       1
-#define R_AMDGPU_32_HIGH      2
-#define R_AMDGPU_64           3
-#define R_AMDGPU_INIT_SAMPLER 4
-#define R_AMDGPU_INIT_IMAGE   5
-#define R_AMDGPU_RELATIVE64   13
+// Legacy/V1 AMD GPU Relocation Type Enumeration Values.
+#define R_AMDGPU_V1_NONE         0
+#define R_AMDGPU_V1_32_LOW       1
+#define R_AMDGPU_V1_32_HIGH      2
+#define R_AMDGPU_V1_64           3
+#define R_AMDGPU_V1_INIT_SAMPLER 4
+#define R_AMDGPU_V1_INIT_IMAGE   5
+#define R_AMDGPU_V1_RELATIVE64   13
 
 // AMD GPU Note Type Enumeration Values.
 #define NT_AMD_HSA_CODE_OBJECT_VERSION 1

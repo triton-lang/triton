@@ -785,6 +785,236 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_images_1
   std::operator<<(out, '}');
   return out;
 }
+inline static std::ostream& operator<<(std::ostream& out, const perf_sample_hosttrap_v1_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("perf_sample_hosttrap_v1_t::correlation_id").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "correlation_id=");
+      roctracer::hsa_support::detail::operator<<(out, v.correlation_id);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::timestamp").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "timestamp=");
+      roctracer::hsa_support::detail::operator<<(out, v.timestamp);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::reserved1").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved1=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved1);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::reserved0").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved0=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved0);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::hw_id").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "hw_id=");
+      roctracer::hsa_support::detail::operator<<(out, v.hw_id);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::reserved").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::chiplet").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "chiplet=");
+      roctracer::hsa_support::detail::operator<<(out, v.chiplet);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::wave_in_wg").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "wave_in_wg=");
+      roctracer::hsa_support::detail::operator<<(out, v.wave_in_wg);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::workgroup_id_z").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "workgroup_id_z=");
+      roctracer::hsa_support::detail::operator<<(out, v.workgroup_id_z);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::workgroup_id_y").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "workgroup_id_y=");
+      roctracer::hsa_support::detail::operator<<(out, v.workgroup_id_y);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::workgroup_id_x").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "workgroup_id_x=");
+      roctracer::hsa_support::detail::operator<<(out, v.workgroup_id_x);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::exec_mask").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "exec_mask=");
+      roctracer::hsa_support::detail::operator<<(out, v.exec_mask);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_hosttrap_v1_t::pc").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "pc=");
+      roctracer::hsa_support::detail::operator<<(out, v.pc);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const perf_sample_snapshot_v1_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("perf_sample_snapshot_v1_t::correlation_id").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "correlation_id=");
+      roctracer::hsa_support::detail::operator<<(out, v.correlation_id);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::timestamp").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "timestamp=");
+      roctracer::hsa_support::detail::operator<<(out, v.timestamp);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::perf_snapshot_data2").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "perf_snapshot_data2=");
+      roctracer::hsa_support::detail::operator<<(out, v.perf_snapshot_data2);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::perf_snapshot_data1").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "perf_snapshot_data1=");
+      roctracer::hsa_support::detail::operator<<(out, v.perf_snapshot_data1);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::perf_snapshot_data").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "perf_snapshot_data=");
+      roctracer::hsa_support::detail::operator<<(out, v.perf_snapshot_data);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::hw_id").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "hw_id=");
+      roctracer::hsa_support::detail::operator<<(out, v.hw_id);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::reserved").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::chiplet").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "chiplet=");
+      roctracer::hsa_support::detail::operator<<(out, v.chiplet);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::wave_in_wg").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "wave_in_wg=");
+      roctracer::hsa_support::detail::operator<<(out, v.wave_in_wg);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::workgroup_id_z").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "workgroup_id_z=");
+      roctracer::hsa_support::detail::operator<<(out, v.workgroup_id_z);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::workgroup_id_y").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "workgroup_id_y=");
+      roctracer::hsa_support::detail::operator<<(out, v.workgroup_id_y);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::workgroup_id_x").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "workgroup_id_x=");
+      roctracer::hsa_support::detail::operator<<(out, v.workgroup_id_x);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::exec_mask").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "exec_mask=");
+      roctracer::hsa_support::detail::operator<<(out, v.exec_mask);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("perf_sample_snapshot_v1_t::pc").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "pc=");
+      roctracer::hsa_support::detail::operator<<(out, v.pc);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hsa_ven_amd_pcs_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_ven_amd_pcs_t::handle").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "handle=");
+      roctracer::hsa_support::detail::operator<<(out, v.handle);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hsa_ven_amd_pcs_configuration_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_ven_amd_pcs_configuration_t::flags").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hsa_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ven_amd_pcs_configuration_t::max_interval").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "max_interval=");
+      roctracer::hsa_support::detail::operator<<(out, v.max_interval);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ven_amd_pcs_configuration_t::min_interval").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "min_interval=");
+      roctracer::hsa_support::detail::operator<<(out, v.min_interval);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ven_amd_pcs_configuration_t::units").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "units=");
+      roctracer::hsa_support::detail::operator<<(out, v.units);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ven_amd_pcs_configuration_t::method").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "method=");
+      roctracer::hsa_support::detail::operator<<(out, v.method);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hsa_ven_amd_pc_sampling_1_00_pfn_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_ven_amd_pc_sampling_1_00_pfn_t::hsa_ven_amd_pcs_flush").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "hsa_ven_amd_pcs_flush=");
+      roctracer::hsa_support::detail::operator<<(out, v.hsa_ven_amd_pcs_flush);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ven_amd_pc_sampling_1_00_pfn_t::hsa_ven_amd_pcs_stop").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "hsa_ven_amd_pcs_stop=");
+      roctracer::hsa_support::detail::operator<<(out, v.hsa_ven_amd_pcs_stop);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ven_amd_pc_sampling_1_00_pfn_t::hsa_ven_amd_pcs_start").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "hsa_ven_amd_pcs_start=");
+      roctracer::hsa_support::detail::operator<<(out, v.hsa_ven_amd_pcs_start);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ven_amd_pc_sampling_1_00_pfn_t::hsa_ven_amd_pcs_destroy").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "hsa_ven_amd_pcs_destroy=");
+      roctracer::hsa_support::detail::operator<<(out, v.hsa_ven_amd_pcs_destroy);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
 inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_vendor_packet_header_t& v)
 {
   std::operator<<(out, '{');
@@ -1355,6 +1585,36 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_images_1
 }
 
 inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_images_1_pfn_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const perf_sample_hosttrap_v1_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const perf_sample_snapshot_v1_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hsa_ven_amd_pcs_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hsa_ven_amd_pcs_configuration_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hsa_ven_amd_pc_sampling_1_00_pfn_t& v)
 {
   roctracer::hsa_support::detail::operator<<(out, v);
   return out;
