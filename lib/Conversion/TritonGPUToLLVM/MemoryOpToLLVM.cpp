@@ -173,7 +173,6 @@ private:
     auto dstLayout = dstTy.getEncoding();
     assert((dstShape.size() <= 2 || isSupportedDotOpLayout(dstLayout)) &&
            "Unexpected rank of ConvertLayout(shared->distributed)");
-    auto inOrd = getOrder(srcSharedLayout);
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
@@ -183,7 +182,6 @@ private:
     SmallVector<Value> outVals = loadSharedToDistributed(
         dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
 
-    outVals = packI32s(outVals, dstTy, rewriter, loc, typeConverter);
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 

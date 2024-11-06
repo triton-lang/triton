@@ -189,7 +189,7 @@ class BlockedToMMA : public mlir::OpRewritePattern<DotOp> {
   // elements distribution to the order of higher precision primitives. As a
   // result, kwidth can be the bitwidth of the lower precision primitive.
   // Conversely, in the downcasting scenario, no reordering is performed,
-  // making it directory use the lower precision primitive.
+  // making it directly use the lower precision primitive.
   static int computeOrigBitWidth(Value x) {
     int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
     int origBitWidth = finalBitWidth;
