@@ -55,10 +55,10 @@ def get_full_tuning_space():
     split_k_range = [1, 2, 4, 5, 6, 8, 10, 12, 16, 18, 24]
     num_warps_range = [1, 2, 4, 8]
     group_m_range = [1, 2, 4, 8, 16, 32]
-    # For now we see better perf with num_stages=0 for all gemm configs we care
+    # For now we see better perf with num_stages=2 for all gemm configs we care
     # But keep this explicit so that we do not forget we may need to set it to
     # other values in the future
-    num_stage_range = [0]
+    num_stage_range = [2]
     waves_per_eu_range = [0]
     matrix_instr_nonkdim_range = [16, 32]
     kpack_range = [1, 2]
