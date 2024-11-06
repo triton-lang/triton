@@ -82,10 +82,15 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   auto kWidth = dot.getKWidth();
   auto largeK = bitwidth * kWidth > 32;
   if (largeK) {
+    // For layouts with a large K dimension, the original register layout needs
+    // to be divided into multiple MMAs, where each MMA has contiguous 32 bits
+    // along the K dimension per thread.
+    // Using kWidth = 8 and bitwidth = 2 as an example,
+    // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
+    // K dimension.
     llvm::SmallVector<unsigned> si;
 
     if (dot.getOpIdx() == 0) {
-      // For kWidth = 8, split the mma into 4 mmas with "stride 4" along K
       // Original register layout:
       //
       //   [0, 1, 2, 3, 4, 5, 6, 7], [16, 17, 18, 19, 20, 21, 22, 23, 23]
