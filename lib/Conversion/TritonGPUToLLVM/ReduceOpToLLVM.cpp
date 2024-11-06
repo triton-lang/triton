@@ -218,6 +218,46 @@ private:
     rewriter.replaceOp(op, results);
   }
 
+  // For slice layout some ids are duplicated on multiple lanes, so we need to
+  // handle the delinearization of laneId in a special way. We need to
+  // generalize this part of the logic to work on any kind of linear layout
+  // uniformely.
+  SmallVector<Value>
+  getMultiDimLaneId(ReduceOpHelper &helper, Value &laneId, Location &loc,
+                    ConversionPatternRewriter &rewriter) const {
+    auto srcLayout = helper.getSrcLayout();
+    auto srcShape = helper.getSrcShape();
+    auto order = triton::gpu::getThreadOrder(srcLayout);
+    SmallVector<Value> multiDimLaneId;
+
+    if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
+      auto parentLayout = sliceLayout.getParent();
+      SmallVector<unsigned> dims = {sliceLayout.getDim()};
+      while (auto parentSliceLayout =
+                 mlir::dyn_cast<SliceEncodingAttr>(parentLayout)) {
+        dims.push_back(parentSliceLayout.getDim());
+        parentLayout = parentSliceLayout.getParent();
+      }
+
+      auto parentThreadsPerWarps = triton::gpu::getThreadsPerWarp(parentLayout);
+      auto parentOrder = triton::gpu::getThreadOrder(parentLayout);
+      multiDimLaneId = delinearize(rewriter, loc, laneId, parentThreadsPerWarps,
+                                   parentOrder);
+      for (unsigned dim : llvm::reverse(dims)) {
+        multiDimLaneId.erase(multiDimLaneId.begin() + dim);
+      }
+    } else {
+      SmallVector<unsigned> threadsPerWarps =
+          triton::gpu::getThreadsPerWarp(srcLayout);
+      threadsPerWarps[helper.getAxis()] =
+          triton::gpu::getThreadsPerWarpWithUniqueData(
+              srcLayout, srcShape)[helper.getAxis()];
+      multiDimLaneId =
+          delinearize(rewriter, loc, laneId, threadsPerWarps, order);
+    }
+    return multiDimLaneId;
+  }
+
   SmallVector<Value>
   getMultiDimWarpId(ReduceOpHelper &helper, Value &warpId, Location &loc,
                     ConversionPatternRewriter &rewriter) const {
@@ -231,11 +271,20 @@ private:
     // a way to properly delinearize warpId in the slice case
     if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
       auto parentLayout = sliceLayout.getParent();
+      SmallVector<unsigned> dims = {sliceLayout.getDim()};
+      while (auto parentSliceLayout =
+                 mlir::dyn_cast<SliceEncodingAttr>(parentLayout)) {
+        dims.push_back(parentSliceLayout.getDim());
+        parentLayout = parentSliceLayout.getParent();
+      }
+
       auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(parentLayout);
       auto parentOrder = triton::gpu::getWarpOrder(parentLayout);
       multiDimWarpId =
           delinearize(rewriter, loc, warpId, parentWarpsPerCTA, parentOrder);
-      multiDimWarpId.erase(multiDimWarpId.begin() + sliceLayout.getDim());
+      for (unsigned dim : llvm::reverse(dims)) {
+        multiDimWarpId.erase(multiDimWarpId.begin() + dim);
+      }
     } else {
       SmallVector<unsigned> warpsPerCTA =
           triton::gpu::getWarpsPerCTA(srcLayout);
@@ -263,11 +312,8 @@ private:
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchRepShape();
 
-    auto threadsPerWarp =
-        triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
-    auto order = getThreadOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
-        delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+        getMultiDimLaneId(helper, laneId, loc, rewriter);
     Value laneIdAxis = multiDimLaneId[axis];
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);

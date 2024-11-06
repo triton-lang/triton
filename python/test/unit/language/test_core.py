@@ -6013,3 +6013,33 @@ def test_side_effectful_scan(device):
     Z = torch.zeros_like(X)
     sanitize_cumsum_kernel[(1, )](Z, X, BLOCK=BLOCK)
     torch.testing.assert_close(Z, X.cumsum(0).to(torch.int32))
+
+
+# stress test slice layout usages in reductions.
+@pytest.mark.parametrize("in_shape, perm, red_dims", [
+    ((4, 32, 32, 4, 2), [2, 1, 0, 3, 4], [3, 1, 0]),
+    ((8, 2, 32, 4, 16), [4, 0, 1, 3, 2], [0, 2, 0]),
+])
+def test_chained_reductions(in_shape, perm, red_dims, device):
+
+    @triton.jit
+    def kernel(In, Out,  #
+               dim_0: tl.constexpr, dim_1: tl.constexpr, dim_2: tl.constexpr, dim_3: tl.constexpr, dim_4: tl.constexpr,
+               perm_0: tl.constexpr, perm_1: tl.constexpr, perm_2: tl.constexpr, perm_3: tl.constexpr,
+               perm_4: tl.constexpr, red_dim_0: tl.constexpr, red_dim_1: tl.constexpr, red_dim_2: tl.constexpr):
+        idx = tl.arange(0, dim_0 * dim_1 * dim_2 * dim_3 * dim_4)
+        idx = idx.reshape(dim_0, dim_1, dim_2, dim_3, dim_4)
+        vals = tl.load(In + idx)
+        vals = tl.permute(vals, [perm_0, perm_1, perm_2, perm_3, perm_4])
+        r = tl.sum(tl.sum(tl.sum(vals, red_dim_0), red_dim_1), red_dim_2)
+        st_idx = tl.arange(0, r.shape[0] * r.shape[1]).reshape(r.shape)
+        tl.store(Out + st_idx, r)
+
+    input = torch.randint(0, 1000, in_shape, device=device, dtype=torch.int32)
+    temp = torch.permute(input, perm).contiguous()
+    ref = torch.sum(torch.sum(torch.sum(temp, dim=red_dims[0]), dim=red_dims[1]), dim=red_dims[2])
+    result = torch.empty_like(ref)
+    kernel[(1, )](input, result, input.shape[0], input.shape[1], input.shape[2], input.shape[3], input.shape[4],
+                  perm[0], perm[1], perm[2], perm[3], perm[4], red_dims[0], red_dims[1], red_dims[2])
+
+    assert torch.all(ref == result)
