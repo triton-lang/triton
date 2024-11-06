@@ -1741,3 +1741,21 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #loc3 = loc("inner_call":29:28)
 #loc4 = loc(callsite(#loc3 at #loc1))
 #loc5 = loc(callsite(#loc4 at #loc2))
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @log1pf_scan(%39: tensor<32x16xf32, #blocked>) attributes {noinline = false} {
+    // CHECK: log1pf_scan
+    // non-speculatable ops will introduce a cond_br; extern_elementwise with pure = true should be considered speculatable.
+    // CHECK-NOT: llvm.cond_br
+    %40 = "tt.scan"(%39) <{axis = 1 : i32, reverse = false}> ({
+    ^bb0(%arg5: f32, %arg6: f32):
+      %43 = tt.extern_elementwise %arg5 {libname = "", libpath = "", pure = true, symbol = "__nv_log1pf"} : (f32) -> f32
+      %44 = arith.addf %43, %43 : f32
+      tt.scan.return %44 : f32
+    }) : (tensor<32x16xf32, #blocked>) -> tensor<32x16xf32, #blocked>
+    tt.return
+  }
+}

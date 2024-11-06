@@ -776,7 +776,8 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
 def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
                                                             SameOperandsAndResultEncoding,
                                                             SameVariadicOperandSize,
-                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                                            ConditionallySpeculatable]> {
 
     let description = [{
         call an external function $symbol implemented in $libpath/$libname with $args
@@ -788,6 +789,12 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
     let results = (outs TT_Type:$result);
 
     let assemblyFormat = "operands attr-dict `:` functional-type(operands, $result)";
+
+    let extraClassDeclaration = [{
+      // Interface method for ConditionallySpeculatable.
+      Speculation::Speculatability getSpeculatability();
+    }];
+
 }
 
 //
