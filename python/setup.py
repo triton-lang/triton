@@ -729,7 +729,6 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
     ],
-    test_suite="tests",
     extras_require={
         "build": [
             "cmake>=3.20",
