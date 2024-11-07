@@ -9,6 +9,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getOrderForDotOperand;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
@@ -412,11 +413,20 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int repM = repA[1], repN = repB[2], repK = repA[2];
   int repBatch = repA[0];
 
+  // We can reuse the same iteration order in
+  // getValuesFromDotOperandLayoutStruct as both a and b are K-major
+  assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
+                                                       aShapePerCTA.size(),
+                                                       /*kMajor=*/true));
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
 
+  assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
+                                                       bShapePerCTA.size(),
+                                                       /*kMajor=*/true));
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
+
   auto fc = unpackLLElements(loc, loadedC, rewriter);
   auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int numCPackedElem = 4 / numMmaRets;

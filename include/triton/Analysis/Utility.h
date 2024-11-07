@@ -66,7 +66,7 @@ public:
   // The shape of the shared memory space needed for the reduction.
   SmallVector<unsigned> getScratchRepShape();
 
-  SmallVector<unsigned> getThreadOrderWithAxisAtBeginning();
+  SmallVector<unsigned> getOrderWithAxisAtBeginning();
 
   unsigned getScratchSizeInBytes();
 

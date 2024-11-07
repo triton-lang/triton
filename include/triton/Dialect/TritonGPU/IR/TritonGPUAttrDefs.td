@@ -474,9 +474,16 @@ layout = [0  4  8  12]
          [3  7  11 15]
 
 For the Threads Per Warp and Values Per Thread level, the linear id distribution is variant for each sub-class encoding.
+
+If the layout does not completely cover the tensor, we tile it until we cover the entire tensor.
+We call each individual tile "rep".
   }];
 
   let methods = [
+    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getRepOrder">,
+
     // Interface for the meta information about the multiple thread hierarchy.
     InterfaceMethod<"Get the shape of the CTAs per CGA.",
                     "SmallVector<unsigned>",
@@ -563,6 +570,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
+    SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
@@ -914,6 +922,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
       auto rank = getWarpsPerCTA().size();
@@ -1022,6 +1031,7 @@ Row |       warp 0                warp 2
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
 
     SmallVector<unsigned> getContigPerThread() {
@@ -1217,6 +1227,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     int getMMAv1Vec(int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
                                           int bitwidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     bool supportReduction() const {
       if (isAmpere() || isHopper()) {
