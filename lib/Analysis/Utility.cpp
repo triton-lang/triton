@@ -32,9 +32,9 @@ int getParentAxis(Attribute layout, int axis) {
   return axis;
 }
 
-SmallVector<unsigned> getParentThreadOrder(Attribute layout) {
+SmallVector<unsigned> getParentOrder(Attribute layout) {
   if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    return getParentThreadOrder(sliceEncoding.getParent());
+    return getParentOrder(sliceEncoding.getParent());
   }
   return getThreadOrder(layout);
 }
@@ -44,12 +44,12 @@ SmallVector<unsigned> getParentThreadOrder(Attribute layout) {
 // TODO(jlebar): Move this class into namespace triton.
 bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
   return getParentAxis(getSrcLayout(), axis) ==
-         getParentThreadOrder(getSrcLayout())[0];
+         getParentOrder(getSrcLayout())[0];
 }
 
-SmallVector<unsigned> ReduceOpHelper::getThreadOrderWithAxisAtBeginning() {
+SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
   auto srcLayout = getSrcLayout();
-  auto order = getThreadOrder(srcLayout);
+  auto order = getOrder(srcLayout);
   auto it = std::find(order.begin(), order.end(), axis);
   // delete the axis from order
   order.erase(it);
@@ -69,18 +69,25 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   }
 
   unsigned threadOffset = 1;
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto threadsPerWarp = getThreadsPerWarp(parentLayout);
-    threadOffset = threadsPerWarp[sliceLayout.getDim()];
-  } else {
-    auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-    auto order = getThreadOrder(srcLayout);
-    for (unsigned i = 0; i < order.size(); i++) {
-      if (order[i] == axis)
-        break;
-      threadOffset *= threadsPerWarp[order[i]];
-    }
+  SmallVector<int> dimsRemoved;
+  while (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
+    dimsRemoved.push_back(sliceLayout.getDim());
+    srcLayout = sliceLayout.getParent();
+  }
+  // In case of slice layout we want to know the axis dimension relative to the
+  // most inner parent layout. `adjustedAxis` is the matching axis dim in the
+  // parent layout.
+  int adjustedAxis = axis;
+  for (auto dim : dimsRemoved) {
+    if (dim <= adjustedAxis)
+      adjustedAxis++;
+  }
+  auto threadsPerWarp = getThreadsPerWarp(srcLayout);
+  auto order = getThreadOrder(srcLayout);
+  for (unsigned i = 0; i < order.size(); i++) {
+    if (order[i] == adjustedAxis)
+      break;
+    threadOffset *= threadsPerWarp[order[i]];
   }
   return threadOffset;
 }

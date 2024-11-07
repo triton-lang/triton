@@ -31,6 +31,7 @@ from triton._internal_testing import (
     is_hip,
     is_hip_cdna,
     is_hip_mi200,
+    is_hip_mi300,
     get_arch,
     torch_float8_dtypes,
     torch_dtypes,
@@ -145,6 +146,17 @@ class MmaLayout:
 
     def __str__(self):
         return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
+
+
+class DotOperandLayout:
+
+    def __init__(self, parent, op_idx, k_width):
+        self.parent = parent
+        self.op_idx = op_idx
+        self.k_width = k_width
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.dot_op<{{parent={self.parent}, opIdx={self.op_idx}, kWidth={self.k_width}}}>"
 
 
 class BlockedLayout:
@@ -3371,8 +3383,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
     if is_hip():
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
-        if (type_a not in ["e2m1", "e5m2"]) or (type_b not in ["e2m1", "e5m2", "bf16"]):
-            pytest.skip(f"scaled_dot({type_a}, {type_b}) not yet implemented for HIP")
+        if "e4m3" in (type_a, type_b) and not is_hip_mi300():
+            pytest.skip(f"scaled_dot({type_a}, {type_b}) only implemented for MI300")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
@@ -5220,6 +5232,14 @@ layouts = [
     BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
     MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]),
 ]
 
@@ -5257,6 +5277,10 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
     if str(src_layout) == str(dst_layout):
         pytest.skip()
+    if (isinstance(src_layout, DotOperandLayout)
+            and isinstance(interm_layout, SharedLayout)) or (isinstance(dst_layout, DotOperandLayout)
+                                                             and isinstance(interm_layout, SharedLayout)):
+        pytest.skip("DotOperandLayout <-> SharedLayout conversion is not completely supported")
     if is_hip():
         try:
             scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
@@ -6012,3 +6036,33 @@ def test_side_effectful_scan(device):
     Z = torch.zeros_like(X)
     sanitize_cumsum_kernel[(1, )](Z, X, BLOCK=BLOCK)
     torch.testing.assert_close(Z, X.cumsum(0).to(torch.int32))
+
+
+# stress test slice layout usages in reductions.
+@pytest.mark.parametrize("in_shape, perm, red_dims", [
+    ((4, 32, 32, 4, 2), [2, 1, 0, 3, 4], [3, 1, 0]),
+    ((8, 2, 32, 4, 16), [4, 0, 1, 3, 2], [0, 2, 0]),
+])
+def test_chained_reductions(in_shape, perm, red_dims, device):
+
+    @triton.jit
+    def kernel(In, Out,  #
+               dim_0: tl.constexpr, dim_1: tl.constexpr, dim_2: tl.constexpr, dim_3: tl.constexpr, dim_4: tl.constexpr,
+               perm_0: tl.constexpr, perm_1: tl.constexpr, perm_2: tl.constexpr, perm_3: tl.constexpr,
+               perm_4: tl.constexpr, red_dim_0: tl.constexpr, red_dim_1: tl.constexpr, red_dim_2: tl.constexpr):
+        idx = tl.arange(0, dim_0 * dim_1 * dim_2 * dim_3 * dim_4)
+        idx = idx.reshape(dim_0, dim_1, dim_2, dim_3, dim_4)
+        vals = tl.load(In + idx)
+        vals = tl.permute(vals, [perm_0, perm_1, perm_2, perm_3, perm_4])
+        r = tl.sum(tl.sum(tl.sum(vals, red_dim_0), red_dim_1), red_dim_2)
+        st_idx = tl.arange(0, r.shape[0] * r.shape[1]).reshape(r.shape)
+        tl.store(Out + st_idx, r)
+
+    input = torch.randint(0, 1000, in_shape, device=device, dtype=torch.int32)
+    temp = torch.permute(input, perm).contiguous()
+    ref = torch.sum(torch.sum(torch.sum(temp, dim=red_dims[0]), dim=red_dims[1]), dim=red_dims[2])
+    result = torch.empty_like(ref)
+    kernel[(1, )](input, result, input.shape[0], input.shape[1], input.shape[2], input.shape[3], input.shape[4],
+                  perm[0], perm[1], perm[2], perm[3], perm[4], red_dims[0], red_dims[1], red_dims[2])
+
+    assert torch.all(ref == result)

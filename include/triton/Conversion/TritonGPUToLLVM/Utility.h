@@ -10,6 +10,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -367,14 +368,67 @@ inline bool isKernel(FunctionOpInterface funcOp) {
 
 inline Value getStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 1);
+    return funcOp.getArgument(funcOp.getNumArguments() - 2);
   }
 
   auto mod = funcOp->getParentOfType<ModuleOp>();
   auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
   assert(globalBase);
   return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+}
+
+inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                                 FunctionOpInterface funcOp,
+                                 Value allocOffset = {}) {
+  // See NOTE: [Additional Function Arguments]
+  if (!isKernel(funcOp)) {
+    // Base for this function
+    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+    if (!allocOffset) {
+      return gmemBase;
+    }
+
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
+    return gep(ptrTy, i8_ty, gmemBase, allocOffset);
+  }
+
+  // Base for entire kernel
+  auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+
+  ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
+  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
+      "triton_gpu.global_scratch_memory_size");
+  if (!allocSizeAttr) {
+    return gmemBase;
+  }
+
+  Value gridIdx[3];
+  Value gridDim[2];
+  for (int k = 0; k < 3; ++k) {
+    gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
+  }
+  for (int k = 0; k < 2; ++k) {
+    gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
+  }
+
+  Value linearId = gridIdx[2];
+  for (int k = 0; k < 2; ++k) {
+    linearId = add(gridIdx[1 - k], mul(linearId, gridDim[1 - k]));
+  }
+
+  auto allocSize = allocSizeAttr.getValue().getZExtValue();
+
+  Value offset = mul(linearId, i32_val(allocSize));
+  if (allocOffset) {
+    offset = add(offset, allocOffset);
+  }
+
+  auto *ctx = rewriter.getContext();
+  auto res =
+      gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
+  return res;
 }
 
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
@@ -396,10 +450,14 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
 // MXFP utilities
 // -----------------------------------------------------------------------
 
-// Convert one int8, which contain, 2 packed mxfp4 values, into 2 bf16
-// standalone values and returns them as a pair for (high 4 bits, low 4 bits).
-std::pair<Value, Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter,
-                                               Location loc, Value v);
+// Convert each value, which is an int8 containing 2 packed mxfp4 values,
+// into 2 standalone bf16 values
+SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
+                                          ArrayRef<Value> values);
+
+// Scale a mxfp4 value by a given scale.
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale);
+
 } // namespace LLVM
 
 /* ------------------------------------ */
@@ -462,15 +520,16 @@ emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
   auto sizePerThread = blockedLayout.getSizePerThread();
   auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
   auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
-  auto order = blockedLayout.getOrder();
+  auto threadOrder = blockedLayout.getThreadOrder();
+  auto warpOrder = blockedLayout.getWarpOrder();
   auto shapePerCTA = triton::gpu::getShapePerCTA(blockedLayout, shape);
   unsigned rank = shape.size();
 
   // delinearize threadId to get the base index
   SmallVector<Value> multiDimWarpId =
-      delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+      delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
   SmallVector<Value> multiDimThreadId =
-      delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+      delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
 
   SmallVector<Value> multiDimBase(rank);
   for (unsigned k = 0; k < rank; ++k) {
@@ -1395,67 +1454,6 @@ inline Value getStructFromSharedMemoryObject(Location loc,
     llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
-}
-
-// For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
-// instructions to pack & unpack sub-word integers.  A workaround is to
-// store the results of tensors with dot operand encodings in i32 to
-// facilitate instructions such as `ldmatrix`.
-//
-// TODO: Confirm if the problem is still there.
-inline bool requiresI32Conversion(Type type) {
-  auto tensorTy = dyn_cast<RankedTensorType>(type);
-  if (!tensorTy)
-    return false;
-  auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!dotOpEnc)
-    return false;
-  auto parent = dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
-  if (!(parent && parent.getVersionMajor() < 3))
-    return false;
-  return true;
-}
-
-inline SmallVector<Value> packI32s(const SmallVector<Value> &inValues,
-                                   Type type, RewriterBase &rewriter,
-                                   Location loc,
-                                   const LLVMTypeConverter *typeConverter) {
-  if (!requiresI32Conversion(type))
-    return inValues;
-  Type eltTy =
-      typeConverter->convertType(cast<RankedTensorType>(type).getElementType());
-
-  SmallVector<Value> outValues;
-  int vecWidth = 32 / eltTy.getIntOrFloatBitWidth();
-  auto vecTy = vec_ty(eltTy, vecWidth);
-  for (int i = 0; i < inValues.size(); i += vecWidth) {
-    Value vec = undef(vecTy);
-    for (int j = 0; j < vecWidth; j++) {
-      vec = insert_element(vec, inValues[i + j], i32_val(j));
-    }
-    outValues.push_back(bitcast(vec, i32_ty));
-  }
-  return outValues;
-}
-
-inline SmallVector<Value> unpackI32s(const SmallVector<Value> &inValues,
-                                     Type type, RewriterBase &rewriter,
-                                     Location loc,
-                                     const LLVMTypeConverter *typeConverter) {
-  if (!requiresI32Conversion(type))
-    return inValues;
-  Type eltTy =
-      typeConverter->convertType(cast<RankedTensorType>(type).getElementType());
-
-  SmallVector<Value> outValues;
-  for (auto v : inValues) {
-    auto vecTy = vec_ty(eltTy, 32 / eltTy.getIntOrFloatBitWidth());
-    auto vec = bitcast(v, vecTy);
-    for (int i = 0; i < 32 / eltTy.getIntOrFloatBitWidth(); i++) {
-      outValues.push_back(extract_element(vec, i32_val(i)));
-    }
-  }
-  return outValues;
 }
 
 inline SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,

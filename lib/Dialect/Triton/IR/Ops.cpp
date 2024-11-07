@@ -836,6 +836,17 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
   return getPtr();
 }
 
+//-- MakeTensorDescOp --
+void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
+                             Value base, ValueRange shape, ValueRange strides,
+                             ArrayRef<int32_t> tensorShape) {
+  auto resultTy = getPointerType(builder.getI8Type());
+  assert(resultTy.getContext());
+
+  return build(builder, state, resultTy, base, shape, strides,
+               builder.getDenseI32ArrayAttr(tensorShape));
+}
+
 // The following ops, including `call`, `func`, and `return` are copied and
 // modified from
 // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/Func/IR/FuncOps.cpp
@@ -1037,6 +1048,12 @@ void ExternElementwiseOp::getEffects(
                        SideEffects::DefaultResource::get());
   effects.emplace_back(MemoryEffects::Read::get(),
                        SideEffects::DefaultResource::get());
+}
+
+Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
+  if (getPure())
+    return Speculation::Speculatable;
+  return Speculation::NotSpeculatable;
 }
 
 // -- ExperimentalTensormapCreateOp --
