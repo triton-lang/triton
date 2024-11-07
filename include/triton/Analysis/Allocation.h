@@ -18,8 +18,6 @@ namespace mlir {
 namespace triton {
 class AllocationAnalysis;
 
-constexpr inline unsigned invalidAllocationSize = -1;
-
 /// Callback to allow backends to specify target-specific scratch sizes for
 /// some operations.
 using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;

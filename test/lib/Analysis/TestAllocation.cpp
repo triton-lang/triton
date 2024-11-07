@@ -6,14 +6,10 @@ using namespace mlir;
 namespace {
 
 unsigned getScratchSize128(Operation *) { return 128; }
-unsigned getScratchSizeInvalid(Operation *) {
-  return mlir::triton::invalidAllocationSize;
-}
 
 enum class GetScratchSizeFunction {
   None,
   ValidConstant,
-  Invalid,
 };
 
 struct TestAllocationPass
@@ -36,8 +32,6 @@ struct TestAllocationPass
       return {getOperation()};
     case GetScratchSizeFunction::ValidConstant:
       return {getOperation(), getScratchSize128};
-    case GetScratchSizeFunction::Invalid:
-      return {getOperation(), getScratchSizeInvalid};
     }
     llvm_unreachable("Unhandled case");
   }
@@ -83,8 +77,7 @@ struct TestAllocationPass
       llvm::cl::values(
           clEnumValN(GetScratchSizeFunction::None, "None", "None (default)"),
           clEnumValN(GetScratchSizeFunction::ValidConstant, "ValidConstant",
-                     "ValidConstant"),
-          clEnumValN(GetScratchSizeFunction::Invalid, "Invalid", "Invalid"))};
+                     "ValidConstant"))};
 };
 
 } // namespace

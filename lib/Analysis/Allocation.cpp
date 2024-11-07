@@ -254,16 +254,6 @@ private:
       return;
     }
     unsigned bytes = scratchSizeGetter(op);
-    if (bytes == invalidAllocationSize) {
-      assert(
-          scratchSizeGetter
-                  .target<decltype(defaultAllocationAnalysisScratchSizeFn)>() !=
-              defaultAllocationAnalysisScratchSizeFn &&
-          "Default implementation should return a valid value");
-      bytes = defaultAllocationAnalysisScratchSizeFn(op);
-    }
-    assert(bytes != invalidAllocationSize &&
-           "Default implementation should return a valid value");
     maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                         scratchAlignment);
   }
