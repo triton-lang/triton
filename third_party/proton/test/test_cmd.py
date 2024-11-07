@@ -2,6 +2,7 @@ import pytest
 import subprocess
 import json
 import pathlib
+import numpy as np
 
 
 def test_help():
@@ -41,4 +42,13 @@ def test_instrument_exec():
 
     out = subprocess.Popen(["proton", "--instrument=print-mem-spaces", "instrument.py"], stderr=subprocess.PIPE,
                            stdout=subprocess.PIPE)
-    assert test_stderr == out.stderr.read().decode()
+    result = []
+    for line in str(out.stderr.read().decode()).split("\n"):
+        if line:
+            result.append(line.split())
+    assert [row[0] for row in result] == ['0', '1', '2', '3']
+    assert [row[1] for row in result] == ['matmul_kernel', 'matmul_kernel', 'matmul_kernel', 'matmul_kernel']
+    assert [row[2] for row in result
+            ] == ['instrument.py:32:20', 'instrument.py:33:20', 'instrument.py:32:20', 'instrument.py:33:20']
+    assert [row[3] for row in result] == ['SHARED', 'SHARED', 'SHARED', 'SHARED']
+    assert [row[4] for row in result] == ['STORE', 'STORE', 'LOAD', 'LOAD']

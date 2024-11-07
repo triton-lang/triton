@@ -51,7 +51,7 @@ def matmul(a, b, activation=""):
 
     # 1D launch kernel where each block gets its own program.
     def grid():
-        return (256 * 256, )
+        return (1, )
 
     matmul_kernel[grid](
         a, b, c,  #
@@ -59,8 +59,7 @@ def matmul(a, b, activation=""):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        128, 256, 64, 8
-    )
+        128, 256, 64, 8)
     return c
 
 
