@@ -34,10 +34,10 @@ def test_exec(mode, tmp_path: pathlib.Path):
 
 def test_instrument_exec():
 
-    test_stderr = '0     matmul_kernel     instrument.py:43:20     SHARED     STORE\n'\
-                  '1     matmul_kernel     instrument.py:44:20     SHARED     STORE\n'\
-                  '2     matmul_kernel     instrument.py:43:20     SHARED     LOAD\n'\
-                  '3     matmul_kernel     instrument.py:44:20     SHARED     LOAD\n'
+    test_stderr = '0     matmul_kernel     instrument.py:32:20     SHARED     STORE\n'\
+                  '1     matmul_kernel     instrument.py:33:20     SHARED     STORE\n'\
+                  '2     matmul_kernel     instrument.py:32:20     SHARED     LOAD\n'\
+                  '3     matmul_kernel     instrument.py:33:20     SHARED     LOAD\n'
 
     out = subprocess.Popen(["proton", "--instrument=print-mem-spaces", "instrument.py"], stderr=subprocess.PIPE,
                            stdout=subprocess.PIPE)

@@ -4,17 +4,6 @@ import triton
 import triton.language as tl
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({
-            "BLOCK_SIZE_M": 128,
-            "BLOCK_SIZE_N": 256,
-            "BLOCK_SIZE_K": 64,
-            "GROUP_SIZE_M": 8,
-        }, ),
-    ],
-    key=["M", "N", "K"],
-)
 @triton.jit
 def matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,  #
                   stride_bk, stride_bn,  #
@@ -70,10 +59,11 @@ def matmul(a, b, activation=""):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
+        128, 256, 64, 8
     )
     return c
 
 
-a = torch.randn((256, 256), device="cuda", dtype=torch.float16)
-b = torch.randn((256, 256), device="cuda", dtype=torch.float16)
+a = torch.randn((32, 32), device="cuda", dtype=torch.float16)
+b = torch.randn((32, 32), device="cuda", dtype=torch.float16)
 matmul(a, b)
