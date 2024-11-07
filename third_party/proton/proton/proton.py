@@ -101,7 +101,7 @@ def run_instrumentation(args, target_args):
 
 def main():
     args, target_args = parse_arguments()
-    if (args.instrument != None):
+    if args.instrument:
         run_instrumentation(args, target_args)
         return
     run_profiling(args, target_args)
