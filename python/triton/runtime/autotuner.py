@@ -44,36 +44,36 @@ class Autotuner(KernelInterface):
         self.arg_names = arg_names
 
         # Reset to zero or restore values
-        self.reset_idx = []
+        self.reset_to_zero = []
         if reset_to_zero is not None:
-            self.reset_idx = [arg_names.index(k) for k in reset_to_zero]
-        self.restore_idx = []
+            self.reset_to_zero = list(reset_to_zero)
+        self.restore_value = []
         if restore_value is not None:
-            self.restore_idx = [arg_names.index(k) for k in restore_value]
+            self.restore_value = list(restore_value)
 
         # Hook to reset or restore for required tensors
-        self.pre_hook = lambda args, reset_only=False: 0
-        self.post_hook = lambda args, exception: 0
+        self.pre_hook = lambda kwargs, reset_only=False: 0
+        self.post_hook = lambda kwargs, exception: 0
         if pre_hook:
             self.pre_hook = pre_hook
-        elif (len(self.reset_idx) > 0 or len(self.restore_idx) > 0):
+        elif (len(self.reset_to_zero) > 0 or len(self.restore_value) > 0):
 
-            def _pre_hook(args, reset_only=False):
-                for i in self.reset_idx:
-                    args[i].zero_()
+            def _pre_hook(kwargs, reset_only=False):
+                for name in self.reset_to_zero:
+                    kwargs[name].zero_()
                 if not reset_only:
-                    self.restore_copies = [args[i].clone() for i in self.restore_idx]
+                    self.restore_copies = {name: kwargs[name].clone() for name in self.restore_value}
 
             self.pre_hook = _pre_hook
 
         if post_hook:
             self.post_hook = post_hook
-        elif len(self.restore_idx) > 0:
+        elif len(self.restore_value) > 0:
 
-            def _post_hook(args, exception):
-                for i, j in enumerate(self.restore_idx):
-                    args[j].copy_(self.restore_copies[i])
-                self.restore_copies = []
+            def _post_hook(kwargs, exception):
+                for name in self.restore_value:
+                    kwargs[name].copy_(self.restore_copies[name])
+                self.restore_copies = {}
 
             self.post_hook = _post_hook
 
@@ -140,7 +140,7 @@ class Autotuner(KernelInterface):
         def kernel_call():
             if config.pre_hook:
                 config.pre_hook(full_nargs)
-            self.pre_hook(args)
+            self.pre_hook(full_nargs)
             try:
                 self.fn.run(
                     *args,
@@ -148,12 +148,12 @@ class Autotuner(KernelInterface):
                 )
             except Exception as e:
                 try:
-                    self.post_hook(args, exception=e)
+                    self.post_hook(full_nargs, exception=e)
                 finally:
                     # Throw exception raised by `self.fn.run`
                     raise
 
-            self.post_hook(args, exception=None)
+            self.post_hook(full_nargs, exception=None)
 
         try:
             return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
@@ -180,7 +180,8 @@ class Autotuner(KernelInterface):
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
-                self.pre_hook(args, reset_only=True)
+                full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
+                self.pre_hook(full_nargs, reset_only=True)
                 self.configs_timings = timings
             config = self.cache[key]
         else:
@@ -190,7 +191,8 @@ class Autotuner(KernelInterface):
             print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         if config.pre_hook is not None:
-            config.pre_hook({**self.nargs, **kwargs, **config.all_kwargs()})
+            full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
+            config.pre_hook(full_nargs)
         ret = self.fn.run(
             *args,
             **kwargs,
@@ -326,12 +328,12 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type restore_value: list[str]
     :param pre_hook: a function that will be called before the kernel is called.
         This overrides the default pre_hook used for 'reset_to_zero' and 'restore_value'.
-        'args': a list of arguments passed to the kernel.
+        'kwargs': a dict of all arguments passed to the kernel.
         'reset_only': a boolean indicating whether the pre_hook is called to reset the values only, without a corresponding post_hook.
     :type pre_hook: lambda args, reset_only
     :param post_hook: a function that will be called after the kernel is called.
         This overrides the default post_hook used for 'restore_value'.
-        'args': a list of arguments passed to the kernel.
+        'kwargs': a dict of all arguments passed to the kernel.
         'exception': the exception raised by the kernel in case of a compilation or runtime error.
     :type post_hook: lambda args, exception
     :param warmup: warmup time (in ms) to pass to benchmarking (deprecated).
