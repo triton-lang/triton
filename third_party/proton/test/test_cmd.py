@@ -52,7 +52,7 @@ def test_instrument_exec():
         if line:
             result.append(line.split())
 
-    if is_hip == True:
+    if is_hip():
         assert [row[0] for row in result] == ['0', '1', '2', '3']
         assert [row[1] for row in result] == ['matmul_kernel', 'matmul_kernel', 'matmul_kernel', 'matmul_kernel']
         assert [row[2] for row in result
