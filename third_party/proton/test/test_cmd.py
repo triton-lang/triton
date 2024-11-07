@@ -38,8 +38,12 @@ def test_exec(mode, tmp_path: pathlib.Path):
 
 def test_instrument_exec():
 
-    out = subprocess.Popen(["proton", "--instrument=print-mem-spaces", "instrument.py"], stderr=subprocess.PIPE,
-                           stdout=subprocess.PIPE)
+    try:
+        out = subprocess.Popen(["proton", "--instrument=print-mem-spaces", "instrument.py"], stderr=subprocess.PIPE,
+                               stdout=subprocess.PIPE)
+    except Exception as e:
+        print(f"An error occurred while executing proton: {e}")
+        
     result = []
     for line in str(out.stderr.read().decode()).split("\n"):
         if line:
