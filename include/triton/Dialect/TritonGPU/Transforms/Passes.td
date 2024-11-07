@@ -23,6 +23,20 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   ];
 }
 
+def TritonGPUPipelineScheduler : Pass<"triiton-gpu-pipeline-scheduler", "mlir::ModuleOp"> {
+  let summary = "pipeline scheduler";
+
+  let description = [{
+    This pass builds the schedule for the software pipelined loops and encodes the
+    schedule in the ops attributes.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
   let summary = "3xTF32 trick";
 
