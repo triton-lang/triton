@@ -60,9 +60,10 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["asanrtl", "ocml", "ockl"]
+        libs = ["ocml", "ockl", "asanrtl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
+            #print(str(default_libdir / f'{lib}.bc'))
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
@@ -312,9 +313,17 @@ class HIPBackend(BaseBackend):
         # from memory.
         amd.set_all_fn_arg_inreg(fns[0])
 
-        if options.extern_libs:
-            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
-            llvm.link_extern_libs(llvm_mod, paths)
+        default_libdir = Path(__file__).parent / 'lib'
+        paths = [str(default_libdir / 'asanrtl.bc'),
+                 str(default_libdir / "ocml.bc"), 
+                 str(default_libdir / "ockl.bc")]
+        llvm.link_extern_libs(llvm_mod, paths)
+#        options.extern_libs += str(default_libdir / 'asanrtl.bc')
+#        if options.extern_libs:
+##            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
+#            paths = [path for (name, path) in options.extern_libs]
+#            print(paths)
+#            llvm.link_extern_libs(llvm_mod, paths)
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
