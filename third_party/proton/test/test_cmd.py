@@ -47,8 +47,7 @@ def test_instrument_exec():
     if is_hip:
         assert [row[0] for row in result] == ['0', '1', '2', '3']
         assert [row[1] for row in result] == ['matmul_kernel', 'matmul_kernel', 'matmul_kernel', 'matmul_kernel']
-        assert [row[2] for row in result] ==
-                     ['instrument.py:32:20', 'instrument.py:33:20', 'instrument.py:32:20', 'instrument.py:33:20']
+        assert [row[2] for row in result] == ['instrument.py:32:20', 'instrument.py:33:20', 'instrument.py:32:20', 'instrument.py:33:20']
         assert [row[3] for row in result] == ['SHARED', 'SHARED', 'SHARED', 'SHARED']
         assert [row[4] for row in result] == ['STORE', 'STORE', 'LOAD', 'LOAD']
     else:
