@@ -52,7 +52,32 @@ proton.activate(session_id)
 # Write out the profile data and finalize the profiler
 proton.finalize()
 ```
+### Advanced features
+In addition to profiling, Proton also incorporates MLIR/LLVM based compiler based instrumentation passes to get Triton level analysis 
+and optimization information. This feature is under active development and the list of available passes is expected to grow.
 
+#### Available passes
+print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
+
+Example usage with the Proton matmul tutorial:
+```bash
+$ proton --instrument=print-mem-spaces matmul.py
+0     matmul_kernel     matmul.py:180:20     SHARED     STORE
+1     matmul_kernel     matmul.py:181:20     SHARED     STORE
+2     matmul_kernel     matmul.py:180:20     SHARED     LOAD
+3     matmul_kernel     matmul.py:181:20     SHARED     LOAD
+
+matmul-performance:
+        M       N       K     cuBLAS     Triton
+0   256.0   256.0   256.0   2.231013   1.691252
+1   384.0   384.0   384.0   5.947805   4.626071
+2   512.0   512.0   512.0  12.336188   8.924051
+3   640.0   640.0   640.0  26.006348  14.628980
+4   768.0   768.0   768.0  36.065672  20.972006
+5   896.0   896.0   896.0  51.974214  29.480457
+6  1024.0  1024.0  1024.0  63.913206  27.560463
+7  1152.0  1152.0  1152.0  52.790876  34.125533
+```
 ### Scope
 
 Unlike the *python* context that provide users with files, functions, and lines where the GPU kernels are invoked, the *shadow* context provides users with the annotated regions in the code. The following example demonstrates how to use the *shadow* context.
@@ -128,6 +153,7 @@ The following examples demonstrate how to use Proton command-line.
 proton [options] script.py [script_args] [script_options]
 proton [options] pytest [pytest_args] [script_options]
 python -m triton.profiler.proton [options] script.py [script_args] [script_options]
+proton --instrument=[instrumentation pass] script.py
 ```
 
 When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported. Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.

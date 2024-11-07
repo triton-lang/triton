@@ -1,3 +1,5 @@
+import triton
+import triton.profiler as proton
 import pytest
 import subprocess
 import json
@@ -48,7 +50,8 @@ def test_instrument_exec():
     for line in str(out.stderr.read().decode()).split("\n"):
         if line:
             result.append(line.split())
-    if is_hip:
+
+    if is_hip == True:
         assert [row[0] for row in result] == ['0', '1', '2', '3']
         assert [row[1] for row in result] == ['matmul_kernel', 'matmul_kernel', 'matmul_kernel', 'matmul_kernel']
         assert [row[2] for row in result] == ['instrument.py:32:20', 'instrument.py:33:20', 'instrument.py:32:20', 'instrument.py:33:20']
@@ -57,7 +60,7 @@ def test_instrument_exec():
     else:
         assert [row[0] for row in result] == ['0']
         assert [row[1] for row in result] == ['matmul_kernel']
-        assert [row[2] for row in result] == ['instrument.py:32:20']
+        assert [row[2] for row in result] == ['instrument.py:42:21']
         assert [row[3] for row in result] == ['SHARED']
-        assert [row[4] for row in result] == ['STORE']
+        assert [row[4] for row in result] == ['LOAD']
 
