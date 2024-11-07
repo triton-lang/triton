@@ -18,6 +18,12 @@ namespace mlir {
 namespace triton {
 class AllocationAnalysis;
 
+constexpr inline unsigned invalidAllocationSize = -1;
+
+/// Callback to allow backends to specify target-specific scratch sizes for some
+/// operations.
+using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
+
 // To convert a tensor from one layout to another, we need to allocate a
 // temporary buffer (i.e., scratch buffer) in shared memory. The conversion may
 // require multiple iterations, with each iteration involving multiple
@@ -102,7 +108,8 @@ public:
   explicit Allocation(Operation *operation) : operation(operation) {}
 
   /// Runs allocation analysis on the given top-level operation.
-  void run(FuncAllocMapT &funcAllocMap);
+  void run(FuncAllocMapT &funcAllocMap,
+           triton::AllocationAnalysisScratchSizeFn scratchSizeGetter);
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
@@ -250,7 +257,9 @@ class ModuleAllocation : public CallGraph<Allocation> {
 public:
   using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
 
-  explicit ModuleAllocation(ModuleOp moduleOp)
+  ModuleAllocation(
+      ModuleOp moduleOp,
+      triton::AllocationAnalysisScratchSizeFn scratchSizeGetter = nullptr)
       : CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
@@ -259,7 +268,7 @@ public:
         [&](FunctionOpInterface funcOp) {
           auto [iter, inserted] = funcMap.try_emplace(funcOp, funcOp);
           if (inserted)
-            iter->second.run(funcMap);
+            iter->second.run(funcMap, scratchSizeGetter);
         });
   }
 

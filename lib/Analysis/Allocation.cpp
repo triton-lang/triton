@@ -131,9 +131,10 @@ class AllocationAnalysis {
 public:
   AllocationAnalysis(Operation *operation,
                      Allocation::FuncAllocMapT *funcAllocMap,
-                     Allocation *allocation)
+                     Allocation *allocation,
+                     AllocationAnalysisScratchSizeFn scratchSizeGetter)
       : operation(operation), funcAllocMap(funcAllocMap),
-        allocation(allocation) {
+        allocation(allocation), scratchSizeGetter(scratchSizeGetter) {
     run();
   }
 
@@ -277,6 +278,15 @@ private:
     // Get the alloc values
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
       getExplicitValueSize(op);
+      if (scratchSizeGetter) {
+        constexpr size_t scratchAlignment = 128;
+        unsigned bytes = scratchSizeGetter(op);
+        if (bytes != invalidAllocationSize) {
+          maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
+                                                              scratchAlignment);
+          return;
+        }
+      }
       getScratchValueSize(op);
     });
     // Get the alias values
@@ -556,12 +566,16 @@ private:
   Allocation::FuncAllocMapT *funcAllocMap;
   Allocation *allocation;
   BufferRangeMapT bufferRange;
+  AllocationAnalysisScratchSizeFn scratchSizeGetter;
 };
 
 } // namespace triton
 
-void Allocation::run(FuncAllocMapT &funcAllocMap) {
-  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+void Allocation::run(
+    FuncAllocMapT &funcAllocMap,
+    triton::AllocationAnalysisScratchSizeFn scratchSizeGetter) {
+  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this,
+                             scratchSizeGetter);
 }
 
 std::map<Operation *, SmallVector<Allocation::BufferId>>
