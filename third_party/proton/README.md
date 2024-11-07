@@ -53,7 +53,7 @@ proton.activate(session_id)
 proton.finalize()
 ```
 ### Advanced features
-In addition to profiling, Proton also incorporates MLIR/LLVM based compiler based instrumentation passes to get Triton level analysis 
+In addition to profiling, Proton also incorporates MLIR/LLVM based compiler based instrumentation passes to get Triton level analysis
 and optimization information. This feature is under active development and the list of available passes is expected to grow.
 
 #### Available passes

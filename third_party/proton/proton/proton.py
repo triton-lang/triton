@@ -66,11 +66,7 @@ def execute_as_main(script, args, instrumentation_pass=None):
         sys.argv = original_argv
 
 
-def run_profiling(args, target_args):
-    backend = args.backend if args.backend else _select_backend()
-
-    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
-
+def do_setup_and_execute(target_args, instrumentation_pass=None):
     # Set the command line mode to avoid any `start` calls in the script.
     set_command_line()
 
@@ -80,24 +76,22 @@ def run_profiling(args, target_args):
         import pytest
         pytest.main(script_args)
     else:
-        execute_as_main(script, script_args)
+        execute_as_main(script, script_args, instrumentation_pass)
+
+
+def run_profiling(args, target_args):
+    backend = args.backend if args.backend else _select_backend()
+
+    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
+
+    do_setup_and_execute(target_args)
 
     finalize()
 
 
 def run_instrumentation(args, target_args):
     backend = args.backend if args.backend else _select_backend()
-
-    set_command_line()
-
-    script = target_args[0]
-    script_args = target_args[1:] if len(target_args) > 1 else []
-    instrumentation_pass = args.instrument
-    if is_pytest(script):
-        import pytest
-        pytest.main(script_args)
-    else:
-        execute_as_main(script, script_args, instrumentation_pass)
+    do_setup_and_execute(target_args, args.instrument)
 
 
 def main():
