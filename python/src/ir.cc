@@ -1625,6 +1625,14 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &ptr,
               std::vector<Value> &offsets) -> Value {
              return self.create<AdvanceOp>(ptr.getType(), ptr, offsets);
+           })
+      // Make a tensor descriptor
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
+              std::vector<Value> &strides,
+              std::vector<int32_t> &tensorShape) -> Value {
+             return self.create<MakeTensorDescOp>(base, shape, strides,
+                                                  tensorShape);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())

@@ -1806,3 +1806,34 @@ def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
 
     # Advanced block pointer type is the same as before
     return tl.tensor(builder.create_advance(base.handle, offsets), base.type)
+
+
+def make_tensor_descriptor(
+    base: tl.tensor,
+    shape: List[tl.tensor],
+    strides: List[tl.tensor],
+    block_shape: List[tl.constexpr],
+    builder: ir.builder,
+) -> tl._experimental_tensor_descriptor:
+    ndim = len(shape)
+    if ndim != 2:
+        raise ValueError("Only two dimensional tensor descriptors are supported at the moment")
+    if len(strides) != ndim:
+        raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
+    if len(block_shape) != ndim:
+        raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
+
+    if not (isinstance(strides[-1], tl.constexpr) and strides[-1].value == 1):
+        raise ValueError(f"Tensor descriptor last dim must tl.constexpr(1) but got {strides[-1]}")
+
+    shape = [to_tensor(x, builder) for x in shape]
+    strides = [to_tensor(x, builder).to(tl.int64, _builder=builder) for x in strides]
+
+    # Check whether `block_shape` is static
+    block_shape = tl._unwrap_shape(block_shape)
+
+    assert isinstance(base.type, tl.pointer_type)
+    type = tl.block_type(base.type.element_ty, block_shape)
+    handle = builder.create_make_tensor_descriptor(base.handle, [s.handle for s in shape], [s.handle for s in strides],
+                                                   block_shape)
+    return tl._experimental_tensor_descriptor(handle, shape, strides, type)

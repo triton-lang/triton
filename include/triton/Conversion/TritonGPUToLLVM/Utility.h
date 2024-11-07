@@ -10,6 +10,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -367,14 +368,67 @@ inline bool isKernel(FunctionOpInterface funcOp) {
 
 inline Value getStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 1);
+    return funcOp.getArgument(funcOp.getNumArguments() - 2);
   }
 
   auto mod = funcOp->getParentOfType<ModuleOp>();
   auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
   assert(globalBase);
   return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+}
+
+inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                                 FunctionOpInterface funcOp,
+                                 Value allocOffset = {}) {
+  // See NOTE: [Additional Function Arguments]
+  if (!isKernel(funcOp)) {
+    // Base for this function
+    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+    if (!allocOffset) {
+      return gmemBase;
+    }
+
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
+    return gep(ptrTy, i8_ty, gmemBase, allocOffset);
+  }
+
+  // Base for entire kernel
+  auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+
+  ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
+  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
+      "triton_gpu.global_scratch_memory_size");
+  if (!allocSizeAttr) {
+    return gmemBase;
+  }
+
+  Value gridIdx[3];
+  Value gridDim[2];
+  for (int k = 0; k < 3; ++k) {
+    gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
+  }
+  for (int k = 0; k < 2; ++k) {
+    gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
+  }
+
+  Value linearId = gridIdx[2];
+  for (int k = 0; k < 2; ++k) {
+    linearId = add(gridIdx[1 - k], mul(linearId, gridDim[1 - k]));
+  }
+
+  auto allocSize = allocSizeAttr.getValue().getZExtValue();
+
+  Value offset = mul(linearId, i32_val(allocSize));
+  if (allocOffset) {
+    offset = add(offset, allocOffset);
+  }
+
+  auto *ctx = rewriter.getContext();
+  auto res =
+      gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
+  return res;
 }
 
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
