@@ -292,9 +292,9 @@ LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
 
   MLIRContext *ctx = mma.getContext();
   SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
-  // Mma is tiled in a row-major fashion
-  auto orderedDimNames =
-      permuteDimNames(dimNames, getMatrixOrder(rank, /*rowMajor=*/true));
+
+  auto orderedDimNames = permuteDimNames(dimNames, mma.getRepOrder());
+  assert(mma.getRepOrder() == getMatrixOrder(rank, /*rowMajor=*/true));
 
   LinearLayout ctaLayout(
       {{S("register"), {{1, 0}, {0, 8}}},
@@ -876,8 +876,9 @@ LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
   MLIRContext *ctx = mma.getContext();
 
   // The A and B operands are tiled in a kMajor fashion
-  auto kMajorOrder =
-      getOrderForDotOperand(dot.getOpIdx(), rank, /*kMajor=*/true);
+  auto kMajorOrder = dot.getRepOrder();
+  assert(kMajorOrder ==
+         getOrderForDotOperand(dot.getOpIdx(), rank, /*kMajor=*/true));
 
   auto kMajorDims =
       permuteDimNames(standardOutDimNames(ctx, rank), kMajorOrder);
