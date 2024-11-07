@@ -20,9 +20,11 @@ class AllocationAnalysis;
 
 constexpr inline unsigned invalidAllocationSize = -1;
 
-/// Callback to allow backends to specify target-specific scratch sizes for some
-/// operations.
+/// Callback to allow backends to specify target-specific scratch sizes for
+/// some operations.
 using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
+
+unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
 // To convert a tensor from one layout to another, we need to allocate a
 // temporary buffer (i.e., scratch buffer) in shared memory. The conversion may
@@ -257,9 +259,9 @@ class ModuleAllocation : public CallGraph<Allocation> {
 public:
   using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
 
-  ModuleAllocation(
-      ModuleOp moduleOp,
-      triton::AllocationAnalysisScratchSizeFn scratchSizeGetter = nullptr)
+  ModuleAllocation(ModuleOp moduleOp,
+                   triton::AllocationAnalysisScratchSizeFn scratchSizeGetter =
+                       triton::defaultAllocationAnalysisScratchSizeFn)
       : CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
