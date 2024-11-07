@@ -520,15 +520,16 @@ emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
   auto sizePerThread = blockedLayout.getSizePerThread();
   auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
   auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
-  auto order = blockedLayout.getOrder();
+  auto threadOrder = blockedLayout.getThreadOrder();
+  auto warpOrder = blockedLayout.getWarpOrder();
   auto shapePerCTA = triton::gpu::getShapePerCTA(blockedLayout, shape);
   unsigned rank = shape.size();
 
   // delinearize threadId to get the base index
   SmallVector<Value> multiDimWarpId =
-      delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+      delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
   SmallVector<Value> multiDimThreadId =
-      delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+      delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
 
   SmallVector<Value> multiDimBase(rank);
   for (unsigned k = 0; k < rank; ++k) {
