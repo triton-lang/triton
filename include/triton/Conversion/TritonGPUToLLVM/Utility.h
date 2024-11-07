@@ -543,122 +543,6 @@ emitOffsetForBlockedLayout(const BlockedEncodingAttr &blockedLayout,
 // Mma layout indices
 // -----------------------------------------------------------------------
 
-inline SmallVector<Value>
-emitBaseIndexWithinCTAForMmaLayoutV1(Location loc, RewriterBase &rewriter,
-                                     const NvidiaMmaEncodingAttr &mmaLayout,
-                                     RankedTensorType type) {
-  auto shape = type.getShape();
-  auto wpt = mmaLayout.getWarpsPerCTA();
-  static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-  auto [isARow, isBRow, isAVec4, isBVec4, _] =
-      mmaLayout.decodeVoltaLayoutStates();
-
-  Value thread = getThreadId(rewriter, loc);
-  auto *ctx = thread.getContext();
-  Value _1 = i32_val(1);
-  Value _2 = i32_val(2);
-  Value _4 = i32_val(4);
-  Value _16 = i32_val(16);
-  Value _32 = i32_val(32);
-  Value _fpw0 = i32_val(fpw[0]);
-  Value _fpw1 = i32_val(fpw[1]);
-
-  // A info
-  auto aRep = mmaLayout.getMMAv1Rep(0);
-  auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
-  // B info
-  auto bSpw = mmaLayout.getMMAv1ShapePerWarp(1);
-  auto bRep = mmaLayout.getMMAv1Rep(1);
-
-  SmallVector<int, 2> rep({aRep[0], bRep[1]});
-  SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
-  SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
-
-  Value lane = urem(thread, _32);
-  Value warp = udiv(thread, _32);
-
-  Value warp0 = urem(warp, i32_val(wpt[0]));
-  Value warp12 = udiv(warp, i32_val(wpt[0]));
-  Value warp1 = urem(warp12, i32_val(wpt[1]));
-
-  // warp offset
-  Value offWarpM = mul(warp0, i32_val(spw[0]));
-  Value offWarpN = mul(warp1, i32_val(spw[1]));
-  // quad offset
-  Value offQuadM = mul(udiv(and_(lane, _16), _4), _fpw0);
-  Value offQuadN = mul(udiv(and_(lane, _16), _4), _fpw1);
-  // pair offset
-  Value offPairM = udiv(urem(lane, _16), _4);
-  offPairM = urem(offPairM, _fpw0);
-  offPairM = mul(offPairM, _4);
-  Value offPairN = udiv(urem(lane, _16), _4);
-  offPairN = udiv(offPairN, _fpw0);
-  offPairN = urem(offPairN, _fpw1);
-  offPairN = mul(offPairN, _4);
-  offPairM = mul(offPairM, i32_val(rep[0] / 2));
-  offQuadM = mul(offQuadM, i32_val(rep[0] / 2));
-  offPairN = mul(offPairN, i32_val(rep[1] / 2));
-  offQuadN = mul(offQuadN, i32_val(rep[1] / 2));
-  // quad pair offset
-  Value offLaneM = add(offPairM, offQuadM);
-  Value offLaneN = add(offPairN, offQuadN);
-  // a, b offset
-  Value offsetAM = add(offWarpM, offLaneM);
-  Value offsetBN = add(offWarpN, offLaneN);
-  // m indices
-  Value offsetCM = add(and_(lane, _1), offsetAM);
-  // n indices
-  Value offsetCN = add((and_(lane, _2)), (add(offWarpN, offPairN)));
-  return {offsetCM, offsetCN};
-}
-
-inline SmallVector<SmallVector<unsigned>>
-emitOffsetForMmaLayoutV1(const NvidiaMmaEncodingAttr &mmaLayout,
-                         RankedTensorType type) {
-  auto shape = type.getShape();
-
-  auto [isARow, isBRow, isAVec4, isBVec4, _] =
-      mmaLayout.decodeVoltaLayoutStates();
-
-  // TODO: seems like the pattern below to get `rep`/`spw` appears quite often
-  // A info
-  auto aRep = mmaLayout.getMMAv1Rep(0);
-  auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
-  // B info
-  auto bSpw = mmaLayout.getMMAv1ShapePerWarp(1);
-  auto bRep = mmaLayout.getMMAv1Rep(1);
-
-  auto wpt = mmaLayout.getWarpsPerCTA();
-  static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-  SmallVector<int, 2> rep({aRep[0], bRep[1]});
-  SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
-  SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
-
-  SmallVector<unsigned> idxM;
-  for (unsigned m = 0; m < shape[0]; m += shapePerCTA[0])
-    for (unsigned mm = 0; mm < rep[0]; ++mm)
-      idxM.push_back(m + mm * 2);
-
-  SmallVector<unsigned> idxN;
-  for (int n = 0; n < shape[1]; n += shapePerCTA[1]) {
-    for (int nn = 0; nn < rep[1]; ++nn) {
-      idxN.push_back(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1]);
-      idxN.push_back(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1] + 1);
-    }
-  }
-
-  SmallVector<SmallVector<unsigned>> ret;
-  for (unsigned x1 : idxN) {   // N
-    for (unsigned x0 : idxM) { // M
-      SmallVector<unsigned> idx(2);
-      idx[0] = x0; // M
-      idx[1] = x1; // N
-      ret.push_back(std::move(idx));
-    }
-  }
-  return ret;
-}
-
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForMmaLayoutV2(const NvidiaMmaEncodingAttr &mmaLayout,
                          RankedTensorType type) {
@@ -1124,9 +1008,6 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
     result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
                                                     blockedLayout, type);
   } else if (auto mmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-    if (mmaLayout.isVolta())
-      result =
-          emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter, mmaLayout, type);
     if (mmaLayout.isAmpere() || mmaLayout.isHopper())
       result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter, mmaLayout,
                                                       type);
@@ -1479,18 +1360,6 @@ inline Value packLLVector(Location loc, ValueRange vals,
     vec = insert_element(vec, vals[i], i32_val(i));
   }
   return vec;
-}
-
-inline bool isLayoutMmaV1(Attribute layout) {
-  bool isMmaV1 = false;
-  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-    isMmaV1 = mmaLayout.isVolta();
-  }
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
-    isMmaV1 = isa<NvidiaMmaEncodingAttr>(sliceLayout.getParent()) &&
-              cast<NvidiaMmaEncodingAttr>(sliceLayout.getParent()).isVolta();
-  }
-  return isMmaV1;
 }
 
 } // namespace mlir

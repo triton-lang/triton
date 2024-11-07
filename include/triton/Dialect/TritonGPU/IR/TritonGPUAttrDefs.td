@@ -346,21 +346,6 @@ compared to 1*64 when the hasLeadingOffset is false.
         // index of the inner dimension in `order`
         unsigned inner = (opIdx == 0) ? 0 : 1;
 
-        // ---- begin Volta ----
-        if (mmaEnc.isVolta()) {
-          int perPhase = 128 / (shapePerCTA[order[0]] * (typeWidthInBit / 8));
-          perPhase = std::max<int>(perPhase, 1);
-          bool is_row = order[0] != 0;
-          bool is_vec4 = opIdx == 0 ? !is_row && (shapePerCTA[order[0]] <= 16) :
-              is_row && (shapePerCTA[order[0]] <= 16);
-          int pack_size = opIdx == 0 ? ((is_row || is_vec4) ? 1 : 2) :
-                                       ((is_row && !is_vec4) ? 2 : 1);
-          int rep = 2 * pack_size;
-          int maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
-          int vec = 2 * rep;
-          return get(context, vec, perPhase, maxPhase, order, CTALayout);
-        }
-
         // ---- begin Ampere & Hopper ----
         if (mmaEnc.isAmpere() || mmaEnc.isHopper()) {
           int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
@@ -763,7 +748,7 @@ for
 //===----------------------------------------------------------------------===//
 // MMA Layout Encoding
 //===----------------------------------------------------------------------===//
-// TODO: MMAv1 and MMAv2 should be two instances of the same class
+
 def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
@@ -1129,69 +1114,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     ArrayRefParameter<"unsigned">:$instrShape
   );
 
-  let builders = [
-    // Specially for MMAV1(Volta)
-    AttrBuilder<(ins "int":$versionMajor,
-                     "int":$numWarps,
-                     "CTALayoutAttr":$CTALayout,
-                     "ArrayRef<unsigned>":$instrShape,
-                     "ArrayRef<int64_t>":$shapeC,
-                     "bool":$isARow,
-                     "bool":$isBRow,
-                     "bool":$isAVec4,
-                     "bool":$isBVec4,
-                     "int":$id), [{
-      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
-      // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
-      int versionMinor = (isARow * (1<<0)) |\
-                         (isBRow * (1<<1)) |\
-                         (isAVec4 * (1<<2)) |\
-                         (isBVec4 * (1<<3));
-
-      // TODO: Share code with
-      // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
-      // rep,spw and fpw.
-      SmallVector<unsigned> wpt({1, 1});
-      SmallVector<unsigned> wpt_nm1;
-
-      SmallVector<int, 2> rep(2), spw(2);
-      std::array<int, 3> fpw{{2, 2, 1}};
-      int packSize0 = (isARow || isAVec4) ? 1 : 2;
-      rep[0] = 2 * packSize0;
-      spw[0] = fpw[0] * 4 * rep[0];
-
-      int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
-      rep[1] = 2 * packSize1;
-      spw[1] = fpw[1] * 4 * rep[1];
-
-      do {
-        wpt_nm1 = wpt;
-        if (wpt[0] * wpt[1] < numWarps)
-          wpt[0] = std::clamp<int>(wpt[0] * 2, 1, shapeC[0] / spw[0]);
-        if (wpt[0] * wpt[1] < numWarps)
-          wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
-      } while (wpt_nm1 != wpt);
-
-      return $_get(context, versionMajor, versionMinor, wpt, CTALayout, instrShape);
-    }]>,
-
-
-    AttrBuilder<(ins "int":$versionMajor,
-                     "int":$numWarps,
-                     "CTALayoutAttr":$CTALayout,
-                     "ArrayRef<unsigned>":$instrShape,
-                     "ArrayRef<int64_t>":$shapeA,
-                     "ArrayRef<int64_t>":$shapeB,
-                     "ArrayRef<int64_t>":$shapeC,
-                     "bool":$isARow,
-                     "bool":$isBRow,
-                     "int":$id), [{
-      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
-      bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
-      bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
-      return get(context, versionMajor, numWarps, CTALayout, instrShape, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
-    }]>
-  ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     bool isVolta() const;
@@ -1199,22 +1121,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isAmpere() const;
     bool isHopper() const;
 
-    // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
-    std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
-
-    // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
-    // Here 5 bits can hold 32 IDs in a single module.
-    static constexpr int numBitsToHoldMmaV1ID{5};
-
-    // For MMA v1, method `getMMAv1IsRow` returns whether e.g. the a operand is used
-    // in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
-    // section 9.7.13.4.1 for more details.
-    bool getMMAv1IsRow(int opIdx) const;
-    bool getMMAv1IsVec4(int opIdx) const;
-    int getMMAv1NumOuter(ArrayRef<int64_t> shape, int opIdx) const;
-    SmallVector<int> getMMAv1Rep(int opIdx) const;
-    SmallVector<int> getMMAv1ShapePerWarp(int opIdx) const;
-    int getMMAv1Vec(int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
                                           int bitwidth, int opIdx) const;
 
@@ -1229,7 +1135,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
-      assert(isVolta() || isAmpere() || isHopper());
+      assert(isAmpere() || isHopper());
       auto rank = getWarpsPerCTA().size();
       SmallVector<unsigned> contigPerThread(rank, 1);
       contigPerThread[rank - 1] = 2;
@@ -1346,7 +1252,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
       if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
-        return $_get(context, opIdx, parent, 0); // For MMAV1
+        return $_get(context, opIdx, parent, 0);
       // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned kWidth = 32 / bitwidth;

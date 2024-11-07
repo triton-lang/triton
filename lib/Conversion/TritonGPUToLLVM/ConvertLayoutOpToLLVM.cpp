@@ -16,7 +16,6 @@
 
 namespace {
 
-using ::mlir::isLayoutMmaV1;
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -56,8 +55,7 @@ private:
     return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
                srcLayout) &&
            isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-               dstLayout) &&
-           !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
+               dstLayout);
   }
 
   // shared memory rd/st for blocked or mma layout with data padding
