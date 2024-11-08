@@ -24,6 +24,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -248,6 +249,16 @@ void init_triton_ir(py::module &&m) {
       .def("is_integer",
            [](Type &self, unsigned width) { return self.isInteger(width); })
       .def("is_fp16", &Type::isF16)
+      .def("__eq__",
+           [](Type &self, py::object &other) {
+             Type *other_ty = py::cast<Type *>(other);
+             return (other_ty != nullptr) && (*other_ty == self);
+           })
+      .def("__ne__",
+           [](Type &self, py::object &other) {
+             Type *other_ty = py::cast<Type *>(other);
+             return (other_ty == nullptr) || (*other_ty != self);
+           })
       .def("__str__", [](Type &self) {
         std::string str;
         llvm::raw_string_ostream os(str);
@@ -491,6 +502,16 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, FuncOp &funcOp) -> void {
              self.push_back(funcOp);
            })
+      .def("get_entry_func_name",
+           [](ModuleOp &self) -> std::string {
+             for (auto &op : self.getOps()) {
+               if (auto func = dyn_cast<FuncOp>(op)) {
+                 if (LLVM::isKernel(func))
+                   return func.getName().str();
+               }
+             }
+             return "";
+           })
       .def("has_function",
            [](ModuleOp &self, std::string &funcName) -> bool {
              if (self.lookupSymbol(funcName))
@@ -500,6 +521,43 @@ void init_triton_ir(py::module &&m) {
       .def("get_function",
            [](ModuleOp &self, std::string &funcName) -> FuncOp {
              return self.lookupSymbol<FuncOp>(funcName);
+           })
+      /*
+       * def ty_to_cpp(ty) is the consumer of this function.
+       * If the type is a ptr it expects ty[0] == '*', else the type itself.
+       */
+
+      .def("get_function_signature",
+           [](ModuleOp &self, FuncOp &func) -> std::vector<std::string> {
+             std::vector<std::string> strVec;
+
+             auto type = func.getFunctionType();
+             unsigned numArgs = type.getNumInputs();
+             for (unsigned i = 0; i != numArgs; ++i) {
+               std::string tempType;
+               llvm::raw_string_ostream os(tempType);
+
+               auto ty = type.getInput(i);
+               if (auto attributes = func.getCallableArgAttrs()) {
+                 Attribute attr = attributes[i];
+                 // Check for tt.nv_tma_desc = 1
+                 if (auto dAttr = dyn_cast<DictionaryAttr>(attr)) {
+                   if (dAttr.contains("tt.nv_tma_desc")) {
+                     strVec.push_back("nvTmaDesc");
+                     continue;
+                   }
+                 }
+               }
+               if (auto ptrType = dyn_cast<PointerType>(ty)) {
+                 auto pType = ptrType.getPointeeType();
+                 os << "*";
+                 pType.print(os);
+               } else {
+                 ty.print(os);
+               }
+               strVec.push_back(tempType);
+             }
+             return strVec;
            })
       .def("get_int_attr",
            [](ModuleOp &self, std::string name) -> py::object {
@@ -1577,6 +1635,14 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &ptr,
               std::vector<Value> &offsets) -> Value {
              return self.create<AdvanceOp>(ptr.getType(), ptr, offsets);
+           })
+      // Make a tensor descriptor
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
+              std::vector<Value> &strides,
+              std::vector<int32_t> &tensorShape) -> Value {
+             return self.create<MakeTensorDescOp>(base, shape, strides,
+                                                  tensorShape);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())

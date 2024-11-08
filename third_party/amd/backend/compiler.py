@@ -48,11 +48,11 @@ class HIPOptions:
     backend_name: str = 'hip'
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. The "default" variant preserves the default
+    # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
     # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
     # The option is experimental and may change at any time regarding its semantics and/or may
     # be gone entirely anytime.
-    instruction_sched_variant: str = 'default'
+    instruction_sched_variant: str = 'none'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -127,7 +127,7 @@ class HIPBackend(BaseBackend):
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
             if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
-                supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
+                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
@@ -276,7 +276,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.num_stages, options.instruction_sched_variant)
+        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages,
+                                                         options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)

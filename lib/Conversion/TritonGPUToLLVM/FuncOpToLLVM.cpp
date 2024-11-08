@@ -1,3 +1,4 @@
+#include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -12,6 +13,19 @@ namespace {
 
 using namespace mlir;
 using namespace mlir::triton;
+
+// NOTE: [Additional Function Arguments]
+// To support use of shared memory and global scratch memory inside of a
+// function, the caller allocates a single large block of the relevant memory
+// and calls the funciton with these extra arguments at the end.
+// Specifically, the last argument is the global scratch memory allocation and
+// the second to last is the shared memory allocation.
+//
+// For the kernel function itself, the shared memory base is a global symbol
+// so no additional function argument is required but global scratch memory
+// allocation is still passed in as the last argument. Though here the scratch
+// memory is shared between all programs, so a linear offset based on the
+// program id is required to get the local scratch base.
 
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
@@ -41,30 +55,46 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo) const {
-    // Push back a variable that indicates the current stack pointer of shared
-    // memory to the function arguments.
+    // Push back two new arguments that indicate the current pointer to shared
+    // memory and global scratch memory.
     auto loc = funcOp.getLoc();
     auto ctx = funcOp->getContext();
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
-                                            targetInfo.getSharedAddressSpace());
-    // 1. Modify the function type to add the new argument.
+    auto sharedPtrTy =
+        LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+
+    // 1. Modify the function type to add the new arguments.
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
-    amendedInputTy.push_back(ptrTy);
-    auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
-                                           funcTy.getResults());
+    bool isKernel = LLVM::isKernel(funcOp);
+    if (!isKernel) {
+      amendedInputTy.push_back(sharedPtrTy);
+    }
+    amendedInputTy.push_back(globalPtrTy);
+    auto amendedFuncTy =
+        FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
     SmallVector<NamedAttribute> amendedAttrs;
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
-    auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedAttrs.push_back(rewriter.getNamedAttr(
-        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
-    // 3. Add a new argument to the region
+    if (auto argAttrs = funcOp.getAllArgAttrs()) {
+      llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                         argAttrs.end());
+      while (amendedArgAttrs.size() < amendedInputTy.size()) {
+        amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      }
+      amendedAttrs.push_back(
+          rewriter.getNamedAttr(funcOp.getArgAttrsAttrName(),
+                                rewriter.getArrayAttr(amendedArgAttrs)));
+    }
+
+    // 3. Add the new arguments to the region
     auto amendedFuncOp = rewriter.create<triton::FuncOp>(
         funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
     auto &region = funcOp.getBody();
-    region.addArgument(ptrTy, loc);
+    if (!isKernel) {
+      region.addArgument(sharedPtrTy, loc);
+    }
+    region.addArgument(globalPtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;
@@ -110,9 +140,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
-    auto amendedFuncOp = funcOp;
-    if (!LLVM::isKernel(funcOp))
-      amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
+    auto amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
 
     FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
         mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
@@ -136,14 +164,15 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/LLVMIR/IR/LLVMInlining.cpp#L267
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
-      rewriter.eraseOp(amendedFuncOp);
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
     }
     // Set an attribute for reqntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.reqntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
+
     rewriter.eraseOp(funcOp);
+    rewriter.eraseOp(amendedFuncOp);
 
     // Add attributes for by-value TMA descriptor args (nvidia)
     handleByvalTmaDescArgs(newFuncOp);

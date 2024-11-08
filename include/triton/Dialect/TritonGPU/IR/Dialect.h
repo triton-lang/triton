@@ -76,9 +76,8 @@ SmallVector<unsigned>
 getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 
 // Returns the dimensions of the tensor from minor (fast-varying) to
-// major (slow-varying). For blocked, mma, and dotOperand layouts,
-// though the elements are in registers, the order refers to memory
-// layout of the original tensor in global memory.
+// major (slow-varying). For distributed layouts, this represents
+// the order of the elements within a thread.
 // For shared Layout, the order refers to which dimension of the original tensor
 // is contiguous in shared memory.
 SmallVector<unsigned> getOrder(Attribute layout);
