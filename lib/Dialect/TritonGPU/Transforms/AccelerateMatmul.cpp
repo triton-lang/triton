@@ -577,8 +577,7 @@ private:
     auto dotOp = rewriter.create<DotOp>(
         scaledDotOp.getLoc(), scaledDotOp.getType(), a, b, scaledDotOp.getC());
 
-    // Waiting for https://github.com/triton-lang/triton/pull/5003 to land
-    // cf.
+    // FIXME Waiting on the following comment to be fixed:
     // https://github.com/triton-lang/triton/pull/5003#issuecomment-2445091746
     // int versionMajor = getMMAVersionSafe(computeCapability, dotOp);
     int versionMajor = 2;
@@ -594,8 +593,10 @@ private:
         versionMajor, retShapePerCTA, dotOp.getA().getType().getElementType(),
         numWarps);
 
-    auto warpsPerCTA = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
-                                       numWarps, instrShape);
+    // FIXME Waiting on supporting LLs on convert_layout
+    // auto warpsPerCTA = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
+    //                                    numWarps, instrShape);
+    SmallVector<unsigned> warpsPerCTA = {(unsigned)numWarps, 1};
     return NvidiaMmaEncodingAttr::get(ctx, versionMajor, versionMinor,
                                       warpsPerCTA, CTALayout, instrShape);
   }
