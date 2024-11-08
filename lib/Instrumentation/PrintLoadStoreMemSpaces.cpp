@@ -5,7 +5,6 @@
 #include <map>
 
 using namespace llvm;
-using namespace std;
 
 namespace {
 

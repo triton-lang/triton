@@ -319,10 +319,8 @@ jobs:
       - &run-proton-tests-step
         name: Run Proton tests
         run: |
-          cd third_party/proton
-          python3 -m pytest -s test --ignore=test/test_cmd.py
-          cd test
-          python3 -m pytest test_cmd.py
+          cd third_party/proton/test
+          python3 -m pytest -s .
           cd ..
 
       # If we're on branch `main`, save the ccache Triton compilation artifacts
