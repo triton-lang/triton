@@ -1,8 +1,11 @@
 import argparse
 import sys
 import os
+from glob import glob
+import pathlib
 from .profile import start, finalize, _select_backend
 from .flags import set_command_line
+import triton
 
 
 def parse_arguments():
@@ -19,6 +22,8 @@ def parse_arguments():
                         choices=["shadow", "python"])
     parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree"])
     parser.add_argument("-k", "--hook", type=str, help="Profiling hook", default=None, choices=[None, "triton"])
+    parser.add_argument("-i", "--instrument", type=str, help="Instrumentation analysis type", default=None,
+                        choices=[None, "print-mem-spaces"])
     parser.add_argument('target_args', nargs=argparse.REMAINDER, help='Subcommand and its arguments')
     args = parser.parse_args()
     return args, args.target_args
@@ -28,7 +33,7 @@ def is_pytest(script):
     return os.path.basename(script) == 'pytest'
 
 
-def execute_as_main(script, args):
+def execute_as_main(script, args, instrumentation_pass=None):
     script_path = os.path.abspath(script)
     # Prepare a clean global environment
     clean_globals = {
@@ -42,6 +47,14 @@ def execute_as_main(script, args):
     sys.argv = [script] + args
     # Append the script's directory in case the script uses relative imports
     sys.path.append(os.path.dirname(script_path))
+    top_level_triton_path = os.path.dirname(triton.__file__)
+
+    if instrumentation_pass == "print-mem-spaces":
+        instrumentation_pass_path = str(
+            next(pathlib.Path(top_level_triton_path).rglob("libPrintLoadStoreMemSpaces.so"), None))
+        os.environ['TRITON_ALWAYS_COMPILE'] = "1"
+        os.environ['TRITON_DISABLE_LINE_INFO'] = "0"
+        os.environ['LLVM_PASS_PLUGIN_PATH'] = instrumentation_pass_path
 
     # Execute in the isolated environment
     try:
@@ -54,11 +67,7 @@ def execute_as_main(script, args):
         sys.argv = original_argv
 
 
-def run_profiling(args, target_args):
-    backend = args.backend if args.backend else _select_backend()
-
-    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
-
+def do_setup_and_execute(target_args, instrumentation_pass=None):
     # Set the command line mode to avoid any `start` calls in the script.
     set_command_line()
 
@@ -68,13 +77,29 @@ def run_profiling(args, target_args):
         import pytest
         pytest.main(script_args)
     else:
-        execute_as_main(script, script_args)
+        execute_as_main(script, script_args, instrumentation_pass)
+
+
+def run_profiling(args, target_args):
+    backend = args.backend if args.backend else _select_backend()
+
+    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
+
+    do_setup_and_execute(target_args)
 
     finalize()
 
 
+def run_instrumentation(args, target_args):
+    backend = args.backend if args.backend else _select_backend()
+    do_setup_and_execute(target_args, args.instrument)
+
+
 def main():
     args, target_args = parse_arguments()
+    if args.instrument:
+        run_instrumentation(args, target_args)
+        return
     run_profiling(args, target_args)
 
 
