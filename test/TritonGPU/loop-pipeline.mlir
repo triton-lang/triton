@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline-v2=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline-v2="num_stages=2 prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -98,6 +99,34 @@
 //       AMD:   %[[SELECT_32:.*]] = arith.select %[[CMPI_27]], %[[IF_31]], %{{.*}}#2
 //       AMD:   triton_gpu.local_dealloc %{{.*}}
 //       AMD:   triton_gpu.local_dealloc %{{.*}}
+
+// Prefetch pipelining adds another stage in between global load and compute.
+// This stage will local_store, then local_load, creating a prefetch from shared
+// memory into a register buffer for compute.
+// 
+// AMD_PREFETCH-LABEL: tt.func @matmul_loop
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   scf.for
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.dot
+//       AMD_PREFETCH:     triton_gpu.local_load
+//       AMD_PREFETCH:     triton_gpu.local_load
+//       AMD_PREFETCH:     scf.yield
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.return
 
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
@@ -219,6 +248,8 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // AMD-COUNT-2:  triton_gpu.local_dealloc
 //         AMD:  scf.yield %[[SEL1]]
 
+// AMD_PREFETCH-LABEL: tt.func @matmul_loop_nested
+
 tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                          %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                          %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C>{
@@ -312,6 +343,22 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:       triton_gpu.local_store %[[LOAD_33]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:       scf.yield %[[ADDPTR_32]], %[[DOT_31]], %[[SELECT_36]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:  triton_gpu.local_dealloc %[[LOCAL_ALLOC_12]]
+
+// AMD_PREFETCH-LABEL: tt.func @matmul_loop_single_pipeline
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   scf.for
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.dot
+//       AMD_PREFETCH:     triton_gpu.local_load
+//       AMD_PREFETCH:     scf.yield
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.return
 
 tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
                                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -445,6 +492,33 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     triton_gpu.local_dealloc %[[LOCAL_ALLOC_0]]
 //       AMD:     triton_gpu.local_dealloc %[[LOCAL_ALLOC_1]]
 
+// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_scalar
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   scf.for
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.dot
+//       AMD_PREFETCH:     triton_gpu.local_load
+//       AMD_PREFETCH:     scf.yield
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.return
+
 tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
@@ -498,6 +572,8 @@ tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 //       AMD:    tt.dot
 //       AMD:    triton_gpu.local_store
 //       AMD:    scf.yield
+
+// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_scalar_dist_one
 
 tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
@@ -596,6 +672,8 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_61]], %{{.*}}, %{{.*}}]
 //       AMD:     triton_gpu.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
+
+// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_vector
 
 tt.func @indirect_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
                    %76: index,
@@ -1243,6 +1321,23 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // AMD:          triton_gpu.local_store
 // AMD:          scf.yield
 // AMD:        triton_gpu.local_dealloc
+
+// AMD_PREFETCH-LABEL:  tt.func public @nested_loops
+// AMD_PREFETCH-NOT:  triton_gpu.local_alloc
+// AMD_PREFETCH:      scf.for
+// AMD_PREFETCH:        triton_gpu.local_alloc
+// AMD_PREFETCH:        tt.load
+// AMD_PREFETCH:        triton_gpu.local_store
+// AMD_PREFETCH:        tt.load
+// AMD_PREFETCH:        triton_gpu.local_load
+// AMD_PREFETCH:        scf.for
+// AMD_PREFETCH:          triton_gpu.local_store
+// AMD_PREFETCH:          tt.load
+// AMD_PREFETCH:          tt.dot
+// AMD_PREFETCH:          triton_gpu.local_load
+// AMD_PREFETCH:          scf.yield
+// AMD_PREFETCH:        triton_gpu.local_dealloc
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 2], instrShape = [16, 8]}>
 #shared = #triton_gpu.shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
@@ -1577,6 +1672,20 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 // AMD:   arith.addf
 // AMD:   arith.select
 // AMD:   scf.yield
+
+// AMD_PREFETCH-LABEL: @masked_add_kernel
+// AMD_PREFETCH: %[[CONSTANT:.*]] = arith.constant dense<0xFF800000>
+// AMD_PREFETCH-COUNT-6: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_PREFETCH: scf.for
+// AMD_PREFETCH:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_PREFETCH:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_PREFETCH:   arith.addf
+// AMD_PREFETCH:   arith.select
+// AMD_PREFETCH:   tt.store
+// AMD_PREFETCH:   scf.yield
+// AMD_PREFETCH: tt.store
+// AMD_PREFETCH: tt.store
+// AMD_PREFETCH: tt.store
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {

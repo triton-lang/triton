@@ -63,11 +63,11 @@ namespace {
 // can 1) issue memory operations earlier to hide the latency and 2) break the
 // strong dependency inside on loop iteration to give backends flexiblity to
 // better interleave instructions for better instruction-level parallelism.
-// 
+//
 // This StreamPipeliner class creates the pipelining schedule and calls the
-// PipelineExpander to rewrite the `scf.for` loop accordingly. A schedule consists
-// of multiple stages, where ops from different stages can overlap executions
-// because the dependencies are loop carried.
+// PipelineExpander to rewrite the `scf.for` loop accordingly. A schedule
+// consists of multiple stages, where ops from different stages can overlap
+// executions because the dependencies are loop carried.
 //
 // The general flow of this process is:
 //
@@ -95,7 +95,7 @@ namespace {
 //       ops in stages 1 to last_stage. This must consider that the loop
 //       bounds may be shorter than num_stages. In this case, the epilogue
 //       iterations must align with the prologue.
-// 
+//
 class StreamPipeliner {
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, bool _prefetch)
@@ -208,15 +208,12 @@ void StreamPipeliner::initSchedule(int maxIndirectionLevel) {
     //   compute:      stage=i
     //   local_load:   stage=i+1
     //   tail:         stage=i
-    config[SCHED_LOCAL_STORE] = {lastStage - 1,
-        schedule.clusters.newAtBack()};
+    config[SCHED_LOCAL_STORE] = {lastStage - 1, schedule.clusters.newAtBack()};
     auto cluster1 = schedule.clusters.newAtBack();
     config[SCHED_GLOBAL_LOAD] = {0, cluster1};
     config[SCHED_COMPUTE] = {lastStage, cluster1};
-    config[SCHED_LOCAL_LOAD] = {lastStage - 1,
-        schedule.clusters.newAtBack()};
-    config[SCHED_TAIL] = {lastStage,
-        schedule.clusters.newAtBack()};
+    config[SCHED_LOCAL_LOAD] = {lastStage - 1, schedule.clusters.newAtBack()};
+    config[SCHED_TAIL] = {lastStage, schedule.clusters.newAtBack()};
   } else if (isMultibuf) {
     // Streaming Schema cluster order and staging for multi-buffer.
     // for i in (...):
