@@ -1226,7 +1226,12 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
 //     an incomplete value while it's being written asynchronously by a load.
 //     1a. If operand A is in registers, these registers cannot be updated inside
 //         the loop.
-//
+//         **Exception** if the operand is produced by a preceding WGMMA,
+//         then this op can be properly async. Either the f16 shortcut is possible
+//         and the WGMMA's can run back-to-back (see rule 3 below), or elementwise
+//         truncate is needed, in which case the preceding WGMMA is not async and
+//         a WarpGroupDotWait is inserted right after, which guarantees exclusive
+//         access to the operand registers.
 //
 //  2. If the dot is used by any op in the loop, it must be used under an `if`,
 //     and will be synced with a `wait 0` at the beginning of the `if` block.
@@ -1263,7 +1268,11 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     if (!isa<ttg::SharedEncodingAttr>(
             cast<TensorOrMemDesc>(operand.getType()).getEncoding())) {
       // Rule 1a: Register operands must not be modified within the loop.
-      // For now, do a stricter-than-necessary check that the operand
+      // First, check for chained WGMMA as an exception.
+      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(operand.getDefiningOp())) {
+        return isa<ttg::NvidiaMmaEncodingAttr>(cvt.getSrc().getType().getEncoding());
+      }
+      // And then, do a stricter-than-necessary check for now, that the operand
       // is defined outside the loop.
       return forOp.isDefinedOutsideOfLoop(operand);
     }

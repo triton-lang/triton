@@ -973,7 +973,7 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     // CHECK:   triton_gpu.local_load
     // CHECK:   triton_gpu.async_wait {{.*}} {num = 2 : i32}
     // CHECK:   triton_nvidia_gpu.warp_group_dot
-    // CHECK-NEXT: triton_nvidia_gpu.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
+    // CHECK-NEXT: triton_nvidia_gpu.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
     // CHECK:   triton_gpu.async_copy_global_to_local
     // CHECK:   triton_gpu.async_commit_group
     // CHECK:   triton_gpu.async_copy_global_to_local
