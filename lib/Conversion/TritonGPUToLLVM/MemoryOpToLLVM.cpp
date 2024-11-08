@@ -114,9 +114,8 @@ public:
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
       // Use when the SharedToDotOperandMMAv2OrV3 is known to be buggy:
       // - kWidth == 8
-      // - fp8 with kWidth == 4 and warpSize != {numWarps, 1} or {1, numWarps}
       if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        bool legacyLoweringIsBuggy = dot.getKWidth() >= 4;
+        bool legacyLoweringIsBuggy = dot.getKWidth() >= 8;
         return legacyLoweringIsBuggy && mma.isAmpere();
       }
       if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
