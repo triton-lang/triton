@@ -11,6 +11,7 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/OuterLoopPipeline.cpp
   Pipeliner/PipelineExpander.cpp
   Pipeliner/PipelineScheduler.cpp
+  Pipeliner/TestPipelineAssignLatencies.cpp
   Pipeliner/SoftwarePipeliner.cpp
   Pipeliner/TMAStoresPipeline.cpp
   Pipeliner/PipeliningUtility.cpp
