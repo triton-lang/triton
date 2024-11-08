@@ -5,6 +5,7 @@ from glob import glob
 import pathlib
 from .profile import start, finalize, _select_backend
 from .flags import set_command_line
+import triton
 
 
 def parse_arguments():
@@ -46,7 +47,7 @@ def execute_as_main(script, args, instrumentation_pass=None):
     sys.argv = [script] + args
     # Append the script's directory in case the script uses relative imports
     sys.path.append(os.path.dirname(script_path))
-    top_level_triton_path = (os.path.dirname("../../../"))
+    top_level_triton_path = os.path.dirname(triton.__file__)
 
     if instrumentation_pass == "print-mem-spaces":
         instrumentation_pass_path = str(
