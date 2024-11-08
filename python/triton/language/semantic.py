@@ -6,7 +6,6 @@ import numbers
 
 from .._C.libtriton import ir
 from . import core as tl
-from . import math
 
 T = TypeVar('T')
 
@@ -88,11 +87,12 @@ def computation_type_impl(a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_i
         else:
             return tl.float16
     # 4) return bf16 only if both operands are of bf16
-    if a_ty.is_bf16() or b_ty.is_bf16():
+    if a_ty.is_bf16() and b_ty.is_bf16():
         if div_or_mod:
             return tl.float32
-        if a_ty.is_bf16() and b_ty.is_bf16():
+        else:
             return tl.bfloat16
+    if a_ty.is_bf16() or b_ty.is_bf16():
         return tl.float32
     # 5) return fp16 if operands are different fp8
     if a_ty.is_fp8() and b_ty.is_fp8():
@@ -333,10 +333,7 @@ def mod(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
     other_scalar_ty = other.type.scalar
     # float % float
     if scalar_ty.is_floating():
-        # input - input.div(other, rounding_mode="floor") * other
-        floor = math.floor(fdiv(input, other, False, builder), _builder=builder)
-        ret = sub(input, mul(floor, other, True, builder), True, builder)
-        return ret
+        return tl.tensor(builder.create_frem(input.handle, other.handle), input.type)
     # % int
     elif scalar_ty.is_int():
         if scalar_ty.int_signedness != other_scalar_ty.int_signedness:
@@ -1256,7 +1253,7 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
     val = cast(val, elt_ty, builder)
 
     # Build IR
-    if not mask:
+    if mask is None:
         return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
@@ -1311,7 +1308,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
         if val is not None:
             val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
     val = cast(val, ptr.type.scalar.element_ty, builder)
-    if not mask:
+    if mask is None:
         mask_ir = builder.get_int1(True)
         mask_ty = tl.int1
         if ptr.type.is_block():
@@ -1727,10 +1724,6 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
 def device_assert(cond: tl.tensor, msg: str, builder: ir.builder) -> tl.tensor:
     if not builder.options.debug:
         return
-    cond_ty = cond.type
-    if not cond_ty.is_block():
-        cond_ty = tl.block_type(cond_ty.scalar, (1, ))
-        cond = tl.tensor(builder.create_splat(cond.handle, (1, )), cond_ty)
     return tl.tensor(builder.create_assert(cond.handle, msg), tl.void)
 
 
@@ -1813,3 +1806,34 @@ def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
 
     # Advanced block pointer type is the same as before
     return tl.tensor(builder.create_advance(base.handle, offsets), base.type)
+
+
+def make_tensor_descriptor(
+    base: tl.tensor,
+    shape: List[tl.tensor],
+    strides: List[tl.tensor],
+    block_shape: List[tl.constexpr],
+    builder: ir.builder,
+) -> tl._experimental_tensor_descriptor:
+    ndim = len(shape)
+    if ndim != 2:
+        raise ValueError("Only two dimensional tensor descriptors are supported at the moment")
+    if len(strides) != ndim:
+        raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
+    if len(block_shape) != ndim:
+        raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
+
+    if not (isinstance(strides[-1], tl.constexpr) and strides[-1].value == 1):
+        raise ValueError(f"Tensor descriptor last dim must tl.constexpr(1) but got {strides[-1]}")
+
+    shape = [to_tensor(x, builder) for x in shape]
+    strides = [to_tensor(x, builder).to(tl.int64, _builder=builder) for x in strides]
+
+    # Check whether `block_shape` is static
+    block_shape = tl._unwrap_shape(block_shape)
+
+    assert isinstance(base.type, tl.pointer_type)
+    type = tl.block_type(base.type.element_ty, block_shape)
+    handle = builder.create_make_tensor_descriptor(base.handle, [s.handle for s in shape], [s.handle for s in strides],
+                                                   block_shape)
+    return tl._experimental_tensor_descriptor(handle, shape, strides, type)

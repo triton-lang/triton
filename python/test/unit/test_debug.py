@@ -4,27 +4,33 @@ import torch
 import triton.language as tl
 import triton
 
-@pytest.mark.parametrize('cond, opt_flag, env_var', [
-    (cond, opt_flag, env_var) for cond in [True, False] \
-                              for opt_flag in [True, False] \
-                              for env_var in [True, False]\
-])
+
+@pytest.mark.parametrize('cond', [True, False])
+@pytest.mark.parametrize('opt_flag', [True, False, None])
+@pytest.mark.parametrize('env_var', [True, False])
+@pytest.mark.parametrize('jit_flag', [True, False])
 @pytest.mark.forked
-def test_device_assert(cond, opt_flag, env_var, device):
+def test_device_assert(cond, opt_flag, env_var, jit_flag, device):
     os.environ['TRITON_DEBUG'] = str(int(env_var))
     torch.zeros([1], dtype=torch.int32, device=device)
 
-    @triton.jit
+    @triton.jit(debug=jit_flag)
     def _kernel(COND: tl.constexpr):
         tl.device_assert(COND, 'test')
 
-    if not cond and (opt_flag or env_var):
+    is_debug = env_var or (opt_flag if opt_flag is not None else jit_flag)
+
+    kwargs = {}
+    if opt_flag is not None:
+        kwargs["debug"] = opt_flag
+
+    if not cond and is_debug:
         with pytest.raises(RuntimeError):
-            _kernel[(1, )](cond, debug=opt_flag)
+            _kernel[(1, )](cond, **kwargs)
             getattr(torch, device).synchronize()
         return
 
-    _kernel[(1, )](cond, debug=opt_flag)
+    _kernel[(1, )](cond, **kwargs)
     getattr(torch, device).synchronize()
 
 

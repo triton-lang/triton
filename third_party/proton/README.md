@@ -128,6 +128,7 @@ The following examples demonstrate how to use Proton command-line.
 proton [options] script.py [script_args] [script_options]
 proton [options] pytest [pytest_args] [script_options]
 python -m triton.profiler.proton [options] script.py [script_args] [script_options]
+proton --instrument=[instrumentation pass] script.py
 ```
 
 When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported. Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
@@ -155,6 +156,23 @@ More options can be found by running the following command.
 ```bash
 proton-viewer -h
 ```
+
+### Advanced features
+In addition to profiling, Proton also incorporates MLIR/LLVM based compiler instrumentation passes to get Triton level analysis
+and optimization information. This feature is under active development and the list of available passes is expected to grow.
+
+#### Available passes
+print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
+
+Example usage with the Proton matmul tutorial:
+```bash
+$ proton --instrument=print-mem-spaces matmul.py
+0     matmul_kernel     matmul.py:180:20     SHARED     STORE
+1     matmul_kernel     matmul.py:181:20     SHARED     STORE
+2     matmul_kernel     matmul.py:180:20     SHARED     LOAD
+3     matmul_kernel     matmul.py:181:20     SHARED     LOAD
+```
+Notes: The instrument functionality is currently only available from the command line. Additionally the instrument and profile command line arguments can not be use simulantously.
 
 ### Instruction sampling (experimental)
 

@@ -149,61 +149,61 @@ hsa_status_t hsa_ven_amd_aqlprofile_validate_event(
 // All parameters are generic and if not applicable for a specific
 // profile configuration then error status will be returned.
 typedef enum {
-  /*
-  * Select the target compute unit (wgp) for profiling.
-  */
+  /**
+   * Select the target compute unit (wgp) for profiling.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_COMPUTE_UNIT_TARGET = 0,
-  /*
-  * VMID Mask
-  */
+  /**
+   * VMID Mask
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_VM_ID_MASK = 1,
-  /*
-  * Legacy. Deprecated.
-  */
+  /**
+   * Legacy. Deprecated.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_MASK = 2,
-  /*
-  * Legacy. Deprecated.
-  */
+  /**
+   * Legacy. Deprecated.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_TOKEN_MASK = 3,
-  /*
-  * Legacy. Deprecated.
-  */
+  /**
+   * Legacy. Deprecated.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_TOKEN_MASK2 = 4,
-  /*
-  * Shader engine mask for selection.
-  */
+  /**
+   * Shader engine mask for selection.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_SE_MASK = 5,
-  /*
-  * Legacy. Deprecated.
-  */
+  /**
+   * Legacy. Deprecated.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_SAMPLE_RATE = 6,
-  /*
-  * Legacy. Deprecated.
-  */
+  /**
+   * Legacy. Deprecated.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_K_CONCURRENT = 7,
-  /*
-  * Set SIMD Mask (GFX9) or SIMD ID for collection (Navi)
-  */
+  /**
+   * Set SIMD Mask (GFX9) or SIMD ID for collection (Navi)
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_SIMD_SELECTION = 8,
-  /*
-  * Set true for occupancy collection only.
-  */
+  /**
+   * Set true for occupancy collection only.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_OCCUPANCY_MODE = 9,
-  /*
-  * ATT collection max data size, in MB. Shared among shader engines.
-  */
+  /**
+   * ATT collection max data size, in MB. Shared among shader engines.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_ATT_BUFFER_SIZE = 10,
-  /*
-  * Mask of which compute units to generate perfcounters. GFX9 only.
-  */
+  /**
+   * Mask of which compute units to generate perfcounters. GFX9 only.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_PERFCOUNTER_MASK = 240,
-  /*
-  * Select collection period for perfcounters. GFX9 only.
-  */
+  /**
+   * Select collection period for perfcounters. GFX9 only.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_PERFCOUNTER_CTRL = 241,
-  /*
-  * Select perfcounter ID (SQ block) for collection. GFX9 only.
-  */
+  /**
+   * Select perfcounter ID (SQ block) for collection. GFX9 only.
+   */
   HSA_VEN_AMD_AQLPROFILE_PARAMETER_NAME_PERFCOUNTER_NAME = 242,
 } hsa_ven_amd_aqlprofile_parameter_name_t;
 
@@ -365,11 +365,11 @@ hsa_status_t hsa_ven_amd_aqlprofile_error_string(
 
 /**
  * @brief Callback for iteration of all possible event coordinate IDs and coordinate names.
-*/
+ */
 typedef hsa_status_t(*hsa_ven_amd_aqlprofile_eventname_callback_t)(int id, const char* name);
 /**
  * @brief Iterate over all possible event coordinate IDs and their names.
-*/
+ */
 hsa_status_t hsa_ven_amd_aqlprofile_iterate_event_ids(hsa_ven_amd_aqlprofile_eventname_callback_t);
 
 /**
@@ -380,7 +380,7 @@ hsa_status_t hsa_ven_amd_aqlprofile_iterate_event_ids(hsa_ven_amd_aqlprofile_eve
  * @param coordinate The coordinate, in the range [0,extent-1].
  * @param name Coordinate name as in _iterate_event_ids.
  * @param userdata Userdata returned from _iterate_event_coord function.
-*/
+ */
 typedef hsa_status_t(*hsa_ven_amd_aqlprofile_coordinate_callback_t)(
   int position,
   int id,
@@ -397,7 +397,7 @@ typedef hsa_status_t(*hsa_ven_amd_aqlprofile_coordinate_callback_t)(
  * @param[in] sample_id aqlprofile_info_data_t.sample_id returned from _aqlprofile_iterate_data.
  * @param[in] callback Callback function to return the coordinates.
  * @param[in] userdata Arbitrary data pointer to be sent back to the user via callback.
-*/
+ */
 hsa_status_t hsa_ven_amd_aqlprofile_iterate_event_coord(
   hsa_agent_t agent,
   hsa_ven_amd_aqlprofile_event_t event,

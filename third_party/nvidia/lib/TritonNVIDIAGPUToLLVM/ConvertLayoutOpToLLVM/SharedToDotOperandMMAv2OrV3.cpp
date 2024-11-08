@@ -528,47 +528,59 @@ Type getSharedMemTy(Type argType) {
     llvm::report_fatal_error("mma16816 data type not supported");
 }
 
-std::vector<Value> unpackInt(const std::vector<Value> &inValues, Type elTy,
-                             ConversionPatternRewriter &rewriter, Location loc,
-                             const LLVMTypeConverter *typeConverter) {
-  const int inBitWidth = inValues[0].getType().getIntOrFloatBitWidth();
-  std::vector<Value> outValues;
-  for (auto v : inValues) {
-    // cast i32 to appropriate eltType vector and extract elements
-    auto eltType = typeConverter->convertType(elTy);
-    auto vecType =
-        vec_ty(eltType, inBitWidth / eltType.getIntOrFloatBitWidth());
-    auto vec = bitcast(v, vecType);
-    for (int i = 0; i < inBitWidth / eltType.getIntOrFloatBitWidth(); i++) {
-      outValues.push_back(extract_element(vec, i32_val(i)));
-    }
-  }
-  return outValues;
-}
-
 Value composeValuesToDotOperandLayoutStruct(
-    const ValueTable &vals, int batch, int n0, int n1,
+    const ValueTable &vals, int batch, int repOuter, int repK,
     const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter, Type elTy, bool isHopper) {
+    ConversionPatternRewriter &rewriter, Type eltTy, int kWidth, bool isHopper,
+    bool isA) {
+  auto bitwidth = eltTy.getIntOrFloatBitWidth();
+  assert(32 >= bitwidth && "only support 32-bit or less");
+  auto numElemsPerVec = 32 / bitwidth;
+  auto vecTy = vec_ty(eltTy, numElemsPerVec);
+  // FIXME: Fix the hopper path
+  // FIXME: [DOT LL]
+  // `kWidth` specifies the number of contiguous elements each thread will load.
+  // Loaded elements are packed into a vector of int32, which will then be
+  // unpacked into individual elements.
+  // `kIters` specifies the number of contiguous int32 elements each thread
+  // should load.
+  auto kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
+
   std::vector<Value> elems;
-  for (int b = 0; b < batch; ++b)
-    for (int m = 0; m < n0; ++m)
-      for (int k = 0; k < n1; ++k) {
-        elems.push_back(vals.at({b, 2 * m, 2 * k}));
-        elems.push_back(vals.at({b, 2 * m + 1, 2 * k}));
-        elems.push_back(vals.at({b, 2 * m, 2 * k + 1}));
-        elems.push_back(vals.at({b, 2 * m + 1, 2 * k + 1}));
+  auto unpackVec = [&](int b, int m, int k) {
+    for (auto kIter = 0; kIter < kIters; ++kIter) {
+      auto val = vals.at({b, m, k + kIter});
+      auto vec = bitcast(val, vecTy);
+      for (auto i = 0; i < numElemsPerVec; ++i) {
+        elems.push_back(extract_element(eltTy, vec, i32_val(i)));
       }
+    }
+  };
+
+  // Loading A tile is different from loading B tile since each tile of A is
+  // 16x16 while B is 16x8.
+  if (isA) {
+    for (int b = 0; b < batch; ++b)
+      for (int m = 0; m < repOuter; ++m)
+        for (int k = 0; k < std::max<int>(repK / kIters, 1); ++k) {
+          unpackVec(b, 2 * m, kIters * 2 * k);
+          unpackVec(b, 2 * m + 1, kIters * 2 * k);
+          unpackVec(b, 2 * m, kIters * (2 * k + 1));
+          unpackVec(b, 2 * m + 1, kIters * (2 * k + 1));
+        }
+  } else {
+    for (int b = 0; b < batch; ++b)
+      for (int n = 0; n < repOuter; ++n)
+        for (int k = 0; k < std::max<int>(repK / kIters, 1); ++k) {
+          unpackVec(b, n, kIters * 2 * k);
+          unpackVec(b, n, kIters * (2 * k + 1));
+        }
+  }
   assert(!elems.empty());
 
-  if (isHopper) {
-    elems = unpackInt(elems, elTy, rewriter, loc, typeConverter);
-  }
-
-  Type elemTy = elems[0].getType();
-  MLIRContext *ctx = elemTy.getContext();
+  MLIRContext *ctx = eltTy.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(elems.size(), elemTy));
+      ctx, SmallVector<Type>(elems.size(), eltTy));
   auto result = packLLElements(loc, typeConverter, elems, rewriter, structTy);
   return result;
 }
@@ -658,16 +670,16 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / mmaBitwidth;
 
   int kWidth = encoding.getKWidth();
-  auto numRep = mmaLayout.getMMAv2OrV3RepForOperand(
-      shapePerCTA, bitwidth, kWidth, encoding.getOpIdx());
+  auto numRep =
+      mmaLayout.getRepForOperand(shapePerCTA, mmaBitwidth, encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-  auto order = triton::gpu::getOrder(mmaLayout);
+  auto warpOrder = mmaLayout.getWarpOrder();
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
 
   SmallVector<Value> multiDimWarpId =
-      delinearize(rewriter, loc, warp, warpsPerCTA, order);
+      delinearize(rewriter, loc, warp, warpsPerCTA, warpOrder);
   Value warpB = urem(multiDimWarpId[0], i32_val(shapePerCTA[0]));
   int warpsPerTile;
   Value warpM = urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / 16));
@@ -704,9 +716,10 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
         loadFn(b, 2 * m, 2 * k);
 
   // Format the values to LLVM::Struct to passing to mma codegen.
+  Type eltTy = typeConverter->convertType(descTy.getElementType());
   return composeValuesToDotOperandLayoutStruct(
-      vals, numRepBatch, numRepOuter, numRepK, typeConverter, loc, rewriter,
-      descTy.getElementType(), /*unpack=*/isHopper);
+      vals, numRepBatch, isA ? numRep[1] : numRep[2], numRepK, typeConverter,
+      loc, rewriter, eltTy, kWidth, isHopper, isA);
 }
 
 template <typename T>
