@@ -100,17 +100,12 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                                : srcContigPerThread;
   scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
 
-  if (auto mma = mlir::dyn_cast<gpu::NvidiaMmaEncodingAttr>(srcLayout)) {
-    if (mma.getVersionMajor() == 1) {
-      // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
-      // codegen.
-      scratchConfig.inVec = srcContigPerThread;
-    } else if (mlir::isa<gpu::BlockedEncodingAttr>(dstLayout)) {
-      // when storing from mma layout and loading in blocked layout vectorizing
-      // the load back gives better performance even if there is a
-      // transposition.
-      scratchConfig.outVec = dstContigPerThread;
-    }
+  if (mlir::isa<gpu::NvidiaMmaEncodingAttr>(srcLayout) &&
+      mlir::isa<gpu::BlockedEncodingAttr>(dstLayout)) {
+    // when storing from mma layout and loading in blocked layout vectorizing
+    // the load back gives better performance even if there is a
+    // transposition.
+    scratchConfig.outVec = dstContigPerThread;
   }
 
   // No padding is required if the tensor is 1-D, or if all dimensions except

@@ -6,111 +6,6 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "llvm/ADT/STLExtras.h"
 
-namespace SharedToDotOperandMMAv1 {
-using CoordTy = SmallVector<Value>;
-using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
-
-static SmallVector<CoordTy>
-getMNCoords(Value thread, Location loc, RewriterBase &rewriter,
-            ArrayRef<unsigned int> wpt, const NvidiaMmaEncodingAttr &mmaLayout,
-            ArrayRef<int64_t> shape, bool isARow, bool isBRow, bool isAVec4,
-            bool isBVec4) {
-  static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-
-  auto *ctx = thread.getContext();
-  Value _1 = i32_val(1);
-  Value _2 = i32_val(2);
-  Value _4 = i32_val(4);
-  Value _16 = i32_val(16);
-  Value _32 = i32_val(32);
-  Value _fpw0 = i32_val(fpw[0]);
-  Value _fpw1 = i32_val(fpw[1]);
-
-  // A info
-  auto aRep = mmaLayout.getMMAv1Rep(0);
-  auto aSpw = mmaLayout.getMMAv1ShapePerWarp(0);
-  // B info
-  auto bSpw = mmaLayout.getMMAv1ShapePerWarp(1);
-  auto bRep = mmaLayout.getMMAv1Rep(1);
-
-  SmallVector<int, 2> rep({aRep[0], bRep[1]});
-  SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
-  SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
-
-  Value lane = urem(thread, _32);
-  Value warp = udiv(thread, _32);
-
-  Value warp0 = urem(warp, i32_val(wpt[0]));
-  Value warp12 = udiv(warp, i32_val(wpt[0]));
-  Value warp1 = urem(warp12, i32_val(wpt[1]));
-
-  // warp offset
-  Value offWarpM = mul(warp0, i32_val(spw[0]));
-  Value offWarpN = mul(warp1, i32_val(spw[1]));
-  // quad offset
-  Value offQuadM = mul(udiv(and_(lane, _16), _4), _fpw0);
-  Value offQuadN = mul(udiv(and_(lane, _16), _4), _fpw1);
-  // pair offset
-  Value offPairM = udiv(urem(lane, _16), _4);
-  offPairM = urem(offPairM, _fpw0);
-  offPairM = mul(offPairM, _4);
-  Value offPairN = udiv(urem(lane, _16), _4);
-  offPairN = udiv(offPairN, _fpw0);
-  offPairN = urem(offPairN, _fpw1);
-  offPairN = mul(offPairN, _4);
-
-  // sclare
-  offPairM = mul(offPairM, i32_val(rep[0] / 2));
-  offQuadM = mul(offQuadM, i32_val(rep[0] / 2));
-  offPairN = mul(offPairN, i32_val(rep[1] / 2));
-  offQuadN = mul(offQuadN, i32_val(rep[1] / 2));
-
-  // quad pair offset
-  Value offLaneM = add(offPairM, offQuadM);
-  Value offLaneN = add(offPairN, offQuadN);
-  // a, b offset
-  Value offsetAM = add(offWarpM, offLaneM);
-  Value offsetBN = add(offWarpN, offLaneN);
-  // m indices
-  Value offsetCM = add(and_(lane, _1), offsetAM);
-  SmallVector<Value> idxM;
-  for (unsigned m = 0; m < shape[0]; m += shapePerCTA[0])
-    for (unsigned mm = 0; mm < rep[0]; ++mm)
-      idxM.push_back(add(offsetCM, i32_val(m + mm * 2)));
-
-  // n indices
-  Value offsetCN = add((and_(lane, _2)), (add(offWarpN, offPairN)));
-  SmallVector<Value> idxN;
-  for (int n = 0; n < shape[1]; n += shapePerCTA[1]) {
-    for (int nn = 0; nn < rep[1]; ++nn) {
-      idxN.push_back(add(
-          offsetCN, i32_val(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1])));
-      idxN.push_back(
-          add(offsetCN,
-              i32_val(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1] + 1)));
-    }
-  }
-
-  SmallVector<SmallVector<Value>> axes({idxM, idxN});
-
-  // product the axis M and axis N to get coords, ported from
-  // generator::init_idx method from triton2.0
-
-  // TODO[Superjomn]: check the order.
-  SmallVector<CoordTy> coords;
-  for (Value x1 : axes[1]) {   // N
-    for (Value x0 : axes[0]) { // M
-      SmallVector<Value, 2> idx(2);
-      idx[0] = x0; // M
-      idx[1] = x1; // N
-      coords.push_back(std::move(idx));
-    }
-  }
-
-  return coords; // {M,N} in row-major
-}
-} // namespace SharedToDotOperandMMAv1
-
 namespace mlir {
 
 namespace triton::gpu {
@@ -785,8 +680,6 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
           mul(multiDimWarpId[rank - 1], i32_val(instrShape[rank - 1]));
       mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
       mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
-    } else if (mmaLayout.isVolta()) {
-      // Volta doesn't follow the pattern here.
     } else {
       llvm_unreachable("Unexpected MMALayout version");
     }
@@ -815,13 +708,6 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
       multiDimOffset[rank - 1] =
           add(multiDimOffset[rank - 1], i32_val(multiDimCTAInRepId[rank - 1] *
                                                 shapePerCTATile[rank - 1]));
-    } else if (mmaLayout.isVolta()) {
-      auto [isARow, isBRow, isAVec4, isBVec4, _] =
-          mmaLayout.decodeVoltaLayoutStates();
-      auto coords = SharedToDotOperandMMAv1::getMNCoords(
-          threadId, loc, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
-          isARow, isBRow, isAVec4, isBVec4);
-      return coords[elemId];
     } else {
       llvm_unreachable("Unexpected MMALayout version");
     }

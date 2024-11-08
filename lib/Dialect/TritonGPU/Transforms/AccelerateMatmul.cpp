@@ -167,7 +167,6 @@ static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
 
 class BlockedToMMA : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
-  mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
   mutable llvm::DenseMap<Operation *, unsigned> dotOpInstNs;
 
   static bool bwdFilter(Operation *op) {
@@ -266,47 +265,13 @@ public:
     auto oldAType = dotOp.getA().getType();
     auto oldBType = dotOp.getB().getType();
 
-    NvidiaMmaEncodingAttr mmaEnc;
-    if (versionMajor == 1) {
-      SetVector<Operation *> aBwdSlices, bBwdSlices;
-      auto isCvt = [](Operation *op) { return isa<ConvertLayoutOp>(op); };
-      mlir::BackwardSliceOptions opt;
-      opt.omitBlockArguments = true;
-      opt.filter = isCvt;
-      getBackwardSlice(a, &aBwdSlices, opt);
-      getBackwardSlice(b, &bBwdSlices, opt);
-      // get the source of the first conversion found in slices
-      auto getCvtArgOrder = [](Operation *op) {
-        return mlir::cast<BlockedEncodingAttr>(
-                   cast<ConvertLayoutOp>(op).getSrc().getType().getEncoding())
-            .getOrder();
-      };
-      bool isARow = true;
-      bool isBRow = true;
-      Operation *aOp = a.getDefiningOp();
-      Operation *bOp = b.getDefiningOp();
-      if (!aBwdSlices.empty())
-        aOp = aBwdSlices[0];
-      if (!bBwdSlices.empty())
-        bOp = bBwdSlices[0];
-      if (aOp)
-        isARow = getCvtArgOrder(aOp)[0] == 1;
-      if (bOp)
-        isBRow = getCvtArgOrder(bOp)[0] == 1;
-
-      mmaEnc = NvidiaMmaEncodingAttr::get(
-          oldRetType.getContext(), versionMajor, numWarps, CTALayout,
-          instrShape, oldAType.getShape(), oldBType.getShape(), retShapePerCTA,
-          isARow, isBRow, mmaV1Counter++);
-    } else {
-      assert(versionMajor == 2 || versionMajor == 3);
-      int versionMinor = computeCapability == 75 ? 1 : 0;
-      auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
-                                          numWarps, instrShape);
-      mmaEnc = NvidiaMmaEncodingAttr::get(oldRetType.getContext(), versionMajor,
-                                          versionMinor, warpsPerTile, CTALayout,
-                                          instrShape);
-    }
+    assert(versionMajor == 2 || versionMajor == 3);
+    int versionMinor = computeCapability == 75 ? 1 : 0;
+    auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
+                                        numWarps, instrShape);
+    auto mmaEnc = NvidiaMmaEncodingAttr::get(
+        oldRetType.getContext(), versionMajor, versionMinor, warpsPerTile,
+        CTALayout, instrShape);
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mmaEnc);
     // convert accumulator
