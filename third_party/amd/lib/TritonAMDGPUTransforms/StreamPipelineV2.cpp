@@ -88,7 +88,7 @@ namespace {
 // 4. Finally the schedule will be passed to the PipelineExpander to rewrite
 //    accordingly. The new implementation will consist of:
 //    a. Prologue: containing the ramp-up of num_stages-1 stages for
-//       iteratorions i=0 to num_stages-1.
+//       iteratorions i=[0, num_stages-1).
 //    b. New loop: ordered by cluster and iterated on each operation by
 //       `i + (num_stages-op_stage)`.
 //    c. Epilogue: ramp-down of the last `num_stages-1` iterations for the
@@ -99,8 +99,8 @@ namespace {
 class StreamPipeliner {
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, bool _prefetch)
-      : forOp(_forOp), prefetch(_prefetch ? 1 : 0),
-        numStages(_numStages + prefetch), schedule(numStages),
+      : forOp(_forOp), prefetch(_prefetch), numStages(_numStages + prefetch),
+        schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
@@ -192,9 +192,11 @@ private:
 } // namespace
 
 // Init Schedule Config based on settings and loop characteristics.
-// Create clusters in order of ops in loop.
-//   WARNING: do not reorder schedule.clusters.newAtBack() calls
-//            unless you want a different operation order in the loop.
+// Create clusters in order of ops in loop. This can interleave ops
+// from different stages in the same cluster to achieve better backend
+// scheduling.
+//   WARNING: Changing the order of schedule.clusters.newAtBack() calls
+//            can cause invalid schedules to be produced.
 void StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   int lastStage = numStages - 1;
   config.resize(SCHED_TAIL + 1);

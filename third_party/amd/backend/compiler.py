@@ -221,7 +221,7 @@ class HIPBackend(BaseBackend):
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
                                              "equivalent behavior in the past.")
-            prefetch = bool(os.getenv("TRITON_HIP_STREAM_PREFETCH", "0"))
+            prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
             amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages, prefetch)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)

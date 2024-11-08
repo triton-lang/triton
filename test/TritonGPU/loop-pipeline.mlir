@@ -103,7 +103,7 @@
 // Prefetch pipelining adds another stage in between global load and compute.
 // This stage will local_store, then local_load, creating a prefetch from shared
 // memory into a register buffer for compute.
-// 
+//
 // AMD_PREFETCH-LABEL: tt.func @matmul_loop
 //       AMD_PREFETCH:   triton_gpu.local_alloc
 //       AMD_PREFETCH:   triton_gpu.local_alloc
