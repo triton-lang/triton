@@ -249,6 +249,16 @@ void init_triton_ir(py::module &&m) {
       .def("is_integer",
            [](Type &self, unsigned width) { return self.isInteger(width); })
       .def("is_fp16", &Type::isF16)
+      .def("__eq__",
+           [](Type &self, py::object &other) {
+             Type *other_ty = py::cast<Type *>(other);
+             return (other_ty != nullptr) && (*other_ty == self);
+           })
+      .def("__ne__",
+           [](Type &self, py::object &other) {
+             Type *other_ty = py::cast<Type *>(other);
+             return (other_ty == nullptr) || (*other_ty != self);
+           })
       .def("__str__", [](Type &self) {
         std::string str;
         llvm::raw_string_ostream os(str);
