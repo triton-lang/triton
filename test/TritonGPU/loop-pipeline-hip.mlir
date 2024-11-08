@@ -164,12 +164,12 @@ module attributes {"triton_gpu.target" = "hip:gfx942", "triton_gpu.num-ctas" = 1
 
 // CHECK-LABEL: tt.func public @add_barrier_kernel
 // CHECK:  tt.load
-// CHECK:  gpu.barrier
 // CHECK:  scf.for
 // CHECK:    tt.load
 // CHECK:    gpu.barrier
 // CHECK:    tt.store
 // CHECK:    scf.yield
+// CHECK:  gpu.barrier
 // CHECK:  tt.store
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
