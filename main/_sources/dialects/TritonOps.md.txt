@@ -843,7 +843,7 @@ return $libpath/$libname:$symbol($args...)
 
 Traits: `Elementwise`, `SameOperandsAndResultEncoding`, `SameVariadicOperandSize`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
+Interfaces: `ConditionallySpeculatable`, `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -1162,6 +1162,47 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of integer values
+
+### `tt.make_tensor_descriptor` (triton::MakeTensorDescOp)
+
+_Make a tensor descriptor type with meta information of the parent tensor and block size_
+
+
+Syntax:
+
+```
+operation ::= `tt.make_tensor_descriptor` $base `,` `[` $shape `]` `,` `[` $strides `]` attr-dict `:` type($base) `,` type($result)
+```
+
+`tt.make_tensor_descriptor` takes both meta information of the parent tensor and the block size,
+and returns a descriptor object which can be used to load/store from the tensor in global memory.
+
+Traits: `AlwaysSpeculatableImplTrait`, `SameVariadicOperandSize`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>tensorShape</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `base` | ptr
+| `shape` | variadic of 32-bit signless integer
+| `strides` | variadic of 64-bit signless integer
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ptr
 
 ### `tt.make_tensor_ptr` (triton::MakeTensorPtrOp)
 

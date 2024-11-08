@@ -145,11 +145,11 @@ kernel, including the time spent autotuning and the best configuration.</p>
 <li><p><strong>restore_value</strong> (<em>list</em><em>[</em><em>str</em><em>]</em>) – a list of argument names whose value will be restored after evaluating any configs.</p></li>
 <li><p><strong>pre_hook</strong> (<em>lambda args</em><em>, </em><em>reset_only</em>) – a function that will be called before the kernel is called.
 This overrides the default pre_hook used for ‘reset_to_zero’ and ‘restore_value’.
-‘args’: a list of arguments passed to the kernel.
+‘kwargs’: a dict of all arguments passed to the kernel.
 ‘reset_only’: a boolean indicating whether the pre_hook is called to reset the values only, without a corresponding post_hook.</p></li>
 <li><p><strong>post_hook</strong> (<em>lambda args</em><em>, </em><em>exception</em>) – a function that will be called after the kernel is called.
 This overrides the default post_hook used for ‘restore_value’.
-‘args’: a list of arguments passed to the kernel.
+‘kwargs’: a dict of all arguments passed to the kernel.
 ‘exception’: the exception raised by the kernel in case of a compilation or runtime error.</p></li>
 <li><p><strong>warmup</strong> (<em>int</em>) – warmup time (in ms) to pass to benchmarking (deprecated).</p></li>
 <li><p><strong>rep</strong> (<em>int</em>) – repetition time (in ms) to pass to benchmarking (deprecated).</p></li>

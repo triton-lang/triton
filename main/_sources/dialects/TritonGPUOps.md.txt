@@ -148,6 +148,39 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values
 
+### `triton_gpu.global_scratch_alloc` (triton::gpu::GlobalScratchAllocOp)
+
+_Allocate a global memory buffer_
+
+
+Syntax:
+
+```
+operation ::= `triton_gpu.global_scratch_alloc` attr-dict `:` type($result)
+```
+
+This operation allocates a buffer in global memory.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Allocate on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>nbytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>alignment</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ptr
+
 ### `triton_gpu.local_alloc` (triton::gpu::LocalAllocOp)
 
 _Allocate tensor_
