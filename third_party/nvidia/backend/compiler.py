@@ -268,6 +268,7 @@ class CUDABackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
@@ -302,6 +303,8 @@ class CUDABackend(BaseBackend):
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["global_scratch_size"] = src.get_int_attr("triton_gpu.global_scratch_memory_size")
+        metadata["global_scratch_align"] = src.get_int_attr("triton_gpu.global_scratch_memory_alignment")
         ret = str(llvm_mod)
         del llvm_mod
         del context

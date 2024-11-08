@@ -261,6 +261,14 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
   return getMatrixOrder(rank, rowMajor);
 }
 
+SmallVector<unsigned> getRepOrder(Attribute layout) {
+  if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
+    return distributedLayout.getRepOrder();
+  else
+    llvm::report_fatal_error("Unimplemented usage of getRepOrder");
+  return {};
+}
+
 SmallVector<unsigned> getWarpOrder(Attribute layout) {
   if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
     return distributedLayout.getWarpOrder();
@@ -269,13 +277,13 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
   return {};
 }
 
+// Returns the order of the elements in a layout from the fastest running
+// dimension to the slowest
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     return llvm::to_vector(blockedLayout.getOrder());
   }
   if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
-    // Order doesn't really matter. We just have to be consistent when unpacking
-    // the output elements in the LLVM lowerings. We choose row-major
     auto distributedLayout = cast<DistributedEncodingTrait>(layout);
     auto rank = distributedLayout.getWarpsPerCTA().size();
     return getMatrixOrder(rank, /*rowMajor*/ true);
@@ -643,6 +651,9 @@ unsigned BlockedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 // If we only had BlockedEncodingAttr, we could simply return ArrayRefs here.
 // But we need to have a consistent interface with e.g. SliceEncodingAttr, which
 // computes some of these fields.
+SmallVector<unsigned> BlockedEncodingAttr::getRepOrder() const {
+  return SmallVector<unsigned>(getOrder());
+}
 SmallVector<unsigned> BlockedEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
@@ -708,6 +719,10 @@ SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 unsigned SliceEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                    Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+SmallVector<unsigned> SliceEncodingAttr::getRepOrder() const {
+  auto parentRepOrder = ::getRepOrder(getParent());
+  return eraseOrder(parentRepOrder, getDim());
 }
 SmallVector<unsigned> SliceEncodingAttr::getCTASplitNum() const {
   SmallVector<unsigned> res = ::getCTASplitNum(getParent());
@@ -1636,6 +1651,10 @@ AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
   return {kDim, nDim};
 }
 
+SmallVector<unsigned> AMDMfmaEncodingAttr::getRepOrder() const {
+  llvm::report_fatal_error("NYI. AMDMfmaEncodingAttr::getRepOrder");
+}
+
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
                                       int kWidth, int opIdx) const {
@@ -1718,6 +1737,9 @@ AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   shapePerCTATile[rank - 2] *= mnkDim[0];
   shapePerCTATile[rank - 1] *= mnkDim[1];
   return shapePerCTATile;
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getRepOrder() const {
+  llvm::report_fatal_error("NYI. AMDWmmaEncodingAttr::getRepOrder");
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
@@ -1843,6 +1865,10 @@ bool NvidiaMmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
 
 bool NvidiaMmaEncodingAttr::isHopper() const { return getVersionMajor() == 3; }
 
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getRepOrder() const {
+  auto rank = getWarpsPerCTA().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
+}
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
@@ -1917,6 +1943,12 @@ NvidiaMmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
     return {16 * getWarpsPerCTA()[0], instrShape[1] * getWarpsPerCTA()[1]};
   }
   llvm::report_fatal_error("Unexpected MMA layout version found");
+}
+
+SmallVector<unsigned>
+NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  auto rank = getWarpsPerCTA().size();
+  return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
 }
 
 SmallVector<int64_t>
@@ -1995,6 +2027,15 @@ NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
 //===----------------------------------------------------------------------===//
 // DotOperand Encoding
 //===----------------------------------------------------------------------===//
+SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
+  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent())) {
+    return mma.getRepOrderForOperand(getOpIdx());
+  }
+  llvm::report_fatal_error(
+      "getRepOrder not implemented for DotOperandEncodingAttr");
+  return {};
+}
+
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadsPerWarp() const {
   auto parent = getParent();
   if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {

@@ -947,6 +947,41 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
   ];
 }
 
+//
+// Make Tensor Descriptor Op
+//
+def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor",
+                               [Pure,
+                                SameVariadicOperandSize]> {
+  let summary = "Make a tensor descriptor type with meta information of the parent tensor and block size";
+
+  let description = [{
+      `tt.make_tensor_descriptor` takes both meta information of the parent tensor and the block size,
+      and returns a descriptor object which can be used to load/store from the tensor in global memory.
+  }];
+
+  let arguments = (ins
+    TT_Ptr:$base,
+    Variadic<I32>:$shape,
+    Variadic<I64>:$strides,
+    DenseI32ArrayAttr:$tensorShape
+  );
+
+  // TODO(peterbell10): define a custom IR type to represent descriptors
+  let results = (outs TT_Ptr:$result);
+
+  let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` attr-dict `:` type($base) `,` type($result)";
+
+  let builders = [
+    OpBuilder<(ins
+        "Value":$base,
+        "ValueRange":$shape,
+        "ValueRange":$strides,
+        "ArrayRef<int32_t>":$tensorShape
+    )>
+  ];
+}
+
 // The following ops, including `call`, `func`, and `return` are copied and modified from
 // https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Func/IR/FuncOps.td
 // We could revert it back once MLIR has a better inliner interface.
