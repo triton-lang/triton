@@ -293,3 +293,22 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     tt.return
   }
 }
+
+// -----
+
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
+#shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.shared = 20608 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @shared_to_mmav3_k32(
+    %arg0: tensor<64x64xbf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>,
+    %arg1: !tt.memdesc<64x64xbf16, #shared, #triton_gpu.shared_memory>,
+    %arg2: tensor<64x64xf32, #mma>) {
+    %out = triton_nvidia_gpu.warp_group_dot %arg0, %arg1, %arg2 {isAsync = true}
+      : tensor<64x64xbf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+      * !tt.memdesc<64x64xbf16, #shared, #triton_gpu.shared_memory>
+      -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+}
+

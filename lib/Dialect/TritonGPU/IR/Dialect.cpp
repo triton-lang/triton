@@ -1989,12 +1989,13 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand(
   // H100
   if (isHopper()) {
     assert(opIdx == 0);
-    auto instrMNK = getInstrShape();
-    int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * warpsPerCTAM);
-    int repK = ceil<unsigned>(shapePerCTA[1], instrMNK[2]);
-    // For each WGMMA instr, a 2x2 matrix fragment is loaded. Each thread holds
-    // kWidth elements for each quadrant. WGMMA is repeated repM * repK times.
-    return 4 * kWidth * repM * repK;
+    auto rep = getRepForOperand(
+        shapePerCTA, eltTy.getIntOrFloatBitWidth(), opIdx);
+    // For each (64, N, 16) WGMMA instr, a 2x2 matrix fragment is loaded.
+    // Each thread holds kWidth elements for each quadrant.
+    // WGMMA is repeated repM * repK times. The number of elems is the same
+    // regardless of the instr shape K.
+    return 4 * kWidth * rep[0] * rep[1] * rep[2];
   }
   llvm_unreachable("unknown mma layout");
 }
