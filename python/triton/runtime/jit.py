@@ -918,6 +918,9 @@ class TensorWrapper:
     def to(self, device):
         return TensorWrapper(self.base.to(device), self.dtype)
 
+    def new_empty(self, sizes):
+        return TensorWrapper(self.base.new_empty(sizes), self.dtype)
+
 
 def reinterpret(tensor, dtype):
     if isinstance(tensor, TensorWrapper):
