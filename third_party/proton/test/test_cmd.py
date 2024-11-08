@@ -1,10 +1,8 @@
 import triton
-import triton.profiler as proton
 import pytest
 import subprocess
 import json
 import pathlib
-import numpy as np
 
 
 def test_help():

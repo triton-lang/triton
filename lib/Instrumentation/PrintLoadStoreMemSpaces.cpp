@@ -24,7 +24,7 @@ struct LoadStoreMemSpace : public PassInfoMixin<LoadStoreMemSpace> {
 } // end anonymous namespace
 
 std::map<int, std::string> AddrSpaceMap = {
-    {0, "FLAT"}, {1, "GLOBAL"}, {3, "SHARED"}, {4, "CONSTANT"}};
+    {0, "FLAT"}, {1, "GLOBAL"}, {3, "SHARED"}, {4, "CONSTANT"}, {5, "SCRATCH"}};
 
 std::map<std::string, uint32_t> LocationCounterSourceMap;
 
