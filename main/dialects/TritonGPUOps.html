@@ -376,7 +376,7 @@ operands are the same as tt.load.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.global_scratch_alloc` attr-dict `:` type($result)
 </pre></div>
 </div>
-<p>This operation allocates a buffer in global memory.</p>
+<p>This operation allocates a buffer in global memory that is private to the current program.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Allocate</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
