@@ -174,12 +174,12 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 // Category 3: two dots in the for loop. Make sure the optimization is not applied
 // should NOT apply: two dots
 // CHECK-LABEL: sink_2nd_load_256x256x64_two_dot
-//       CHECK: triton_gpu.local_load
+//  CHECK: tt.load
+//  CHECK-NEXT: tt.load
+//  CHECK-NEXT: triton_gpu.local_load
 //  CHECK-NEXT: triton_gpu.local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: tt.dot
-//  CHECK-NEXT: tt.load
-//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: triton_gpu.local_store
 //  CHECK-NEXT: triton_gpu.local_store
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
