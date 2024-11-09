@@ -371,10 +371,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    // TODO (Keren): Currently, we handle general mma/blocked/slice ->
-    // mma/blocked/slice conversions.
-    // The following tasks must be completed before we can remove the layoutIsOK
-    // check:
+    // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
+    // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
+    // completed before we can remove the layoutIsOK check:
     // 1. Support for AMD's MFMA and WMMA
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
