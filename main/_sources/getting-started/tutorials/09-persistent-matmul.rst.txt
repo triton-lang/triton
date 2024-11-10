@@ -48,15 +48,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    176.460 5452.087 ROOT
+    176.457 5452.166 ROOT
     ├─ nan 0.049 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
     ├─ nan 0.044 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 177.180 4266.357 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 4266.357 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 170.315 403.484 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 171.041 401.771 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 180.659 380.382 torch [M=8192, N=8192, K=512]
-       └─ nan 380.382 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 177.206 4265.734 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 4265.734 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 170.367 403.361 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 171.192 401.418 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 180.101 381.560 torch [M=8192, N=8192, K=512]
+       └─ nan 381.560 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -718,7 +718,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 19.434 seconds)
+   **Total running time of the script:** (0 minutes 19.438 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
