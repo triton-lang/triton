@@ -3,7 +3,7 @@ from .flags import get_profiling_on
 from functools import wraps
 
 
-class scope:
+class state:
     """
     A context manager and decorator for entering and exiting a state.
 
