@@ -31,7 +31,7 @@ class scope:
     def __enter__(self):
         if not get_profiling_on():
             return self
-        libproton.enter_state()
+        libproton.enter_state(self.name)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:

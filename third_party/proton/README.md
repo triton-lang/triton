@@ -168,7 +168,7 @@ In addition to `proton.scope`, we can also customize the call path of each GPU o
 
 The `state` is different from `scope` in several ways:
 
-1. State is not recursive; each operation can have only a single state. Recursively decorating states will cause inner states to overwrite outer states.
+1. State is not recursive; each operation can have only a single state. Inner most state will overwrite the outer most state.
 2. A states is a suffix, meaning that the original call path will append a state before the name of each operation.
 3. State is compatible with both Python and shadow contexts.
 
