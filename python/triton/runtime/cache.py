@@ -256,7 +256,7 @@ __cache_cls = FileCacheManager
 __cache_cls_nme = "DEFAULT"
 
 
-def _base64(key):
+def _base32(key):
     # Assume key is a hex string.
     return base64.b32encode(bytes.fromhex(key)).decode("utf-8").rstrip("=")
 
@@ -274,15 +274,15 @@ def get_cache_manager(key) -> CacheManager:
         __cache_cls = getattr(module, clz_nme)
         __cache_cls_nme = user_cache_manager
 
-    return __cache_cls(_base64(key))
+    return __cache_cls(_base32(key))
 
 
 def get_override_manager(key) -> CacheManager:
-    return __cache_cls(_base64(key), override=True)
+    return __cache_cls(_base32(key), override=True)
 
 
 def get_dump_manager(key) -> CacheManager:
-    return __cache_cls(_base64(key), dump=True)
+    return __cache_cls(_base32(key), dump=True)
 
 
 def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
@@ -292,4 +292,4 @@ def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
     for kw in kwargs:
         key = f"{key}-{kwargs.get(kw)}"
     key = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    return _base64(key)
+    return _base32(key)
