@@ -230,6 +230,7 @@ class CUDABackend(BaseBackend):
         if capability // 10 >= 8:
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+            passes.ttgpuir.add_loop_scheduling(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
@@ -268,6 +269,7 @@ class CUDABackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
@@ -302,6 +304,8 @@ class CUDABackend(BaseBackend):
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["global_scratch_size"] = src.get_int_attr("triton_gpu.global_scratch_memory_size")
+        metadata["global_scratch_align"] = src.get_int_attr("triton_gpu.global_scratch_memory_alignment")
         ret = str(llvm_mod)
         del llvm_mod
         del context
