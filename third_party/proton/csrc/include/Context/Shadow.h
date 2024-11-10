@@ -17,10 +17,8 @@ public:
 
   void exitScope(const Scope &scope) override final;
 
-protected:
-  std::vector<Context> getContextsImpl() override final { return contextStack; }
-
 private:
+  std::vector<Context> getContextsImpl() override final { return contextStack; }
   std::vector<Context> contextStack;
 };
 

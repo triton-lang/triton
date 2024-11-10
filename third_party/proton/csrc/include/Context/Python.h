@@ -12,7 +12,7 @@ public:
   PythonContextSource() = default;
   ~PythonContextSource() = default;
 
-protected:
+private:
   std::vector<Context> getContextsImpl() override final;
 };
 
