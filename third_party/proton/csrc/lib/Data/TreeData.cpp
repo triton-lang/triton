@@ -104,6 +104,8 @@ void TreeData::init() { tree = std::make_unique<Tree>(); }
 void TreeData::startOp(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads
   std::unique_lock<std::shared_mutex> lock(mutex);
+  if (dummyState)
+    return;
   std::vector<Context> contexts;
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
@@ -136,8 +138,8 @@ size_t TreeData::addScope(size_t parentScopeId, const std::string &name) {
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactived, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
+  // The profile data is deactivated or in the dummy state, ignore the metric
+  if (scopeIdIt == scopeIdToContextId.end() || dummyState)
     return;
   auto contextId = scopeIdIt->second;
   auto &node = tree->getNode(contextId);
@@ -151,6 +153,8 @@ void TreeData::addMetrics(size_t scopeId,
                           const std::map<std::string, MetricValueType> &metrics,
                           bool aggregable) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  if (dummyState)
+    return;
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   auto contextId = Tree::TreeNode::DummyId;
   if (scopeIdIt == scopeIdToContextId.end()) {
@@ -171,6 +175,11 @@ void TreeData::addMetrics(size_t scopeId,
       node.flexibleMetrics.at(metricName).updateValue(metricValue);
     }
   }
+}
+
+void TreeData::flush() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  scopeIdToContextId.clear();
 }
 
 void TreeData::dumpHatchet(std::ostream &os) const {

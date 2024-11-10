@@ -137,26 +137,6 @@ def test_metrics(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["metrics"]["foo"] == 1.0
 
 
-def test_metrics_ignore(tmp_path: pathlib.Path):
-
-    @triton.jit
-    def foo(x, y):
-        tl.store(y, tl.load(x))
-
-    x = torch.tensor([2], device="cuda")
-    y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_metrics_ignore.hatchet"
-    session_id = proton.start(str(temp_file.with_suffix("")))
-    proton.deactivate(session_id)
-    with proton.scope("test0", {"foo": 1.0}):
-        foo[(1, )](x, y)
-    proton.activate(session_id)
-    proton.finalize()
-    with temp_file.open() as f:
-        data = json.load(f)
-    assert len(data[0]["children"]) == 0
-
-
 def test_scope_backward(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_scope_backward.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -242,14 +222,15 @@ def test_pcsampling(tmp_path: pathlib.Path):
     assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
-def test_deactivate(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_deactivate.hatchet"
+@pytest.mark.parametrize("flush", [True, False])
+def test_deactivate_torch(tmp_path: pathlib.Path, flush: bool):
+    temp_file = tmp_path / "test_deactivate_torch.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
-    proton.deactivate(session_id)
+    proton.deactivate(session_id, flush=flush)
     torch.randn((10, 10), device="cuda")
     proton.activate(session_id)
     torch.zeros((10, 10), device="cuda")
-    proton.deactivate(session_id)
+    proton.deactivate(session_id, flush=flush)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -257,3 +238,24 @@ def test_deactivate(tmp_path: pathlib.Path):
     assert "device_id" not in data[0]["metrics"]
     assert len(data[0]["children"]) == 1
     assert "device_id" in data[0]["children"][0]["metrics"]
+
+
+@pytest.mark.parametrize("flush", [True, False])
+def test_deactivate_triton(tmp_path: pathlib.Path, flush: bool):
+
+    @triton.jit
+    def foo(x, y):
+        tl.store(y, tl.load(x))
+
+    x = torch.tensor([2], device="cuda")
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_deactivate_triton.hatchet"
+    session_id = proton.start(str(temp_file.with_suffix("")))
+    proton.deactivate(session_id, flush=flush)
+    with proton.scope("test0", {"foo": 1.0}):
+        foo[(1, )](x, y)
+    proton.activate(session_id)
+    proton.finalize()
+    with temp_file.open() as f:
+        data = json.load(f)
+    assert len(data[0]["children"]) == 0

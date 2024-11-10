@@ -141,14 +141,17 @@ By default, proton profiles are in the *json* format and can be read by *Hatchet
 pip install llnl-hatchet
 proton-viewer -m time/s <profile.hatchet>
 ```
+
 NOTE: `pip install hatchet` does not work because the API is slightly different.
 
 ### Visualizing sorted profile data
+
 In addition visualizing the profile data on terminal through Hatchet. A sorted list of the kernels by the first metric can be done using the --print-sorted flag with proton-viewer
 
 ```bash
 proton-viewer -m time/ns,time/% <profile.hatchet> --print-sorted
 ```
+
 prints the sorted kernels by the time/ns since it is the first listed.
 
 More options can be found by running the following command.
@@ -158,13 +161,39 @@ proton-viewer -h
 ```
 
 ### Advanced features
+
+#### Skip profiling regions
+
+There are two ways to skip a certain region using proton.
+The first and the recommended way is to use the `proton.deactivate(session_id)` and `proton.activate(session_id)` functions.
+It's simple and robust.
+Every time we deactivate a session, we will synchronize the CPU and the GPU, flush all the profiling data when deactivate, and attribute all the profiling data to the region.
+The other way is to use the skip field in the scope function, e.g., `with proton.scope("test", skip=True):`.
+This way all the nested regions underlying will not attribute any profiling data to the "test" region.
+But it should be used with caution because its children scope may not be skipped.
+And notice that we still profile all kernels but just don't attribute the profiling data to the region to reduce the overhead of turn on/off the profiling.
+See the following example:
+
+```python
+import triton.profiler as proton
+
+with proton.scope("test0", skip=True):
+    foo0[1,](x, y)  # This kernel will not have profiling data
+    with proton.scope("test1", skip=False):
+        foo1[1,](x, y) # This kernel will have profiling data
+```
+
+#### Instrumentation (experimental)
+
 In addition to profiling, Proton also incorporates MLIR/LLVM based compiler instrumentation passes to get Triton level analysis
 and optimization information. This feature is under active development and the list of available passes is expected to grow.
 
-#### Available passes
+##### Available passes
+
 print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
 
 Example usage with the Proton matmul tutorial:
+
 ```bash
 $ proton --instrument=print-mem-spaces matmul.py
 0     matmul_kernel     matmul.py:180:20     SHARED     STORE
@@ -172,9 +201,10 @@ $ proton --instrument=print-mem-spaces matmul.py
 2     matmul_kernel     matmul.py:180:20     SHARED     LOAD
 3     matmul_kernel     matmul.py:181:20     SHARED     LOAD
 ```
+
 Notes: The instrument functionality is currently only available from the command line. Additionally the instrument and profile command line arguments can not be use simulantously.
 
-### Instruction sampling (experimental)
+#### Instruction sampling (experimental)
 
 Proton supports instruction sampling on NVIDIA GPUs.
 Please note that this is an experimental feature and may not work on all GPUs.

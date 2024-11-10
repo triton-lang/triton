@@ -33,9 +33,16 @@ public:
                           const std::map<std::string, MetricValueType> &metrics,
                           bool aggregable) = 0;
 
+  /// Clean up internal data structures.
+  virtual void flush() = 0;
+
   /// Dump the data to the given output format.
   /// [MT] Thread-safe.
   void dump(OutputFormat outputFormat);
+
+  /// Set the dummy state of the data. No operations will be recorded if the
+  /// dummy state is set.
+  void setDummyState(bool value);
 
 protected:
   /// The actual implementation of the dump operation.
@@ -44,6 +51,7 @@ protected:
 
   mutable std::shared_mutex mutex;
   const std::string path{};
+  bool dummyState{};
   ContextSource *contextSource{};
 };
 
