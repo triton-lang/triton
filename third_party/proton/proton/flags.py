@@ -28,6 +28,6 @@ def set_command_line():
     command_line = True
 
 
-def is_command_line():
+def get_command_line():
     global command_line
     return command_line
