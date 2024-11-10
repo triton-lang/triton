@@ -22,30 +22,29 @@ void initProton(pybind11::module &&m) {
           return sessionId;
         });
 
-  m.def("activate", [](std::optional<size_t> sessionId) {
-    if (sessionId.has_value()) {
-      SessionManager::instance().activateSession(*sessionId);
-    } else {
-      SessionManager::instance().activateAllSessions();
-    }
+  m.def("activate", [](size_t sessionId) {
+    SessionManager::instance().activateSession(sessionId);
   });
 
-  m.def("deactivate", [](std::optional<size_t> sessionId, bool flush) {
-    if (sessionId.has_value()) {
-      SessionManager::instance().deactivateSession(*sessionId, flush);
-    } else {
-      SessionManager::instance().deactivateAllSessions(flush);
-    }
+  m.def("activate_all",
+        []() { SessionManager::instance().activateAllSessions(); });
+
+  m.def("deactivate", [](size_t sessionId, bool flush) {
+    SessionManager::instance().deactivateSession(sessionId, flush);
   });
 
-  m.def("finalize", [](std::optional<size_t> sessionId,
-                       const std::string &outputFormat) {
+  m.def("deactivate_all", [](bool flush) {
+    SessionManager::instance().deactivateAllSessions(flush);
+  });
+
+  m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
     auto outputFormatEnum = parseOutputFormat(outputFormat);
-    if (sessionId.has_value()) {
-      SessionManager::instance().finalizeSession(*sessionId, outputFormatEnum);
-    } else {
-      SessionManager::instance().finalizeAllSessions(outputFormatEnum);
-    }
+    SessionManager::instance().finalizeSession(sessionId, outputFormatEnum);
+  });
+
+  m.def("finalize_all", [](const std::string &outputFormat) {
+    auto outputFormatEnum = parseOutputFormat(outputFormat);
+    SessionManager::instance().finalizeAllSessions(outputFormatEnum);
   });
 
   m.def("record_scope", []() { return Scope::getNewScopeId(); });

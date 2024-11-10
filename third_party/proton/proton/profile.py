@@ -98,7 +98,10 @@ def activate(session: Optional[int] = None) -> None:
     """
     if get_command_line() and session != 0:
         raise ValueError("Only one session can be activated when running from the command line.")
-    libproton.activate(session)
+    if session is None:
+        libproton.activate_all()
+    else:
+        libproton.activate(session)
 
 
 def deactivate(session: Optional[int] = None, flush: Optional[bool] = True) -> None:
@@ -115,7 +118,10 @@ def deactivate(session: Optional[int] = None, flush: Optional[bool] = True) -> N
     """
     if get_command_line() and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
-    libproton.deactivate(session, flush)
+    if session is None:
+        libproton.deactivate_all(flush)
+    else:
+        libproton.deactivate(session, flush)
 
 
 def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> None:
@@ -133,7 +139,7 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
     """
     if session is None:
         set_profiling_off()
-        libproton.finalize(session, output_format)
+        libproton.finalize_all(output_format)
         unregister_triton_hook()
     else:
         if get_command_line() and session != 0:
