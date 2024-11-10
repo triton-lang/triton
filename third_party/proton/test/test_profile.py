@@ -211,7 +211,6 @@ def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
-    print(data)
 
 
 def test_pcsampling(tmp_path: pathlib.Path):
