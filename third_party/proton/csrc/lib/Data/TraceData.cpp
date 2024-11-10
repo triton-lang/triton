@@ -23,8 +23,6 @@ void TraceData::addMetrics(
   throw NotImplemented();
 }
 
-void TraceData::flush() { throw NotImplemented(); }
-
 void TraceData::doDump(std::ostream &os, OutputFormat outputFormat) const {
   throw NotImplemented();
 }

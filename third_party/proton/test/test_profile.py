@@ -187,6 +187,33 @@ def test_hook(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
+@pytest.mark.parametrize("context", ["shadow", "python"])
+def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
+    tmp_path = pathlib.Path("./")
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        x = args["x"]
+        # A gpu kernel, but it should be under the metadata state
+        y = x + 1
+        return {"name": f"foo_test", "res": y.sum().item()}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
+    with proton.scope("test0"):
+        foo[(1, )](x, 1, y, num_warps=4)
+    proton.finalize()
+    with temp_file.open() as f:
+        data = json.load(f)
+    print(data)
+
+
 def test_pcsampling(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support pc sampling")
@@ -222,26 +249,29 @@ def test_pcsampling(tmp_path: pathlib.Path):
     assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
-@pytest.mark.parametrize("flush", [True, False])
-def test_deactivate_torch(tmp_path: pathlib.Path, flush: bool):
+@pytest.mark.parametrize("context", ["shadow", "python"])
+def test_deactivate_torch(tmp_path: pathlib.Path, context: str):
     temp_file = tmp_path / "test_deactivate_torch.hatchet"
-    session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
-    proton.deactivate(session_id, flush=flush)
+    session_id = proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
+    proton.deactivate(session_id)
     torch.randn((10, 10), device="cuda")
     proton.activate(session_id)
     torch.zeros((10, 10), device="cuda")
-    proton.deactivate(session_id, flush=flush)
+    proton.deactivate(session_id)
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
     # Root shouldn't have device id
     assert "device_id" not in data[0]["metrics"]
     assert len(data[0]["children"]) == 1
-    assert "device_id" in data[0]["children"][0]["metrics"]
+    parent_frame = data[0]
+    while len(parent_frame["children"]) > 0:
+        parent_frame = parent_frame["children"][0]
+    assert "device_id" in parent_frame["metrics"]
 
 
-@pytest.mark.parametrize("flush", [True, False])
-def test_deactivate_triton(tmp_path: pathlib.Path, flush: bool):
+@pytest.mark.parametrize("context", ["shadow", "python"])
+def test_deactivate_triton(tmp_path: pathlib.Path, context: str):
 
     @triton.jit
     def foo(x, y):
@@ -251,7 +281,7 @@ def test_deactivate_triton(tmp_path: pathlib.Path, flush: bool):
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_deactivate_triton.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")))
-    proton.deactivate(session_id, flush=flush)
+    proton.deactivate(session_id)
     with proton.scope("test0", {"foo": 1.0}):
         foo[(1, )](x, y)
     proton.activate(session_id)

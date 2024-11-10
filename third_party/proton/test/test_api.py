@@ -150,6 +150,32 @@ def test_scope_properties(tmp_path: pathlib.Path):
             assert child["metrics"]["a"] == "1"
 
 
+def test_state(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_state.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+    proton.enter_scope("test0")
+    proton.enter_state("state")
+    proton.enter_scope("test1", metrics={"a": 1.0})
+    proton.exit_scope()
+    proton.exit_state()
+    proton.exit_scope()
+    proton.finalize()
+    assert temp_file.exists()
+    with temp_file.open() as f:
+        data = json.load(f)
+    # test0->test1->state
+    assert len(data[0]["children"]) == 1
+    child = data[0]["children"][0]
+    assert child["frame"]["name"] == "test0"
+    assert len(child["children"]) == 1
+    child = child["children"][0]
+    assert child["frame"]["name"] == "test1"
+    assert len(child["children"]) == 1
+    child = child["children"][0]
+    assert child["frame"]["name"] == "state"
+    assert child["metrics"]["a"] == 1.0
+
+
 def test_throw(tmp_path: pathlib.Path):
     # Catch an exception thrown by c++
     session_id = 100

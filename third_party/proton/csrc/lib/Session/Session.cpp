@@ -53,18 +53,13 @@ void throwIfSessionNotInitialized(
 } // namespace
 
 void Session::activate() {
-  data->setDummyState(false);
   profiler->start();
+  profiler->flush();
   profiler->registerData(data.get());
 }
 
-void Session::deactivate(bool flush) {
-  if (flush) {
-    profiler->flush();
-    data->flush();
-  } else {
-    data->setDummyState(true);
-  }
+void Session::deactivate() {
+  profiler->flush();
   profiler->unregisterData(data.get());
 }
 
@@ -96,15 +91,15 @@ void SessionManager::activateAllSessions() {
   }
 }
 
-void SessionManager::deactivateSession(size_t sessionId, bool flush) {
+void SessionManager::deactivateSession(size_t sessionId) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  deActivateSessionImpl(sessionId, flush);
+  deActivateSessionImpl(sessionId);
 }
 
-void SessionManager::deactivateAllSessions(bool flush) {
+void SessionManager::deactivateAllSessions() {
   std::unique_lock<std::shared_mutex> lock(mutex);
   for (auto iter : sessionActive) {
-    deActivateSessionImpl(iter.first, flush);
+    deActivateSessionImpl(iter.first);
   }
 }
 
@@ -116,17 +111,19 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   sessions[sessionId]->activate();
   registerInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   registerInterface<OpInterface>(sessionId, opInterfaceCounts);
+  registerInterface<ContextSource>(sessionId, contextSourceCounts);
 }
 
-void SessionManager::deActivateSessionImpl(size_t sessionId, bool flush) {
+void SessionManager::deActivateSessionImpl(size_t sessionId) {
   throwIfSessionNotInitialized(sessions, sessionId);
   if (!sessionActive[sessionId]) {
     return;
   }
   sessionActive[sessionId] = false;
-  sessions[sessionId]->deactivate(flush);
+  sessions[sessionId]->deactivate();
   unregisterInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   unregisterInterface<OpInterface>(sessionId, opInterfaceCounts);
+  unregisterInterface<ContextSource>(sessionId, contextSourceCounts);
 }
 
 void SessionManager::removeSession(size_t sessionId) {
@@ -161,7 +158,7 @@ void SessionManager::finalizeSession(size_t sessionId,
   if (!hasSession(sessionId)) {
     return;
   }
-  deActivateSessionImpl(sessionId, /*flush=*/true);
+  deActivateSessionImpl(sessionId);
   sessions[sessionId]->finalize(outputFormat);
   removeSession(sessionId);
 }
@@ -170,7 +167,7 @@ void SessionManager::finalizeAllSessions(OutputFormat outputFormat) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto sessionIds = std::vector<size_t>{};
   for (auto &[sessionId, session] : sessions) {
-    deActivateSessionImpl(sessionId, /*flush=*/true);
+    deActivateSessionImpl(sessionId);
     session->finalize(outputFormat);
     sessionIds.push_back(sessionId);
   }
@@ -226,6 +223,16 @@ void SessionManager::addMetrics(
   for (auto [sessionId, active] : sessionActive) {
     if (active) {
       sessions[sessionId]->data->addMetrics(scopeId, metrics, aggregable);
+    }
+  }
+}
+
+void SessionManager::setState(std::optional<Context> context) {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  for (auto iter : contextSourceCounts) {
+    auto [contextSource, count] = iter;
+    if (count > 0) {
+      contextSource->setState(context);
     }
   }
 }

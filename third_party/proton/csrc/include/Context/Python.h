@@ -2,13 +2,18 @@
 #define PROTON_CONTEXT_PYTHON_H_
 
 #include "Context.h"
+#include <optional>
 
 namespace proton {
 
 /// Unwind the Python stack and early return a list of contexts.
 class PythonContextSource : public ContextSource {
 public:
-  std::vector<Context> getContexts() override;
+  PythonContextSource() = default;
+  ~PythonContextSource() = default;
+
+protected:
+  std::vector<Context> getContextsImpl() override final;
 };
 
 } // namespace proton

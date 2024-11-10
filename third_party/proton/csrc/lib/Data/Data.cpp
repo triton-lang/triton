@@ -23,11 +23,6 @@ void Data::dump(OutputFormat outputFormat) {
   doDump(*out, outputFormat);
 }
 
-void Data::setDummyState(bool value) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  dummyState = value;
-}
-
 OutputFormat parseOutputFormat(const std::string &outputFormat) {
   if (toLower(outputFormat) == "hatchet") {
     return OutputFormat::Hatchet;

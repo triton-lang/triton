@@ -18,8 +18,6 @@ public:
                   const std::map<std::string, MetricValueType> &metrics,
                   bool aggregable) override final;
 
-  void flush() override final;
-
 protected:
   void startOp(const Scope &scope) override final;
 

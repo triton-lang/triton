@@ -55,8 +55,6 @@ processActivityKernel(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
   if (/*Not a valid context*/ !corrIdToExternId.contain(correlationId))
     return correlationId;
   auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
-  if (/*Skip this context*/ parentId == Scope::DummyScopeId)
-    return correlationId;
   if (kernel->graphId == 0) {
     // Non-graph kernels
     for (auto *data : dataSet) {

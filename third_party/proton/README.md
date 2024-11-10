@@ -160,35 +160,37 @@ More options can be found by running the following command.
 proton-viewer -h
 ```
 
-### Advanced features
+## Advanced features
 
-#### Skip profiling regions
+### State annotation
 
-There are two ways to skip a certain region using proton.
-The first and the recommended way is to use the `proton.deactivate(session_id)` and `proton.activate(session_id)` functions.
-It's simple and robust.
-Every time we deactivate a session, we will synchronize the CPU and the GPU, flush all the profiling data when deactivate, and attribute all the profiling data to the region.
-The other way is to use the skip field in the scope function, e.g., `with proton.scope("test", skip=True):`.
-This way all the nested regions underlying will not attribute any profiling data to the "test" region.
-But it should be used with caution because its children scope may not be skipped.
-And notice that we still profile all kernels but just don't attribute the profiling data to the region to reduce the overhead of turn on/off the profiling.
-See the following example:
+In addition to `proton.scope`, we can also customize the call path of each GPU operation using `proton.state`.
+
+The `state` is different from `scope` in several ways:
+
+1. State is not recursive; each operation can have only a single state. Recursively decorating states will cause inner states to overwrite outer states.
+2. A states is a suffix, meaning that the original call path will append a state before the name of each operation.
+3. State is compatible with both Python and shadow contexts.
+
+The following example demonstrates a basic use of state:
 
 ```python
-import triton.profiler as proton
-
-with proton.scope("test0", skip=True):
-    foo0[1,](x, y)  # This kernel will not have profiling data
-    with proton.scope("test1", skip=False):
-        foo1[1,](x, y) # This kernel will have profiling data
+with proton.scope("test"):
+    with proton.state("state0"):
+        with proton.scope("test0"):
+            foo0[1,](x, y)
+        with proton.scope("test1"):
+            foo1[1,](x, y)
 ```
 
-#### Instrumentation (experimental)
+The call path of `foo1` will be `test->test1->state0`.
+
+### Instrumentation (experimental)
 
 In addition to profiling, Proton also incorporates MLIR/LLVM based compiler instrumentation passes to get Triton level analysis
 and optimization information. This feature is under active development and the list of available passes is expected to grow.
 
-##### Available passes
+#### Available passes
 
 print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
 
@@ -204,7 +206,7 @@ $ proton --instrument=print-mem-spaces matmul.py
 
 Notes: The instrument functionality is currently only available from the command line. Additionally the instrument and profile command line arguments can not be use simulantously.
 
-#### Instruction sampling (experimental)
+### Instruction sampling (experimental)
 
 Proton supports instruction sampling on NVIDIA GPUs.
 Please note that this is an experimental feature and may not work on all GPUs.
