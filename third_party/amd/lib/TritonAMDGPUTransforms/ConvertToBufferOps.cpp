@@ -162,9 +162,6 @@ struct ConvertTritonLoadToBufferLoad
     LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
 
-    if (op.getCache() != triton::CacheModifier::NONE)
-      return failure();
-
     if (canUseBufferOps(ptr, assumptions)) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
       Value tensorPtr = addPtrOp.getPtr();
@@ -179,8 +176,8 @@ struct ConvertTritonLoadToBufferLoad
         maybeMask = op.getMask();
 
       auto bufferLoadOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
-          op->getLoc(), op.getType(), basePtr, tensorOffset, maybeMask,
-          maybeOther);
+          op->getLoc(), op.getType(), basePtr, tensorOffset, op.getCache(),
+          maybeMask, maybeOther);
 
       // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
       // labeled it. The attribute needs to be preserved for custom instruction
@@ -218,8 +215,8 @@ struct ConvertTritonStoreToBufferStore
     LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
 
-    if (op.getCache() != triton::CacheModifier::NONE)
-      return failure();
+    // if (op.getCache() != triton::CacheModifier::NONE)
+    //   return failure();
 
     if (canUseBufferOps(ptr, assumptions)) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
@@ -231,7 +228,7 @@ struct ConvertTritonStoreToBufferStore
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, maybeMask);
+          op, op.getValue(), basePtr, tensorOffset, op.getCache(), maybeMask);
       return success();
     }
     LDBG("Failed to convert: " << op);

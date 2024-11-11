@@ -75,9 +75,10 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr) {
 }
 
 Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
-                              Value pred, Value falseVal) {
+                              Value pred, Value falseVal,
+                              triton::CacheModifier cm) {
   SmallVector<Value, 6> args;
-  fillCommonArgs(type, rsrcDesc, offset, pred, args);
+  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
   Type bufferType = getBufferOpType(type);
   Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
       loc, bufferType, args, ArrayRef<NamedAttribute>());
@@ -88,13 +89,14 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 }
 
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
-                              Value pred) {
+                              Value pred, triton::CacheModifier cm) {
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(vecTy);
   if (vecTy != bufferType)
     data = bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
-  fillCommonArgs(vecTy, rsrcDesc, offset, pred, args);
+  fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
+                 args);
   rewriter.create<ROCDL::RawPtrBufferStoreOp>(loc, TypeRange{}, args,
                                               ArrayRef<NamedAttribute>());
 }
@@ -143,6 +145,7 @@ Type BufferEmitter::getBufferOpType(Type type) {
 
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    Value vOffsetElems, Value pred,
+                                   triton::CacheModifier cm, bool isBufferLoad,
                                    SmallVector<Value> &args) {
 
   // 1. Create the (masked) offset
@@ -161,10 +164,53 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   Value sgprOffset = int_val(32, 0);
 
   // 3. Create the cache modifiers word
-  // bit 0: GLC = 0 (atomics drop value, less coherency)
-  // bits 1-2: SLC, DLC = 0 (similarly)
-  // bit 3: swizzled (0 for raw)
-  Value cacheModifiers = int_val(32, 0);
+  //            bit 0 = glc, bit 1 = slc, bit 2 = dlc (gfx10/gfx11),
+  //            bit 3 = swz, bit 4 = scc (gfx90a)
+  //    gfx940: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
+  //    gfx12+: bits [0-2] = th, bits [3-4] = scope,
+  //            bit 6 = swz
+  //       all: volatile op (bit 31, stripped at lowering)
+  //
+  // MI300 cache modifiers:
+  // Op   | cm  | SC1 | SC0 | NT |
+  // -----+-----+-----+-----+----+--
+  // Load | .ca |  0  |  0  | 0  |
+  //      | .cg |  0  |  x  | 1  |
+  //      | .cs |  1  |  0  | x  |
+  //      | .cv |  1  |  1  | x  |
+  // -----+-----+-----+-----+----+--
+  // Store| .wb |  1  |  0  | 0  |
+  //      | .cg |  0  |  0  | 0  |
+  //      | .cs |  1  |  0  | 1  |
+  //      | .wt |  1  |  1  | x  |
+
+  int32_t aux = 0;
+  switch (cm) {
+  case triton::CacheModifier::CA:
+    aux = 0;
+    break;
+  case triton::CacheModifier::CG:
+    if (isBufferLoad)
+      aux |= 2;
+    break;
+  case triton::CacheModifier::CS:
+    aux |= 16;
+    if (!isBufferLoad)
+      aux |= 2;
+    break;
+  case triton::CacheModifier::CV:
+    aux |= 17;
+    break;
+  case triton::CacheModifier::WB:
+    aux |= 16;
+    break;
+  case triton::CacheModifier::WT:
+    aux |= 17;
+    break;
+  default:
+    aux = 0;
+  }
+  Value cacheModifiers = int_val(32, aux);
 
   // 5. Add the arguments
   args.push_back(rsrcDesc);

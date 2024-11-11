@@ -109,6 +109,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       ins
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
+      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other
     );
@@ -116,6 +117,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
+      oilist(`cacheModifier` `=` $cache)
       attr-dict `:` type($result)
     }];
 }
@@ -142,11 +144,13 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       TT_Tensor:$value,
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
+      DefaultValuedAttr<TT_CacheModifierAttr, "mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask
     );
 
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+      oilist(`cacheModifier` `=` $cache)
       attr-dict `:` type($value)
     }];
 }

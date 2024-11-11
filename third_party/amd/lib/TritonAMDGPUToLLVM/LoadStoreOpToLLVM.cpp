@@ -355,6 +355,7 @@ struct BufferLoadOpConversion
     Value offset = op.getOffsets();
     Value mask = op.getMask();
     Value other = op.getOther();
+    auto cacheMod = op.getCache();
 
     // Converted values
     Value llPtr = adaptor.getPtr();
@@ -395,7 +396,7 @@ struct BufferLoadOpConversion
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
       Value loadVal = bufferEmitter.emitLoad(
-          vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal);
+          vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
@@ -515,6 +516,7 @@ struct BufferStoreOpConversion
     Value offset = op.getOffsets();
     Value mask = op.getMask();
     Value data = op.getValue();
+    auto cacheMod = op.getCache();
 
     Value llPtr = adaptor.getPtr();
     Value llOffset = adaptor.getOffsets();
@@ -547,7 +549,8 @@ struct BufferStoreOpConversion
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
-      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], storeVal, pred);
+      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], storeVal, pred,
+                              cacheMod);
     } // end vec
 
     rewriter.eraseOp(op);
