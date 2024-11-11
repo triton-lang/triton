@@ -658,7 +658,8 @@ static Operation *transposeDotOp(DotScaledOp dotOp) {
 }
 
 static void transposeDots(ModuleOp m) {
-  // TODO: extend to regular dot when it is profitable.
+  // TODO: extend to regular dot when it is profitable. For instance when we may
+  // want to use rhs from register for mmav3.
   SmallVector<DotScaledOp> toTranspose;
   m.walk([&](DotScaledOp dotOp) -> void {
     if (dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr)

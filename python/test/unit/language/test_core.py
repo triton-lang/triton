@@ -3367,16 +3367,16 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
 
-@pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, elemtent_type, scale_type, num_warps, mma, kpack",
-                         [(M, N, K, col_a, col_b, rhs_scale, elemtent_type, scale_type, 4, mma, kpack)
+@pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, num_warps, mma, kpack",
+                         [(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, 4, mma, kpack)
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
                           for col_a, col_b in itertools.product([True, False], repeat=2)
                           for rhs_scale in [False, True]
-                          for elemtent_type in ["e2m1", "e4m3", "e5m2"]
-                          for scale_type in ["e4m3", "e5m2", "bf16"]
+                          for normal_type in ["e2m1", "e4m3", "e5m2"]
+                          for mxfp_type in ["e4m3", "e5m2", "bf16"]
                           for mma in ([32, 16] if is_hip() else [16])
                           for kpack in ([1, 2] if is_hip() else [1])])
-def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, elemtent_type, scale_type, num_warps, mma, kpack, device):
+def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, num_warps, mma, kpack, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc < (8, 9):
@@ -3386,8 +3386,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, elemtent_type, scale_type,
             pytest.skip("scales on rhs not yet support for HIP")
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
-        if "e4m3" in (elemtent_type, scale_type) and not is_hip_mi300():
-            pytest.skip(f"scaled_dot({elemtent_type}, {scale_type}) only implemented for MI300")
+        if "e4m3" in (normal_type, mxfp_type) and not is_hip_mi300():
+            pytest.skip(f"scaled_dot({normal_type}, {mxfp_type}) only implemented for MI300")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
@@ -3496,9 +3496,10 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, elemtent_type, scale_type,
                 type = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2, "bf16": torch.bfloat16}[type]
                 return v.view(type).to(comp_dtype)
             e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type]
-            v = v.contiguous()
+            # Packing is always on the K dimension so we transpose before upcasting then transpose back.
             if transposed:
-                v = v.T.contiguous()
+                v = v.mT.contiguous()
+            v = v.contiguous()
             v_upcast = v.new_empty(scale.shape[:-1] + (32 * scale.shape[-1], ), dtype=comp_dtype)
             N = v_upcast.numel()
             BLOCK_SIZE = 512
@@ -3507,7 +3508,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, elemtent_type, scale_type,
                                       num_warps=num_warps)
             assert v_upcast.isfinite().all()
             if transposed:
-                v_upcast = v_upcast.T.contiguous()
+                v_upcast = v_upcast.mT
             return v_upcast
 
         x_upcast = upcast(x, scale_x, type_x, False)
@@ -3540,8 +3541,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, elemtent_type, scale_type,
             ret = ret.mT
         return ret
 
-    type_a = elemtent_type if not rhs_scale else scale_type
-    type_b = scale_type if not rhs_scale else elemtent_type
+    type_a = normal_type if not rhs_scale else mxfp_type
+    type_b = mxfp_type if not rhs_scale else normal_type
 
     DIV_FACTOR_A = 2 if type_a == "e2m1" else 1
     DIV_FACTOR_B = 2 if type_b == "e2m1" else 1

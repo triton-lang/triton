@@ -1565,6 +1565,7 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     assert rhs_format in allowed_formats, f"NYI: rhs_format {rhs_format}"
     rhs_scale_is_none = isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None
     lhs_scale_is_none = isinstance(lhs_scale, tl.constexpr) and lhs_scale.value is None
+    assert rhs_scale_is_none != lhs_scale_is_none, "There should be exactly one operand with scale"
     lhs = _bitcast_to_fp_type(lhs, lhs_format, builder)
     rhs = _bitcast_to_fp_type(rhs, rhs_format, builder)
 
