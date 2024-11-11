@@ -103,11 +103,9 @@ ParseResult RecordOp::parse(OpAsmParser &parser, OperationState &result) {
   GranularityAttr granularityAttr;
   if (!granularity.empty()) {
     if (granularity == "warpgroup")
-      granularityAttr =
-          GranularityAttr::get(ctx, Granularity::WARPGROUP);
+      granularityAttr = GranularityAttr::get(ctx, Granularity::WARPGROUP);
     else if (granularity == "warp")
-      granularityAttr =
-          GranularityAttr::get(ctx, Granularity::WARP);
+      granularityAttr = GranularityAttr::get(ctx, Granularity::WARP);
     else
       return failure();
     result.addAttribute("granularity", granularityAttr);
