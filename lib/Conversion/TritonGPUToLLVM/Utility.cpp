@@ -943,22 +943,99 @@ CTALayoutAttr getExpandedCTALayout(MLIRContext *ctx,
   return expandedCTALayout;
 }
 
-Attribute getExpandedSharedEncoding(SharedEncodingAttr sharedEncoding) {
-  auto ctx = sharedEncoding.getContext();
-  auto order = sharedEncoding.getOrder();
-  auto rank = order.size();
-  if (rank == 3) {
-    return sharedEncoding;
-  }
-  auto expandedOrder = SmallVector<unsigned>(3, 0);
-  expandedOrder[0] = order[0] + 1;
-  expandedOrder[1] = order[1] + 1;
-  ArrayRef<unsigned> expandedOrderArr(expandedOrder);
-  auto expandedEncoding = triton::gpu::SharedEncodingAttr::get(
+/// Expand layout of dot operands and dot results to 3d variant.
+///
+/// If given layout describes 3d tensor, return it without change.
+/// If given layout describes 2d tensor, create new layout
+/// describing 3d tensor by adding batch = 1.
+Attribute getExpandedEncoding(Attribute encoding) {
+  auto ctx = encoding.getContext();
+  if (auto sharedEncoding = mlir::dyn_cast<SharedEncodingAttr>(encoding)) {
+    auto order = sharedEncoding.getOrder();
+    auto rank = order.size();
+    if (rank == 3) {
+      return sharedEncoding;
+    }
+    auto expandedOrder = SmallVector<unsigned>(3, 0);
+    expandedOrder[0] = order[0] + 1;
+    expandedOrder[1] = order[1] + 1;
+    ArrayRef<unsigned> expandedOrderArr(expandedOrder);
+    auto expandedEncoding = triton::gpu::SharedEncodingAttr::get(
       ctx, sharedEncoding.getVec(), sharedEncoding.getPerPhase(),
       sharedEncoding.getMaxPhase(), expandedOrderArr,
       getExpandedCTALayout(ctx, sharedEncoding.getCTALayout()),
       sharedEncoding.getHasLeadingOffset());
-  return expandedEncoding;
+    return expandedEncoding;
+  } else if (auto mmaEncoding =
+                 mlir::dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
+    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(mmaEncoding);
+    auto rank = warpsPerCTA.size();
+    if (rank == 3) {
+      return encoding;
+    }
+    auto expandedWarpsPerCTA = insertValue<unsigned>(warpsPerCTA, 0, 1);
+    auto instrShape = mmaEncoding.getInstrShape();
+    auto expandedInstrShape = insertValue<unsigned>(instrShape, 0, 1);
+    auto expandedMmaEncoding = NvidiaMmaEncodingAttr::get(
+        ctx, mmaEncoding.getVersionMajor(), mmaEncoding.getVersionMinor(),
+        expandedWarpsPerCTA,
+        getExpandedCTALayout(ctx, mmaEncoding.getCTALayout()),
+        expandedInstrShape);
+    return expandedMmaEncoding;
+  } else if (auto mfmaEncoding =
+                 mlir::dyn_cast<AMDMfmaEncodingAttr>(encoding)) {
+    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(mfmaEncoding);
+    auto rank = warpsPerCTA.size();
+    if (rank == 3) {
+      return encoding;
+    }
+    SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0], warpsPerCTA[1]};
+    auto expandedMfmaEncoding = AMDMfmaEncodingAttr::get(
+        ctx, mfmaEncoding.getVersionMajor(), mfmaEncoding.getVersionMinor(),
+        expandedWarpsPerCTA, mfmaEncoding.getMDim(), mfmaEncoding.getNDim(),
+        mfmaEncoding.getIsTransposed(),
+        getExpandedCTALayout(ctx, mfmaEncoding.getCTALayout()));
+    return expandedMfmaEncoding;
+  } else if (auto wmmaEncoding =
+                 mlir::dyn_cast<AMDWmmaEncodingAttr>(encoding)) {
+    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(wmmaEncoding);
+    auto rank = warpsPerCTA.size();
+    if (rank == 3) {
+      return encoding;
+    }
+    SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0], warpsPerCTA[1]};
+    return AMDWmmaEncodingAttr::get(
+        ctx, /*version=*/1, expandedWarpsPerCTA,
+        getExpandedCTALayout(ctx, wmmaEncoding.getCTALayout()));
+  } else if (auto dotOperandEncoding =
+                 mlir::dyn_cast<DotOperandEncodingAttr>(encoding)) {
+    auto pEncoding = dotOperandEncoding.getParent();
+    auto expandedMfmaEncoding = getExpandedEncoding(pEncoding);
+    auto expandedEncoding = DotOperandEncodingAttr::get(
+        ctx, dotOperandEncoding.getOpIdx(), expandedMfmaEncoding,
+        dotOperandEncoding.getKWidth());
+    return expandedEncoding;
+  } else
+    llvm_unreachable("unsupported encoding");
 }
+
+/// Expand type of dot operands to 3d variant. If the given type is a 3d tensor,
+/// return it without change. If it is a 2d tensor, create a new type that describes
+/// 3d tensor with expanded shape and layout.
+MemDescType getExpandedDesc(MemDescType descTy) {
+  ArrayRef<int64_t> shape = descTy.getShape();
+  auto rank = shape.size();
+  if (rank == 3)
+    return descTy;
+  auto elTy = descTy.getElementType();
+  auto expandedShape = SmallVector<int64_t>(3, 1);
+  expandedShape[1] = shape[0];
+  expandedShape[2] = shape[1];
+  auto encoding = descTy.getEncoding();
+  auto expandedEncoding = getExpandedEncoding(encoding);
+  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
+                                       descTy.getMemorySpace());
+  return expandedDesc;
+}
+
 } // namespace mlir

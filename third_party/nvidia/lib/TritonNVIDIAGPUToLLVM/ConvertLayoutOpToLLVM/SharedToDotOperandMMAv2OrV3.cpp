@@ -722,58 +722,6 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
       loc, rewriter, eltTy, kWidth, isHopper, isA);
 }
 
-Attribute getExpandedEncoding(Attribute encoding) {
-  auto ctx = encoding.getContext();
-  if (auto sharedEncoding = mlir::dyn_cast<SharedEncodingAttr>(encoding)) {
-    auto expandedEncoding = getExpandedSharedEncoding(sharedEncoding);
-    return expandedEncoding;
-  } else if (auto mmaEncoding =
-                 mlir::dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(mmaEncoding);
-    auto rank = warpsPerCTA.size();
-    if (rank == 3) {
-      return encoding;
-    }
-    auto expandedWarpsPerCTA = insertValue<unsigned>(warpsPerCTA, 0, 1);
-    auto instrShape = mmaEncoding.getInstrShape();
-    auto expandedInstrShape = insertValue<unsigned>(instrShape, 0, 1);
-    auto expandedMmaEncoding = NvidiaMmaEncodingAttr::get(
-        ctx, mmaEncoding.getVersionMajor(), mmaEncoding.getVersionMinor(),
-        expandedWarpsPerCTA,
-        getExpandedCTALayout(ctx, mmaEncoding.getCTALayout()),
-        expandedInstrShape);
-    return expandedMmaEncoding;
-  } else if (auto dotOperandEncoding =
-                 mlir::dyn_cast<DotOperandEncodingAttr>(encoding)) {
-    auto mmaEncoding =
-        mlir::cast<NvidiaMmaEncodingAttr>(dotOperandEncoding.getParent());
-    auto expandedMMAEncoding = getExpandedEncoding(mmaEncoding);
-    auto expandedEncoding = DotOperandEncodingAttr::get(
-        ctx, dotOperandEncoding.getOpIdx(), expandedMMAEncoding,
-        dotOperandEncoding.getKWidth());
-    return expandedEncoding;
-  } else
-    llvm_unreachable("unsupported encoding");
-}
-
-MemDescType getExpandedDesc(MemDescType descTy) {
-  auto shapePerCTA = getShapePerCTA(descTy);
-  auto rank = shapePerCTA.size();
-  if (rank == 3)
-    return descTy;
-
-  auto elTy = descTy.getElementType();
-  auto shape = descTy.getShape();
-  auto expandedShape = SmallVector<int64_t>(3, 1);
-  expandedShape[1] = shape[0];
-  expandedShape[2] = shape[1];
-  auto encoding = descTy.getEncoding();
-  auto expandedEncoding = getExpandedEncoding(encoding);
-  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
-                                       descTy.getMemorySpace());
-  return expandedDesc;
-}
-
 namespace SharedToDotOperandMMAv2OrV3 {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,

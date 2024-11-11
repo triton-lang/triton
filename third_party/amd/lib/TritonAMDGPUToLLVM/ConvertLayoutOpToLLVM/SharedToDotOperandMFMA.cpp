@@ -193,64 +193,6 @@ bool isColMajor(::llvm::ArrayRef<unsigned> order) {
   return order[0] == (rank - 2);
 }
 
-/// Expand layout of dot operands and dot results to 3d variant.
-///
-/// If given layout describes 3d tensor, return it without change.
-/// If given layout describes 2d tensor, create new layout
-/// describing 3d tensor by adding batch = 1.
-Attribute getExpandedEncoding(Attribute encoding) {
-  auto ctx = encoding.getContext();
-  if (auto sharedEncoding = mlir::dyn_cast<SharedEncodingAttr>(encoding)) {
-    auto expandedEncoding = getExpandedSharedEncoding(sharedEncoding);
-    return expandedEncoding;
-  } else if (auto mfmaEncoding =
-                 mlir::dyn_cast<AMDMfmaEncodingAttr>(encoding)) {
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(mfmaEncoding);
-    auto rank = warpsPerCTA.size();
-    if (rank == 3) {
-      return encoding;
-    }
- 
-    SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0], warpsPerCTA[1]};
-    auto expandedMfmaEncoding = AMDMfmaEncodingAttr::get(
-        ctx, mfmaEncoding.getVersionMajor(), mfmaEncoding.getVersionMinor(), expandedWarpsPerCTA,
-        mfmaEncoding.getMDim(), mfmaEncoding.getNDim(), mfmaEncoding.getIsTransposed(),
-        getExpandedCTALayout(ctx, mfmaEncoding.getCTALayout()));
-
-    return expandedMfmaEncoding;
-  } else if (auto dotOperandEncoding =
-                 mlir::dyn_cast<DotOperandEncodingAttr>(encoding)) {
-    auto mfmaEncoding =
-        mlir::cast<AMDMfmaEncodingAttr>(dotOperandEncoding.getParent());
-    auto expandedMfmaEncoding = getExpandedEncoding(mfmaEncoding);
-    auto expandedEncoding = DotOperandEncodingAttr::get(
-        ctx, dotOperandEncoding.getOpIdx(), expandedMfmaEncoding,
-        dotOperandEncoding.getKWidth());
-    return expandedEncoding;
-  } else
-    llvm_unreachable("unsupported encoding");
-}
-
-/// Expand date type of dot operands to 3d variant. If the given type is a 3d tensor,
-/// return it without change. If it is a 2d tensor, create a new type that describes
-/// 3d tensor with expanded shape and layout.
-MemDescType getExpandedDesc(MemDescType descTy) {
-  ArrayRef<int64_t> shape = descTy.getShape();
-  auto rank = shape.size();
-  if (rank == 3)
-    return descTy;
-
-  auto elTy = descTy.getElementType();
-  auto expandedShape = SmallVector<int64_t>(3, 1);
-  expandedShape[1] = shape[0];
-  expandedShape[2] = shape[1];
-  auto encoding = descTy.getEncoding();
-  auto expandedEncoding = getExpandedEncoding(encoding);
-  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
-                                       descTy.getMemorySpace());
-  return expandedDesc;
-}
-
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
