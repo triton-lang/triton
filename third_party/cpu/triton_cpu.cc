@@ -20,9 +20,9 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
-#ifdef __linux__
+#if defined(__x86_64__) || defined(__i386__)
 #include <asm/prctl.h>
-#endif // __linux__
+#endif
 #include <sys/syscall.h>
 #include <unistd.h>
 
