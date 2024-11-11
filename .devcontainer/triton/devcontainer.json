@@ -1,0 +1,43 @@
+{
+  "name": "Triton",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      // root (not recommended)
+      "USERNAME": "${localEnv:USER}",
+      "USER_UID": 1000,
+      "USER_GID": 1000,
+      "INSTALL_CUDNN": "true"
+    }
+  },
+  "remoteUser": "${localEnv:USER}",
+  "containerUser": "${localEnv:USER}",
+  // Add the IDs of extensions you want installed when the container is created.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.debugpy",
+        "ms-python.flake8",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-vscode.cmake-tools",
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack",
+        "ms-vscode.cpptools-themes",
+        "twxs.cmake"
+      ]
+    }
+  },
+  "postStartCommand": "${containerWorkspaceFolder}/.devcontainer/triton/postStartCommand.sh",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+  "hostRequirements": {
+    "cpus": 4,
+    "gpu": "optional"
+  },
+  "runArgs": [
+    "--runtime=nvidia",
+    "--gpus",
+    "all"
+  ]
+}
