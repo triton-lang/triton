@@ -24,7 +24,6 @@
 #define PROTON_OPS
 
 include "mlir/IR/OpBase.td"
-include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -68,11 +67,11 @@ def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffect
   let arguments = (
     ins BoolAttr: $isStart,
     I32Attr: $regionId,
-    DefaultValuedAttr<MetricAttr, "proton::Metric::CYCLE">:$metric,
-    DefaultValuedAttr<GranularityAttr, "proton::Granularity::WARPGROUP">:$granularity
+    DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
+    DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
   );
 
-  let hasCustomAssemblyFormat = 0;
+  let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
 }
 

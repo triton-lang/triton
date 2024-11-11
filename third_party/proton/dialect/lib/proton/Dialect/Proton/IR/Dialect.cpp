@@ -22,26 +22,28 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef TRITON_DIALECT_PROTON_IR_DIALECT_H_
-#define TRITON_DIALECT_PROTON_IR_DIALECT_H_
+#include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/OpImplementation.h"
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dialect.h"
-#include "mlir/IR/PatternMatch.h"
-#include "proton/include/Dialect/Proton/IR/Dialect.h.inc"
+// clang-format off
+#include "proton/Dialect/Proton/IR/Dialect.h"
+#include "proton/Dialect/Proton/IR/Dialect.cpp.inc"
+// clang-format on
+
+using namespace mlir;
+using namespace mlir::triton::proton;
+
+void mlir::triton::proton::ProtonDialect::initialize() {
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "proton/Dialect/Proton/IR/ProtonAttrDefs.cpp.inc"
+      >();
+
+  addOperations<
+#define GET_OP_LIST
+#include "proton/Dialect/Proton/IR/Ops.cpp.inc"
+      >();
+}
 
 #define GET_ATTRDEF_CLASSES
-#include "proton/include/Dialect/Proton/IR/ProtonAttrDefs.h.inc"
-
-#define GET_OP_CLASSES
-#include "proton/include/Dialect/Proton/IR/Ops.h.inc"
-
-namespace mlir {
-namespace triton {
-namespace proton {} // namespace proton
-} // namespace triton
-} // namespace mlir
-
-#endif // TRITON_DIALECT_PROTON_IR_DIALECT_H_
+#include "proton/Dialect/Proton/IR/ProtonAttrDefs.cpp.inc"

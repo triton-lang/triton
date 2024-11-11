@@ -36,6 +36,7 @@
 
 #define GET_OP_CLASSES
 #include "proton/Dialect/Proton/IR/Ops.cpp.inc"
+#include "proton/Dialect/Proton/IR/OpsEnums.cpp.inc"
 
 namespace mlir {
 namespace triton {
@@ -52,6 +53,94 @@ void RecordOp::getEffects(
 }
 
 LogicalResult RecordOp::verify() { return success(); }
+
+ParseResult RecordOp::parse(OpAsmParser &parser, OperationState &result) {
+  MLIRContext *ctx = parser.getContext();
+  int idx = 0;
+  std::string tag, metric, granularity;
+  mlir::IntegerAttr rid;
+
+  auto parseAttr = [&]() {
+    switch (idx++) {
+    case 0:
+      return parser.parseAttribute(rid, mlir::IntegerType::get(ctx, 32));
+    case 1:
+      return parser.parseString(&tag);
+    case 2:
+      return parser.parseOptionalString(&metric);
+    case 3:
+      return parser.parseOptionalString(&granularity);
+    }
+    return ParseResult(failure());
+  };
+
+  if (parser.parseLess() || parser.parseCommaSeparatedList(parseAttr) ||
+      parser.parseGreater())
+    return failure();
+
+  bool isStart;
+  if (tag == "start")
+    isStart = true;
+  else if (tag == "end")
+    isStart = false;
+  else
+    return failure();
+  result.addAttribute("isStart", BoolAttr::get(ctx, isStart));
+
+  result.addAttribute("regionId", rid);
+
+  MetricAttr metricAttr;
+  if (!metric.empty()) {
+    if (metric == "cycle")
+      metricAttr = MetricAttr::get(ctx, Metric::CYCLE);
+    else if (metric == "invalid")
+      metricAttr = MetricAttr::get(ctx, Metric::INVALID);
+    else
+      return failure();
+    result.addAttribute("metric", metricAttr);
+  }
+
+  GranularityAttr granularityAttr;
+  if (!granularity.empty()) {
+    if (granularity == "warpgroup")
+      granularityAttr =
+          GranularityAttr::get(ctx, Granularity::WARPGROUP);
+    else if (granularity == "warp")
+      granularityAttr =
+          GranularityAttr::get(ctx, Granularity::WARP);
+    else
+      return failure();
+    result.addAttribute("granularity", granularityAttr);
+  }
+
+  return success();
+}
+
+void RecordOp::print(OpAsmPrinter &printer) {
+  Operation *op = getOperation();
+  printer << " <";
+  printer << getRegionId() << ", ";
+
+  if (getIsStart()) {
+    printer << "\"start\", ";
+  } else {
+    printer << "\"end\", ";
+  }
+
+  if (getMetric() == Metric::CYCLE) {
+    printer << "\"cycle\", ";
+  } else {
+    printer << "\"invalid\", ";
+  }
+
+  if (getGranularity() == Granularity::WARP) {
+    printer << "\"warp\"";
+  } else {
+    printer << "\"warpgroup\"";
+  }
+
+  printer << ">";
+}
 
 } // namespace proton
 } // namespace triton
