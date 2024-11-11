@@ -1,7 +1,6 @@
 import argparse
 import sys
 import os
-from glob import glob
 import pathlib
 from .profile import start, finalize, _select_backend
 from .flags import set_command_line
@@ -91,7 +90,6 @@ def run_profiling(args, target_args):
 
 
 def run_instrumentation(args, target_args):
-    backend = args.backend if args.backend else _select_backend()
     do_setup_and_execute(target_args, args.instrument)
 
 

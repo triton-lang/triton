@@ -141,14 +141,17 @@ By default, proton profiles are in the *json* format and can be read by *Hatchet
 pip install llnl-hatchet
 proton-viewer -m time/s <profile.hatchet>
 ```
+
 NOTE: `pip install hatchet` does not work because the API is slightly different.
 
 ### Visualizing sorted profile data
+
 In addition visualizing the profile data on terminal through Hatchet. A sorted list of the kernels by the first metric can be done using the --print-sorted flag with proton-viewer
 
 ```bash
 proton-viewer -m time/ns,time/% <profile.hatchet> --print-sorted
 ```
+
 prints the sorted kernels by the time/ns since it is the first listed.
 
 More options can be found by running the following command.
@@ -157,14 +160,19 @@ More options can be found by running the following command.
 proton-viewer -h
 ```
 
-### Advanced features
+## Advanced features
+
+### Instrumentation (experimental)
+
 In addition to profiling, Proton also incorporates MLIR/LLVM based compiler instrumentation passes to get Triton level analysis
 and optimization information. This feature is under active development and the list of available passes is expected to grow.
 
 #### Available passes
+
 print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
 
 Example usage with the Proton matmul tutorial:
+
 ```bash
 $ proton --instrument=print-mem-spaces matmul.py
 0     matmul_kernel     matmul.py:180:20     SHARED     STORE
@@ -172,6 +180,7 @@ $ proton --instrument=print-mem-spaces matmul.py
 2     matmul_kernel     matmul.py:180:20     SHARED     LOAD
 3     matmul_kernel     matmul.py:181:20     SHARED     LOAD
 ```
+
 Notes: The instrument functionality is currently only available from the command line. Additionally the instrument and profile command line arguments can not be use simulantously.
 
 ### Instruction sampling (experimental)
