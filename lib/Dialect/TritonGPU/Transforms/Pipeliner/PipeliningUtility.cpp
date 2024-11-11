@@ -80,6 +80,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     storeOp.getMaskMutable().assign(mask);
     return op;
   }
+  if (auto atomicRMWOp = dyn_cast<tt::AtomicRMWOp>(op)) {
+    rewriter.setInsertionPoint(atomicRMWOp);
+    Value mask = getPredMask(rewriter, atomicRMWOp.getPtr().getType(),
+      atomicRMWOp.getMask(), pred);
+      atomicRMWOp.getMaskMutable().assign(mask);
+      return op;
+  }
 
   assert("don't know how to predicate this op" && false);
   return op;
