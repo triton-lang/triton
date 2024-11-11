@@ -10,9 +10,6 @@
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-using mlir::triton::AMD::DppCtrl;
-using mlir::triton::AMD::ISAFamily;
-
 namespace mlir::LLVM::AMD {
 
 const char predicatedLoad[] = "__predicated_load";
@@ -25,13 +22,17 @@ const char predicatedStoreCS[] = "__predicated_store_CS";
 const char predicatedStoreWT[] = "__predicated_store_WT";
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
-                 ISAFamily isaFamily = ISAFamily::Unknown);
+                 mlir::triton::AMD::ISAFamily isaFamily =
+                     mlir::triton::AMD::ISAFamily::Unknown);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                ISAFamily isaFamily = ISAFamily::Unknown);
+                mlir::triton::AMD::ISAFamily isaFamily =
+                    mlir::triton::AMD::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
-                 ISAFamily isaFamily = ISAFamily::Unknown);
+                 mlir::triton::AMD::ISAFamily isaFamily =
+                     mlir::triton::AMD::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
-                 ISAFamily isaFamily = ISAFamily::Unknown);
+                 mlir::triton::AMD::ISAFamily isaFamily =
+                     mlir::triton::AMD::ISAFamily::Unknown);
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                int axis);

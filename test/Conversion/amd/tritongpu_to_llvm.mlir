@@ -139,6 +139,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 #blocked3 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: reduce_dpp_max
   tt.func @reduce_dpp_max(%arg0: tensor<64xf32, #blocked3>) {
     // CHECK: rocdl.update.dpp
     // CHECK-SAME: with 280, 15, 15, true : f32
@@ -178,6 +179,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 #blocked4 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: reduce_xor_max
   tt.func @reduce_xor_max(%arg0: tensor<32xf32, #blocked4>) {
     // CHECK: rocdl.ds_swizzle
     // CHECK: llvm.intr.maxnum

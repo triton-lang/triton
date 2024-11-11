@@ -21,8 +21,9 @@ ISAFamily deduceISAFamily(llvm::StringRef arch);
 
 // Here is a partial definition of DppCtrl enums. For the complete definition,
 // please check:
-// https://github.com/llvm/llvm-project/blob/llvmorg-19.1.3/llvm/lib/Target/AMDGPU/SIDefines.h
-enum DppCtrl : uint32_t {
+// https://github.com/llvm/llvm-project/blob/8c75290/llvm/lib/Target/AMDGPU/SIDefines.h#L939
+enum class DppCtrl : uint32_t {
+  QUAD_PERM_FIRST = 0,
   ROW_SHL0 = 0x100,
   ROW_SHR0 = 0x110,
   BCAST15 = 0x142,

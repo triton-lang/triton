@@ -5,8 +5,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-using mlir::getSingleCombinerFromReduceOp;
-
+using mlir::triton::AMD::DppCtrl;
 namespace mlir::triton::AMD {
 
 namespace {
@@ -128,35 +127,45 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
-static inline Type castToInt(RewriterBase &rewriter, Location loc, Value &val,
-                             Type valType, unsigned bits) {
-  unsigned originalBits = valType.getIntOrFloatBitWidth();
-  Type actualType = valType;
+// Cast and sext values into specific-length int to meet the requirements of
+// instructions like UpdateDpp or readlane if necessary.
+static inline Type castToAndSExtInt(RewriterBase &rewriter, Location loc,
+                                    Value &val, Type fromType,
+                                    unsigned toBits) {
+  unsigned originalBits = fromType.getIntOrFloatBitWidth();
+  Type toType = fromType;
 
-  if (!valType.isIntOrIndex()) {
+  if (!fromType.isIntOrIndex()) {
     val = bitcast(val, int_ty(originalBits));
-    actualType = int_ty(originalBits);
+    toType = int_ty(originalBits);
   }
 
-  if (originalBits < bits) {
-    val = sext(int_ty(bits), val);
-    actualType = int_ty(bits);
+  if (originalBits < toBits) {
+    val = sext(int_ty(toBits), val);
+    toType = int_ty(toBits);
   }
 
-  return actualType;
+  return toType;
 }
 
-static inline void castFromInt(RewriterBase &rewriter, Location loc, Value &val,
-                               Type valType, unsigned bits) {
+// Trunc the value to specific length and then cast it to given type if
+// necessary. This function is typically used in conjunction with
+// castToAndSExtInt.
+static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
+                                        Value val, Type valType,
+                                        unsigned fromBits) {
   unsigned originalBits = valType.getIntOrFloatBitWidth();
+  Value toVal = val;
 
-  if (originalBits < bits) {
-    val = trunc(int_ty(originalBits), val);
+  if (originalBits < fromBits) {
+    toVal = trunc(int_ty(originalBits), toVal);
   }
 
   if (!valType.isIntOrIndex()) {
-    val = bitcast(val, valType);
+    toVal = bitcast(toVal, valType);
   }
+
+  return toVal;
 }
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
@@ -171,19 +180,19 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return false;
   }
 
-  Operation *reduxOp = getSingleCombinerFromReduceOp(op);
+  Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
     return false;
 
-  auto createDppReduxOp = [&](Type valType, Value &src, int dppCtrl,
-                              int rowMask, int bankMask,
-                              bool boundCtrl) -> Value {
+  auto createDppReduxOpWithBoundCtrl = [&](Type valType, Value &src,
+                                           uint32_t dppCtrl, int rowMask,
+                                           int bankMask) -> Value {
     // DPP has limited support for data types, so here we need to
     // cast non-integer types or integer types shorter than 32 bits
     // to int32, except for fp32.
     Type actualType = valType;
     if (!valType.isF32()) {
-      actualType = castToInt(rewriter, loc, src, valType, 32);
+      actualType = castToAndSExtInt(rewriter, loc, src, valType, 32);
     }
 
     Value dppResult =
@@ -192,12 +201,12 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                                         rewriter.getI32IntegerAttr(dppCtrl),
                                         rewriter.getI32IntegerAttr(rowMask),
                                         rewriter.getI32IntegerAttr(bankMask),
-                                        rewriter.getBoolAttr(boundCtrl))
+                                        rewriter.getBoolAttr(true))
             .getRes();
 
     if (!valType.isF32()) {
-      castFromInt(rewriter, loc, src, valType, 32);
-      castFromInt(rewriter, loc, dppResult, valType, 32);
+      src = truncAndCastFromInt(rewriter, loc, src, valType, 32);
+      dppResult = truncAndCastFromInt(rewriter, loc, dppResult, valType, 32);
     }
 
     IRMapping mapping;
@@ -218,10 +227,13 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       some cases, the lower-level compiler could merge them into single
       instruction. For example, v_mov_dpp + max => v_max_dpp.
 
-      In DPP, each row consists of 16 consecutive lanes.
-      So the modifier row_shr and row_bcast mean they have the same operations
-      in each row, so in the following instructions, we only take row 0
-      as an example:
+      For gfx9, we have 64 threads per warp. These 64 threads are arranged
+      into 4 rows, with each row being 16 threads. Each 16 threads are arranged
+      further into 4 banks, with each bank being 4 threads. Overall it's in a
+      (row, bank, thread) structure. When shuffling, we use row/bank mask to
+      indicate which row/bank to participate. Then modifier like row_shr and
+      row_bcast means exact data movement schemes. In the following
+      instructions, taking row 0 as an example:
 
       Step 1: Right shift for 8 lanes.
           lane 8-15 = redux(lane 0-7, lane 8-15)
@@ -247,27 +259,38 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       readlane.
     */
 
+    const int allRows = 0xf;
+    const int allBanks = 0xf;
+
+    const uint32_t dppCtrlRowShr = static_cast<uint32_t>(DppCtrl::ROW_SHR0);
+
     // row_shr:8
-    buf = createDppReduxOp(valType, acc[i], 8 + DppCtrl::ROW_SHR0, 0xf, 0xf,
-                           true);
+    buf = createDppReduxOpWithBoundCtrl(valType, acc[i], 8 + dppCtrlRowShr,
+                                        allRows, allBanks);
 
     // row_shr:4
-    buf = createDppReduxOp(valType, buf, 4 + DppCtrl::ROW_SHR0, 0xf, 0xf, true);
+    buf = createDppReduxOpWithBoundCtrl(valType, buf, 4 + dppCtrlRowShr,
+                                        allRows, allBanks);
 
     // row_shr:2
-    buf = createDppReduxOp(valType, buf, 2 + DppCtrl::ROW_SHR0, 0xf, 0xf, true);
+    buf = createDppReduxOpWithBoundCtrl(valType, buf, 2 + dppCtrlRowShr,
+                                        allRows, allBanks);
 
     // row_shr:1
-    buf = createDppReduxOp(valType, buf, 1 + DppCtrl::ROW_SHR0, 0xf, 0xf, true);
+    buf = createDppReduxOpWithBoundCtrl(valType, buf, 1 + dppCtrlRowShr,
+                                        allRows, allBanks);
 
     // row_bcast:15 row_mask:0xa
-    buf = createDppReduxOp(valType, buf, DppCtrl::BCAST15, 0xa, 0xf, true);
+    buf = createDppReduxOpWithBoundCtrl(
+        valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
 
     // row_bcast:31
-    buf = createDppReduxOp(valType, buf, DppCtrl::BCAST31, 0xf, 0xf, true);
+    buf = createDppReduxOpWithBoundCtrl(valType, buf,
+                                        static_cast<uint32_t>(DppCtrl::BCAST31),
+                                        allRows, allBanks);
 
     // Similarly, we need to cast data types for readlane instruction.
-    Type actualType = castToInt(rewriter, loc, buf, valType, 16);
+    Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 16);
 
     // Get reduction result from lane 63
     std::string intrinsic = "llvm.amdgcn.readlane";
@@ -276,7 +299,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                                         ValueRange{buf, i32_val(63)})
             ->getResult(0);
 
-    castFromInt(rewriter, loc, result, valType, 16);
+    result = truncAndCastFromInt(rewriter, loc, result, valType, 16);
 
     acc[i] = result;
   }

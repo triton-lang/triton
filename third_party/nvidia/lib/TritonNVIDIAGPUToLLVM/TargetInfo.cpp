@@ -10,7 +10,6 @@
 
 using namespace mlir;
 
-using mlir::getSingleCombinerFromReduceOp;
 using mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getShapePerCTA;
@@ -94,7 +93,7 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
                                                      int computeCapability) {
   if (computeCapability < 80)
     return std::nullopt;
-  Operation *reduceOp = getSingleCombinerFromReduceOp(op);
+  Operation *reduceOp = op.getSingleCombiner();
   if (!reduceOp)
     return std::nullopt;
   auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);

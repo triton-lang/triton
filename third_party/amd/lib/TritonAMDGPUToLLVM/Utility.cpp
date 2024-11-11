@@ -8,6 +8,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+using mlir::triton::AMD::DppCtrl;
+using mlir::triton::AMD::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::getFunctionType;
 
@@ -154,50 +156,62 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
         return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
       }
 
-      auto createDppOp = [&](Value &old, Value &src, uint32_t dppCtrl,
-                             uint32_t rowMask, uint32_t bankMask,
-                             bool boundCtrl) {
+      auto createDppOpWithoutBoundCtrl = [&](Value &old, Value &src,
+                                             uint32_t dppCtrl, uint32_t rowMask,
+                                             uint32_t bankMask) {
         return rewriter.create<ROCDL::DPPUpdateOp>(
             loc, valType, old, src, rewriter.getI32IntegerAttr(dppCtrl),
             rewriter.getI32IntegerAttr(rowMask),
-            rewriter.getI32IntegerAttr(bankMask),
-            rewriter.getBoolAttr(boundCtrl));
+            rewriter.getI32IntegerAttr(bankMask), rewriter.getBoolAttr(false));
       };
+
+      const int allRows = 0xf;
+      const int allBanks = 0xf;
 
       switch (strideInt) {
       case 1: {
         // quad_perm: 1, 0, 3, 2
-        uint32_t dppCtrl = 0;
+        uint32_t dppCtrl = static_cast<uint32_t>(DppCtrl::QUAD_PERM_FIRST);
         std::array<uint32_t, 4> mask = {1, 0, 3, 2};
         for (int i = 0; i < mask.size(); i++) {
           dppCtrl |= mask[i] << (i * 2);
         }
-        return createDppOp(val, val, dppCtrl, 0xf, 0xf, false);
+        return createDppOpWithoutBoundCtrl(val, val, dppCtrl, allRows,
+                                           allBanks);
       }
       case 2: {
         // quad_perm: 2, 3, 0, 1
-        uint32_t dppCtrl = 0;
+        uint32_t dppCtrl = static_cast<uint32_t>(DppCtrl::QUAD_PERM_FIRST);
         std::array<uint32_t, 4> mask = {2, 3, 0, 1};
         for (int i = 0; i < mask.size(); i++) {
           dppCtrl |= mask[i] << (i * 2);
         }
-        return createDppOp(val, val, dppCtrl, 0xf, 0xf, false);
+        return createDppOpWithoutBoundCtrl(val, val, dppCtrl, allRows,
+                                           allBanks);
       }
       case 4: {
         // row_shr:4 bank_mask: 0xa
-        auto ret = createDppOp(val, val, 4 + DppCtrl::ROW_SHR0, 0xf, 0xa, false)
+        auto ret = createDppOpWithoutBoundCtrl(
+                       val, val, 4 + static_cast<uint32_t>(DppCtrl::ROW_SHR0),
+                       allRows, 0xa)
                        .getRes();
 
         // row_shl:4 bank_mask: 0x5
-        return createDppOp(ret, val, 4 + DppCtrl::ROW_SHL0, 0xf, 0x5, false);
+        return createDppOpWithoutBoundCtrl(
+            ret, val, 4 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
+            0x5);
       }
       case 8: {
         // row_shr:8 bank_mask: 0xc
-        auto ret = createDppOp(val, val, 8 + DppCtrl::ROW_SHR0, 0xf, 0xc, false)
+        auto ret = createDppOpWithoutBoundCtrl(
+                       val, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHR0),
+                       allRows, 0xc)
                        .getRes();
 
         // row_shl:8 bank_mask: 0x3
-        return createDppOp(ret, val, 8 + DppCtrl::ROW_SHL0, 0xf, 0x3, false);
+        return createDppOpWithoutBoundCtrl(
+            ret, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
+            0x3);
       }
       default:
         assert(false &&

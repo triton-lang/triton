@@ -731,6 +731,7 @@ def TT_ReduceOp: TT_Op<"reduce",
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
       unsigned getNumOperands();
+      ::mlir::Operation *getSingleCombiner();
     }];
 }
 
