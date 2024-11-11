@@ -7,6 +7,7 @@ from typing import NamedTuple
 import pathlib
 
 import triton.language as tl
+from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
 
 
 def is_hip():
@@ -194,8 +195,7 @@ def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
         # A gpu kernel, but it should be under the metadata state
-        y = x + 1
-        return {"name": f"foo_test", "res": y.sum().item()}
+        return {"name": "foo_test", "bytes": x.sum().item()}
 
     @triton.jit(launch_metadata=metadata_fn)
     def foo(x, size: tl.constexpr, y):
@@ -211,6 +211,15 @@ def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
+    # bfs search until find the reduce kernel and then check its parent
+    queue = [data[0]]
+    while len(queue) > 0:
+        parent_frame = queue.pop(0)
+        for child in parent_frame["children"]:
+            if "reduce" in child["frame"]["name"]:
+                assert parent_frame["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME
+                return
+            queue.append(child)
 
 
 def test_pcsampling(tmp_path: pathlib.Path):
