@@ -84,8 +84,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
 
-  auto inOrd = gpu::getOrder(srcLayout);
-  auto outOrd = gpu::getOrder(dstLayout);
+  const auto &inOrd = gpu::getOrder(srcLayout);
+  const auto &outOrd = gpu::getOrder(dstLayout);
   scratchConfig.order = outOrd;
 
   unsigned srcContigPerThread =
@@ -304,7 +304,7 @@ private:
   /// arguments are involved.
   void resolveAliasBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto aliasBufferIter : allocation->aliasBuffer) {
+    for (const auto &aliasBufferIter : allocation->aliasBuffer) {
       auto value = aliasBufferIter.first;
       auto buffers = aliasBufferIter.second;
       auto range = getLiveness(value);
@@ -444,7 +444,7 @@ private:
           std::find_if(xBuffers.begin(), xBuffers.end(), [&](auto *buffer) {
             auto xRange = bufferRange[buffer];
             bool res = xRange.intersects(range);
-            for (auto val : tripleMap)
+            for (const auto &val : tripleMap)
               res = res &&
                     !val.second.intersects(xRange); // only one buffer intersect
             return res;
