@@ -10,6 +10,7 @@ body:
       The core triton team is small and has very limited capacity. We may not have time to look into your report.
       For the best results, please:
         - Avoid submitting duplicates. Search through [the existing and past issues](https://github.com/triton-lang/triton/issues?q=is%3Aissue+sort%3Acreated-desc+) first to see if it's been reported previously.
+        - Check if the issue persists with a build from the latest source.
         - Provide all relevant information in the initial report, to prevent unnecessary back and forth discussion.
         - If you can, try to diagnose and/or fix the issue yourself. We welcome high quality contributions.
 - type: textarea
