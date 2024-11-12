@@ -546,7 +546,6 @@ Value composeValuesToDotOperandLayoutStruct(
   std::vector<Value> elems;
   auto unpackVec = [&](int b, int m, int k) {
     for (int kIter = 0; kIter < kIters; ++kIter) {
-      //llvm::errs() << "isA: " << isA << ": " << b << ", " << m << ", " << (k + kIter) % kSize << "\n";
       auto val = vals.at({b, m, (k + kIter) % kSize});
       auto vec = bitcast(val, vecTy);
       for (auto i = 0; i < numElemsPerVec; ++i) {
@@ -620,7 +619,6 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
     // initialize pointers
     const int numPtrs = loader.getNumPtrs();
     SmallVector<Value> ptrs(numPtrs);
-    //llvm::errs() << "isA: " << isA << ", numPtrs: " << numPtrs << "\n";
     Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
     Type smemTy = getSharedMemTy(eltTy);
     for (int i = 0; i < numPtrs; ++i)

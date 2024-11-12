@@ -119,7 +119,8 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         //   [0, 1, 2, 3], [0, 1, 2, 3]
         //   [4, 5, 6, 7], [4, 5, 6, 7]
         //
-        // [0, 1], [4, 5], [2, 3], [6, 7] are packed into a single 32-bit value.
+        // We should reorder the elements by moving the duplicated elements to
+        // the end
         size_t elemsPerTile = 2 * 2 * kWidth;
         size_t elemsPerMma = 2 * 2 * numElemsPerVec;
         for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma) {
@@ -127,7 +128,8 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
             for (size_t kTile = 0; kTile < 2; ++kTile) {
               for (size_t mTile = 0; mTile < 2; ++mTile) {
                 for (size_t e = 0; e < numElemsPerVec; ++e) {
-                  si.push_back(mma * elemsPerMma + tile * elemsPerTile + mTile * kWidth + kTile * numElemsPerVec + e);
+                  si.push_back(mma * elemsPerMma + tile * elemsPerTile +
+                               mTile * kWidth + kTile * numElemsPerVec + e);
                 }
               }
             }
@@ -157,14 +159,16 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         //
         //   [0, 1, 2, 3]^T, [0, 1, 2, 3]^T
         //
-        // [0, 1], [4, 5] are packed into a single 32-bit value.
+        // We should reorder the elements by moving the duplicated elements to
+        // the end
         size_t elemsPerTile = 2 * kWidth;
         size_t elemsPerMma = 2 * numElemsPerVec;
         for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma) {
           for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile) {
             for (size_t kTile = 0; kTile < 2; ++kTile) {
               for (size_t e = 0; e < numElemsPerVec; ++e) {
-                si.push_back(mma * elemsPerMma + tile * elemsPerTile + kTile * numElemsPerVec + e);
+                si.push_back(mma * elemsPerMma + tile * elemsPerTile +
+                             kTile * numElemsPerVec + e);
               }
             }
           }
@@ -513,10 +517,6 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           extract_val(elemTy, mmaOut, i);
     }
   };
-
-  //llvm::errs() << "repK: " << repK << "\n";
-  //llvm::errs() << "repM: " << repM << "\n";
-  //llvm::errs() << "repN: " << repN << "\n";
 
   for (int b = 0; b < repBatch; ++b)
     for (int k = 0; k < repK; ++k)
