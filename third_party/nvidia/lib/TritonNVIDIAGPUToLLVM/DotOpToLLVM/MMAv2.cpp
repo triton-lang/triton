@@ -90,6 +90,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
     // K dimension.
     llvm::SmallVector<unsigned> si;
+    auto kIters = kWidth / (32 / bitwidth);
 
     if (dot.getOpIdx() == 0) {
       // Original register layout:
@@ -106,7 +107,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       //  2nd MMA: [[2, 3], [10, 11], [18, 19], [26, 27]]
       //  3rd MMA: [[4, 5], [12, 13], [20, 21], [28, 29]]
       //  4th MMA: [[6, 7], [14, 15], [22, 23], [30, 31]]
-      auto kIters = kWidth / (32 / bitwidth);
       if (kIters <= repK) {
         for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
           for (size_t tile = 0; tile < 4; ++tile)
@@ -123,18 +123,14 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         // the end
         size_t elemsPerTile = 2 * 2 * kWidth;
         size_t elemsPerMma = 2 * 2 * numElemsPerVec;
-        for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma) {
-          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile) {
-            for (size_t kTile = 0; kTile < 2; ++kTile) {
-              for (size_t mTile = 0; mTile < 2; ++mTile) {
+        for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma)
+          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
+            for (size_t kTile = 0; kTile < 2; ++kTile)
+              for (size_t mTile = 0; mTile < 2; ++mTile)
                 for (size_t e = 0; e < numElemsPerVec; ++e) {
                   si.push_back(mma * elemsPerMma + tile * elemsPerTile +
                                mTile * kWidth + kTile * numElemsPerVec + e);
                 }
-              }
-            }
-          }
-        }
       }
     } else {
       // Original register layout:
@@ -147,7 +143,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       //  2nd MMA: [[2, 3], [10, 11]]
       //  3rd MMA: [[4, 5], [12, 13]]
       //  4th MMA: [[6, 7], [14, 15]]
-      auto kIters = kWidth / (32 / bitwidth);
       if (kIters <= repK) {
         for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
           for (size_t tile = 0; tile < 2; ++tile)
@@ -163,16 +158,13 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         // the end
         size_t elemsPerTile = 2 * kWidth;
         size_t elemsPerMma = 2 * numElemsPerVec;
-        for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma) {
-          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile) {
-            for (size_t kTile = 0; kTile < 2; ++kTile) {
+        for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma)
+          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
+            for (size_t kTile = 0; kTile < 2; ++kTile)
               for (size_t e = 0; e < numElemsPerVec; ++e) {
                 si.push_back(mma * elemsPerMma + tile * elemsPerTile +
                              kTile * numElemsPerVec + e);
               }
-            }
-          }
-        }
       }
     }
 
