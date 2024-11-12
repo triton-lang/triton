@@ -234,7 +234,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
   int laneHeight = 8;
   int quadWidth = laneWidth * kWidth;
   int quadHeight = laneHeight;
-  int numQuads = tileShape[kOrder] >= (2 * kWidth * 4) ? 2 : 1;
 
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
@@ -242,7 +241,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
   for (int rep = 0; rep < numPtrs / (2 * kWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < kWidth; ++elemId) {
-        auto qId = quadId % numQuads;
         // inner index base
         Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(kWidth));
         jBase = add(jBase, i32_val(elemId));
