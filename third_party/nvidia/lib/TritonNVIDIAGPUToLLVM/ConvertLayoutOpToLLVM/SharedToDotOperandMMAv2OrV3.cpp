@@ -536,9 +536,8 @@ Value composeValuesToDotOperandLayoutStruct(
     bool isA) {
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   assert(32 >= bitwidth && "only support 32-bit or less");
-  auto numElemsPerVec = 32 / bitwidth;
+  auto numElemsPerVec = isHopper ? kWidth : 32 / bitwidth;
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
-  // FIXME: Fix the hopper path
   // FIXME: [DOT LL]
   // `kWidth` specifies the number of contiguous elements each thread will load.
   // Loaded elements are packed into a vector of int32, which will then be
