@@ -478,10 +478,10 @@ using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
 inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
@@ -536,8 +536,8 @@ CTALayoutAttr getExpandedCTALayout(MLIRContext *ctx,
 Attribute getExpandedEncoding(Attribute encoding);
 
 /// Expand type of dot operands to 3d variant. If the given type is a 3d tensor,
-/// return it without change. If it is a 2d tensor, create a new type that describes
-/// 3d tensor with expanded shape and layout.
+/// return it without change. If it is a 2d tensor, create a new type that
+/// describes 3d tensor with expanded shape and layout.
 MemDescType getExpandedDesc(MemDescType descTy);
 
 // -----------------------------------------------------------------------

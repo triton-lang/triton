@@ -961,10 +961,10 @@ Attribute getExpandedEncoding(Attribute encoding) {
     expandedOrder[1] = order[1] + 1;
     ArrayRef<unsigned> expandedOrderArr(expandedOrder);
     auto expandedEncoding = triton::gpu::SharedEncodingAttr::get(
-      ctx, sharedEncoding.getVec(), sharedEncoding.getPerPhase(),
-      sharedEncoding.getMaxPhase(), expandedOrderArr,
-      getExpandedCTALayout(ctx, sharedEncoding.getCTALayout()),
-      sharedEncoding.getHasLeadingOffset());
+        ctx, sharedEncoding.getVec(), sharedEncoding.getPerPhase(),
+        sharedEncoding.getMaxPhase(), expandedOrderArr,
+        getExpandedCTALayout(ctx, sharedEncoding.getCTALayout()),
+        sharedEncoding.getHasLeadingOffset());
     return expandedEncoding;
   } else if (auto mmaEncoding =
                  mlir::dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
@@ -989,7 +989,8 @@ Attribute getExpandedEncoding(Attribute encoding) {
     if (rank == 3) {
       return encoding;
     }
-    SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0], warpsPerCTA[1]};
+    SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0],
+                                                 warpsPerCTA[1]};
     auto expandedMfmaEncoding = AMDMfmaEncodingAttr::get(
         ctx, mfmaEncoding.getVersionMajor(), mfmaEncoding.getVersionMinor(),
         expandedWarpsPerCTA, mfmaEncoding.getMDim(), mfmaEncoding.getNDim(),
@@ -1003,7 +1004,8 @@ Attribute getExpandedEncoding(Attribute encoding) {
     if (rank == 3) {
       return encoding;
     }
-    SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0], warpsPerCTA[1]};
+    SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0],
+                                                 warpsPerCTA[1]};
     return AMDWmmaEncodingAttr::get(
         ctx, /*version=*/1, expandedWarpsPerCTA,
         getExpandedCTALayout(ctx, wmmaEncoding.getCTALayout()));
@@ -1020,8 +1022,8 @@ Attribute getExpandedEncoding(Attribute encoding) {
 }
 
 /// Expand type of dot operands to 3d variant. If the given type is a 3d tensor,
-/// return it without change. If it is a 2d tensor, create a new type that describes
-/// 3d tensor with expanded shape and layout.
+/// return it without change. If it is a 2d tensor, create a new type that
+/// describes 3d tensor with expanded shape and layout.
 MemDescType getExpandedDesc(MemDescType descTy) {
   ArrayRef<int64_t> shape = descTy.getShape();
   auto rank = shape.size();

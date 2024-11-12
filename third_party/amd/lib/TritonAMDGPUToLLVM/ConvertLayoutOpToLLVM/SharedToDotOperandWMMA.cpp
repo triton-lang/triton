@@ -149,7 +149,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int kDimIdx = opIdx == 0 ? 2 : 1;
   int nonKDimIdx = opIdx == 0 ? 1 : 2;
 
-  auto expandedEncoding = cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
+  auto expandedEncoding =
+      cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
 
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(expandedEncoding.getParent());
   auto computeTensorElemMappingInBlock =
@@ -161,7 +162,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto order = sharedLayout.getOrder();
   assert(order[2] == 0 && "expect batch to be the slowest dimension");
 
-  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj, tensorTy.getShape());
+  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj,
+                                                       tensorTy.getShape());
 
   auto elemTy = aTensorTy.getElementType();
   int kWidth = expandedEncoding.getKWidth();
@@ -254,8 +256,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       ctx, SmallVector<Type>(loadedValues.size(), loadedValues[0].getType()));
   auto result =
       packLLElements(loc, typeConverter, loadedValues, rewriter, structTy);
-  llvm::errs()<<"\nreturns ";
-  result.dump();
   return result;
 }
 

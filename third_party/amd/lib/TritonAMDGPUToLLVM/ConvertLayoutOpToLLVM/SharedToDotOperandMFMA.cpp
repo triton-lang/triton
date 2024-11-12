@@ -200,8 +200,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
   auto tensorTy = cast<MemDescType>(tensor.getType());
   auto aTensorTy = getExpandedDesc(tensorTy);
-  auto expandedEncoding = cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
-  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj, tensorTy.getShape());
+  auto expandedEncoding =
+      cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
+  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj,
+                                                       tensorTy.getShape());
 
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto rank = shape.size();
@@ -209,7 +211,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   int kDimIdx = opIdx == 0 ? 2 : 1;
   int nonKDimIdx = opIdx == 0 ? 1 : 2;
-  
+
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(expandedEncoding.getParent());
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
@@ -229,8 +231,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int64_t mfmaInstrK;
   // TODO(Lixun): make it simpler
   // getInstrShapeForOperand always returns a 2D vector
-    mfmaInstrNonK = elemsPerInstr[nonKDimIdx - 1];
-    mfmaInstrK = elemsPerInstr[kDimIdx - 1];
+  mfmaInstrNonK = elemsPerInstr[nonKDimIdx - 1];
+  mfmaInstrK = elemsPerInstr[kDimIdx - 1];
 
   if (mfmaInstrNonK > shape[nonKDimIdx] || mfmaInstrK > shape[kDimIdx]) {
     // This pattern does not support cases tensor shape is smaller than
@@ -313,14 +315,14 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     if (opIdx == 0) {
       offsets = AMD::computeOffsetsAType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
-          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, expandedSmemObj,
-          sharedLayout, mDim, mfmaInstrK);
+          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps,
+          expandedSmemObj, sharedLayout, mDim, mfmaInstrK);
     } else {
       assert(opIdx == 1);
       offsets = AMD::computeOffsetsBType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
-          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, expandedSmemObj,
-          sharedLayout, nDim, mfmaInstrK);
+          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps,
+          expandedSmemObj, sharedLayout, nDim, mfmaInstrK);
     }
     smemBase = AMD::computeBasePtr(rewriter, loc, expandedSmemObj);
   }
