@@ -267,12 +267,11 @@ bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
     std::optional<int32_t> maxVecElems, Value shmemBase,
     ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
+    const TargetInfoBase &target, bool crossGrain,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
 
   auto shape = registerTy.getShape();
-  LDBG("shape: " << shape[0] << " " << shape[1]);
   int rank = shape.size();
 
   StringAttr kBlock = str_attr("block");
@@ -282,7 +281,7 @@ bool emitTransferBetweenRegistersAndShared(
 
   std::optional<LinearLayout> regLayout = LinearLayout::empty();
   auto regEncoding = registerTy.getEncoding();
-  if (isa<BlockedEncodingAttr>(regEncoding))
+  if (crossGrain)
     regLayout =
       mlir::triton::gpu::blockedToLinearLayoutThreadRake(shape, regEncoding);
   else
@@ -293,12 +292,7 @@ bool emitTransferBetweenRegistersAndShared(
   if (!regLayout.has_value() || !sharedLayout.has_value()) {
     return false;
   }
-  LDBG("-----regLayout-----");
-  LDBG(regLayout);
-  LDBG("-----sharedLayout-----");
-  LDBG(sharedLayout);
   auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
-  LDBG("sharedOrder: " << sharedOrder[0] << " " << sharedOrder[1]);
 
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
   // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
@@ -306,7 +300,6 @@ bool emitTransferBetweenRegistersAndShared(
   auto sharedLegacy =
       cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
   SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
-  LDBG("multiDimSharedSize");
   for (int i = 0; i < rank; i++) {
     int dim = sharedOrder[i];
     int64_t size = std::max(
@@ -314,17 +307,13 @@ bool emitTransferBetweenRegistersAndShared(
         shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
     multiDimSharedSize.push_back(
         {str_attr("offset" + std::to_string(dim)), size});
-    LDBG(multiDimSharedSize.back().first << ": " << multiDimSharedSize.back().second);
   }
   multiDimSharedSize.push_back({kBlock, sharedLayout->getInDimSize(kBlock)});
-  LDBG(multiDimSharedSize.back().first << ": " << multiDimSharedSize.back().second);
   sharedLayout = sharedLayout->reshapeIns(multiDimSharedSize);
 
   // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
   // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
   LinearLayout regToSharedLayout = regLayout->invertAndCompose(*sharedLayout);
-  LDBG("-----regToSharedLayout-----");
-  LDBG(regToSharedLayout);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
@@ -358,7 +347,6 @@ bool emitTransferBetweenRegistersAndShared(
   const int vecElems =
       std::min(regToSharedLayout.getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
-  LDBG("vecElems = min(" << regToSharedLayout.getNumConsecutiveInOut() <<
     ", " << maxVecElems.value_or(std::numeric_limits<int>::max()) <<
     ") = " << vecElems);
 
@@ -401,11 +389,10 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            SharedMemoryObject smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target) {
-  LDBG("loadSharedToDistributed");
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj.getBase(),
-      smemObj.getStrides(), loc, rewriter, target,
+      smemObj.getStrides(), loc, rewriter, target, /*crossGrain=*/false,
       [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
@@ -425,16 +412,11 @@ void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                               Type elemLlvmTy, ArrayRef<Value> srcVals,
                               Value smemBase, ArrayRef<Value> dstStrides,
                               Location loc, RewriterBase &rewriter,
-                              const TargetInfoBase &target) {
-  LDBG("inside callback ");
-  LDBG("srcVals size = " << srcVals.size());
-  auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
-  auto sizePerThread = blockedEncoding.getSizePerThread();
+                              const TargetInfoBase &target, bool crossGrain) {
   bool success;
-  if (sizePerThread[0] == 1) {
-    success = emitTransferBetweenRegistersAndShared(
-        srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-        dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+  std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback;
+  if (!crossGrain) {
+    perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
           ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
           srcVals = srcVals.drop_front(vecTy.getNumElements());
 
@@ -445,29 +427,31 @@ void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
           store(vec, vecAddr)
               .setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
-        });
+        };
   } else {
+    auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+    auto sizePerThread = blockedEncoding.getSizePerThread();
+    auto order = blockedEncoding.getOrder();
     unsigned int numElementsPerIter = product<unsigned>(sizePerThread);
     unsigned int val_counter = 0;
-    unsigned int innerVectorization = sizePerThread[1];
-    success = emitTransferBetweenRegistersAndShared(
-        srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-        dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-          // ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-          // srcVals = srcVals.drop_front(vecTy.getNumElements());
+    unsigned int innerVectorization = sizePerThread[order[0]];
+    perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
           Value vec = undef(vecTy);
           for (int i = 0; i < vecTy.getNumElements(); i++) {
-              auto idx = val_counter % innerVectorization +  // 0, 1, ..., 7
-                val_counter / innerVectorization * numElementsPerIter +  // 0, 16, 32, 48
-                i*innerVectorization;  // 0, 8
+              auto idx = val_counter % innerVectorization +
+                  val_counter / innerVectorization * numElementsPerIter +
+                  i*innerVectorization;
               vec = insert_element(vec, srcVals[idx], i32_val(i));
           }
           val_counter++;
           store(vec, vecAddr)
               .setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
-        });
+        };
   }
+  success = emitTransferBetweenRegistersAndShared(
+        srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
+        dstStrides, loc, rewriter, target, crossGrain, perVectorCallback);
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from register to shared");
 }

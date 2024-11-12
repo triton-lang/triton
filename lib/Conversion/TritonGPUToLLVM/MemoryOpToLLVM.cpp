@@ -23,17 +23,19 @@ void lowerDistributedToShared(Location loc, Value src, Value dst,
                               const TargetInfoBase &targetInfo) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
+  auto inOrd = mlir::cast<BlockedEncodingAttr>(srcTy.getEncoding()).getOrder();
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   assert(srcTy.getShape().size() <= 2 ||
          (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
              "Unexpected rank of ConvertLayout(blocked->shared)");
+  bool crossGrain = inOrd[0] != outOrd[0];
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto smemBase = smemObj.getBase();
   auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
   storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
-                           loc, rewriter, targetInfo);
+                           loc, rewriter, targetInfo, crossGrain);
 }
 
 struct LocalAllocOpConversion

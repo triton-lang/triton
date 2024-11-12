@@ -37,19 +37,6 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, int64_t alignmentBytes = 0,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
-
-void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
-                              Type elemLlvmTy, ArrayRef<Value> srcVals,
-                              Value smemBase, ArrayRef<Value> dstStrides,
-                              Location loc, RewriterBase &rewriter,
-                              const TargetInfoBase &target, bool crossGrain);
-
-[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, Value shmemBase,
-    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target, bool crossGrain,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 } // namespace mlir::LLVM::AMD
 
 
