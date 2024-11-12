@@ -528,7 +528,7 @@ Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int batch, int repOuter, int repK,
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Type eltTy, int kWidth, bool isHopper,
-    bool isA, int kSizePerThread) {
+    bool isA) {
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   assert(32 >= bitwidth && "only support 32-bit or less");
   auto numElemsPerVec = 32 / bitwidth;
@@ -541,7 +541,7 @@ Value composeValuesToDotOperandLayoutStruct(
   // `kIters` specifies the number of contiguous int32 elements each thread
   // should load.
   int kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
-  int kSize = kSizePerThread / (32 / bitwidth);
+  int kSize = repK >= kIters ? repK * 2 : kIters;
 
   std::vector<Value> elems;
   auto unpackVec = [&](int b, int m, int k) {
@@ -714,11 +714,9 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
 
   // Format the values to LLVM::Struct to passing to mma codegen.
   Type eltTy = typeConverter->convertType(descTy.getElementType());
-  auto kOrder = isA ? 2 : 1;
-  auto kSizePerThread = shapePerCTA[kOrder] / 4;
   return composeValuesToDotOperandLayoutStruct(
       vals, numRepBatch, isA ? numRep[1] : numRep[2], numRepK, typeConverter,
-      loc, rewriter, eltTy, kWidth, isHopper, isA, kSizePerThread);
+      loc, rewriter, eltTy, kWidth, isHopper, isA);
 }
 
 template <typename T>
