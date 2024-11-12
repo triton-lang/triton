@@ -145,11 +145,18 @@ filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
     bool hasSharedEncoding = false;
     if (use->hasTrait<OpTrait::DotLike>()) {
-      if (loadIsMMAv3(op)) {
+      auto mmaLoadType = getMMALoadType(op);
+      auto dot = dyn_cast<tt::DotOp>(use);
+      auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
+      bool isMMAv3Shared = mmaLoadType == MMALoadType::SharedV3;
+      bool isMMAv3Registers = (mmaLoadType == MMALoadType::Registers)
+        && warpGroupDot;
+
+      if (isMMAv3Shared) {
         hasSharedEncoding = true;
       } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
         hasSharedEncoding = true;
-      } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
+      } else if (isMMAv3Registers || dot) {
         // FIXME: if we have a better solution in handling incompatible shared
         // encoding, we can simplify the logic here by checking if all users are
         // dot encoding. Fow now, getSharedEncIfAllUsersAreDotEnc will be used

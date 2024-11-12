@@ -396,48 +396,6 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
                                       ctaLayout);
 }
 
-enum class MMALoadType {
-  SharedV3,
-  Registers, // may be v2 or v3
-  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip pipelining
-};
-
-static MMALoadType getMMALoadType(Operation *loadOp) {
-  if (!loadOp->hasOneUse())
-      return MMALoadType::DoNotPipeline;
-
-  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin())) {
-    auto sharedEnc = cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
-
-    if (!sharedEnc.getHasLeadingOffset())
-      return MMALoadType::DoNotPipeline;
-
-    // MMA V3 case.
-    auto newOrder = sharedEnc.getOrder();
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    auto oldOrder = ttg::getOrder(ty.getEncoding());
-
-    // The operand of MMAv3 is in SharedEncoding and its order should not
-    // be changed after FuseTranspositions Pass. So we only pipeline the
-    // load if the order of the loaded BlockedEncoding is the same as the
-    // order of the SharedEncoding it is converted to.
-    return oldOrder == newOrder ? MMALoadType::SharedV3 : MMALoadType::DoNotPipeline;
-  } else if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(*loadOp->getUsers().begin())) {
-    auto resTy = dyn_cast<RankedTensorType>(cvt->getResultTypes()[0]);
-    if (!resTy) {
-      return MMALoadType::DoNotPipeline;
-    }
-
-    if (isa<ttg::DotOperandEncodingAttr>(resTy.getEncoding())) {
-      return MMALoadType::Registers;
-    }
-
-    return MMALoadType::DoNotPipeline;
-  } else {
-    return MMALoadType::DoNotPipeline;
-  }
-}
-
 static bool hasSharedEncodingHelper(Operation *loadOp) {
   // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
   // If the allocs don't all have the same encoding, bail.
