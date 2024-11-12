@@ -155,10 +155,6 @@ jobs:
       - name: Check pre-commit
         run: |
           python3 -m pip install --upgrade pre-commit
-          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
-          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
-          # If first run of yapf worked and made changes reset the tree to the original state
-          git reset --hard
           python3 -m pre_commit run --all-files --verbose
 
       - name: Print diff of changes if pre-commit failed
