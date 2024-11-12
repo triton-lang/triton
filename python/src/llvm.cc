@@ -460,8 +460,6 @@ void init_triton_llvm(py::module &&m) {
     if (paths.empty())
       return;
 
-    //    for(auto &path : paths)
-    //    	std::cout << path << std::endl;
     LLVMContext &ctx = dstMod->getContext();
     llvm::Linker linker(*dstMod);
     for (const std::string &path : paths) {

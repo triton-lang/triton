@@ -329,7 +329,7 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-   // printf("_launch hip kernel\\n");
+  // printf("_launch hip kernel\\n");
   void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
   if (gridX*gridY*gridZ > 0) {{
       HIP_CHECK(hipSymbolTable.hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
@@ -383,7 +383,7 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
 }}
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
-  // printf("launch\\n");
+   // printf("launch\\n");
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
