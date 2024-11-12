@@ -142,11 +142,13 @@ public:
     auto layout = type.getEncoding();
     auto bitwidth = type.getElementType().getIntOrFloatBitWidth();
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      auto kWidth = dot.getKWidth();
       // Use when the SharedToDotOperandMMAv2OrV3 is known to be buggy:
-      // - kWidth == 8, bitwidth = 16
+      // - kWidth == 8
       // - kWidth == 4, bitwidth = 32
       if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        bool legacyLoweringIsBuggy = bitwidth * dot.getKWidth() >= 128;
+        bool legacyLoweringIsBuggy =
+            kWidth >= 8 || (kWidth == 4 && bitwidth == 32);
         return legacyLoweringIsBuggy && mma.isAmpere();
       }
       if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
