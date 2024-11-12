@@ -12,7 +12,9 @@ import torch
 import triton
 import triton.language as tl
 
-input_dtypes = ["float16", "float32", "float64", "int8", "float8_e5m2", "float8_e4m3fn"]
+input_dtypes = ["float16", "float32", "float64"]
+if triton.runtime.driver.active.get_current_target().backend == "cuda":
+    input_dtypes += ["int8", "int32", "int64"]
 out_dtypes = ["float16", "float32"]
 
 
