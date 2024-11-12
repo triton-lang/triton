@@ -290,7 +290,7 @@ class HIPBackend(BaseBackend):
         amd.attach_target_triple(llvm_mod)
         target_features = ''
         if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
-            target_features = '+xnack'        
+            target_features = '+xnack'
         llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
 
         # Set various control constants on the LLVM module so that device
@@ -318,9 +318,11 @@ class HIPBackend(BaseBackend):
 
         if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
             default_libdir = Path(__file__).parent / 'lib'
-            paths = [str(default_libdir / 'asanrtl.bc'),
-                     str(default_libdir / "ocml.bc"), 
-                     str(default_libdir / "ockl.bc")]
+            paths = [
+                str(default_libdir / 'asanrtl.bc'),
+                str(default_libdir / "ocml.bc"),
+                str(default_libdir / "ockl.bc")
+            ]
             llvm.link_extern_libs(llvm_mod, paths)
         elif options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
@@ -353,7 +355,7 @@ class HIPBackend(BaseBackend):
     def make_hsaco(src, metadata, options):
         target_features = ''
         if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
-            target_features = '+xnack'       
+            target_features = '+xnack'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
 
         rocm_path = HIPBackend.path_to_rocm_lld()

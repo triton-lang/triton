@@ -26,11 +26,11 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
+#include <iostream>
 #include <memory>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
-#include <iostream>
 
 namespace py = pybind11;
 
@@ -384,23 +384,24 @@ void init_triton_llvm(py::module &&m) {
             });
         bool enableAddressSanitizer =
             mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ADDRESS_SANITIZER");
-        if(enableAddressSanitizer){	
-//                llvm::SmallVector<StringRef, 3> split;
-//                StringRef(mod->getTargetTriple()).split(split, '-');
-//                if(split[0] != "amdgcn"){
-//                         std::string ErrMsg = "Address Sanitizer Error: Address sanitizer is currently only support on the AMD backend\n";
-//                         throw std::runtime_error(ErrMsg);
-//                }		
-	for (llvm::Function &f : mod->functions()){
-	    if(f.isIntrinsic()) continue;
-        if (f.getCallingConv() == CallingConv::AMDGPU_KERNEL){
+        if (enableAddressSanitizer) {
+          llvm::SmallVector<StringRef, 3> split;
+          StringRef(mod->getTargetTriple()).split(split, '-');
+          if (split[0] != "amdgcn") {
+            std::string ErrMsg =
+                "Address Sanitizer Error: Address sanitizer is currently only "
+                "support on the AMD backend\n";
+            throw std::runtime_error(ErrMsg);
+          }
+          for (llvm::Function &f : mod->functions()) {
+            if (f.isIntrinsic() || f.isDeclaration())
+              continue;
             f.addFnAttr("target-features", "+xnack");
-//     		f.addFnAttr(llvm::Attribute::SanitizeAddress);
-	}
-	    }	
-//    AddressSanitizerOptions Opts;
-//    mpm.addPass(AddressSanitizerPass(Opts));	
-	}
+            f.addFnAttr(llvm::Attribute::SanitizeAddress);
+          }
+          AddressSanitizerOptions Opts;
+          mpm.addPass(AddressSanitizerPass(Opts));
+        }
         mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
         mpm.run(*mod, mam);
       },
@@ -459,8 +460,8 @@ void init_triton_llvm(py::module &&m) {
     if (paths.empty())
       return;
 
-//    for(auto &path : paths)
-//    	std::cout << path << std::endl;
+    //    for(auto &path : paths)
+    //    	std::cout << path << std::endl;
     LLVMContext &ctx = dstMod->getContext();
     llvm::Linker linker(*dstMod);
     for (const std::string &path : paths) {
