@@ -247,7 +247,7 @@ compared to 1*64 when the hasLeadingOffset is false.
     ArrayRefParameter<"unsigned">:$order,
     "CTALayoutAttr":$CTALayout,
     "bool":$hasLeadingOffset,
-    "bool":$fromKOuterBlocked
+    "bool":$performInThreadTranspose
   );
 
   let builders = [
@@ -257,8 +257,8 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "ArrayRef<unsigned>":$order,
                      "CTALayoutAttr":$CTALayout), [{
         bool hasLeadingOffset = false; // default value
-        bool fromKOuterBlocked = false; // default value
-        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset, fromKOuterBlocked);
+        bool performInThreadTranspose = false; // default value
+        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset, performInThreadTranspose);
     }]>,
 
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
@@ -311,7 +311,7 @@ compared to 1*64 when the hasLeadingOffset is false.
           } else {
             SmallVector<unsigned int> newOrder(order);
             std::swap(newOrder[0], newOrder[1]);
-            // set fromKOuterBlocked to true since we want to use special swizzling
+            // set performInThreadTranspose to true since we want to use special swizzling
             return $_get(context, vecSize, perPhase, maxPhase, newOrder, CTALayout, false, true);
           }
         }

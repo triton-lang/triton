@@ -111,15 +111,17 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
   let dependentDialects = [];
 }
 
-def TritonAMDGPUTransposeKOuter: Pass<"tritonamdgpu-transpose-kouter", "mlir::ModuleOp"> {
-  let summary = "Pre-transpose K-outer dot operand when transferring from global to LDS";
+def TritonAMDGPUPerformInThreadTranspose: Pass<"tritonamdgpu-perform-in-thread-transpose", "mlir::ModuleOp"> {
+  let summary = "Transpose K-outer dot operand while data is loaded into register right before writing to LDS";
 
   let description = [{
-    Pre-transpose K-outer dot operand when transferring from global to LDS. By enabling special
-    blocked and shared layout, this pass allows both efficient LDS write and read.
+    Transpose K-outer dot operand (not consecutive on K dimension) right before writing data into LDS. This feature
+    happens right after data has been loaded from global memory to register-local registers. This feature will
+    allow coalesced global loading while still maintaining vectorized LDS write/read, by adding few VALU instructions
+    to perform in-thread transpose
   }];
 
-  let constructor = "mlir::createTritonAMDGPUTransposeKOuterPass()";
+  let constructor = "mlir::createTritonAMDGPUPerformInThreadTransposePass()";
 
   let dependentDialects = [];
 }

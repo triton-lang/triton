@@ -213,7 +213,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_thread_locality(pm)
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
         passes.ttgpuir.add_remove_layout_conversions(pm)
-        amd.passes.ttgpuir.add_transpose_kouter(pm)
+        amd.passes.ttgpuir.add_in_thread_tranpose(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)

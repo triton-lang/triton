@@ -8,7 +8,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "tritonamdgpu-transpose-kouter"
+#define DEBUG_TYPE "tritonamdgpu-in-thread-transpose"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -163,12 +163,12 @@ ttg::BlockedEncodingAttr getThreadRakedBlockedEnc(
       threadsPerWarp, numCTAs);
 }
 
-class TritonAMDGPUTranposeKOuterPass
-    : public TritonAMDGPUTransposeKOuterBase<
-          TritonAMDGPUTranposeKOuterPass> {
+class TritonAMDGPUPerformInThreadTransposePass
+    : public TritonAMDGPUPerformInThreadTransposeBase<
+          TritonAMDGPUPerformInThreadTransposePass> {
 
 public:
-  TritonAMDGPUTranposeKOuterPass() = default;
+  TritonAMDGPUPerformInThreadTransposePass() = default;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -211,6 +211,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUTransposeKOuterPass() {
-  return std::make_unique<TritonAMDGPUTranposeKOuterPass>();
+std::unique_ptr<Pass> mlir::createTritonAMDGPUPerformInThreadTransposePass() {
+  return std::make_unique<TritonAMDGPUPerformInThreadTransposePass>();
 }

@@ -25,7 +25,7 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
   const auto &order = attr.getOrder();
   auto rank = order.size();
   bool transposed = (order[rank - 2] != 1);
-  auto fromKOuterBlocked = attr.getFromKOuterBlocked();
+  auto performInThreadTranspose = attr.getPerformInThreadTranspose();
   if (transposed) {
     // tensor is column-wise, so swapping col and row in computations
     std::swap(row, col);
@@ -43,7 +43,7 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
   // colOff = colOffSwizzled + colOffOrdered
   auto phase = urem(udiv(row, perPhase), maxPhase);
   mlir::LLVM::MulOp colOffSwizzled;
-  if (fromKOuterBlocked) {
+  if (performInThreadTranspose) {
     // phase = (phase + row / maxPhase / perPhase) % maxPhase;
     auto rotation = udiv(row, mul(perPhase, maxPhase));
     colOffSwizzled = mul(xor_(udiv(col, vec), xor_(phase, rotation)), vec);
