@@ -1667,8 +1667,12 @@ def device_assert(cond: tl.tensor, msg: str, builder: ir.builder) -> tl.tensor:
         return
     cond_ty = cond.type
     if not cond_ty.is_block():
-        cond_ty = tl.block_type(cond_ty.scalar, list((1, )))
-        cond = tl.tensor(builder.create_splat(cond.handle, list((1, ))), cond_ty)
+        cond_ty = tl.block_type(cond_ty.scalar, [
+            1,
+        ])
+        cond = tl.tensor(builder.create_splat(cond.handle, [
+            1,
+        ]), cond_ty)
     return tl.tensor(builder.create_assert(cond.handle, msg), tl.void)
 
 
