@@ -276,5 +276,26 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
-
 } // namespace mlir::LLVM::AMD
+
+namespace {
+void getAllInnerForOps(scf::ForOp forOp,
+                       llvm::SetVector<scf::ForOp> &innermostForOps) {
+  bool found = false;
+  forOp.getBody()->walk([&found, &innermostForOps](scf::ForOp innerForOp) {
+    getAllInnerForOps(innerForOp, innermostForOps);
+    found = true;
+  });
+  if (!found)
+    innermostForOps.insert(forOp);
+}
+} // namespace
+
+namespace mlir::triton::AMD {
+llvm::SetVector<scf::ForOp> getAllInnerForOps(mlir::triton::FuncOp funcOp) {
+  llvm::SetVector<scf::ForOp> innermostForOps{};
+  funcOp->walk(
+      [&](scf::ForOp forOp) { ::getAllInnerForOps(forOp, innermostForOps); });
+  return innermostForOps;
+}
+} // namespace mlir::triton::AMD

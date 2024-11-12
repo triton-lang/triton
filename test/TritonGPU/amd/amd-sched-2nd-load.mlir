@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-reorder-instructions | FileCheck %s
+// RUN: triton-opt %s -split-input-file -triton-amdgpu-insert-instruction-sched-hints -tritonamdgpu-reorder-instructions | FileCheck %s
 
 // Check the logic of sched-2nd-load optimizations
 //
@@ -27,6 +27,7 @@
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: amdgpu.instruction_sched_hint
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
 //  CHECK-NEXT: triton_gpu.local_store %[[tileB]]
 module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
@@ -66,6 +67,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: amdgpu.instruction_sched_hint
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
 //  CHECK-NEXT: triton_gpu.local_store %[[tileB]]
 module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
@@ -105,6 +107,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: amdgpu.instruction_sched_hint
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
 //  CHECK-NEXT: triton_gpu.local_store %[[tileB]]
 module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
@@ -144,6 +147,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: amdgpu.instruction_sched_hint
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
 //  CHECK-NEXT: triton_gpu.local_store %[[tileB]]
 module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
@@ -186,6 +190,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.store
 //  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: amdgpu.instruction_sched_hint
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
 module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
   tt.func public @sink_2nd_load_128x128x128_user_before_dot(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked>, %B_ptr: tensor<128x128x!tt.ptr<i64>, #blocked>, %B_ptr2: tensor<128x128x!tt.ptr<f16>, #blocked>, %C_ptr: tensor<128x128x!tt.ptr<f32>, #mma>, %A_LDS: !tt.memdesc<128x128xf16, #shared, #triton_gpu.shared_memory, mutable>, %B_LDS: !tt.memdesc<128x128xf16, #shared1, #triton_gpu.shared_memory, mutable>) {
