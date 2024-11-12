@@ -154,9 +154,11 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
           oldType.getMemorySpace(), isMutable);
       newVal = builder.create<triton::gpu::MemDescSubviewOp>(
           subview.getLoc(), newDstType, val, subview.getOffsets());
+      newVal.getDefiningOp()->setAttrs(user->getAttrs());
     } else if (auto trans = dyn_cast<triton::TransOp>(user)) {
       newVal = builder.create<triton::TransOp>(trans.getLoc(), val,
                                                trans.getOrderAttr());
+      newVal.getDefiningOp()->setAttrs(user->getAttrs());
     }
     assert(newVal);
     replaceUsesAndPropagateType(builder, user, newVal);
@@ -172,4 +174,42 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
   // Perform late op erasure.
   for (Operation *op : opsToDelete)
     op->erase();
+}
+
+std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
+  auto stage = cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopStageAttrName))
+                   .getValue()
+                   .getSExtValue();
+  auto clusterId =
+      cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopClusterAttrName))
+          .getValue()
+          .getSExtValue();
+  return std::make_pair(stage, clusterId);
+}
+
+void mlir::triton::setStageCluster(scf::ForOp &forOp, Operation *op, int stage,
+                                   int cluster) {
+  auto ctx = forOp.getContext();
+  op->setAttr(mlir::triton::kLoopStageAttrName,
+              IntegerAttr::get(IntegerType::get(ctx, 32), stage));
+  op->setAttr(mlir::triton::kLoopClusterAttrName,
+              IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
+}
+
+std::pair<int, int> mlir::triton::getMinMaxCluster(scf::ForOp &forOp) {
+  int minClusterId = -1, maxClusterId = -1;
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
+        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
+      continue;
+    auto [_, cluster] = getStageCluster(&op);
+    if (maxClusterId < 0) {
+      minClusterId = cluster;
+      maxClusterId = cluster;
+      continue;
+    }
+    maxClusterId = cluster > maxClusterId ? cluster : maxClusterId;
+    minClusterId = cluster < minClusterId ? cluster : minClusterId;
+  }
+  return std::make_pair(minClusterId, maxClusterId);
 }
