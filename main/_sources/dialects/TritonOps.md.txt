@@ -541,14 +541,14 @@ _Dot_scaled_
 Syntax:
 
 ```
-operation ::= `tt.dot_scaled` $lhs `,` $lhs_scale `,` $rhs (`,`) : (`,` $rhs_scale^ `,`)? $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
-              `:` type($lhs) `,` type($lhs_scale) `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
+operation ::= `tt.dot_scaled` $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs_scale^)? `,` $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
+              `:` type($lhs) (`,` type($lhs_scale)^)? `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
 ```
 
 $d = matrix_multiply(scale($lhs, $lhs_scale), scale($rhs, $rhs_scale)) + $c.
 Where scale(x, s) is a function that applies the scale per block following microscaling spec.
 
-Traits: `AlwaysSpeculatableImplTrait`, `DotLike`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `AttrSizedOperandSegments`, `DotLike`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -882,7 +882,7 @@ Floating point casting for custom types (F8), and non-default rounding modes.
 
 F8 <-> FP16, BF16, FP32, FP64
 
-Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
