@@ -60,7 +60,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["ocml", "ockl", "asanrtl"]
+        libs = ["ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
             #print(str(default_libdir / f'{lib}.bc'))
@@ -288,7 +288,10 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
-        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, "+xnack")
+        target_features = ''
+        if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
+            target_features = '+xnack'        
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -313,17 +316,15 @@ class HIPBackend(BaseBackend):
         # from memory.
         amd.set_all_fn_arg_inreg(fns[0])
 
-        default_libdir = Path(__file__).parent / 'lib'
-        paths = [str(default_libdir / 'asanrtl.bc'),
-                 str(default_libdir / "ocml.bc"), 
-                 str(default_libdir / "ockl.bc")]
-        llvm.link_extern_libs(llvm_mod, paths)
-#        options.extern_libs += str(default_libdir / 'asanrtl.bc')
-#        if options.extern_libs:
-##            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
-#            paths = [path for (name, path) in options.extern_libs]
-#            print(paths)
-#            llvm.link_extern_libs(llvm_mod, paths)
+        if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
+            default_libdir = Path(__file__).parent / 'lib'
+            paths = [str(default_libdir / 'asanrtl.bc'),
+                     str(default_libdir / "ocml.bc"), 
+                     str(default_libdir / "ockl.bc")]
+            llvm.link_extern_libs(llvm_mod, paths)
+        elif options.extern_libs:
+            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
+            llvm.link_extern_libs(llvm_mod, paths)
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
@@ -350,7 +351,10 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        hsaco = amd.assemble_amdgcn(src, options.arch, '+xnack')
+        target_features = ''
+        if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
+            target_features = '+xnack'       
+        hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
 
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
