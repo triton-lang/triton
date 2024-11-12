@@ -964,9 +964,8 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
   if (auto mmaParent = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
-    if (auto nvidiaMmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(mmaParent);
-        nvidiaMmaParent &&
-        (nvidiaMmaParent.isAmpere() || nvidiaMmaParent.isHopper())) {
+    if (auto nvidiaMmaParent =
+            mlir::dyn_cast<NvidiaMmaEncodingAttr>(mmaParent)) {
       return product<unsigned>(getElemsPerThread(shape, eltTy));
     }
     if (auto amdMfmaParent = mlir::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
