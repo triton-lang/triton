@@ -116,11 +116,26 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       } else {
         // Original register layout:
         //
+        //      tile0         tile1
         //   [0, 1, 2, 3], [0, 1, 2, 3]
         //   [4, 5, 6, 7], [4, 5, 6, 7]
         //
-        // We should reorder the elements by moving the duplicated elements to
-        // the end
+        //      tile2         tile3
+        //   [8, 9, 10, 11], [8, 9, 10, 11]
+        //   [12, 13, 14, 15], [12, 13, 14, 15]
+        //
+        // Each element in the layout is a single bf16.
+        // The converted register layout should be:
+        //
+        // 1st MMA: [[0, 1], [4, 5], [2, 3], [6, 7]]
+        // 2nd MMA: [[0, 1], [4, 5], [2, 3], [6, 7]]
+        // 3rd MMA: [[8, 9], [12, 13], [10, 11], [14, 15]]
+        // 4th MMA: [[8, 9], [12, 13], [10, 11], [14, 15]]
+        //
+        // Additionally, we should reorder the elements by moving the duplicated
+        // elements to the end.  In the example above, we convert the order from
+        // tile0, tile1, tile2, tile3 to tile0, tile2, tile1, tile3, so that
+        // only the first two tiles will be used in the computation.
         size_t elemsPerTile = 2 * 2 * kWidth;
         size_t elemsPerMma = 2 * 2 * numElemsPerVec;
         for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma)
@@ -152,10 +167,11 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       } else {
         // Original register layout:
         //
+        //       tile0          tile1
         //   [0, 1, 2, 3]^T, [0, 1, 2, 3]^T
         //
         // We should reorder the elements by moving the duplicated elements to
-        // the end
+        // the end.
         size_t elemsPerTile = 2 * kWidth;
         size_t elemsPerMma = 2 * numElemsPerVec;
         for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma)

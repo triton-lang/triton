@@ -538,6 +538,8 @@ Value composeValuesToDotOperandLayoutStruct(
   // unpacked into individual elements.
   // `kIters` specifies the number of contiguous int32 elements each thread
   // should load.
+  // `kSize` specifies the total number of int32 elements each thread should
+  // load.
   int kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
   int kSize = repK >= kIters ? repK * 2 : kIters;
 
