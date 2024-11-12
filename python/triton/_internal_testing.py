@@ -59,6 +59,11 @@ def is_hip_cdna():
     return is_hip_mi200() or is_hip_mi300()
 
 
+def is_xpu():
+    target = get_current_target()
+    return False if target is None else target.backend == "xpu"
+
+
 def get_arch():
     target = get_current_target()
     return "" if target is None else str(target.arch)
