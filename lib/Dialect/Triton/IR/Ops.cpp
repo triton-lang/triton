@@ -503,8 +503,6 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   return getElementTypesImpl(this->getOperands());
 }
 
-// Returns the CombineOp iff this ReduceOp's region contains only
-// one CombineOp other than the return, or nullptr if not applicable.
 ::mlir::Operation *ReduceOp::getSingleCombiner() {
   if (getNumOperands() != 1 || getNumResults() != 1)
     return nullptr;
