@@ -92,10 +92,6 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
 }
 
 bool canHaveSharedEncoding(Operation *op, Operation *user) {
-  // TMA loads load into shared memory, has shared encoding
-  // by definition.
-  if (isa<tt::ExperimentalDescriptorLoadOp>(op))
-    return true;
   auto loadOp = cast<tt::LoadOp>(op);
   auto dst = loadOp.getResult();
   // Load used for initializing shared memory.
@@ -137,8 +133,10 @@ bool isSmallLoad(tt::LoadOp loadOp,
 bool loadGoodForPipelining(Operation *op, Operation *user,
                            tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    if (isSmallLoad(loadOp, axisInfoAnalysis))
+    if (isSmallLoad(loadOp, axisInfoAnalysis)) {
+
       return false;
+    }
   }
   if (!canHaveSharedEncoding(op, user)) {
     return false;
