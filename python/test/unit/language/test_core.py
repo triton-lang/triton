@@ -32,6 +32,7 @@ from triton._internal_testing import (
     is_hip_cdna,
     is_hip_mi200,
     is_hip_mi300,
+    is_xpu,
     get_arch,
     torch_float8_dtypes,
     torch_dtypes,
@@ -5179,7 +5180,9 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel[(1, )](a)
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    assert "poison" in h.asm["llir"], h.asm["llir"]
+    # xpu uses llvm.store, which in this case is removed by the optimizer
+    if not is_xpu():
+        assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
 # -----------------------

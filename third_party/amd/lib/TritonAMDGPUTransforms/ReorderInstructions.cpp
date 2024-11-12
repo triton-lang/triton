@@ -366,10 +366,10 @@ struct TritonAMDGPUReorderInstructionsPass
 
     moveUpTranspose(m);
 
-    if (isPureMatmulProblem(m)) {
-      scheduleGlobalLoadLocalStore(m);
+    if (isPureMatmulProblem(m))
       sinkSecondLoad(m);
-    }
+    else
+      scheduleGlobalLoadLocalStore(m);
   }
 };
 } // namespace

@@ -50,7 +50,6 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
   // know about the op to split the block.
   void llAssert(Operation *op, Value condition, StringRef message,
                 ConversionPatternRewriter &rewriter) const {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
 
     auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
@@ -87,6 +86,7 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     rewriter.create<cf::BranchOp>(loc, thenBlock);
     rewriter.setInsertionPointToEnd(prevBlock);
     rewriter.create<cf::CondBranchOp>(loc, condition, ifBlock, thenBlock);
+    rewriter.setInsertionPointToStart(thenBlock);
   }
 
 protected:
