@@ -197,8 +197,9 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
 enum class MMALoadType {
   SharedV3,
-  Registers, // may be v2 or v3
-  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip pipelining
+  Registers,     // may be v2 or v3
+  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip
+                 // pipelining
 };
 MMALoadType getMMALoadType(Operation *loadOp);
 } // namespace mlir

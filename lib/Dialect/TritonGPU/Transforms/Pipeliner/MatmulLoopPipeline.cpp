@@ -125,10 +125,8 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
   auto convertBlockLayout = [&](Value val, ttg::BlockedEncodingAttr enc) {
     auto ty = cast<RankedTensorType>(val.getType());
-    auto newTy =
-        RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
-    auto cvt =
-        builder.create<ttg::ConvertLayoutOp>(loc, newTy, val);
+    auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
+    auto cvt = builder.create<ttg::ConvertLayoutOp>(loc, newTy, val);
     return cvt.getResult();
   };
 
@@ -169,20 +167,16 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
     SmallVector<unsigned> newSizePerThread;
     llvm::transform(blockEnc.getSizePerThread(),
-        std::back_inserter(newSizePerThread),
-        [&](auto size) { return std::min(size, sharedVec); });
+                    std::back_inserter(newSizePerThread),
+                    [&](auto size) { return std::min(size, sharedVec); });
 
     if (newSizePerThread != blockEnc.getSizePerThread()) {
       auto mod = loadOp->getParentOfType<ModuleOp>();
       int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
       int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
       auto newBlockEnc = ttg::BlockedEncodingAttr::get(
-          loadOp.getContext(),
-          tensorTy.getShape(),
-          newSizePerThread,
-          blockEnc.getOrder(),
-          numWarps,
-          threadsPerWarp,
+          loadOp.getContext(), tensorTy.getShape(), newSizePerThread,
+          blockEnc.getOrder(), numWarps, threadsPerWarp,
           blockEnc.getCTALayout());
 
       src = convertBlockLayout(src, newBlockEnc);
@@ -528,8 +522,8 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
         loadInfo.usedByDot = true;
         loadInfo.isMMAv3Shared = mmaLoadType == MMALoadType::SharedV3;
-        loadInfo.isMMAv3Registers = (mmaLoadType == MMALoadType::Registers)
-          && warpGroupDot;
+        loadInfo.isMMAv3Registers =
+            (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
 
         if (loadInfo.isMMAv3Shared) {
           loadInfo.sharedEncoding =
@@ -771,9 +765,9 @@ createAsyncOps(scf::ForOp &forOp,
                                                                 auto &rhs) {
         return lhs.distToUse < rhs.distToUse;
       })->distToUse;
-  bool hasMMAV3 =
-      llvm::any_of(loadToInfo, [](auto &kv) {
-          return kv.second.isMMAv3Shared || kv.second.isMMAv3Registers; });
+  bool hasMMAV3 = llvm::any_of(loadToInfo, [](auto &kv) {
+    return kv.second.isMMAv3Shared || kv.second.isMMAv3Registers;
+  });
   if (hasMMAV3) {
     // For MMAv3, we need an extra buffer as this is assumed in the wgmma
     // pipelining post-processing.
@@ -1182,14 +1176,15 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
 //
 //  1. All operands that touch shared memory are multi-buffered, i.e. can't read
 //     an incomplete value while it's being written asynchronously by a load.
-//     1a. If operand A is in registers, these registers cannot be updated inside
+//     1a. If operand A is in registers, these registers cannot be updated
+//     inside
 //         the loop.
 //         **Exception** if the operand is produced by a preceding WGMMA,
-//         then this op can be properly async. Either the f16 shortcut is possible
-//         and the WGMMA's can run back-to-back (see rule 3 below), or elementwise
-//         truncate is needed, in which case the preceding WGMMA is not async and
-//         a WarpGroupDotWait is inserted right after, which guarantees exclusive
-//         access to the operand registers.
+//         then this op can be properly async. Either the f16 shortcut is
+//         possible and the WGMMA's can run back-to-back (see rule 3 below), or
+//         elementwise truncate is needed, in which case the preceding WGMMA is
+//         not async and a WarpGroupDotWait is inserted right after, which
+//         guarantees exclusive access to the operand registers.
 //
 //  2. If the dot is used by any op in the loop, it must be used under an `if`,
 //     and will be synced with a `wait 0` at the beginning of the `if` block.
@@ -1228,7 +1223,8 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
       // Rule 1a: Register operands must not be modified within the loop.
       // First, check for chained WGMMA as an exception.
       if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(operand.getDefiningOp())) {
-        return isa<ttg::NvidiaMmaEncodingAttr>(cvt.getSrc().getType().getEncoding());
+        return isa<ttg::NvidiaMmaEncodingAttr>(
+            cvt.getSrc().getType().getEncoding());
       }
       // And then, do a stricter-than-necessary check for now, that the operand
       // is defined outside the loop.

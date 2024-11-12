@@ -994,4 +994,3 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
     tt.return %17#0 : tensor<128x16xf32, #mma>
   }
 }
-

@@ -284,7 +284,8 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 //
 // This ordering is decided when a tensor in DotOpEnc is lowered into llvm.
 // For WGMMA this happens in both SharedToDotOperand and MMAToDotOperand.
-// Thus, both lowerings must obey this above ordering for the below code to be correct.
+// Thus, both lowerings must obey this above ordering for the below code to be
+// correct.
 llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Location loc,
                                  const SmallVector<Value> &elements,

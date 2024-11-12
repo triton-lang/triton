@@ -149,8 +149,8 @@ filterPipelinedLoad(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
       auto dot = dyn_cast<tt::DotOp>(use);
       auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
       bool isMMAv3Shared = mmaLoadType == MMALoadType::SharedV3;
-      bool isMMAv3Registers = (mmaLoadType == MMALoadType::Registers)
-        && warpGroupDot;
+      bool isMMAv3Registers =
+          (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
 
       if (isMMAv3Shared) {
         hasSharedEncoding = true;

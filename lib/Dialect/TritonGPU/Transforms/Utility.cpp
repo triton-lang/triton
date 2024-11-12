@@ -978,10 +978,11 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
 
 MMALoadType getMMALoadType(Operation *loadOp) {
   if (!loadOp->hasOneUse())
-      return MMALoadType::DoNotPipeline;
+    return MMALoadType::DoNotPipeline;
 
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin())) {
-    auto sharedEnc = cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
+    auto sharedEnc =
+        cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
 
     if (!sharedEnc.getHasLeadingOffset())
       return MMALoadType::DoNotPipeline;
@@ -995,8 +996,10 @@ MMALoadType getMMALoadType(Operation *loadOp) {
     // be changed after FuseTranspositions Pass. So we only pipeline the
     // load if the order of the loaded BlockedEncoding is the same as the
     // order of the SharedEncoding it is converted to.
-    return oldOrder == newOrder ? MMALoadType::SharedV3 : MMALoadType::DoNotPipeline;
-  } else if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(*loadOp->getUsers().begin())) {
+    return oldOrder == newOrder ? MMALoadType::SharedV3
+                                : MMALoadType::DoNotPipeline;
+  } else if (auto cvt =
+                 dyn_cast<ttg::ConvertLayoutOp>(*loadOp->getUsers().begin())) {
     auto resTy = dyn_cast<RankedTensorType>(cvt->getResultTypes()[0]);
     if (!resTy) {
       return MMALoadType::DoNotPipeline;
@@ -1011,7 +1014,6 @@ MMALoadType getMMALoadType(Operation *loadOp) {
     return MMALoadType::DoNotPipeline;
   }
 }
-
 
 namespace {
 
