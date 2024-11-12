@@ -226,11 +226,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
                                                          Value cSwizzleOffset) {
   Value warpB = multiDimWarpId[0];
   Value warpOff = kOrder == 2 ? multiDimWarpId[1] : multiDimWarpId[2];
-  int cTileShape = tileShape[order[0]];
-  int sTileShape = tileShape[order[1]];
-  if (!needTrans) {
-    std::swap(cTileShape, sTileShape);
-  }
 
   SmallVector<Value> offs(numPtrs);
 
@@ -239,7 +234,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
   int laneHeight = 8;
   int quadWidth = laneWidth * kWidth;
   int quadHeight = laneHeight;
-  int numQuadI = 2;
+  int numQuads = tileShape[kOrder] >= (2 * kWidth * 4) ? 2 : 1;
 
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
@@ -247,6 +242,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
   for (int rep = 0; rep < numPtrs / (2 * kWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < kWidth; ++elemId) {
+        auto qId = quadId % numQuads;
         // inner index base
         Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(kWidth));
         jBase = add(jBase, i32_val(elemId));
@@ -532,7 +528,7 @@ Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int batch, int repOuter, int repK,
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Type eltTy, int kWidth, bool isHopper,
-    bool isA) {
+    bool isA, int kSizePerThread) {
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   assert(32 >= bitwidth && "only support 32-bit or less");
   auto numElemsPerVec = 32 / bitwidth;
@@ -544,12 +540,14 @@ Value composeValuesToDotOperandLayoutStruct(
   // unpacked into individual elements.
   // `kIters` specifies the number of contiguous int32 elements each thread
   // should load.
-  auto kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
+  int kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
+  int kSize = kSizePerThread / (32 / bitwidth);
 
   std::vector<Value> elems;
   auto unpackVec = [&](int b, int m, int k) {
-    for (auto kIter = 0; kIter < kIters; ++kIter) {
-      auto val = vals.at({b, m, k + kIter});
+    for (int kIter = 0; kIter < kIters; ++kIter) {
+      //llvm::errs() << "isA: " << isA << ": " << b << ", " << m << ", " << (k + kIter) % kSize << "\n";
+      auto val = vals.at({b, m, (k + kIter) % kSize});
       auto vec = bitcast(val, vecTy);
       for (auto i = 0; i < numElemsPerVec; ++i) {
         elems.push_back(extract_element(eltTy, vec, i32_val(i)));
@@ -622,6 +620,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
     // initialize pointers
     const int numPtrs = loader.getNumPtrs();
     SmallVector<Value> ptrs(numPtrs);
+    //llvm::errs() << "isA: " << isA << ", numPtrs: " << numPtrs << "\n";
     Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
     Type smemTy = getSharedMemTy(eltTy);
     for (int i = 0; i < numPtrs; ++i)
@@ -717,9 +716,11 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
 
   // Format the values to LLVM::Struct to passing to mma codegen.
   Type eltTy = typeConverter->convertType(descTy.getElementType());
+  auto kOrder = isA ? 2 : 1;
+  auto kSizePerThread = shapePerCTA[kOrder] / 4;
   return composeValuesToDotOperandLayoutStruct(
       vals, numRepBatch, isA ? numRep[1] : numRep[2], numRepK, typeConverter,
-      loc, rewriter, eltTy, kWidth, isHopper, isA);
+      loc, rewriter, eltTy, kWidth, isHopper, isA, kSizePerThread);
 }
 
 template <typename T>

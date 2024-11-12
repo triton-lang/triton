@@ -106,11 +106,34 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       //  2nd MMA: [[2, 3], [10, 11], [18, 19], [26, 27]]
       //  3rd MMA: [[4, 5], [12, 13], [20, 21], [28, 29]]
       //  4th MMA: [[6, 7], [14, 15], [22, 23], [30, 31]]
-      for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
-        for (size_t tile = 0; tile < 4; ++tile)
-          for (size_t e = 0; e < numElemsPerVec; ++e) {
-            si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+      auto kIters = kWidth / (32 / bitwidth);
+      if (kIters <= repK) {
+        for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+          for (size_t tile = 0; tile < 4; ++tile)
+            for (size_t e = 0; e < numElemsPerVec; ++e) {
+              si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+            }
+      } else {
+        // Original register layout:
+        //
+        //   [0, 1, 2, 3], [0, 1, 2, 3]
+        //   [4, 5, 6, 7], [4, 5, 6, 7]
+        //
+        // [0, 1], [4, 5], [2, 3], [6, 7] are packed into a single 32-bit value.
+        size_t elemsPerTile = 2 * 2 * kWidth;
+        size_t elemsPerMma = 2 * 2 * numElemsPerVec;
+        for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma) {
+          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile) {
+            for (size_t kTile = 0; kTile < 2; ++kTile) {
+              for (size_t mTile = 0; mTile < 2; ++mTile) {
+                for (size_t e = 0; e < numElemsPerVec; ++e) {
+                  si.push_back(mma * elemsPerMma + tile * elemsPerTile + mTile * kWidth + kTile * numElemsPerVec + e);
+                }
+              }
+            }
           }
+        }
+      }
     } else {
       // Original register layout:
       //
@@ -122,11 +145,31 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       //  2nd MMA: [[2, 3], [10, 11]]
       //  3rd MMA: [[4, 5], [12, 13]]
       //  4th MMA: [[6, 7], [14, 15]]
-      for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
-        for (size_t tile = 0; tile < 2; ++tile)
-          for (size_t e = 0; e < numElemsPerVec; ++e) {
-            si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+      auto kIters = kWidth / (32 / bitwidth);
+      if (kIters <= repK) {
+        for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+          for (size_t tile = 0; tile < 2; ++tile)
+            for (size_t e = 0; e < numElemsPerVec; ++e) {
+              si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+            }
+      } else {
+        // Original register layout:
+        //
+        //   [0, 1, 2, 3]^T, [0, 1, 2, 3]^T
+        //
+        // [0, 1], [4, 5] are packed into a single 32-bit value.
+        size_t elemsPerTile = 2 * kWidth;
+        size_t elemsPerMma = 2 * numElemsPerVec;
+        for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma) {
+          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile) {
+            for (size_t kTile = 0; kTile < 2; ++kTile) {
+              for (size_t e = 0; e < numElemsPerVec; ++e) {
+                si.push_back(mma * elemsPerMma + tile * elemsPerTile + kTile * numElemsPerVec + e);
+              }
+            }
           }
+        }
+      }
     }
 
     auto step = si.size();
@@ -470,6 +513,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           extract_val(elemTy, mmaOut, i);
     }
   };
+
+  //llvm::errs() << "repK: " << repK << "\n";
+  //llvm::errs() << "repM: " << repM << "\n";
+  //llvm::errs() << "repN: " << repN << "\n";
 
   for (int b = 0; b < repBatch; ++b)
     for (int k = 0; k < repK; ++k)
