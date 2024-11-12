@@ -75,7 +75,7 @@ public:
 
   void finalizeAllSessions(OutputFormat outputFormat);
 
-  void activateSession(size_t sesssionId);
+  void activateSession(size_t sessionId);
 
   void deactivateSession(size_t sessionId);
 
@@ -97,7 +97,7 @@ private:
                                        const std::string &contextSourceName,
                                        const std::string &dataName);
 
-  void activateSessionImpl(size_t sesssionId);
+  void activateSessionImpl(size_t sessionId);
 
   void deActivateSessionImpl(size_t sessionId);
 
@@ -135,7 +135,7 @@ private:
   // path -> session id
   std::map<std::string, size_t> sessionPaths;
   // session id -> active
-  std::map<size_t, bool> activeSessions;
+  std::map<size_t, bool> sessionActive;
   // session id -> session
   std::map<size_t, std::unique_ptr<Session>> sessions;
   // scope -> active count

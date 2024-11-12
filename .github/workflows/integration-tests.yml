@@ -10,8 +10,7 @@ name: Integration Tests
 on:
   workflow_dispatch:
   pull_request:
-    # You can name your branch dev-foo to get CI runs.
-    branches: [main, 'dev-**']
+    branches-ignore: ['llvm-**']
   merge_group:
     branches: [main, 'dev-**']
     types: [checks_requested]
@@ -240,14 +239,14 @@ jobs:
           cd python
           LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+            echo "Could not find '${LIT_TEST_DIR}'" ; exit -1
           fi
           lit -v "${LIT_TEST_DIR}"
       - name: Run python tests on CUDA
         run: |
-          SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/_C"
-          if [ ! -d "${SHARED_LIB_DIR}" ]; then
-            echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
+          INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/instrumentation"
+          if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
+            echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
           cd python/test/unit
           python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
@@ -257,7 +256,7 @@ jobs:
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
           python3 -m pytest -s hopper/test_flashattention.py
-          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
+          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
           python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
@@ -269,17 +268,20 @@ jobs:
            language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
            runtime/test_autotuner.py::test_kwargs[False]\
            ../../tutorials/06-fused-attention.py::test_op --device cpu
+      - name: Run regression tests
+        run: |
+          cd python/test/regression
+          python3 -m pytest -s -n 8 .
       - name: Run C++ unittests
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
           ctest -j32
       - name: Run Proton tests
-        env:
-          LD_LIBRARY_PATH: "/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
         run: |
-          cd third_party/proton
-          python3 -m pytest -s test
+          cd third_party/proton/test
+          python3 -m pytest -s .
+          cd ..
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
@@ -396,14 +398,14 @@ jobs:
           cd python
           LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+            echo "Could not find '${LIT_TEST_DIR}'" ; exit -1
           fi
           lit -v "${LIT_TEST_DIR}"
       - name: Run python tests on HIP
         run: |
-          SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/_C"
-          if [ ! -d "${SHARED_LIB_DIR}" ]; then
-            echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
+          INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
+          if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
+            echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
@@ -412,15 +414,21 @@ jobs:
                  --ignore=test_debug.py
           # TODO: uncomment
           # pytest --capture=tee-sys -rfs test_debug.py
-          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
+          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+      - name: Run regression tests
+        run: |
+          # Reenable test_functional_regression.py once it's fixed
+          cd python/test/regression
+          python3 -m pytest -s -n 8 ./test_cast_matmul.py
       - name: Run Proton tests
         run: |
-          cd third_party/proton
-          python3 -m pytest test
+          cd third_party/proton/test
+          python3 -m pytest -s .
+          cd ..
       - name: Run C++ unittests
         run: |
           cd python

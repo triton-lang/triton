@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, nvidia
+from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
 import functools
@@ -12,6 +13,7 @@ import signal
 import os
 import subprocess
 from pathlib import Path
+import sysconfig
 
 
 def min_dot_size(target: GPUTarget):
@@ -20,18 +22,19 @@ def min_dot_size(target: GPUTarget):
 
 @functools.lru_cache()
 def _path_to_binary(binary: str):
+    binary += sysconfig.get_config_var("EXE")
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
         os.path.join(os.path.dirname(__file__), "bin", binary),
     ]
 
-    for bin in paths:
-        if os.path.exists(bin) and os.path.isfile(bin):
-            result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
+    for path in paths:
+        if os.path.exists(path) and os.path.isfile(path):
+            result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                 if version is not None:
-                    return bin, version.group(1)
+                    return path, version.group(1)
     raise RuntimeError(f"Cannot find {binary}")
 
 
@@ -60,12 +63,17 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 
-@functools.lru_cache()
-def get_features(options):
+def get_ptx_version_from_options(options):
     ptx_version = options.ptx_version
     if ptx_version is None:
         _, cuda_version = _path_to_binary("ptxas")
         ptx_version = ptx_get_version(cuda_version)
+    return ptx_version
+
+
+@functools.lru_cache()
+def get_features(options):
+    ptx_version = get_ptx_version_from_options(options)
 
     # PTX 8.3 is the max version supported by llvm 3a83162168.
     #
@@ -222,6 +230,7 @@ class CUDABackend(BaseBackend):
         if capability // 10 >= 8:
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+            passes.ttgpuir.add_loop_scheduling(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
@@ -240,6 +249,8 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
+        ptx_version = get_ptx_version_from_options(options)
+
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
@@ -258,7 +269,8 @@ class CUDABackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
-        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
@@ -292,6 +304,8 @@ class CUDABackend(BaseBackend):
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["global_scratch_size"] = src.get_int_attr("triton_gpu.global_scratch_memory_size")
+        metadata["global_scratch_align"] = src.get_int_attr("triton_gpu.global_scratch_memory_alignment")
         ret = str(llvm_mod)
         del llvm_mod
         del context
@@ -299,10 +313,7 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ptx(src, metadata, opt, capability):
-        ptx_version = opt.ptx_version
-        if ptx_version is None:
-            _, cuda_version = _path_to_binary("ptxas")
-            ptx_version = ptx_get_version(cuda_version)
+        ptx_version = get_ptx_version_from_options(opt)
 
         triple = 'nvptx64-nvidia-cuda'
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
@@ -357,9 +368,9 @@ class CUDABackend(BaseBackend):
                 else:
                     error = f'`ptxas` failed with error code {e.returncode}'
 
-                raise RuntimeError(f'{error}\n'
-                                   f'`ptxas` stderr:\n{log}\n'
-                                   f'Repro command: {ptxas_cmd}\n')
+                raise PTXASError(f"{error}\n"
+                                 f"`ptxas` stderr:\n{log}\n"
+                                 f'Repro command: {" ".join(ptxas_cmd)}\n')
 
             with open(fbin, 'rb') as f:
                 cubin = f.read()

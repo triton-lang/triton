@@ -76,9 +76,8 @@ SmallVector<unsigned>
 getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 
 // Returns the dimensions of the tensor from minor (fast-varying) to
-// major (slow-varying). For blocked, mma, and dotOperand layouts,
-// though the elements are in registers, the order refers to memory
-// layout of the original tensor in global memory.
+// major (slow-varying). For distributed layouts, this represents
+// the order of the elements within a thread.
 // For shared Layout, the order refers to which dimension of the original tensor
 // is contiguous in shared memory.
 SmallVector<unsigned> getOrder(Attribute layout);
@@ -129,6 +128,17 @@ SmallVector<int64_t> getShapePerCTA(Type type);
 unsigned getNumWarpsPerCTA(Attribute layout);
 
 unsigned getNumCTAs(Attribute layout);
+
+// Return the order that represents that the batch is in row-major or
+// column-major order for a batch of matrices of shape [*, m, n] with
+// len(shape) == rank.
+SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
+
+// Return the order that represents that the dot operand is in kMajor
+// (contiguous in the inner dimension) or it's contiguous on the outer
+// dimension.
+SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
+                                            bool kMajor);
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 

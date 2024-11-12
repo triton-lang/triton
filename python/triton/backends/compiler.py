@@ -2,13 +2,28 @@ import os
 import re
 import hashlib
 import subprocess
+import sysconfig
 
-from abc import ABCMeta, abstractmethod, abstractclassmethod
+from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 from types import ModuleType
 
+# Table that associates strings to AttrsDescriptor (sub)classes.
+# In this way we can dynamically select the correct class
+# constructor
+_descriptor_table = {}
 
+
+def register_descriptor(cls):
+    """
+    Register a descriptor into the descriptor table
+    """
+    _descriptor_table[cls.__name__] = cls
+    return cls
+
+
+@register_descriptor
 class AttrsDescriptor:
     """
     This class handles compile-time properties for specific function parameters.
@@ -135,18 +150,28 @@ class AttrsDescriptor:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def to_dict(self):
-        return self.arg_properties
+        """
+        Store the fields of this class in a serializable dictionary
+        """
+        # We need to only store the `arg_properties` field. To initialize the
+        # other fields we relay on the class type. We store it as a string in
+        # the dictionary so that we can use it to invoke the appropriate
+        # (sub)class constructor in the `from_dict` method.
+        return {"arg_properties": self.arg_properties, "cls": type(self).__name__}
 
     @staticmethod
     def from_dict(data):
-        attrsDescriptor = AttrsDescriptor()
-        for prop_name, param_ids in data.items():
-            attrsDescriptor.arg_properties[prop_name] = param_ids
-        attrsDescriptor._init_slots()
-        return attrsDescriptor
+        """
+        Create the object from a serializable dictionary
+        """
+        attrs_descriptor = _descriptor_table[data["cls"]]()
+        for prop_name, param_ids in data["arg_properties"].items():
+            attrs_descriptor.arg_properties[prop_name] = param_ids
+        attrs_descriptor._init_slots()
+        return attrs_descriptor
 
-    @staticmethod
-    def from_hints(hints: List[Tuple[int, int]]):
+    @classmethod
+    def from_hints(cls, hints: List[Tuple[int, int]]):
         """
         Create the class from a set of hints that are passed in.
 
@@ -156,11 +181,11 @@ class AttrsDescriptor:
         then we insert `param_index` into the correct list (e.g., in
         `arg_properties[prop0]`)
         """
-        attrsDescriptor = AttrsDescriptor()
-        for prop_name, prop_val in attrsDescriptor.property_values.items():
-            attrsDescriptor.arg_properties[prop_name] = [i for i, h in hints.items() if h == prop_val]
-        attrsDescriptor._init_slots()
-        return attrsDescriptor
+        attrs_descriptor = cls()
+        for prop_name, prop_val in attrs_descriptor.property_values.items():
+            attrs_descriptor.arg_properties[prop_name] = [i for i, h in hints.items() if h == prop_val]
+        attrs_descriptor._init_slots()
+        return attrs_descriptor
 
     @staticmethod
     def is_divisible_by_16(x):
@@ -186,6 +211,9 @@ class AttrsDescriptor:
             return "1"
         return "N"
 
+    def __repr__(self):
+        return f"AttrsDescriptor.from_dict({self.to_dict()!r})"
+
 
 @dataclass(frozen=True)
 class GPUTarget(object):
@@ -204,22 +232,23 @@ class BaseBackend(metaclass=ABCMeta):
 
     @staticmethod
     def _path_to_binary(binary: str):
+        binary += sysconfig.get_config_var("EXE")
         base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
         paths = [
             os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
             os.path.join(base_dir, "third_party", "cuda", "bin", binary),
         ]
-        for p in paths:
-            bin = p.split(" ")[0]
-            if os.path.exists(bin) and os.path.isfile(bin):
-                result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
+        for path in paths:
+            if os.path.exists(path) and os.path.isfile(path):
+                result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
                 if result is not None:
                     version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                     if version is not None:
-                        return p, version.group(1)
+                        return path, version.group(1)
         raise RuntimeError(f"Cannot find {binary}")
 
-    @abstractclassmethod
+    @classmethod
+    @abstractmethod
     def supports_target(target: GPUTarget):
         raise NotImplementedError
 

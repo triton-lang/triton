@@ -346,23 +346,8 @@ compared to 1*64 when the hasLeadingOffset is false.
         // index of the inner dimension in `order`
         unsigned inner = (opIdx == 0) ? 0 : 1;
 
-        // ---- begin Volta ----
-        if (mmaEnc.isVolta()) {
-          int perPhase = 128 / (shapePerCTA[order[0]] * (typeWidthInBit / 8));
-          perPhase = std::max<int>(perPhase, 1);
-          bool is_row = order[0] != 0;
-          bool is_vec4 = opIdx == 0 ? !is_row && (shapePerCTA[order[0]] <= 16) :
-              is_row && (shapePerCTA[order[0]] <= 16);
-          int pack_size = opIdx == 0 ? ((is_row || is_vec4) ? 1 : 2) :
-                                       ((is_row && !is_vec4) ? 2 : 1);
-          int rep = 2 * pack_size;
-          int maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
-          int vec = 2 * rep;
-          return get(context, vec, perPhase, maxPhase, order, CTALayout);
-        }
-
-        // ---- begin Ampere ----
-        if (mmaEnc.isAmpere()) {
+        // ---- begin Ampere & Hopper ----
+        if (mmaEnc.isAmpere() || mmaEnc.isHopper()) {
           int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
           perPhase = std::max<int>(perPhase, 1);
           std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
@@ -395,13 +380,6 @@ compared to 1*64 when the hasLeadingOffset is false.
           }
 
           llvm_unreachable("invalid operand index");
-        }
-
-        // ---- begin version 3 ----
-        if (mmaEnc.isHopper()) {
-          llvm_unreachable("SharedEncodingAttr builder when the MMAEncodingAttr"
-                           " is Hopper has not been implemented yet");
-          return $_get(context, 1, 1, 1, order, CTALayout, true);
         }
 
         // ---- not implemented ----
@@ -481,9 +459,16 @@ layout = [0  4  8  12]
          [3  7  11 15]
 
 For the Threads Per Warp and Values Per Thread level, the linear id distribution is variant for each sub-class encoding.
+
+If the layout does not completely cover the tensor, we tile it until we cover the entire tensor.
+We call each individual tile "rep".
   }];
 
   let methods = [
+    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getRepOrder">,
+
     // Interface for the meta information about the multiple thread hierarchy.
     InterfaceMethod<"Get the shape of the CTAs per CGA.",
                     "SmallVector<unsigned>",
@@ -570,6 +555,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
+    SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
@@ -710,7 +696,7 @@ for
       // starting from the contiguous dimension
       for (unsigned d = 0; d < rank - 1; ++d) {
         unsigned i = order[d];
-        unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, shapePerCTA[i] / sizePerThread[i]);
+        unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, std::max<unsigned>(1, shapePerCTA[i] / sizePerThread[i]));
         threadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
         warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / threadsPerWarp[i], 1, remainingWarps);
         remainingWarps /= warpsPerCTA[i];
@@ -743,7 +729,7 @@ for
       // starting from the most strided dimension
       for (int d = rank - 1; d >= 0; --d) {
         unsigned i = order[d];
-        CTAsPerCGA[i] = std::clamp<unsigned>(remainingCTAs, 1, shape[i] / sizePerThread[i]);
+        CTAsPerCGA[i] = std::clamp<unsigned>(remainingCTAs, 1, std::max<unsigned>(1, shape[i] / sizePerThread[i]));
         CTASplitNum[i] = CTAsPerCGA[i];
         remainingCTAs /= CTAsPerCGA[i];
       }
@@ -770,7 +756,7 @@ for
 //===----------------------------------------------------------------------===//
 // MMA Layout Encoding
 //===----------------------------------------------------------------------===//
-// TODO: MMAv1 and MMAv2 should be two instances of the same class
+
 def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
@@ -781,22 +767,24 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
 
     InterfaceMethod<"Return shape per CTA.",
                     "SmallVector<unsigned>",
-                    "getShapePerCTATileForDotOperands",
+                    "getShapePerCTATileForOperand",
                     (ins "ArrayRef<int64_t>":$tensorShape,
-                         "unsigned":$opIdx)>,
+                         "int":$kWidth,
+                         "int":$opIdx)>,
 
     InterfaceMethod<"Return total element size per thread for dot operands.",
                     "unsigned",
-                    "getTotalElemsPerThreadForOperands",
+                    "getTotalElemsPerThreadForOperand",
                     (ins "ArrayRef<int64_t>":$tensorShape,
                          "Type":$eltTy,
-                         "unsigned":$kWidth,
-                         "unsigned":$opIdx)>,
+                         "int":$kWidth,
+                         "int":$opIdx)>,
 
     InterfaceMethod<"Return size per thread for dot operands.",
                     "SmallVector<unsigned>",
-                    "getSizePerThreadForOperands",
-                    (ins "unsigned":$opIdx)>,
+                    "getSizePerThreadForOperand",
+                    (ins "int":$opIdx,
+                         "int":$kWidth)>,
   ];
 }
 
@@ -914,11 +902,12 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     bool supportReduction() const {
       return true;
     }
-    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
-    SmallVector<int64_t> getMFMAInstrShapeForOperands(int kWidth, int opIdx) const;
-    SmallVector<int64_t> getMFMARepForOperands(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
+    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
       auto rank = getWarpsPerCTA().size();
@@ -1021,12 +1010,13 @@ Row |       warp 0                warp 2
     bool supportReduction() const {
       return true;
     }
-    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
+    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
-    SmallVector<int64_t> getRepForOperands(ArrayRef<int64_t> operandShape,
-                                      Type elemType, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
+                                          Type elemType, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
 
     SmallVector<unsigned> getContigPerThread() {
@@ -1134,69 +1124,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     ArrayRefParameter<"unsigned">:$instrShape
   );
 
-  let builders = [
-    // Specially for MMAV1(Volta)
-    AttrBuilder<(ins "int":$versionMajor,
-                     "int":$numWarps,
-                     "CTALayoutAttr":$CTALayout,
-                     "ArrayRef<unsigned>":$instrShape,
-                     "ArrayRef<int64_t>":$shapeC,
-                     "bool":$isARow,
-                     "bool":$isBRow,
-                     "bool":$isAVec4,
-                     "bool":$isBVec4,
-                     "int":$id), [{
-      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
-      // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
-      int versionMinor = (isARow * (1<<0)) |\
-                         (isBRow * (1<<1)) |\
-                         (isAVec4 * (1<<2)) |\
-                         (isBVec4 * (1<<3));
-
-      // TODO: Share code with
-      // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
-      // rep,spw and fpw.
-      SmallVector<unsigned> wpt({1, 1});
-      SmallVector<unsigned> wpt_nm1;
-
-      SmallVector<int, 2> rep(2), spw(2);
-      std::array<int, 3> fpw{{2, 2, 1}};
-      int packSize0 = (isARow || isAVec4) ? 1 : 2;
-      rep[0] = 2 * packSize0;
-      spw[0] = fpw[0] * 4 * rep[0];
-
-      int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
-      rep[1] = 2 * packSize1;
-      spw[1] = fpw[1] * 4 * rep[1];
-
-      do {
-        wpt_nm1 = wpt;
-        if (wpt[0] * wpt[1] < numWarps)
-          wpt[0] = std::clamp<int>(wpt[0] * 2, 1, shapeC[0] / spw[0]);
-        if (wpt[0] * wpt[1] < numWarps)
-          wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
-      } while (wpt_nm1 != wpt);
-
-      return $_get(context, versionMajor, versionMinor, wpt, CTALayout, instrShape);
-    }]>,
-
-
-    AttrBuilder<(ins "int":$versionMajor,
-                     "int":$numWarps,
-                     "CTALayoutAttr":$CTALayout,
-                     "ArrayRef<unsigned>":$instrShape,
-                     "ArrayRef<int64_t>":$shapeA,
-                     "ArrayRef<int64_t>":$shapeB,
-                     "ArrayRef<int64_t>":$shapeC,
-                     "bool":$isARow,
-                     "bool":$isBRow,
-                     "int":$id), [{
-      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
-      bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
-      bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
-      return get(context, versionMajor, numWarps, CTALayout, instrShape, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
-    }]>
-  ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     bool isVolta() const;
@@ -1204,26 +1131,9 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isAmpere() const;
     bool isHopper() const;
 
-    unsigned getElemsPerThreadOfOperand(int opIdx, ArrayRef<int64_t> shape) const;
-
-    // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
-    std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
-
-    // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
-    // Here 5 bits can hold 32 IDs in a single module.
-    static constexpr int numBitsToHoldMmaV1ID{5};
-
-    // For MMA v1, method `getMMAv1IsRow` returns whether e.g. the a operand is used
-    // in the context of an mma.884.row.col or an mma.884.col.col operation. See the PTX ISA documentation
-    // section 9.7.13.4.1 for more details.
-    bool getMMAv1IsRow(int opIdx) const;
-    bool getMMAv1IsVec4(int opIdx) const;
-    int getMMAv1NumOuter(ArrayRef<int64_t> shape, int opIdx) const;
-    SmallVector<int> getMMAv1Rep(int opIdx) const;
-    SmallVector<int> getMMAv1ShapePerWarp(int opIdx) const;
-    int getMMAv1Vec(int opIdx) const;
-    SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
-                                     int bitwidth, int opIdx) const;
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
+                                          int bitwidth, int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     bool supportReduction() const {
       if (isAmpere() || isHopper()) {
@@ -1231,12 +1141,12 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       }
       return false;
     };
-    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
+    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
+    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
-      assert(isVolta() || isAmpere() || isHopper());
+      assert(isAmpere() || isHopper());
       auto rank = getWarpsPerCTA().size();
       SmallVector<unsigned> contigPerThread(rank, 1);
       contigPerThread[rank - 1] = 2;
@@ -1317,6 +1227,27 @@ The parent field is the layout of d.
 kWidth defines number of consecutive elements stored by one thread along k dimension.
 Some layouts do not use this parameter, either because they have a fixed number of
 elements along the K dim, or they use all elements of the tensor along the K dim.
+
+# WGMMA Notes
+We require kWidth to be provided for Hopper because the dtype at loading might be
+different from the dtype at WGMMA, due to casting. The kWidth is determined by the
+dtype at WGMMA.
+
+The encoded tensor consists of operand A for possibly multiple wgmma instructions.
+For each wgmma, each warp in a warp group feeds a single "warp matrix"
+Each warp matrix consists of 2x2 "quads".
+Each thread holds several elements in each quad. Right before a wgmma,
+the sum of bitwidth of
+the elements in each quad should add up to 32.
+
+These values are stored unrolled in `elements`.
+The ordering of dimensions is as follows by convention:
+batch (only 1 batch for Hopper currently)
+matM (m-index of the "warp matrix")
+matK (k-index of the "warp matrix")
+quadK (k-index of the "quad" in the core matrix)
+quadM (m-index of the "quad" in the core matrix)
+vecIdx (index of the element in the quad; this is always along the k-dim)
   }];
 
   let parameters = (
@@ -1327,16 +1258,16 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   );
 
   let builders = [
-        // Specially for MMAV1(Volta)
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
-      if (!parentAttr || !parentAttr.isAmpere())
+      if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
         return $_get(context, opIdx, parent, 0);
+      // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      unsigned MMAv2kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, MMAv2kWidth);
+      unsigned kWidth = 32 / bitwidth;
+      return $_get(context, opIdx, parent, kWidth);
     }]>
   ];
 
@@ -1344,7 +1275,16 @@ elements along the K dim, or they use all elements of the tensor along the K dim
   let genVerifyDecl = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() {
-      return getSizePerThread();
+      auto rank = getWarpsPerCTA().size();
+      assert(rank == 2 || rank == 3);
+      SmallVector<unsigned> contigPerThread(rank, 1);
+      auto kWidth = getKWidth();
+      assert(kWidth != 0 && "Do not support kWidth=0");
+      if (getOpIdx() == 0)
+        contigPerThread[rank - 1] = kWidth;
+      else
+        contigPerThread[rank - 2] = kWidth;
+      return contigPerThread;
     };
   }];
 }

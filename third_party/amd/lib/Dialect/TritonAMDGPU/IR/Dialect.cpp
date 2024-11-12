@@ -21,8 +21,12 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/OperationSupport.h"
+
+#include "llvm/ADT/TypeSwitch.h"
 
 // clang-format off
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -43,6 +47,9 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
       >();
 }
+
+#define GET_ATTRDEF_CLASSES
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.cpp.inc"
 
 #define GET_OP_CLASSES
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"

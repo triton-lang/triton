@@ -38,7 +38,7 @@ tt.func public @fn(%arg0: tensor<128xf32>, %arg1: tensor<64xf32>) {
 
 tt.func public @reshape_different_num_elements(%arg0: tensor<32x128xf16>) {
     // expected-error @+1 {{number of src and dst elements of reshape must be the same}}
-    %a = tt.reshape %arg0 {allow_reorder = false} : tensor<32x128xf16> -> tensor<64x32xf16>
+    %a = tt.reshape %arg0 : tensor<32x128xf16> -> tensor<64x32xf16>
     tt.return
 }
 
@@ -104,6 +104,19 @@ tt.func public @fn(%v: tensor<4x128xf64>) {
       tt.reduce.return %add : f32
     }) {axis = 0 : i32}  : (tensor<4x128xf64>) -> tensor<128xf32>
     tt.return
+}
+
+// -----
+
+tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>) {
+    // expected-error @below {{op requires the same shape for all operands}}
+    %0:2 = "tt.reduce" (%arg0, %arg1) <{axis = 1 : i32}> ({
+    ^bb0(%acc0: f32, %acc1: f32, %cur0: f32, %cur1: f32):
+      %1 = arith.addf %acc0, %cur0 : f32
+      %2 = arith.addf %acc1, %cur1 : f32
+      tt.reduce.return %1, %2 : f32, f32
+    }) : (tensor<32x32x64xf32>, tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>)
+    tt.return %0#0, %0#1 : tensor<32x64xf32>, tensor<16x64xf32>
 }
 
 // -----

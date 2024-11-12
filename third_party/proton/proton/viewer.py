@@ -92,7 +92,7 @@ derivable_metrics = {
 }
 
 # FLOPS have a specific width to their metric
-default_flop_factor_dict = {f"flop/s": 1, f"gflop/s": 1e9, f"tflop/s": 1e12}
+default_flop_factor_dict = {"flop/s": 1, "gflop/s": 1e9, "tflop/s": 1e12}
 derivable_metrics.update(
     {key: FactorDict("flops", default_flop_factor_dict)
      for key in default_flop_factor_dict.keys()})
@@ -189,7 +189,7 @@ WHERE p."name" =~ "{exclude}"
     return gf
 
 
-def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None):
+def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None, print_sorted=False):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)
@@ -199,6 +199,15 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
+        if print_sorted:
+            print("Sorted kernels by metric " + metrics[0].strip("(inc)"))
+            sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
+            for row in range(1, len(sorted_df)):
+                if len(sorted_df.iloc[row]['name']) > 100:
+                    kernel_name = sorted_df.iloc[row]['name'][:100] + "..."
+                else:
+                    kernel_name = sorted_df.iloc[row]['name']
+                print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row][metrics[0]]))
         emit_warnings(gf, metrics)
 
 
@@ -269,7 +278,7 @@ proton-viewer -i ".*test.*" path/to/file.json
         type=str,
         default=None,
         help="""Exclude frames that match the given regular expression and their children.
-For example, the following command will exclude all paths that contain frames that contains "test":
+For example, the following command will exclude all paths starting from "test":
 ```
 proton-viewer -e ".*test.*" path/to/file.json
 ```
@@ -298,6 +307,12 @@ proton-viewer -e ".*test.*" path/to/file.json
 - function_line: include the function name and line number.
 - file_function: include the file name and function name.
 """)
+    argparser.add_argument(
+        "--print-sorted",
+        action='store_true',
+        default=False,
+        help="Sort output by metric value instead of chronologically",
+    )
 
     args, target_args = argparser.parse_known_args()
     assert len(target_args) == 1, "Must specify a file to read"
@@ -309,12 +324,13 @@ proton-viewer -e ".*test.*" path/to/file.json
     threshold = args.threshold
     depth = args.depth
     format = args.format
+    print_sorted = args.print_sorted
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        parse(metrics, file_name, include, exclude, threshold, depth, format)
+        parse(metrics, file_name, include, exclude, threshold, depth, format, print_sorted)
 
 
 if __name__ == "__main__":

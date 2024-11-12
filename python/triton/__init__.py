@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '3.0.0'
+__version__ = '3.2.0'
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -20,6 +20,7 @@ from .runtime import (
 from .runtime.jit import jit
 from .compiler import compile, CompilationError
 from .errors import TritonError
+from .runtime._allocation import set_allocator
 
 from . import language
 from . import testing
@@ -44,6 +45,7 @@ __all__ = [
     "OutOfResources",
     "reinterpret",
     "runtime",
+    "set_allocator",
     "TensorWrapper",
     "TritonError",
     "testing",

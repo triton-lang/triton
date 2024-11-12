@@ -86,7 +86,8 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     // TODO: Add verifier
 }
 
-def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
+def TT_FpToFpOp : TT_Op<"fp_to_fp", [Elementwise,
+                                     SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
                                      /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
@@ -108,6 +109,8 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let assemblyFormat = "$src attr-dict  (`,` `rounding` `=` $rounding^)? `:` type($src) `->` type($result)";
 
     let hasVerifier = 1;
+
+    let hasFolder = 1;
 }
 
 //
@@ -460,17 +463,12 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
         If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
         The compiler is still free to change it for better performance.
     }];
-    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder, OptionalAttr<UnitAttr>:$efficient_layout);
+    let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
     let results = (outs TT_Tensor:$result);
-    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+    let assemblyFormat = "$src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
-    let builders = [
-      OpBuilder<(ins "Type":$type, "Value":$src, "bool":$allow_reorder),
-        [{
-        build($_builder, $_state, type, src, allow_reorder, /*efficient_layout=*/UnitAttr());
-        }]>];
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
@@ -673,11 +671,50 @@ def TT_DotOp : TT_Op<"dot", [Pure,
     let hasVerifier = 1;
 }
 
+
+//
+// DotScaled Op
+//
+def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
+                             AttrSizedOperandSegments,
+                             DotLike,
+                             TypesMatchWith<"result's type matches accumulator's type",
+                                            "d", "c", "$_self">]> {
+    let summary = "dot_scaled";
+
+    let description = [{
+        $d = matrix_multiply(scale($lhs, $lhs_scale), scale($rhs, $rhs_scale)) + $c.
+        Where scale(x, s) is a function that applies the scale per block following microscaling spec.
+    }];
+
+    let arguments = (
+      ins
+      // inputs are floats if we have a type for them, otherwise (fp4),
+      // they are packed in pairs in an I8Tensor
+      RankedTensorOf<[TT_Float,I8]>:$lhs,
+      RankedTensorOf<[TT_Float,I8]>:$rhs,
+      TT_FloatTensor:$c,
+      Optional<RankedTensorOf<[I8]>>:$lhs_scale,
+      Optional<RankedTensorOf<[I8]>>:$rhs_scale,
+      TT_ScaleDotElemTypeAttr:$lhs_type,
+      TT_ScaleDotElemTypeAttr:$rhs_type
+    );
+
+    let results = (outs TT_FloatTensor:$d);
+
+    // Not sure why I need to fully specify the optional group, but otherwise it complains when loading the mlir file
+    let assemblyFormat = [{
+      $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs_scale^)? `,` $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
+      `:` type($lhs) (`,` type($lhs_scale)^)? `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
+    }];
+}
+
 //
 // Reduce Op
 //
 def TT_ReduceOp: TT_Op<"reduce",
                        [Pure,
+                        SameOperandsShape,
                         SameOperandsEncoding,
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
@@ -743,7 +780,8 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
 def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
                                                             SameOperandsAndResultEncoding,
                                                             SameVariadicOperandSize,
-                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                                            ConditionallySpeculatable]> {
 
     let description = [{
         call an external function $symbol implemented in $libpath/$libname with $args
@@ -755,6 +793,12 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
     let results = (outs TT_Type:$result);
 
     let assemblyFormat = "operands attr-dict `:` functional-type(operands, $result)";
+
+    let extraClassDeclaration = [{
+      // Interface method for ConditionallySpeculatable.
+      Speculation::Speculatability getSpeculatability();
+    }];
+
 }
 
 //
@@ -858,7 +902,7 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
     `tt.assert` takes a condition tensor and a message string.
     If the condition is false, the message is printed, and the program is aborted.
   }];
-  let arguments = (ins TT_Tensor:$condition, StrAttr:$message);
+  let arguments = (ins AnyTypeOf<[I1, I1Tensor]>:$condition, StrAttr:$message);
   let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 
@@ -901,6 +945,41 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
         "ValueRange":$offsets,
         "ArrayRef<int32_t>":$tensorShape,
         "ArrayRef<int32_t>":$order
+    )>
+  ];
+}
+
+//
+// Make Tensor Descriptor Op
+//
+def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor",
+                               [Pure,
+                                SameVariadicOperandSize]> {
+  let summary = "Make a tensor descriptor type with meta information of the parent tensor and block size";
+
+  let description = [{
+      `tt.make_tensor_descriptor` takes both meta information of the parent tensor and the block size,
+      and returns a descriptor object which can be used to load/store from the tensor in global memory.
+  }];
+
+  let arguments = (ins
+    TT_Ptr:$base,
+    Variadic<I32>:$shape,
+    Variadic<I64>:$strides,
+    DenseI32ArrayAttr:$tensorShape
+  );
+
+  // TODO(peterbell10): define a custom IR type to represent descriptors
+  let results = (outs TT_Ptr:$result);
+
+  let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` attr-dict `:` type($base) `,` type($result)";
+
+  let builders = [
+    OpBuilder<(ins
+        "Value":$base,
+        "ValueRange":$shape,
+        "ValueRange":$strides,
+        "ArrayRef<int32_t>":$tensorShape
     )>
   ];
 }

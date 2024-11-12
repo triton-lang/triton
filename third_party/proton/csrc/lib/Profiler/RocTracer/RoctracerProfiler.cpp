@@ -231,8 +231,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     const hip_api_data_t *data = (const hip_api_data_t *)(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
-      auto scopeId = Scope::getNewScopeId();
-      threadState.record(scopeId);
+      auto scopeId = threadState.record();
       threadState.enterOp(scopeId);
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {

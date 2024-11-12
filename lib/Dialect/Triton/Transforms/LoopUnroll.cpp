@@ -22,8 +22,6 @@
 
 namespace mlir::triton {
 
-static const char *loopUnrollFactorAttrName = "tt.loop_unroll_factor";
-
 namespace {
 
 class LoopUnrollPass : public TritonLoopUnrollBase<LoopUnrollPass> {
@@ -31,11 +29,14 @@ class LoopUnrollPass : public TritonLoopUnrollBase<LoopUnrollPass> {
   int getUnrollFactorOrDefault(scf::ForOp forOp) {
     // Use the attribute attached to the loop if it exists otherwise set the
     // factor to 1 to suppress the unrolling.
-    if (auto factor = forOp->getAttrOfType<IntegerAttr>(
-            mlir::triton::loopUnrollFactorAttrName))
+    if (auto factor =
+            forOp->getAttrOfType<IntegerAttr>(loopUnrollFactorAttrName))
       return factor.getInt();
     return 1;
   }
+
+  const char *loopUnrollFactorAttrName = "tt.loop_unroll_factor";
+  const char *pipelineStagesAttrName = "tt.num_stages";
 
 public:
   LoopUnrollPass() = default;
@@ -49,11 +50,18 @@ public:
         loops.push_back(forOp);
     });
 
+    auto ctx = getOperation()->getContext();
     for (auto loop : loops) {
       auto unrollFactor = getUnrollFactorOrDefault(loop);
-      loop->removeAttr(mlir::triton::loopUnrollFactorAttrName);
+      loop->removeAttr(loopUnrollFactorAttrName);
       LDBG("Unrolling loop by " << unrollFactor << " times\n" << loop);
-      (void)loopUnrollByFactor(loop, unrollFactor);
+      auto resultLoops = loopUnrollByFactor(loop, unrollFactor);
+      // Do not pipeline the epilog loop.
+      if (succeeded(resultLoops) && resultLoops->epilogueLoopOp) {
+        (*resultLoops->epilogueLoopOp)
+            ->setAttr(pipelineStagesAttrName,
+                      mlir::IntegerAttr::get(IntegerType::get(ctx, 32), 1));
+      }
     }
   }
 };

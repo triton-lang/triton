@@ -234,7 +234,8 @@ def make_launcher(constants, signature, ids, warp_size):
     libhip_path = _get_path_to_hip_runtime_dylib()
 
     # generate glue code
-    params = [i for i in signature.keys() if i not in constants]
+    params = [f"&arg{i}" for i in signature.keys() if i not in constants]
+    params.append("&global_scratch")
     src = f"""
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
@@ -330,7 +331,8 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   // printf("_launch hip kernel\\n");
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
+  hipDeviceptr_t global_scratch = 0;
+  void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
       HIP_CHECK(hipSymbolTable.hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
     }}
@@ -503,3 +505,10 @@ class HIPDriver(GPUDriver):
     def get_benchmarker(self):
         from triton.testing import do_bench
         return do_bench
+
+    def get_empty_cache_for_benchmark(self):
+        import torch
+
+        # It's the same as the Nvidia backend.
+        cache_size = 256 * 1024 * 1024
+        return torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')

@@ -1,5 +1,6 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
+// RUN: triton-opt %s -split-input-file -tritongpu-loop-scheduling=num-stages=3 -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline-v2=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline-v2="num_stages=2 prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -62,43 +63,70 @@
 //   AMD-DAG:   %[[C0:.*]] = arith.constant 0 : index
 //       AMD:   %[[UB1:.*]] = arith.subi %[[UB:.*]], %arg2 : index
 //       AMD:   %[[FOR:.*]]:6 = scf.for %[[ARG5:.*]] = %[[LB:.*]] to %[[UB1]] step %[[STEP:.*]] iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}})
-//       AMD:       %[[LOCAL_LOAD_32:.*]] = triton_gpu.local_load %[[ARG10]]
-//       AMD:       %[[LOCAL_LOAD_33:.*]] = triton_gpu.local_load %[[ARG11]]
-//       AMD:       %[[MULF_34:.*]] = arith.mulf %[[LOCAL_LOAD_33]], %{{.*}}
-//       AMD:       %[[DOT_35:.*]] = tt.dot %[[LOCAL_LOAD_32]], %[[MULF_34]], %[[ARG8]]
-//       AMD:       %[[ADDPTR_36:.*]] = tt.addptr %[[ARG6]], %{{.*}}
-//       AMD:       %[[ADDPTR_37:.*]] = tt.addptr %[[ARG7]], %{{.*}}
-//       AMD:       %[[LOAD_38:.*]] = tt.load %[[ADDPTR_36]]
-//       AMD:       %[[LOAD_39:.*]] = tt.load %[[ADDPTR_37]]
-//       AMD:       %[[ADDI_40:.*]] = arith.addi %[[ARG9]], %{{.*}}
-//       AMD:       %[[CMPI_41:.*]] = arith.cmpi slt, %[[ADDI_40]], %{{.*}}
-//       AMD:       %[[SELECT_42:.*]] = arith.select %[[CMPI_41]], %[[ADDI_40]], %{{.*}}
-//       AMD:       %[[MEMDESC_SUBVIEW_43:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_42]], %{{.*}}, %{{.*}}]
-//       AMD:       triton_gpu.local_store %[[LOAD_38]], %[[MEMDESC_SUBVIEW_43]]
-//       AMD:       %[[MEMDESC_SUBVIEW_44:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_42]], %{{.*}}, %{{.*}}]
-//       AMD:       triton_gpu.local_store %[[LOAD_39]], %[[MEMDESC_SUBVIEW_44]]
-//       AMD:       scf.yield %[[ADDPTR_36]], %[[ADDPTR_37]], %[[DOT_35]], %[[SELECT_42]], %[[MEMDESC_SUBVIEW_43]], %[[MEMDESC_SUBVIEW_44]]
+//       AMD:     %[[ADDPTR_34:.*]] = tt.addptr %[[ARG6]], %{{.*}}
+//       AMD:     %[[ADDPTR_35:.*]] = tt.addptr %[[ARG7]], %{{.*}}
+//       AMD:     %[[LOAD_36:.*]] = tt.load %[[ADDPTR_34]]
+//       AMD:     %[[LOCAL_LOAD_37:.*]] = triton_gpu.local_load %[[ARG10]]
+//       AMD:     %[[LOAD_38:.*]] = tt.load %[[ADDPTR_35]]
+//       AMD:     %[[LOCAL_LOAD_39:.*]] = triton_gpu.local_load %[[ARG11]]
+//       AMD:     %[[MULF_40:.*]] = arith.mulf %[[LOCAL_LOAD_39]], %{{.*}}
+//       AMD:     %[[DOT_41:.*]] = tt.dot %[[LOCAL_LOAD_37]], %[[MULF_40]], %[[ARG8]]
+//       AMD:     %[[ADDI_42:.*]] = arith.addi %[[ARG9]], %{{.*}}
+//       AMD:     %[[CMPI_43:.*]] = arith.cmpi slt, %[[ADDI_42]], %{{.*}}
+//       AMD:     %[[SELECT_44:.*]] = arith.select %[[CMPI_43]], %[[ADDI_42]], %{{.*}}
+//       AMD:     %[[MEMDESC_SUBVIEW_45:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_44]], %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %[[LOAD_36]], %[[MEMDESC_SUBVIEW_45]]
+//       AMD:     %[[MEMDESC_SUBVIEW_46:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_44]], %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %[[LOAD_38]], %[[MEMDESC_SUBVIEW_46]]
+//       AMD:     scf.yield %[[ADDPTR_34]], %[[ADDPTR_35]], %[[DOT_41]], %[[SELECT_44]], %[[MEMDESC_SUBVIEW_45]], %[[MEMDESC_SUBVIEW_46]]
 //       AMD:   }
 //       AMD:   %[[CMPI_21:.*]] = arith.cmpi slt, %[[STEP]], %[[C0]]
 //       AMD:   %[[SELECT_22:.*]] = arith.select %[[CMPI_21]], %[[C1]], %[[CM1]]
 //       AMD:   %[[SUBI_23:.*]] = arith.subi %[[UB]], %[[LB]]
 //       AMD:   %[[ADDI_24:.*]] = arith.addi %[[SUBI_23]], %[[STEP]]
 //       AMD:   %[[ADDI_25:.*]] = arith.addi %[[ADDI_24]], %[[SELECT_22]]
-//       AMD:   %[[DIVUI_26:.*]] = arith.divsi %[[ADDI_25]], %[[STEP]]
-//       AMD:   %[[ADDI_27:.*]] = arith.addi %[[DIVUI_26]], %[[CM1]]
-//       AMD:   %[[CMPI_28:.*]] = arith.cmpi sge, %[[ADDI_27]], %[[C0]]
-//       AMD:   %[[LOCAL_LOAD_27:.*]] = triton_gpu.local_load %[[FOR]]#4
-//       AMD:   %[[LOCAL_LOAD_28:.*]] = triton_gpu.local_load %[[FOR]]#5
-//       AMD:   %[[MULF_29:.*]] = arith.mulf %[[LOCAL_LOAD_28]], %{{.*}}
-//       AMD:   %[[IF_30:.*]] = scf.if %[[CMPI_28]]
-//       AMD:       %[[DOT_32:.*]] = tt.dot %[[LOCAL_LOAD_27]], %[[MULF_29]], %[[FOR]]#2
-//       AMD:       scf.yield %[[DOT_32]]
+//       AMD:   %[[DIVSI_26:.*]] = arith.divsi %[[ADDI_25]], %[[STEP]]
+//       AMD:   %[[CMPI_27:.*]] = arith.cmpi sge, %[[DIVSI_26]], %{{.*}}
+//       AMD:   %[[LOCAL_LOAD_28:.*]] = triton_gpu.local_load %{{.*}}#4
+//       AMD:   %[[LOCAL_LOAD_29:.*]] = triton_gpu.local_load %{{.*}}#5
+//       AMD:   %[[MULF_30:.*]] = arith.mulf %[[LOCAL_LOAD_29]], %{{.*}}
+//       AMD:   %[[IF_31:.*]] = scf.if %[[CMPI_27]]
+//       AMD:     %[[DOT_33:.*]] = tt.dot %[[LOCAL_LOAD_28]], %[[MULF_30]], %{{.*}}#2
+//       AMD:     scf.yield %[[DOT_33]]
 //       AMD:   } else {
-//       AMD:       scf.yield %[[FOR]]#2
+//       AMD:     scf.yield %{{.*}}#2
 //       AMD:   }
-//       AMD:   %[[SELECT_31:.*]] = arith.select %[[CMPI_28]], %[[IF_30]], %[[FOR]]#2
+//       AMD:   %[[SELECT_32:.*]] = arith.select %[[CMPI_27]], %[[IF_31]], %{{.*}}#2
 //       AMD:   triton_gpu.local_dealloc %{{.*}}
 //       AMD:   triton_gpu.local_dealloc %{{.*}}
+
+// Prefetch pipelining adds another stage in between global load and compute.
+// This stage will local_store, then local_load, creating a prefetch from shared
+// memory into a register buffer for compute.
+//
+// AMD_PREFETCH-LABEL: tt.func @matmul_loop
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   scf.for
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.dot
+//       AMD_PREFETCH:     triton_gpu.local_load
+//       AMD_PREFETCH:     triton_gpu.local_load
+//       AMD_PREFETCH:     scf.yield
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.return
 
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
@@ -201,10 +229,12 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 //         AMD:  %[[SUBVIEW1:.*]] = triton_gpu.memdesc_subview
 //         AMD:  triton_gpu.local_store %{{.+}}, %[[SUBVIEW1]]
 //         AMD:  %[[FOR:.*]]:6 = scf.for
-// AMD-COUNT-2:    triton_gpu.local_load
-//         AMD:    tt.dot
 // AMD-COUNT-2:    tt.addptr
-// AMD-COUNT-2:    tt.load
+//         AMD:    tt.load
+//         AMD:    triton_gpu.local_load
+//         AMD:    tt.load
+//         AMD:    triton_gpu.local_load
+//         AMD:    tt.dot
 //         AMD:    %[[SUBVIEW0:.*]] = triton_gpu.memdesc_subview
 //         AMD:    triton_gpu.local_store %{{.+}}, %[[SUBVIEW0]]
 //         AMD:    %[[SUBVIEW1:.*]] = triton_gpu.memdesc_subview
@@ -217,6 +247,8 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 //         AMD:  %[[SEL1:.*]] = arith.select %{{.*}}, %[[IF1]], %[[FOR]]#2
 // AMD-COUNT-2:  triton_gpu.local_dealloc
 //         AMD:  scf.yield %[[SEL1]]
+
+// AMD_PREFETCH-LABEL: tt.func @matmul_loop_nested
 
 tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                          %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -300,10 +332,10 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:   triton_gpu.local_store %[[LOAD_15]], %[[MEMDESC_SUBVIEW_16]]
 //       AMD:   %[[SUBI_17:.*]] = arith.subi %{{.*}}, %{{.*}}
 //       AMD:   %{{.*}}:4 = scf.for %[[ARG5:.*]] = %{{.*}} to %[[SUBI_17]] step %{{.*}} iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[MEMDESC_SUBVIEW_16]])
-//       AMD:       %[[LOCAL_LOAD_30:.*]] = triton_gpu.local_load %[[ARG9]]
-//       AMD:       %[[DOT_31:.*]] = tt.dot %[[CONVERT_LAYOUT_11]], %[[LOCAL_LOAD_30]], %[[ARG7]]
 //       AMD:       %[[ADDPTR_32:.*]] = tt.addptr %[[ARG6]], %{{.*}}
 //       AMD:       %[[LOAD_33:.*]] = tt.load %[[ADDPTR_32]]
+//       AMD:       %[[LOCAL_LOAD_30:.*]] = triton_gpu.local_load %[[ARG9]]
+//       AMD:       %[[DOT_31:.*]] = tt.dot %[[CONVERT_LAYOUT_11]], %[[LOCAL_LOAD_30]], %[[ARG7]]
 //       AMD:       %[[ADDI_34:.*]] = arith.addi %[[ARG8]], %{{.*}}
 //       AMD:       %[[CMPI_35:.*]] = arith.cmpi slt, %[[ADDI_34]], %{{.*}}
 //       AMD:       %[[SELECT_36:.*]] = arith.select %[[CMPI_35]], %[[ADDI_34]], %{{.*}}
@@ -311,6 +343,22 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:       triton_gpu.local_store %[[LOAD_33]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:       scf.yield %[[ADDPTR_32]], %[[DOT_31]], %[[SELECT_36]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:  triton_gpu.local_dealloc %[[LOCAL_ALLOC_12]]
+
+// AMD_PREFETCH-LABEL: tt.func @matmul_loop_single_pipeline
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   scf.for
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.dot
+//       AMD_PREFETCH:     triton_gpu.local_load
+//       AMD_PREFETCH:     scf.yield
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.return
 
 tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
                                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -366,85 +414,110 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 // CHECK: triton_gpu.async_wait {{.*}} {num = 2 : i32}
 
 // AMD-LABEL:  tt.func @indirect_bmm_scalar
-//       AMD:   %[[LOCAL_ALLOC_0:.*]] = triton_gpu.local_alloc
-//       AMD:   %[[LOCAL_ALLOC_1:.*]] = triton_gpu.local_alloc
-//       AMD:   %[[CMPI_2:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
-//       AMD:   %[[SPLAT_3:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:   %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]]
-//       AMD:   %[[LOAD_5:.*]] = tt.load %{{.*}}, %[[CMPI_2]]
-//       AMD:   %[[MULI_6:.*]] = arith.muli %{{.*}}, %[[LOAD_5]]
-//       AMD:   %[[SPLAT_7:.*]] = tt.splat %[[MULI_6]]
-//       AMD:   %[[ADDPTR_8:.*]] = tt.addptr %{{.*}}, %[[SPLAT_7]]
-//       AMD:   %[[SPLAT_9:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:   %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]]
-//       AMD:   %[[CMPI_11:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
-//       AMD:   %[[ADDPTR_12:.*]] = tt.addptr %{{.*}}, %{{.*}}
-//       AMD:   %[[ADDPTR_13:.*]] = tt.addptr %{{.*}}, %{{.*}}
-//       AMD:   %[[SPLAT_14:.*]] = tt.splat %[[CMPI_11]]
-//       AMD:   %[[LOAD_15:.*]] = tt.load %[[ADDPTR_12]], %[[SPLAT_14]]
-//       AMD:   %[[LOAD_16:.*]] = tt.load %[[ADDPTR_13]], %[[CMPI_11]]
-//       AMD:   %[[MULI_17:.*]] = arith.muli %{{.*}}, %[[LOAD_16]]
-//       AMD:   %[[SPLAT_18:.*]] = tt.splat %[[MULI_17]]
-//       AMD:   %[[ADDPTR_19:.*]] = tt.addptr %{{.*}}, %[[SPLAT_18]]
-//       AMD:   %[[SPLAT_20:.*]] = tt.splat %[[CMPI_11]]
-//       AMD:   %[[LOAD_21:.*]] = tt.load %[[ADDPTR_19]], %[[SPLAT_20]]
-//       AMD:   %[[MEMDESC_SUBVIEW_22:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
-//       AMD:   triton_gpu.local_store %[[LOAD_4]], %[[MEMDESC_SUBVIEW_22]]
-//       AMD:   %[[MEMDESC_SUBVIEW_23:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
-//       AMD:   triton_gpu.local_store %[[LOAD_10]], %[[MEMDESC_SUBVIEW_23]]
-//       AMD:   %[[SUBI_24:.*]] = arith.subi %{{.*}}, %{{.*}}
-//       AMD:   %{{.*}}:8 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_24]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %[[ADDPTR_12]], %[[ARG9:.*]] = %[[ADDPTR_13]], %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_22]], %[[ARG12:.*]] = %[[MEMDESC_SUBVIEW_23]], %[[ARG13:.*]] = %[[LOAD_15]], %[[ARG14:.*]] = %[[LOAD_21]])
-//       AMD:       %[[LOCAL_LOAD_43:.*]] = triton_gpu.local_load %[[ARG11]]
-//       AMD:       %[[LOCAL_LOAD_44:.*]] = triton_gpu.local_load %[[ARG12]]
-//       AMD:       %[[DOT_45:.*]] = tt.dot %[[LOCAL_LOAD_43]], %[[LOCAL_LOAD_44]], %[[ARG7]]
+//       AMD:     %[[LOCAL_ALLOC_0:.*]] = triton_gpu.local_alloc
+//       AMD:     %[[LOCAL_ALLOC_1:.*]] = triton_gpu.local_alloc
+//       AMD:     %[[CMPI_2:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
+//       AMD:     %[[SPLAT_3:.*]] = tt.splat %[[CMPI_2]]
+//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]]
+//       AMD:     %[[LOAD_5:.*]] = tt.load %{{.*}}, %[[CMPI_2]]
+//       AMD:     %[[MULI_6:.*]] = arith.muli %{{.*}}, %[[LOAD_5]]
+//       AMD:     %[[SPLAT_7:.*]] = tt.splat %[[MULI_6]]
+//       AMD:     %[[ADDPTR_8:.*]] = tt.addptr %{{.*}}, %[[SPLAT_7]]
+//       AMD:     %[[SPLAT_9:.*]] = tt.splat %[[CMPI_2]]
+//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]]
+//       AMD:     %[[CMPI_11:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
+//       AMD:     %[[MEMDESC_SUBVIEW_12:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %[[LOAD_4]], %[[MEMDESC_SUBVIEW_12]]
+//       AMD:     %[[MEMDESC_SUBVIEW_13:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %[[LOAD_10]], %[[MEMDESC_SUBVIEW_13]]
+//       AMD:     %[[ADDPTR_14:.*]] = tt.addptr %{{.*}}, %{{.*}}
+//       AMD:     %[[ADDPTR_15:.*]] = tt.addptr %{{.*}}, %{{.*}}
+//       AMD:     %[[SPLAT_16:.*]] = tt.splat %[[CMPI_11]]
+//       AMD:     %[[LOAD_17:.*]] = tt.load %[[ADDPTR_14]], %[[SPLAT_16]]
+//       AMD:     %[[LOAD_18:.*]] = tt.load %[[ADDPTR_15]], %[[CMPI_11]]
+//       AMD:     %[[MULI_19:.*]] = arith.muli %{{.*}}, %[[LOAD_18]]
+//       AMD:     %[[SPLAT_20:.*]] = tt.splat %[[MULI_19]]
+//       AMD:     %[[ADDPTR_21:.*]] = tt.addptr %{{.*}}, %[[SPLAT_20]]
+//       AMD:     %[[SPLAT_22:.*]] = tt.splat %[[CMPI_11]]
+//       AMD:     %[[LOAD_23:.*]] = tt.load %[[ADDPTR_21]], %[[SPLAT_22]]
+//       AMD:     %[[SUBI_24:.*]] = arith.subi %{{.*}}, %{{.*}}
+//       AMD:     %{{.*}}:8 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_24]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %[[ADDPTR_14]], %[[ARG9:.*]] = %[[ADDPTR_15]], %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[LOAD_17]], %[[ARG12:.*]] = %[[LOAD_23]], %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_12]], %[[ARG14:.*]] = %[[MEMDESC_SUBVIEW_13]])
+//       AMD:       %[[ADDI_41:.*]] = arith.addi %[[ARG10]], %{{.*}}
+//       AMD:       %[[CMPI_42:.*]] = arith.cmpi slt, %[[ADDI_41]], %{{.*}}
+//       AMD:       %[[SELECT_43:.*]] = arith.select %[[CMPI_42]], %[[ADDI_41]], %{{.*}}
+//       AMD:       %[[MEMDESC_SUBVIEW_44:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%[[SELECT_43]], %{{.*}}, %{{.*}}]
+//       AMD:       triton_gpu.local_store %[[ARG11]], %[[MEMDESC_SUBVIEW_44]]
+//       AMD:       %[[MEMDESC_SUBVIEW_45:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_43]], %{{.*}}, %{{.*}}]
+//       AMD:       triton_gpu.local_store %[[ARG12]], %[[MEMDESC_SUBVIEW_45]]
 //       AMD:       %[[ADDPTR_46:.*]] = tt.addptr %[[ARG8]], %{{.*}}
 //       AMD:       %[[ADDPTR_47:.*]] = tt.addptr %[[ARG9]], %{{.*}}
 //       AMD:       %[[LOAD_48:.*]] = tt.load %[[ADDPTR_46]]
-//       AMD:       %[[LOAD_49:.*]] = tt.load %[[ADDPTR_47]]
-//       AMD:       %[[MULI_50:.*]] = arith.muli %{{.*}}, %[[LOAD_49]]
-//       AMD:       %[[SPLAT_51:.*]] = tt.splat %[[MULI_50]]
-//       AMD:       %[[ADDPTR_52:.*]] = tt.addptr %{{.*}}, %[[SPLAT_51]]
-//       AMD:       %[[LOAD_53:.*]] = tt.load %[[ADDPTR_52]]
-//       AMD:       %[[ADDI_54:.*]] = arith.addi %[[ARG10]], %{{.*}}
-//       AMD:       %[[CMPI_55:.*]] = arith.cmpi slt, %[[ADDI_54]], %{{.*}}
-//       AMD:       %[[SELECT_56:.*]] = arith.select %[[CMPI_55]], %[[ADDI_54]], %{{.*}}
-//       AMD:       %[[MEMDESC_SUBVIEW_57:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%[[SELECT_56]], %{{.*}}, %{{.*}}]
-//       AMD:       triton_gpu.local_store %[[ARG13]], %[[MEMDESC_SUBVIEW_57]]
-//       AMD:       %[[MEMDESC_SUBVIEW_58:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_56]], %{{.*}}, %{{.*}}]
-//       AMD:       triton_gpu.local_store %[[ARG14]], %[[MEMDESC_SUBVIEW_58]]
-//       AMD:       scf.yield %[[DOT_45]], %[[ADDPTR_46]], %[[ADDPTR_47]], %[[SELECT_56]], %[[MEMDESC_SUBVIEW_57]], %[[MEMDESC_SUBVIEW_58]], %[[LOAD_48]], %[[LOAD_53]]
-//       AMD:   }
-//       AMD:   %[[ADDI_26:.*]] = arith.addi %{{.*}}, %{{.*}}-1
-//       AMD:   %[[CMPI_27:.*]] = arith.cmpi sge, %[[ADDI_26]], %{{.*}}
-//       AMD:   %[[ADDI_28:.*]] = arith.addi %{{.*}}, %{{.*}}-2
-//       AMD:   %[[CMPI_29:.*]] = arith.cmpi sge, %[[ADDI_28]], %{{.*}}
-//       AMD:   %[[LOCAL_LOAD_30:.*]] = triton_gpu.local_load %{{.*}}#4
-//       AMD:   %[[LOCAL_LOAD_31:.*]] = triton_gpu.local_load %{{.*}}#5
-//       AMD:   %[[IF_32:.*]] = scf.if %[[CMPI_27]]
-//       AMD:       %[[DOT_43:.*]] = tt.dot %[[LOCAL_LOAD_30]], %[[LOCAL_LOAD_31]], %{{.*}}#0
-//       AMD:       scf.yield %[[DOT_43]]
-//       AMD:   } else {
+//       AMD:       %[[LOCAL_LOAD_49:.*]] = triton_gpu.local_load %[[ARG13]]
+//       AMD:       %[[LOAD_50:.*]] = tt.load %[[ADDPTR_47]]
+//       AMD:       %[[MULI_51:.*]] = arith.muli %{{.*}}, %[[LOAD_50]]
+//       AMD:       %[[SPLAT_52:.*]] = tt.splat %[[MULI_51]]
+//       AMD:       %[[ADDPTR_53:.*]] = tt.addptr %{{.*}}, %[[SPLAT_52]]
+//       AMD:       %[[LOAD_54:.*]] = tt.load %[[ADDPTR_53]]
+//       AMD:       %[[LOCAL_LOAD_55:.*]] = triton_gpu.local_load %[[ARG14]]
+//       AMD:       %[[DOT_56:.*]] = tt.dot %[[LOCAL_LOAD_49]], %[[LOCAL_LOAD_55]], %[[ARG7]]
+//       AMD:       scf.yield %[[DOT_56]], %[[ADDPTR_46]], %[[ADDPTR_47]], %[[SELECT_43]], %[[LOAD_48]], %[[LOAD_54]], %[[MEMDESC_SUBVIEW_44]], %[[MEMDESC_SUBVIEW_45]]
+//       AMD:     }
+//       AMD:     %[[CMPI_26:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
+//       AMD:     %[[CMPI_27:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
+//       AMD:     %[[ADDI_28:.*]] = arith.addi %{{.*}}#3, %{{.*}}
+//       AMD:     %[[CMPI_29:.*]] = arith.cmpi slt, %[[ADDI_28]], %{{.*}}
+//       AMD:     %[[SELECT_30:.*]] = arith.select %[[CMPI_29]], %[[ADDI_28]], %{{.*}}
+//       AMD:     %[[MEMDESC_SUBVIEW_31:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%[[SELECT_30]], %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %{{.*}}#4, %[[MEMDESC_SUBVIEW_31]]
+//       AMD:     %[[MEMDESC_SUBVIEW_32:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_30]], %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %{{.*}}#5, %[[MEMDESC_SUBVIEW_32]]
+//       AMD:     %[[LOCAL_LOAD_33:.*]] = triton_gpu.local_load %{{.*}}#6
+//       AMD:     %[[LOCAL_LOAD_34:.*]] = triton_gpu.local_load %{{.*}}#7
+//       AMD:     %[[IF_35:.*]] = scf.if %[[CMPI_26]]
+//       AMD:       %[[DOT_41:.*]] = tt.dot %[[LOCAL_LOAD_33]], %[[LOCAL_LOAD_34]], %{{.*}}#0
+//       AMD:       scf.yield %[[DOT_41]]
+//       AMD:     } else {
 //       AMD:       scf.yield %{{.*}}#0
-//       AMD:   }
-//       AMD:   %[[ADDI_33:.*]] = arith.addi %{{.*}}#3, %{{.*}}
-//       AMD:   %[[CMPI_34:.*]] = arith.cmpi slt, %[[ADDI_33]], %{{.*}}
-//       AMD:   %[[SELECT_35:.*]] = arith.select %[[CMPI_34]], %[[ADDI_33]], %{{.*}}
-//       AMD:   %[[MEMDESC_SUBVIEW_36:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_35]], %{{.*}}, %{{.*}}]
-//       AMD:   triton_gpu.local_store %{{.*}}#6, %[[MEMDESC_SUBVIEW_36]]
-//       AMD:   %[[MEMDESC_SUBVIEW_37:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_35]], %{{.*}}, %{{.*}}]
-//       AMD:   triton_gpu.local_store %{{.*}}#7, %[[MEMDESC_SUBVIEW_37]]
-//       AMD:   %[[SELECT_38:.*]] = arith.select %[[CMPI_27]], %[[IF_32]], %{{.*}}#0
-//       AMD:   %[[LOCAL_LOAD_39:.*]] = triton_gpu.local_load %[[MEMDESC_SUBVIEW_36]]
-//       AMD:   %[[LOCAL_LOAD_40:.*]] = triton_gpu.local_load %[[MEMDESC_SUBVIEW_37]]
-//       AMD:   %[[IF_41:.*]] = scf.if %[[CMPI_29]]
-//       AMD:       %[[DOT_43:.*]] = tt.dot %[[LOCAL_LOAD_39]], %[[LOCAL_LOAD_40]], %[[SELECT_38]]
-//       AMD:       scf.yield %[[DOT_43]]
-//       AMD:   } else {
-//       AMD:       scf.yield %[[SELECT_38]]
-//       AMD:   }
-//       AMD:   %[[SELECT_42:.*]] = arith.select %[[CMPI_29]], %[[IF_41]], %[[SELECT_38]]
-//       AMD:   triton_gpu.local_dealloc %[[LOCAL_ALLOC_0]]
-//       AMD:   triton_gpu.local_dealloc %[[LOCAL_ALLOC_1]]
+//       AMD:     }
+//       AMD:     %[[SELECT_36:.*]] = arith.select %[[CMPI_26]], %[[IF_35]], %{{.*}}#0
+//       AMD:     %[[LOCAL_LOAD_37:.*]] = triton_gpu.local_load %[[MEMDESC_SUBVIEW_31]]
+//       AMD:     %[[LOCAL_LOAD_38:.*]] = triton_gpu.local_load %[[MEMDESC_SUBVIEW_32]]
+//       AMD:     %[[IF_39:.*]] = scf.if %[[CMPI_27]]
+//       AMD:       %[[DOT_41:.*]] = tt.dot %[[LOCAL_LOAD_37]], %[[LOCAL_LOAD_38]], %[[SELECT_36]]
+//       AMD:       scf.yield %[[DOT_41]]
+//       AMD:     } else {
+//       AMD:       scf.yield %[[SELECT_36]]
+//       AMD:     }
+//       AMD:     %[[SELECT_40:.*]] = arith.select %[[CMPI_27]], %[[IF_39]], %[[SELECT_36]]
+//       AMD:     triton_gpu.local_dealloc %[[LOCAL_ALLOC_0]]
+//       AMD:     triton_gpu.local_dealloc %[[LOCAL_ALLOC_1]]
+
+// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_scalar
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   triton_gpu.local_alloc
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   triton_gpu.local_store
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   triton_gpu.local_load
+//       AMD_PREFETCH:   scf.for
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     triton_gpu.local_store
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.dot
+//       AMD_PREFETCH:     triton_gpu.local_load
+//       AMD_PREFETCH:     scf.yield
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.dot
+//       AMD_PREFETCH:   tt.return
 
 tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
@@ -495,10 +568,12 @@ tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 // AMD-LABEL:  tt.func @indirect_bmm_scalar_dist_one
 // AMD-COUNT-4:  tt.load
 //       AMD:  scf.for
-//       AMD:    tt.dot
 //       AMD:    tt.load
+//       AMD:    tt.dot
 //       AMD:    triton_gpu.local_store
 //       AMD:    scf.yield
+
+// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_scalar_dist_one
 
 tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
@@ -563,40 +638,42 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:   %[[ADDPTR_6:.*]] = tt.addptr %{{.*}}, %{{.*}}
 //       AMD:   %[[SPLAT_7:.*]] = tt.splat %[[CMPI_2]]
 //       AMD:   %[[LOAD_8:.*]] = tt.load %{{.*}}, %[[SPLAT_7]]
-//       AMD:   %[[EXPAND_DIMS_9:.*]] = tt.expand_dims %[[LOAD_4]] {axis = 1 : i32}
-//       AMD:   %[[BROADCAST_10:.*]] = tt.broadcast %[[EXPAND_DIMS_9]]
-//       AMD:   %[[MULI_11:.*]] = arith.muli %{{.*}}, %[[BROADCAST_10]]
-//       AMD:   %[[ADDPTR_12:.*]] = tt.addptr %{{.*}}, %[[MULI_11]]
-//       AMD:   %[[SPLAT_13:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:   %[[LOAD_14:.*]] = tt.load %[[ADDPTR_12]], %[[SPLAT_13]]
-//       AMD:   %[[SPLAT_15:.*]] = tt.splat %[[CMPI_5]]
-//       AMD:   %[[LOAD_16:.*]] = tt.load %[[ADDPTR_6]], %[[SPLAT_15]]
+//       AMD:   %[[SPLAT_9:.*]] = tt.splat %[[CMPI_5]]
+//       AMD:   %[[LOAD_10:.*]] = tt.load %[[ADDPTR_6]], %[[SPLAT_9]]
+//       AMD:   %[[EXPAND_DIMS_11:.*]] = tt.expand_dims %[[LOAD_4]] {axis = 1 : i32}
+//       AMD:   %[[BROADCAST_12:.*]] = tt.broadcast %[[EXPAND_DIMS_11]]
+//       AMD:   %[[MULI_13:.*]] = arith.muli %{{.*}}, %[[BROADCAST_12]]
+//       AMD:   %[[ADDPTR_14:.*]] = tt.addptr %{{.*}}, %[[MULI_13]]
+//       AMD:   %[[SPLAT_15:.*]] = tt.splat %[[CMPI_2]]
+//       AMD:   %[[LOAD_16:.*]] = tt.load %[[ADDPTR_14]], %[[SPLAT_15]]
 //       AMD:   %[[MEMDESC_SUBVIEW_17:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
 //       AMD:   triton_gpu.local_store %[[LOAD_8]], %[[MEMDESC_SUBVIEW_17]]
 //       AMD:   %[[MEMDESC_SUBVIEW_18:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
-//       AMD:   triton_gpu.local_store %[[LOAD_14]], %[[MEMDESC_SUBVIEW_18]]
+//       AMD:   triton_gpu.local_store %[[LOAD_16]], %[[MEMDESC_SUBVIEW_18]]
 //       AMD:   %[[SUBI_19:.*]] = arith.subi %{{.*}}, %{{.*}}
-//       AMD:   %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_19]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[ADDPTR_6]], %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_17]], %[[ARG12:.*]] = %[[MEMDESC_SUBVIEW_18]], %[[ARG13:.*]] = %[[LOAD_16]])
-//       AMD:       %[[LOCAL_LOAD_47:.*]] = triton_gpu.local_load %[[ARG11]]
-//       AMD:       %[[LOCAL_LOAD_48:.*]] = triton_gpu.local_load %[[ARG12]]
-//       AMD:       %[[DOT_49:.*]] = tt.dot %[[LOCAL_LOAD_47]], %[[LOCAL_LOAD_48]], %[[ARG7]]
-//       AMD:       %[[ADDPTR_50:.*]] = tt.addptr %[[ARG8]], %{{.*}}
-//       AMD:       %[[ADDPTR_51:.*]] = tt.addptr %[[ARG9]], %{{.*}}
-//       AMD:       %[[LOAD_52:.*]] = tt.load %[[ADDPTR_50]]
-//       AMD:       %[[EXPAND_DIMS_53:.*]] = tt.expand_dims %[[ARG13]] {axis = 1 : i32}
-//       AMD:       %[[BROADCAST_54:.*]] = tt.broadcast %[[EXPAND_DIMS_53]]
-//       AMD:       %[[MULI_55:.*]] = arith.muli %{{.*}}, %[[BROADCAST_54]]
-//       AMD:       %[[ADDPTR_56:.*]] = tt.addptr %{{.*}}, %[[MULI_55]]
-//       AMD:       %[[LOAD_57:.*]] = tt.load %[[ADDPTR_56]]
-//       AMD:       %[[LOAD_58:.*]] = tt.load %[[ADDPTR_51]]
-//       AMD:       %[[ADDI_59:.*]] = arith.addi %[[ARG10]], %{{.*}}
-//       AMD:       %[[CMPI_60:.*]] = arith.cmpi slt, %[[ADDI_59]], %{{.*}}
-//       AMD:       %[[SELECT_61:.*]] = arith.select %[[CMPI_60]], %[[ADDI_59]], %{{.*}}
-//       AMD:       %[[MEMDESC_SUBVIEW_62:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%[[SELECT_61]], %{{.*}}, %{{.*}}]
-//       AMD:       triton_gpu.local_store %[[LOAD_52]], %[[MEMDESC_SUBVIEW_62]]
-//       AMD:       %[[MEMDESC_SUBVIEW_63:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_61]], %{{.*}}, %{{.*}}]
-//       AMD:       triton_gpu.local_store %[[LOAD_57]], %[[MEMDESC_SUBVIEW_63]]
-//       AMD:       scf.yield %[[DOT_49]], %[[ADDPTR_50]], %[[ADDPTR_51]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[MEMDESC_SUBVIEW_63]], %[[LOAD_58]]
+//       AMD:   %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_19]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[ADDPTR_6]], %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_17]], %[[ARG12:.*]] = %[[LOAD_10]], %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_18]])
+//       AMD:     %[[ADDPTR_47:.*]] = tt.addptr %[[ARG8]], %{{.*}}
+//       AMD:     %[[ADDPTR_48:.*]] = tt.addptr %[[ARG9]], %{{.*}}
+//       AMD:     %[[LOAD_49:.*]] = tt.load %[[ADDPTR_47]]
+//       AMD:     %[[LOCAL_LOAD_50:.*]] = triton_gpu.local_load %[[ARG11]]
+//       AMD:     %[[LOAD_51:.*]] = tt.load %[[ADDPTR_48]]
+//       AMD:     %[[EXPAND_DIMS_52:.*]] = tt.expand_dims %[[ARG12]] {axis = 1 : i32}
+//       AMD:     %[[BROADCAST_53:.*]] = tt.broadcast %[[EXPAND_DIMS_52]]
+//       AMD:     %[[MULI_54:.*]] = arith.muli %{{.*}}, %[[BROADCAST_53]]
+//       AMD:     %[[ADDPTR_55:.*]] = tt.addptr %{{.*}}, %[[MULI_54]]
+//       AMD:     %[[LOAD_56:.*]] = tt.load %[[ADDPTR_55]]
+//       AMD:     %[[LOCAL_LOAD_57:.*]] = triton_gpu.local_load %[[ARG13]]
+//       AMD:     %[[DOT_58:.*]] = tt.dot %[[LOCAL_LOAD_50]], %[[LOCAL_LOAD_57]], %[[ARG7]]
+//       AMD:     %[[ADDI_59:.*]] = arith.addi %[[ARG10]], %{{.*}}
+//       AMD:     %[[CMPI_60:.*]] = arith.cmpi slt, %[[ADDI_59]], %{{.*}}
+//       AMD:     %[[SELECT_61:.*]] = arith.select %[[CMPI_60]], %[[ADDI_59]], %{{.*}}
+//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_0]][%[[SELECT_61]], %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %[[LOAD_49]], %[[MEMDESC_SUBVIEW_62]]
+//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = triton_gpu.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_61]], %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
+//       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
+
+// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_vector
 
 tt.func @indirect_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
                    %76: index,
@@ -747,7 +824,6 @@ tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
 // COMMON: tt.expand_dims
 // COMMON: tt.expand_dims
 // COMMON: tt.expand_dims %arg5
-// COMMON-NEXT: tt.expand_dims %arg5
 // COMMON: %[[PTR0:.*]] = tt.splat %arg6
 // COMMON: %[[PTR1:.*]] = tt.addptr %[[PTR0]]
 // COMMON-NEXT: tt.load %[[PTR1]]
@@ -976,68 +1052,68 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 //   AMD-DIS: #[[$SHARED_LAYOUT:shared.*]] = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
 // AMD-LABEL: tt.func @indirect_load_shared_layout
+//       AMD:   %[[LOCAL_ALLOC_0:.*]] = triton_gpu.local_alloc
+//       AMD:   %[[LOCAL_ALLOC_1:.*]] = triton_gpu.local_alloc
 //       AMD:   %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}}, %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %{{.*}})
-//       AMD:     %[[LOCAL_LOAD_47:.*]] = triton_gpu.local_load %[[ARG11]]
-//       AMD:     %[[LOCAL_LOAD_48:.*]] = triton_gpu.local_load %[[ARG12]]
-//       AMD:     %[[DOT_49:.*]] = tt.dot %[[LOCAL_LOAD_47]], %[[LOCAL_LOAD_48]], %[[ARG7]]
-//       AMD:     %[[ADDPTR_50:.*]] = tt.addptr %[[ARG8]], %{{.*}}
-//       AMD:     %[[ADDPTR_51:.*]] = tt.addptr %[[ARG9]], %{{.*}}
-//       AMD:     %[[LOAD_52:.*]] = tt.load %[[ADDPTR_50]]
-//       AMD:     %[[EXPAND_DIMS_53:.*]] = tt.expand_dims %[[ARG13]] {axis = 1 : i32}
-//       AMD:     %[[BROADCAST_54:.*]] = tt.broadcast %[[EXPAND_DIMS_53]]
-//       AMD:     %[[MULI_55:.*]] = arith.muli %{{.*}}, %[[BROADCAST_54]]
-//       AMD:     %[[ADDPTR_56:.*]] = tt.addptr %{{.*}}, %[[MULI_55]]
-//       AMD:     %[[LOAD_57:.*]] = tt.load %[[ADDPTR_56]]
-//       AMD:     %[[LOAD_58:.*]] = tt.load %[[ADDPTR_51]]
+//       AMD:     %[[ADDPTR_47:.*]] = tt.addptr %[[ARG8]], %{{.*}}
+//       AMD:     %[[ADDPTR_48:.*]] = tt.addptr %[[ARG9]], %{{.*}}
+//       AMD:     %[[LOAD_49:.*]] = tt.load %[[ADDPTR_47]]
+//       AMD:     %[[LOCAL_LOAD_50:.*]] = triton_gpu.local_load %[[ARG11]]
+//       AMD:     %[[LOAD_51:.*]] = tt.load %[[ADDPTR_48]]
+//       AMD:     %[[EXPAND_DIMS_52:.*]] = tt.expand_dims %[[ARG12]] {axis = 1 : i32}
+//       AMD:     %[[BROADCAST_53:.*]] = tt.broadcast %[[EXPAND_DIMS_52]]
+//       AMD:     %[[MULI_54:.*]] = arith.muli %{{.*}}, %[[BROADCAST_53]]
+//       AMD:     %[[ADDPTR_55:.*]] = tt.addptr %{{.*}}, %[[MULI_54]]
+//       AMD:     %[[LOAD_56:.*]] = tt.load %[[ADDPTR_55]]
+//       AMD:     %[[LOCAL_LOAD_57:.*]] = triton_gpu.local_load %[[ARG13]]
+//       AMD:     %[[DOT_58:.*]] = tt.dot %[[LOCAL_LOAD_50]], %[[LOCAL_LOAD_57]], %[[ARG7]]
 //       AMD:     %[[ADDI_59:.*]] = arith.addi %[[ARG10]], %{{.*}}
 //       AMD:     %[[CMPI_60:.*]] = arith.cmpi slt, %[[ADDI_59]], %{{.*}}
 //       AMD:     %[[SELECT_61:.*]] = arith.select %[[CMPI_60]], %[[ADDI_59]], %{{.*}}
 //       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_61]], %{{.*}}, %{{.*}}]
-//       AMD:     triton_gpu.local_store %[[LOAD_52]], %[[MEMDESC_SUBVIEW_62]]
+//       AMD:     triton_gpu.local_store %[[LOAD_49]], %[[MEMDESC_SUBVIEW_62]]
 //       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_61]], %{{.*}}, %{{.*}}]
-//       AMD:     triton_gpu.local_store %[[LOAD_57]], %[[MEMDESC_SUBVIEW_63]]
-//       AMD:     scf.yield %[[DOT_49]], %[[ADDPTR_50]], %[[ADDPTR_51]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[MEMDESC_SUBVIEW_63]], %[[LOAD_58]]
+//       AMD:     triton_gpu.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
+//       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:   }
-//       AMD:   %[[ADDI_21:.*]] = arith.addi %{{.*}}, %{{.*}}-1
-//       AMD:   %[[CMPI_22:.*]] = arith.cmpi sge, %[[ADDI_21]], %{{.*}}
-//       AMD:   %[[ADDI_23:.*]] = arith.addi %{{.*}}, %{{.*}}-2
-//       AMD:   %[[CMPI_24:.*]] = arith.cmpi sge, %[[ADDI_23]], %{{.*}}
-//       AMD:   %[[LOCAL_LOAD_25:.*]] = triton_gpu.local_load %{{.*}}#4
-//       AMD:   %[[LOCAL_LOAD_26:.*]] = triton_gpu.local_load %{{.*}}#5
-//       AMD:   %[[IF_27:.*]] = scf.if %[[CMPI_22]]
-//       AMD:     %[[DOT_47:.*]] = tt.dot %[[LOCAL_LOAD_25]], %[[LOCAL_LOAD_26]], %{{.*}}#0
-//       AMD:     scf.yield %[[DOT_47]]
-//       AMD:   } else {
-//       AMD:     scf.yield %{{.*}}#0
-//       AMD:   }
-//       AMD:   %[[ADDPTR_28:.*]] = tt.addptr %{{.*}}#1, %{{.*}}
-//       AMD:   %[[SPLAT_29:.*]] = tt.splat %[[CMPI_24]]
-//       AMD:   %[[LOAD_30:.*]] = tt.load %[[ADDPTR_28]], %[[SPLAT_29]]
-//       AMD:   %[[EXPAND_DIMS_31:.*]] = tt.expand_dims %{{.*}}#6 {axis = 1 : i32}
-//       AMD:   %[[BROADCAST_32:.*]] = tt.broadcast %[[EXPAND_DIMS_31]]
-//       AMD:   %[[MULI_33:.*]] = arith.muli %{{.*}}, %[[BROADCAST_32]]
-//       AMD:   %[[ADDPTR_34:.*]] = tt.addptr %{{.*}}, %[[MULI_33]]
-//       AMD:   %[[SPLAT_35:.*]] = tt.splat %[[CMPI_24]]
-//       AMD:   %[[LOAD_36:.*]] = tt.load %[[ADDPTR_34]], %[[SPLAT_35]]
-//       AMD:   %[[ADDI_37:.*]] = arith.addi %{{.*}}#3, %{{.*}}
-//       AMD:   %[[CMPI_38:.*]] = arith.cmpi slt, %[[ADDI_37]], %{{.*}}
-//       AMD:   %[[SELECT_39:.*]] = arith.select %[[CMPI_38]], %[[ADDI_37]], %{{.*}}
-//       AMD:   %[[MEMDESC_SUBVIEW_40:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_39]], %{{.*}}, %{{.*}}]
-//       AMD:   triton_gpu.local_store %[[LOAD_30]], %[[MEMDESC_SUBVIEW_40]]
-//       AMD:   %[[MEMDESC_SUBVIEW_41:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_39]], %{{.*}}, %{{.*}}]
-//       AMD:   triton_gpu.local_store %[[LOAD_36]], %[[MEMDESC_SUBVIEW_41]]
-//       AMD:   %[[SELECT_42:.*]] = arith.select %[[CMPI_22]], %[[IF_27]], %{{.*}}#0
-//       AMD:   %[[LOCAL_LOAD_43:.*]] = triton_gpu.local_load %[[MEMDESC_SUBVIEW_40]]
-//       AMD:   %[[LOCAL_LOAD_44:.*]] = triton_gpu.local_load %[[MEMDESC_SUBVIEW_41]]
-//       AMD:   %[[IF_45:.*]] = scf.if %[[CMPI_24]]
-//       AMD:     %[[DOT_47:.*]] = tt.dot %[[LOCAL_LOAD_43]], %[[LOCAL_LOAD_44]], %[[SELECT_42]]
-//       AMD:     scf.yield %[[DOT_47]]
-//       AMD:   } else {
-//       AMD:     scf.yield %[[SELECT_42]]
-//       AMD:   }
-//       AMD:   %[[SELECT_46:.*]] = arith.select %[[CMPI_24]], %[[IF_45]], %[[SELECT_42]]
-//       AMD:   triton_gpu.local_dealloc %{{.*}}
-//       AMD:   triton_gpu.local_dealloc %{{.*}}
+//       AMD:     %[[CMPI_21:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
+//       AMD:     %[[CMPI_22:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
+//       AMD:     %[[ADDPTR_23:.*]] = tt.addptr %{{.*}}#1, %{{.*}}
+//       AMD:     %[[SPLAT_24:.*]] = tt.splat %[[CMPI_22]]
+//       AMD:     %[[LOAD_25:.*]] = tt.load %[[ADDPTR_23]], %[[SPLAT_24]]
+//       AMD:     %[[LOCAL_LOAD_26:.*]] = triton_gpu.local_load %{{.*}}#4
+//       AMD:     %[[EXPAND_DIMS_27:.*]] = tt.expand_dims %{{.*}}#5 {axis = 1 : i32}
+//       AMD:     %[[BROADCAST_28:.*]] = tt.broadcast %[[EXPAND_DIMS_27]]
+//       AMD:     %[[MULI_29:.*]] = arith.muli %{{.*}}, %[[BROADCAST_28]]
+//       AMD:     %[[ADDPTR_30:.*]] = tt.addptr %{{.*}}, %[[MULI_29]]
+//       AMD:     %[[SPLAT_31:.*]] = tt.splat %[[CMPI_22]]
+//       AMD:     %[[LOAD_32:.*]] = tt.load %[[ADDPTR_30]], %[[SPLAT_31]]
+//       AMD:     %[[LOCAL_LOAD_33:.*]] = triton_gpu.local_load %{{.*}}#6
+//       AMD:     %[[IF_34:.*]] = scf.if %[[CMPI_21]]
+//       AMD:       %[[DOT_45:.*]] = tt.dot %[[LOCAL_LOAD_26]], %[[LOCAL_LOAD_33]], %{{.*}}#0
+//       AMD:       scf.yield %[[DOT_45]]
+//       AMD:     } else {
+//       AMD:       scf.yield %{{.*}}#0
+//       AMD:     }
+//       AMD:     %[[ADDI_35:.*]] = arith.addi %{{.*}}#3, %{{.*}}
+//       AMD:     %[[CMPI_36:.*]] = arith.cmpi slt, %[[ADDI_35]], %{{.*}}
+//       AMD:     %[[SELECT_37:.*]] = arith.select %[[CMPI_36]], %[[ADDI_35]], %{{.*}}
+//       AMD:     %[[MEMDESC_SUBVIEW_38:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_37]], %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %[[LOAD_25]], %[[MEMDESC_SUBVIEW_38]]
+//       AMD:     %[[MEMDESC_SUBVIEW_39:.*]] = triton_gpu.memdesc_subview %{{.*}}[%[[SELECT_37]], %{{.*}}, %{{.*}}]
+//       AMD:     triton_gpu.local_store %[[LOAD_32]], %[[MEMDESC_SUBVIEW_39]]
+//       AMD:     %[[SELECT_40:.*]] = arith.select %[[CMPI_21]], %[[IF_34]], %{{.*}}#0
+//       AMD:     %[[LOCAL_LOAD_41:.*]] = triton_gpu.local_load %[[MEMDESC_SUBVIEW_38]]
+//       AMD:     %[[LOCAL_LOAD_42:.*]] = triton_gpu.local_load %[[MEMDESC_SUBVIEW_39]]
+//       AMD:     %[[IF_43:.*]] = scf.if %[[CMPI_22]]
+//       AMD:       %[[DOT_45:.*]] = tt.dot %[[LOCAL_LOAD_41]], %[[LOCAL_LOAD_42]], %[[SELECT_40]]
+//       AMD:       scf.yield %[[DOT_45]]
+//       AMD:     } else {
+//       AMD:       scf.yield %[[SELECT_40]]
+//       AMD:     }
+//       AMD:     %[[SELECT_44:.*]] = arith.select %[[CMPI_22]], %[[IF_43]], %[[SELECT_40]]
+//       AMD:     triton_gpu.local_dealloc %{{.*}}
+//       AMD:     triton_gpu.local_dealloc %{{.*}}
 
 #AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -1245,6 +1321,23 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // AMD:          triton_gpu.local_store
 // AMD:          scf.yield
 // AMD:        triton_gpu.local_dealloc
+
+// AMD_PREFETCH-LABEL:  tt.func public @nested_loops
+// AMD_PREFETCH-NOT:  triton_gpu.local_alloc
+// AMD_PREFETCH:      scf.for
+// AMD_PREFETCH:        triton_gpu.local_alloc
+// AMD_PREFETCH:        tt.load
+// AMD_PREFETCH:        triton_gpu.local_store
+// AMD_PREFETCH:        tt.load
+// AMD_PREFETCH:        triton_gpu.local_load
+// AMD_PREFETCH:        scf.for
+// AMD_PREFETCH:          triton_gpu.local_store
+// AMD_PREFETCH:          tt.load
+// AMD_PREFETCH:          tt.dot
+// AMD_PREFETCH:          triton_gpu.local_load
+// AMD_PREFETCH:          scf.yield
+// AMD_PREFETCH:        triton_gpu.local_dealloc
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 2], instrShape = [16, 8]}>
 #shared = #triton_gpu.shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
@@ -1341,7 +1434,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
       %84 = arith.sitofp %82 : tensor<64x256xi8, #blocked> to tensor<64x256xf16, #blocked>
       %85 = tt.join %83, %84 : tensor<64x256xf16, #blocked> -> tensor<64x256x2xf16, #blocked3>
       %86 = tt.trans %85 {order = array<i32: 0, 2, 1>} : tensor<64x256x2xf16, #blocked3> -> tensor<64x2x256xf16, #blocked4>
-      %87 = tt.reshape %86 {allow_reorder = false} : tensor<64x2x256xf16, #blocked4> -> tensor<128x256xf16, #blocked5>
+      %87 = tt.reshape %86 : tensor<64x2x256xf16, #blocked4> -> tensor<128x256xf16, #blocked5>
       %88 = triton_gpu.convert_layout %78 : tensor<16x128xf16, #blocked1> -> tensor<16x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
       %89 = triton_gpu.convert_layout %87 : tensor<128x256xf16, #blocked5> -> tensor<128x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %90 = tt.dot %88, %89, %arg10 : tensor<16x128xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<128x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<16x256xf32, #mma>
@@ -1453,7 +1546,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 :
 // -----
 
 // COMMON-LABEL: @dont_pipeline_128x1
-// COMMON-NOT: local_load{{.*}}128x1
+// AMD-NOT: local_load{{.*}}128x1
+// CHECK: local_load{{.*}}128x1
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
@@ -1573,10 +1667,25 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 // AMD: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD: scf.for
-// AMD:   arith.select
-// AMD:   arith.addf
 // AMD:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD:   arith.addf
+// AMD:   arith.select
+// AMD:   scf.yield
+
+// AMD_PREFETCH-LABEL: @masked_add_kernel
+// AMD_PREFETCH: %[[CONSTANT:.*]] = arith.constant dense<0xFF800000>
+// AMD_PREFETCH-COUNT-6: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_PREFETCH: scf.for
+// AMD_PREFETCH:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_PREFETCH:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_PREFETCH:   arith.addf
+// AMD_PREFETCH:   arith.select
+// AMD_PREFETCH:   tt.store
+// AMD_PREFETCH:   scf.yield
+// AMD_PREFETCH: tt.store
+// AMD_PREFETCH: tt.store
+// AMD_PREFETCH: tt.store
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {

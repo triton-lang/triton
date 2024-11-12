@@ -1,11 +1,15 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getOrderForDotOperand;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
@@ -56,21 +60,102 @@ Value loadC(Value tensor, Value llTensor,
 
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter, Value value, int batch, int n0, int n1,
-    RankedTensorType type) {
-
+    ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
+    int repK, RankedTensorType type) {
   auto elems = unpackLLElements(loc, value, rewriter);
+  auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
   ValueTableV2 vals;
-  for (auto b = 0; b < batch; ++b)
-    for (auto i = 0; i < n0; ++i) {
-      for (auto j = 0; j < n1; j++) {
-        vals[{b, 2 * i, 2 * j}] = elems[offset++];
-        vals[{b, 2 * i, 2 * j + 1}] = elems[offset++];
-        vals[{b, 2 * i + 1, 2 * j}] = elems[offset++];
-        vals[{b, 2 * i + 1, 2 * j + 1}] = elems[offset++];
-      }
+  auto bitwidth = eltTy.getIntOrFloatBitWidth();
+  auto numElemsPerVec = 32 / bitwidth;
+  auto vecTy = vec_ty(eltTy, numElemsPerVec);
+
+  auto packVec = [&](std::array<int, 3> dstIdx) {
+    Value vec = undef(vecTy);
+    for (auto i = 0; i < numElemsPerVec; ++i) {
+      vec = insert_element(vec, bitcast(elems[offset + i], eltTy), i32_val(i));
     }
+    vals[dstIdx] = bitcast(vec, i32_ty);
+    offset += numElemsPerVec;
+  };
+
+  auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
+  auto kWidth = dot.getKWidth();
+  auto largeK = bitwidth * kWidth > 32;
+  if (largeK) {
+    // For layouts with a large K dimension, the original register layout needs
+    // to be divided into multiple MMAs, where each MMA has contiguous 32 bits
+    // along the K dimension per thread.
+    // Using kWidth = 8 and bitwidth = 2 as an example,
+    // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
+    // K dimension.
+    llvm::SmallVector<unsigned> si;
+
+    if (dot.getOpIdx() == 0) {
+      // Original register layout:
+      //
+      //   [0, 1, 2, 3, 4, 5, 6, 7], [16, 17, 18, 19, 20, 21, 22, 23, 23]
+      //   [8, 9, 10, 11, 12, 13, 14, 15], [24, 25, 26, 27, 28, 29, 30, 31]
+      //
+      // Each element in the layout is a single bf16.
+      //
+      // To derive four independent MMA operations, a stride of 4 is applied to
+      // the original register layout:
+      //
+      //  1st MMA: [[0, 1], [8, 9], [16, 17], [24, 25]]
+      //  2nd MMA: [[2, 3], [10, 11], [18, 19], [26, 27]]
+      //  3rd MMA: [[4, 5], [12, 13], [20, 21], [28, 29]]
+      //  4th MMA: [[6, 7], [14, 15], [22, 23], [30, 31]]
+      for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+        for (size_t tile = 0; tile < 4; ++tile)
+          for (size_t e = 0; e < numElemsPerVec; ++e) {
+            si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+          }
+    } else {
+      // Original register layout:
+      //
+      //   [0, 1, 2, 3, 4, 5, 6, 7]^T, [8, 9, 10, 11, 12, 13, 14, 15]^T
+      //
+      // A stride of 4 is applied to derive four independent MMA operations:
+      //
+      //  1st MMA: [[0, 1], [8, 9]]
+      //  2nd MMA: [[2, 3], [10, 11]]
+      //  3rd MMA: [[4, 5], [12, 13]]
+      //  4th MMA: [[6, 7], [14, 15]]
+      for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+        for (size_t tile = 0; tile < 2; ++tile)
+          for (size_t e = 0; e < numElemsPerVec; ++e) {
+            si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+          }
+    }
+
+    auto step = si.size();
+    SmallVector<Value> perm(step);
+    for (auto i = 0; i < elems.size() / step; ++i) {
+      for (auto j = 0; j < step; ++j) {
+        perm[j] = elems[i * step + si[j]];
+      }
+      std::copy(perm.begin(), perm.end(), elems.begin() + i * step);
+    }
+  }
+
+  if (dot.getOpIdx() == 0) {
+    for (auto b = 0; b < batch; ++b)
+      for (auto m = 0; m < repOuter; ++m)
+        for (auto k = 0; k < repK; ++k) {
+          packVec({b, 2 * m, 2 * k});
+          packVec({b, 2 * m + 1, 2 * k});
+          packVec({b, 2 * m, 2 * k + 1});
+          packVec({b, 2 * m + 1, 2 * k + 1});
+        }
+  } else {
+    for (auto b = 0; b < batch; ++b)
+      for (auto n = 0; n < repOuter; ++n)
+        for (auto k = 0; k < repK; ++k) {
+          packVec({b, n, 2 * k});
+          packVec({b, n, 2 * k + 1});
+        }
+  }
   return vals;
 }
 
@@ -318,22 +403,30 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-                  .getMMAv2Rep(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+                  .getRepForOperand(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-                  .getMMAv2Rep(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
+                  .getRepForOperand(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
   int repM = repA[1], repN = repB[2], repK = repA[2];
   int repBatch = repA[0];
 
-  // shape / shape_per_cta
+  // We can reuse the same iteration order in
+  // getValuesFromDotOperandLayoutStruct as both a and b are K-major
+  assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
+                                                       aShapePerCTA.size(),
+                                                       /*kMajor=*/true));
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
+
+  assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
+                                                       bShapePerCTA.size(),
+                                                       /*kMajor=*/true));
   auto hb = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, loadedB, repBatch, std::max(repN / 2, 1),
-      repK, bTensorTy);
+      typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
+
   auto fc = unpackLLElements(loc, loadedC, rewriter);
   auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int numCPackedElem = 4 / numMmaRets;

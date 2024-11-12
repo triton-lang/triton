@@ -678,7 +678,7 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
 }
 
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
-  if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
+  if (!op.getAllowReorder() || op.getEfficientLayout())
     return failure();
   return canonicalizeViewOrBroadcast(op, rewriter);
 }
@@ -728,6 +728,29 @@ LogicalResult ReshapeOp::verify() {
 }
 
 //-- FpToFpOp --
+
+// Fold FpToFpOp when the input operand is a constant zero.
+OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
+  auto srcVal = getSrc();
+  auto dstTy = getType();
+
+  const llvm::fltSemantics &semantic =
+      llvm::cast<FloatType>(dstTy.getElementType()).getFloatSemantics();
+
+  if (matchPattern(srcVal, m_PosZeroFloat())) {
+    llvm::APFloat posZero =
+        llvm::APFloat::getZero(semantic, /*negative=*/false);
+    return DenseFPElementsAttr::get(dstTy, posZero);
+  }
+
+  if (matchPattern(srcVal, m_NegZeroFloat())) {
+    llvm::APFloat negZero = llvm::APFloat::getZero(semantic, /*negative=*/true);
+    return DenseFPElementsAttr::get(dstTy, negZero);
+  }
+
+  return {};
+}
+
 LogicalResult FpToFpOp::verify() {
   auto dstType = getType().getElementType();
   auto srcType = getSrc().getType().getElementType();
@@ -811,6 +834,17 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
     if (offset != 0)
       return {};
   return getPtr();
+}
+
+//-- MakeTensorDescOp --
+void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
+                             Value base, ValueRange shape, ValueRange strides,
+                             ArrayRef<int32_t> tensorShape) {
+  auto resultTy = getPointerType(builder.getI8Type());
+  assert(resultTy.getContext());
+
+  return build(builder, state, resultTy, base, shape, strides,
+               builder.getDenseI32ArrayAttr(tensorShape));
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and
@@ -1014,6 +1048,12 @@ void ExternElementwiseOp::getEffects(
                        SideEffects::DefaultResource::get());
   effects.emplace_back(MemoryEffects::Read::get(),
                        SideEffects::DefaultResource::get());
+}
+
+Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
+  if (getPure())
+    return Speculation::Speculatable;
+  return Speculation::NotSpeculatable;
 }
 
 // -- ExperimentalTensormapCreateOp --

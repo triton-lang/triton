@@ -25,6 +25,7 @@ public:
                      ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
                      ArrayRef<int> matShape, SmallVector<Value> multiDimWarpId,
                      int perPhase, int maxPhase, int elemBytes,
+                     int mmaElemBytes, bool isHopper,
                      ConversionPatternRewriter &rewriter,
                      const LLVMTypeConverter *typeConverter,
                      const Location &loc);
@@ -67,6 +68,8 @@ private:
   int perPhase;
   int maxPhase;
   int elemBytes;
+  int mmaElemBytes;
+  bool isHopper;
   ConversionPatternRewriter &rewriter;
   const Location &loc;
   MLIRContext *ctx{};
@@ -203,10 +206,10 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
 // vecWidth
 // <------->
 //  *#t0 ... *#t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  *t0 ... *t0  t1 ... t1  t2 ... t2  t3 ... t3  /|\
-//  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   ||  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   |
-//  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   ||  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   | quad height
-// ...                                                                                            |
-// t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31   || t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31  \|/
+//   t4 ...    t4  t5 ... t5  t6 ... t6  t7 ... t7   ||   t4 ...  t4  t5 ... t5  t6 ... t6  t7 ... t7   |
+//   t8 ...    t8  t9 ... t9 t10 .. t10 t11 .. t11   ||   t8 ...  t8  t9 ... t9 t10 .. t10 t11 .. t11   | quad height
+//      ...                                                                                             |
+//   t28 ...  t28 t29 .. t29 t30 .. t30 t31 .. t31   ||   t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31  \|/
 // --------------------------------------------- || --------------------------------------------
 //  *#t0 ... *#t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3
 //  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   ||  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7
@@ -364,6 +367,7 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else {
     // base pointers
+    // ptrs[k][...] holds `vec` pointers each for (quadK == k)
     std::array<std::array<Value, 4>, 2> ptrs;
     for (int i = 0; i < vecWidth; i++)
       ptrs[0][i] = getPtr(ptrIdx + i);
@@ -383,11 +387,13 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
       i0 = add(i0, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
       i1 = add(i1, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
     }
+    // ii[m] holds the offset for (quadM == m)
     std::array<Value, 2> ii = {i0, i1};
     // load 4 32-bit values from shared memory
     // (equivalent to ldmatrix.x4)
     SmallVector<SmallVector<Value>> vptrs(4, SmallVector<Value>(vecWidth));
 
+    // i iterates the 2x2 quads, m-first
     for (int i = 0; i < 4; ++i)
       for (int j = 0; j < vecWidth; ++j) {
         vptrs[i][j] = gep(ptr_ty(ctx, 3), shemTy, ptrs[i / 2][j], ii[i % 2]);
@@ -402,7 +408,9 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     int canonWidth = (8 * elemBytes * inc) / canonBits;
     Type canonInt = int_ty(canonBits);
     std::array<Value, 4> retElems;
-    retElems.fill(undef(vec_ty(canonInt, 32 / canonBits)));
+    // don't pack to 32b for Hopper
+    int vecSize = isHopper ? 1 : 32 / canonBits;
+    retElems.fill(undef(vec_ty(canonInt, vecSize)));
     for (int r = 0; r < 2; ++r) {
       for (int em = 0; em < 2 * vecWidth; em += inc) {
         int e = em % vecWidth;
@@ -421,8 +429,11 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     }
     if (isActualTrans)
       std::swap(retElems[1], retElems[2]);
-    return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
-            bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
+
+    auto iTy = isHopper ? int_ty(8 * elemBytes * inc) : i32_ty;
+
+    return {bitcast(retElems[0], iTy), bitcast(retElems[1], iTy),
+            bitcast(retElems[2], iTy), bitcast(retElems[3], iTy)};
   }
 }
 
@@ -432,8 +443,9 @@ MMA16816SmemLoader::MMA16816SmemLoader(
     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
     ArrayRef<int> instrShape, ArrayRef<int> matShape,
     SmallVector<Value> multiDimWarpId, int perPhase, int maxPhase,
-    int elemBytes, ConversionPatternRewriter &rewriter,
-    const LLVMTypeConverter *typeConverter, const Location &loc)
+    int elemBytes, int mmaElemBytes, bool isHopper,
+    ConversionPatternRewriter &rewriter, const LLVMTypeConverter *typeConverter,
+    const Location &loc)
     : nPerWarp(nPerWarp), order(order.begin(), order.end()),
       warpsPerCTA(warpsPerCTA.begin(), warpsPerCTA.end()), kOrder(kOrder),
       kWidth(kWidth), tileShape(tileShape.begin(), tileShape.end()),
@@ -441,17 +453,29 @@ MMA16816SmemLoader::MMA16816SmemLoader(
       matShape(matShape.begin(), matShape.end()),
       multiDimWarpId(multiDimWarpId.begin(), multiDimWarpId.end()),
       perPhase(perPhase), maxPhase(maxPhase), elemBytes(elemBytes),
-      rewriter(rewriter), loc(loc), ctx(rewriter.getContext()) {
+      mmaElemBytes(mmaElemBytes), isHopper(isHopper), rewriter(rewriter),
+      loc(loc), ctx(rewriter.getContext()) {
+  // If the current elemType width is different from the MMA elemType width,
+  // i.e. width-changing casting is done later in DotOp Layout... then, in the
+  // case of Hopper, the number of bytes held by each thread after loading will
+  // no longer be 32B. Hence this flag is required to stipulate different logic.
+  bool isHopperWidthChange = isHopper && (mmaElemBytes != elemBytes);
+
   contiguousMatShape = matShape[order[0]];
   stridedMatShape = matShape[order[1]];
   stridedSmemOffset = smemStrides[order[1]];
   smemBatchOffset = smemStrides[order[2]];
-  vecWidth = 4 / elemBytes;
+  if (isHopperWidthChange) {
+    vecWidth = 4 / mmaElemBytes;
+  } else {
+    vecWidth = 4 / elemBytes;
+  }
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
   nonKOrder = (kOrder == 2) ? 1 : 2;
   canUseLdmatrix = elemBytes == 2 || (!needTrans);
   canUseLdmatrix = canUseLdmatrix && (kWidth == vecWidth);
+  canUseLdmatrix = canUseLdmatrix && !isHopperWidthChange;
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwarpsPerTile] if not transposed,
@@ -505,24 +529,58 @@ Type getSharedMemTy(Type argType) {
 }
 
 Value composeValuesToDotOperandLayoutStruct(
-    const ValueTable &vals, int batch, int n0, int n1,
+    const ValueTable &vals, int batch, int repOuter, int repK,
     const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter) {
+    ConversionPatternRewriter &rewriter, Type eltTy, int kWidth, bool isHopper,
+    bool isA) {
+  auto bitwidth = eltTy.getIntOrFloatBitWidth();
+  assert(32 >= bitwidth && "only support 32-bit or less");
+  auto numElemsPerVec = 32 / bitwidth;
+  auto vecTy = vec_ty(eltTy, numElemsPerVec);
+  // FIXME: Fix the hopper path
+  // FIXME: [DOT LL]
+  // `kWidth` specifies the number of contiguous elements each thread will load.
+  // Loaded elements are packed into a vector of int32, which will then be
+  // unpacked into individual elements.
+  // `kIters` specifies the number of contiguous int32 elements each thread
+  // should load.
+  auto kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
+
   std::vector<Value> elems;
-  for (int b = 0; b < batch; ++b)
-    for (int m = 0; m < n0; ++m)
-      for (int k = 0; k < n1; ++k) {
-        elems.push_back(vals.at({b, 2 * m, 2 * k}));
-        elems.push_back(vals.at({b, 2 * m, 2 * k + 1}));
-        elems.push_back(vals.at({b, 2 * m + 1, 2 * k}));
-        elems.push_back(vals.at({b, 2 * m + 1, 2 * k + 1}));
+  auto unpackVec = [&](int b, int m, int k) {
+    for (auto kIter = 0; kIter < kIters; ++kIter) {
+      auto val = vals.at({b, m, k + kIter});
+      auto vec = bitcast(val, vecTy);
+      for (auto i = 0; i < numElemsPerVec; ++i) {
+        elems.push_back(extract_element(eltTy, vec, i32_val(i)));
       }
+    }
+  };
+
+  // Loading A tile is different from loading B tile since each tile of A is
+  // 16x16 while B is 16x8.
+  if (isA) {
+    for (int b = 0; b < batch; ++b)
+      for (int m = 0; m < repOuter; ++m)
+        for (int k = 0; k < std::max<int>(repK / kIters, 1); ++k) {
+          unpackVec(b, 2 * m, kIters * 2 * k);
+          unpackVec(b, 2 * m + 1, kIters * 2 * k);
+          unpackVec(b, 2 * m, kIters * (2 * k + 1));
+          unpackVec(b, 2 * m + 1, kIters * (2 * k + 1));
+        }
+  } else {
+    for (int b = 0; b < batch; ++b)
+      for (int n = 0; n < repOuter; ++n)
+        for (int k = 0; k < std::max<int>(repK / kIters, 1); ++k) {
+          unpackVec(b, n, kIters * 2 * k);
+          unpackVec(b, n, kIters * (2 * k + 1));
+        }
+  }
   assert(!elems.empty());
 
-  Type elemTy = elems[0].getType();
-  MLIRContext *ctx = elemTy.getContext();
+  MLIRContext *ctx = eltTy.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(elems.size(), elemTy));
+      ctx, SmallVector<Type>(elems.size(), eltTy));
   auto result = packLLElements(loc, typeConverter, elems, rewriter, structTy);
   return result;
 }
@@ -544,18 +602,20 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   const int maxPhase = sharedLayout.getMaxPhase();
   const int vecPhase = sharedLayout.getVec();
   const int elemBytes = descTy.getElementTypeBitWidth() / 8;
+  const int mmaElemBytes = 4 / kWidth;
+  const bool isHopper = mmaLayout.getVersionMajor() == 3;
   auto order = sharedLayout.getOrder();
 
   int nPerWarp =
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
-
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int batch, int a, int b) {
-    MMA16816SmemLoader loader(
-        nPerWarp, warpsPerTile, sharedLayout.getOrder(),
-        mmaLayout.getWarpsPerCTA(), kOrder, kWidth, smemObj.strides,
-        shapePerCTA /*tileShape*/, instrShape, matShape, multiDimWarpId,
-        perPhase, maxPhase, elemBytes, rewriter, typeConverter, loc);
+    MMA16816SmemLoader loader(nPerWarp, warpsPerTile, sharedLayout.getOrder(),
+                              mmaLayout.getWarpsPerCTA(), kOrder, kWidth,
+                              smemObj.strides, shapePerCTA /*tileShape*/,
+                              instrShape, matShape, multiDimWarpId, perPhase,
+                              maxPhase, elemBytes, mmaElemBytes, isHopper,
+                              rewriter, typeConverter, loc);
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs = loader.computeOffsets(lane, cSwizzleOffset);
@@ -573,6 +633,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
     auto [ha0, ha1, ha2, ha3] = loader.loadX4(
         batch, (kOrder == 2) ? a : b /*mat0*/, (kOrder == 2) ? b : a /*mat1*/,
         ptrs, matTy, getSharedMemTy(eltTy));
+
     if (!isA)
       std::swap(ha1, ha2);
     // the following is incorrect
@@ -595,28 +656,32 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
               MemDescType descTy, DotOperandEncodingAttr encoding,
               const SharedMemoryObject &smemObj,
               const LLVMTypeConverter *typeConverter, Value thread, bool isA) {
+  auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(encoding.getParent());
+  bool isHopper = mmaLayout.getVersionMajor() == 3;
   auto shapePerCTA = getShapePerCTA(descTy);
   int bitwidth = descTy.getElementTypeBitWidth();
-  auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(encoding.getParent());
+  // For Hopper WGMMA, the sum of bitwidth of the elements in each quad should
+  // add up to 32. We use kWidth to compute the element bitwidth of the input to
+  // WGMMA, which could be different from `bitwidth` due to later casting.
+  int mmaBitwidth = isHopper ? (32 / encoding.getKWidth()) : bitwidth;
 
   ValueTable vals;
-  int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
-  int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
+  int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / mmaBitwidth;
+  int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / mmaBitwidth;
 
-  auto numRep =
-      mmaLayout.getMMAv2Rep(shapePerCTA, bitwidth, encoding.getOpIdx());
   int kWidth = encoding.getKWidth();
+  auto numRep =
+      mmaLayout.getRepForOperand(shapePerCTA, mmaBitwidth, encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-  auto order = triton::gpu::getOrder(mmaLayout);
+  auto warpOrder = mmaLayout.getWarpOrder();
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
 
   SmallVector<Value> multiDimWarpId =
-      delinearize(rewriter, loc, warp, warpsPerCTA, order);
+      delinearize(rewriter, loc, warp, warpsPerCTA, warpOrder);
   Value warpB = urem(multiDimWarpId[0], i32_val(shapePerCTA[0]));
   int warpsPerTile;
-  auto rank = shapePerCTA.size();
   Value warpM = urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / 16));
   Value warpN = urem(multiDimWarpId[2], i32_val(shapePerCTA[2] / 8));
   if (isA)
@@ -651,8 +716,10 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
         loadFn(b, 2 * m, 2 * k);
 
   // Format the values to LLVM::Struct to passing to mma codegen.
+  Type eltTy = typeConverter->convertType(descTy.getElementType());
   return composeValuesToDotOperandLayoutStruct(
-      vals, numRepBatch, numRepOuter, numRepK, typeConverter, loc, rewriter);
+      vals, numRepBatch, isA ? numRep[1] : numRep[2], numRepK, typeConverter,
+      loc, rewriter, eltTy, kWidth, isHopper, isA);
 }
 
 template <typename T>
@@ -764,7 +831,7 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
   return expandedSmemObj;
 }
 
-namespace SharedToDotOperandMMAv2 {
+namespace SharedToDotOperandMMAv2OrV3 {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
@@ -785,4 +852,4 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                    expandedSmemObj, typeConverter, thread, false);
   }
 }
-} // namespace SharedToDotOperandMMAv2
+} // namespace SharedToDotOperandMMAv2OrV3
