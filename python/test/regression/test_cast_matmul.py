@@ -12,7 +12,7 @@ import torch
 import triton
 import triton.language as tl
 
-input_dtypes = ["float16", "float32", "float64"]
+input_dtypes = ["float16", "float32", "float64", "int8", "float8_e5m2", "float8_e4m3fn"]
 out_dtypes = ["float16", "float32"]
 
 
@@ -65,7 +65,7 @@ def matmul_kernel(A, B, C, M, N, K,  #
 
 @pytest.mark.parametrize("M, K, N, w_dtype, x_dtype, out_dtype",
                          [(M, K, N, w, x, o)  #
-                          for (M, K, N) in [(128, 128, 128), (1280, 768, 1024)]  #
+                          for (M, K, N) in [(128, 128, 128), (768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
                           for o in out_dtypes])
@@ -73,10 +73,20 @@ def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
     if x_dtype == w_dtype:
         pytest.skip("skip the same input dtype")
     device = torch.cuda.current_device()
-    x_dtype = getattr(torch, x_dtype)
-    w_dtype = getattr(torch, w_dtype)
-    a = torch.randn((M, K), device=device, dtype=x_dtype)
-    b = torch.randn((K, N), device=device, dtype=w_dtype)
+    x_dtype: torch.dtype = getattr(torch, x_dtype)
+    w_dtype: torch.dtype = getattr(torch, w_dtype)
+
+    def init_tensor(dtype, shape):
+        if dtype == torch.int8:
+            return torch.randint(0, 3, shape, device=device, dtype=dtype)
+        elif dtype == torch.float8_e4m3fn or dtype == torch.float8_e5m2:
+            return torch.randn(shape, device=device, dtype=torch.float16).to(dtype)
+        else:
+            return torch.randn(shape, device=device, dtype=dtype)
+
+    a = init_tensor(w_dtype, (M, K))
+    b = init_tensor(x_dtype, (K, N))
+
     torch_dtype = getattr(torch, out_dtype)
     triton_dtype = getattr(tl, out_dtype)  # <- here force dot_out_dtype
     out_torch = torch.matmul(a.to(torch_dtype), b.to(torch_dtype))
