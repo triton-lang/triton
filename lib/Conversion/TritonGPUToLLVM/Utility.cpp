@@ -1007,7 +1007,7 @@ Attribute getExpandedEncoding(Attribute encoding) {
     SmallVector<unsigned, 3> expandedWarpsPerCTA{1, warpsPerCTA[0],
                                                  warpsPerCTA[1]};
     return AMDWmmaEncodingAttr::get(
-        ctx, /*version=*/1, expandedWarpsPerCTA,
+        ctx, wmmaEncoding.getVersion(), expandedWarpsPerCTA,
         getExpandedCTALayout(ctx, wmmaEncoding.getCTALayout()));
   } else if (auto dotOperandEncoding =
                  mlir::dyn_cast<DotOperandEncodingAttr>(encoding)) {
