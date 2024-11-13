@@ -3386,8 +3386,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if rhs_scale:
-            pytest.skip("scales on rhs not yet support for HIP")
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
         if "e4m3" in (normal_type, mxfp_type) and not is_hip_mi300():
