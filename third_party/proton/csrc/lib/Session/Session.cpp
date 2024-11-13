@@ -84,9 +84,23 @@ void SessionManager::activateSession(size_t sessionId) {
   activateSessionImpl(sessionId);
 }
 
+void SessionManager::activateAllSessions() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  for (auto iter : sessionActive) {
+    activateSessionImpl(iter.first);
+  }
+}
+
 void SessionManager::deactivateSession(size_t sessionId) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   deActivateSessionImpl(sessionId);
+}
+
+void SessionManager::deactivateAllSessions() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  for (auto iter : sessionActive) {
+    deActivateSessionImpl(iter.first);
+  }
 }
 
 void SessionManager::activateSessionImpl(size_t sessionId) {
