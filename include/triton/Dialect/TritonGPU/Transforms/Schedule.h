@@ -15,7 +15,7 @@ namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user.
-DenseMap<Operation *, int> assignLatencies(scf::ForOp forOp, int numStages);
+DenseMap<Operation *, int> assignLatencies(ModuleOp forOp, int numStages);
 
 }; // namespace gpu
 

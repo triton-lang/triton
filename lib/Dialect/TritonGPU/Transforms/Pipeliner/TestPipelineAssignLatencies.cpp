@@ -28,20 +28,12 @@ struct TestPipelineAssignLatencies
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
-    SmallVector<scf::ForOp> loops;
-    getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+    DenseMap<Operation *, int> opLatencies = assignLatencies(m, numStages);
 
-    if (loops.empty())
-      return;
-
-    for (scf::ForOp forOp : loops) {
-      DenseMap<Operation *, int> opLatencies =
-          assignLatencies(forOp, numStages);
-      for (auto [op, latency] : opLatencies) {
-        op->setAttr(
-            kLatencyAttrName,
-            IntegerAttr::get(IntegerType::get(m.getContext(), 32), latency));
-      }
+    for (auto [op, latency] : opLatencies) {
+      op->setAttr(
+          kLatencyAttrName,
+          IntegerAttr::get(IntegerType::get(m.getContext(), 32), latency));
     }
   }
 };

@@ -9,6 +9,9 @@ namespace triton {
 
 static const char *kNumStagesAttrName = "tt.num_stages";
 
+// Return true if the preconditions for pipelining the loop are met.
+bool preCondition(scf::ForOp forOp);
+
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
