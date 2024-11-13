@@ -299,6 +299,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                      .o("L1::evict_last",
                         op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
                      .o("L1::cache_hint", hasL2EvictPolicy)
+                     .o("cta", op.getScope() == triton::MemSyncScope::CTA)
+                     .o("gpu", op.getScope() == triton::MemSyncScope::GPU)
+                     .o("sys", op.getScope() == triton::MemSyncScope::SYSTEM)
+                     .o("acquire", op.getSem() == triton::MemSemantic::ACQUIRE)
+                     .o("relaxed", op.getSem() == triton::MemSemantic::RELAXED)
                      .v(nWords)
                      .b(width);
 
@@ -474,6 +479,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                  op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
               .o("L1::evict_last",
                  op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+              .o("cta", op.getScope() == triton::MemSyncScope::CTA)
+              .o("gpu", op.getScope() == triton::MemSyncScope::GPU)
+              .o("sys", op.getScope() == triton::MemSyncScope::SYSTEM)
+              .o("release", op.getSem() == triton::MemSemantic::RELEASE)
+              .o("relaxed", op.getSem() == triton::MemSemantic::RELAXED)
               .v(nWords)
               .b(width);
       ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
