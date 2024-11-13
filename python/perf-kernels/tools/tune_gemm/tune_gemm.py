@@ -143,8 +143,14 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
             continue
         # out of shared memory resource
         # TODO (zhanglx): This does not consider the LDS usage in the epilogue
-        LDS = BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a + BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b
-        LDS = LDS if not num_stages else LDS * num_stages
+        LDSA = BLOCK_SIZE_K * BLOCK_SIZE_M * elemBytes_a
+        LDSB = BLOCK_SIZE_K * BLOCK_SIZE_N * elemBytes_b
+        if num_stages <= 1:
+            # No pipeline, buffer A and buffer B can re-use each other
+            LDS = max(LDSA, LDSB)
+        else:
+            # Pipeline, we need (num_stages - 1) buffers for both A and B at the same time
+            LDS = (LDSA + LDSB) * (num_stages - 1)
         if LDS > 65536:
             continue
         # Skip small block sizes and num_warps for large gemm
