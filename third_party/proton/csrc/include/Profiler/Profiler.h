@@ -27,10 +27,9 @@ public:
   /// If the profiler is already started, this function does nothing.
   Profiler *start() {
     std::unique_lock<std::shared_mutex> lock(mutex);
-    if (this->initializedCount > 0)
-      return this;
-    this->doStart();
     this->initializedCount++;
+    if (this->initializedCount == 0)
+      this->doStart();
     return this;
   }
 
@@ -48,9 +47,8 @@ public:
     if (this->initializedCount == 0)
       return this;
     this->initializedCount--;
-    if (this->initializedCount > 0)
-      return this;
-    this->doStop();
+    if (this->initializedCount == 0)
+      this->doStop();
     return this;
   }
 
