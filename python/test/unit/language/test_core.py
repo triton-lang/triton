@@ -4090,13 +4090,12 @@ def test_load_cache_modifier(cache, device):
         cv_cache_modifier_str = 'sc0 sc1'
         buffer_load_line = [line for line in amdgcn.splitlines() if "buffer_load" in line]
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
-        flat_load_line = [line for line in amdgcn.splitlines() if "flat_load" in line]
         if cache == '' or cache == '.ca':
             assert cg_cache_modifier_str not in (global_load_line[0] if global_load_line else buffer_load_line[0])
         if cache == '.cg':
             assert cg_cache_modifier_str in global_load_line[0]
         if cache == '.cv':
-            assert cv_cache_modifier_str in flat_load_line[0]
+            assert cv_cache_modifier_str in global_load_line[0]
 
     if is_cuda():
         ptx = pgm.asm['ptx']
