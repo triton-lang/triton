@@ -68,13 +68,14 @@ def matmul_kernel(A, B, C, M, N, K,  #
     tl.store(C, acc, mask=mask)
 
 
-@pytest.mark.parametrize("M, K, N, w_dtype, x_dtype, out_dtype",
+@pytest.mark.parametrize("M, K, N, BLOCK_K, w_dtype, x_dtype, out_dtype",
                          [(M, K, N, w, x, o)  #
+                          for BLOCK_K in [16, 32]  #
                           for (M, K, N) in [(128, 128, 128), (768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
                           for o in out_dtypes])
-def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
+def test_cast_matmul(M, K, N, BLOCK_K, w_dtype, x_dtype, out_dtype):
     if x_dtype == w_dtype:
         pytest.skip("skip the same input dtype")
     device = torch.cuda.current_device()
@@ -98,8 +99,8 @@ def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
     out_triton = torch.empty((M, N), device=device, dtype=torch_dtype)
 
     # launch kernel
-    BLOCK_M, BLOCK_N, BLOCK_K = 16, 16, 32
-    grid = ((triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)), 1)
+    block_m, block_n, block_k = 16, 16, BLOCK_K
+    grid = ((triton.cdiv(M, block_m) * triton.cdiv(N, block_n)), 1)
 
     matmul_kernel[grid](
         a, b, out_triton, M, N, K,  #
@@ -107,8 +108,8 @@ def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
         b.stride(0), b.stride(1),  #
         out_triton.stride(0), out_triton.stride(1), dot_out_dtype=triton_dtype,  #
         GROUP_M=8,  #
-        BLOCK_M=BLOCK_M,  #
-        BLOCK_N=BLOCK_N,  #
-        BLOCK_K=BLOCK_K)
+        BLOCK_M=block_m,  #
+        BLOCK_N=block_n,  #
+        BLOCK_K=block_k)
 
     torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
