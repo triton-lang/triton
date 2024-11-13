@@ -1989,7 +1989,7 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
 
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getShapePerCTATileForOperand(
     ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
-  assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
+  assert(isAmpere() && "mmaLayout Hopper is not implemented yet");
   auto shapePerCTATile = getShapePerCTATile(shape);
   auto rank = shapePerCTATile.size();
   auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
@@ -1999,8 +1999,6 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getShapePerCTATileForOperand(
 }
 SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
-  assert((isAmpere() || isHopper()) &&
-         "mmaLayout version = 1 is not implemented yet");
   auto rank = getWarpsPerCTA().size();
   auto sizePerThread = SmallVector<unsigned>(rank, 1);
   if (opIdx == 0) {
