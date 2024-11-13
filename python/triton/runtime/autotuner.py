@@ -42,7 +42,6 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache = {}
         self.arg_names = arg_names
-        self.debug = os.environ.get("TRITON_DEBUG", "0") == "1"
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -132,7 +131,8 @@ class Autotuner(KernelInterface):
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
-        if self.debug:
+        verbose = os.environ.get("TRITON_PRINT_AUTOTUNING", None) == "1"
+        if verbose:
             print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
 
         # check for conflicts, i.e. meta-parameters both provided
@@ -166,7 +166,7 @@ class Autotuner(KernelInterface):
         try:
             return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
         except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
-            if self.debug:
+            if verbose:
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
