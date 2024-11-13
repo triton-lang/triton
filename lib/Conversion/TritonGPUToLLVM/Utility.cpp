@@ -347,8 +347,6 @@ bool emitTransferBetweenRegistersAndShared(
   const int vecElems =
       std::min(regToSharedLayout.getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
-    ", " << maxVecElems.value_or(std::numeric_limits<int>::max()) <<
-    ") = " << vecElems);
 
   Value threadId = getThreadId(rewriter, loc);
   Value threadsPerWarp = i32_val(regToSharedLayout.getInDimSize(kLane));
