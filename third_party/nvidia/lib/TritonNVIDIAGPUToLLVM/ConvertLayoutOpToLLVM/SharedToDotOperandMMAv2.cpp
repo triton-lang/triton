@@ -699,7 +699,7 @@ Attribute getExpandedEncoding(Attribute encoding) {
         sharedEncoding.getMaxPhase(), expandedOrderArr,
         getExpandedCTALayout(ctx, sharedEncoding.getCTALayout()),
         sharedEncoding.getHasLeadingOffset(),
-        sharedEncoding.getPerformInThreadTranspose());
+        sharedEncoding.getInThreadTranspose());
     return expandedEncoding;
   } else if (auto mmaEncoding =
                  mlir::dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {

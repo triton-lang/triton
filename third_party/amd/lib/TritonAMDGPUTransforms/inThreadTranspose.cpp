@@ -163,12 +163,12 @@ ttg::BlockedEncodingAttr getThreadRakedBlockedEnc(
       threadsPerWarp, numCTAs);
 }
 
-class TritonAMDGPUPerformInThreadTransposePass
-    : public TritonAMDGPUPerformInThreadTransposeBase<
-          TritonAMDGPUPerformInThreadTransposePass> {
+class TritonAMDGPUInThreadTransposePass
+    : public TritonAMDGPUInThreadTransposeBase<
+          TritonAMDGPUInThreadTransposePass> {
 
 public:
-  TritonAMDGPUPerformInThreadTransposePass() = default;
+  TritonAMDGPUInThreadTransposePass() = default;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -211,6 +211,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUPerformInThreadTransposePass() {
-  return std::make_unique<TritonAMDGPUPerformInThreadTransposePass>();
+std::unique_ptr<Pass> mlir::createTritonAMDGPUInThreadTransposePass() {
+  return std::make_unique<TritonAMDGPUInThreadTransposePass>();
 }

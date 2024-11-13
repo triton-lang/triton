@@ -111,7 +111,7 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
   let dependentDialects = [];
 }
 
-def TritonAMDGPUPerformInThreadTranspose: Pass<"tritonamdgpu-perform-in-thread-transpose", "mlir::ModuleOp"> {
+def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mlir::ModuleOp"> {
   let summary = "Transpose K-outer dot operand while data is loaded into register right before writing to LDS";
 
   let description = [{
@@ -121,7 +121,7 @@ def TritonAMDGPUPerformInThreadTranspose: Pass<"tritonamdgpu-perform-in-thread-t
     to perform in-thread transpose
   }];
 
-  let constructor = "mlir::createTritonAMDGPUPerformInThreadTransposePass()";
+  let constructor = "mlir::createTritonAMDGPUInThreadTransposePass()";
 
   let dependentDialects = [];
 }

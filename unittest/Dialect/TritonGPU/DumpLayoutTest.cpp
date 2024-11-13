@@ -22,13 +22,13 @@ public:
   }
 
   SharedEncodingAttr shared(unsigned vec, unsigned perPhase, unsigned maxPhase,
-                            bool hasLeadingOffset, bool performInThreadTranspose,
+                            bool hasLeadingOffset, bool inThreadTranspose,
                             ArrayRef<unsigned> cpg,
                             ArrayRef<unsigned> cSplit, ArrayRef<unsigned> ord,
                             ArrayRef<unsigned> cOrd) {
     return SharedEncodingAttr::get(&ctx, vec, perPhase, maxPhase, ord,
                                    CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd),
-                                   hasLeadingOffset, performInThreadTranspose);
+                                   hasLeadingOffset, inThreadTranspose);
   }
 
   void assertSameStr(const std::string &refStr, const std::string &output) {
