@@ -1694,6 +1694,28 @@ def test_load_scope_sem(device):
     assert len(re.findall("load .* memSemantic = relaxed memSyncScope = sys", asm)) == 1
     assert len(re.findall("store .* memSemantic = relaxed memSyncScope = sys", asm)) == 1
 
+    asm = out.asm['ptx']
+
+    assert len(re.findall("ld.global.gpu.acquire", asm)) == 1
+    assert len(re.findall("st.global.gpu.release", asm)) == 1
+
+    assert len(re.findall("ld.global.cta.acquire", asm)) == 1
+    assert len(re.findall("st.global.cta.release", asm)) == 1
+
+    assert len(re.findall("ld.global.sys.acquire", asm)) == 1
+    assert len(re.findall("st.global.sys.release", asm)) == 1
+
+    ########### relaxed:
+
+    assert len(re.findall("ld.global.gpu.relaxed", asm)) == 1
+    assert len(re.findall("st.global.gpu.relaxed", asm)) == 1
+
+    assert len(re.findall("ld.global.cta.relaxed", asm)) == 1
+    assert len(re.findall("st.global.cta.relaxed", asm)) == 1
+
+    assert len(re.findall("ld.global.sys.relaxed", asm)) == 1
+    assert len(re.findall("st.global.sys.relaxed", asm)) == 1
+
 
 # ---------------
 # test cast
