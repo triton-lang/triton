@@ -109,7 +109,15 @@ public:
   createFinalSchedule(scf::ForOp forOp);
   void dump();
   bool empty() { return opToStageAndCluster.size() == 0; }
+  void serialize(scf::ForOp &forOp);
+  // Create a CoarseSchedule based on forOp's <stage, cluster>.
+  void deSerialize(scf::ForOp &forOp);
 };
+
+// Add dependencies of anchor ops to the coarse schedule. Schedule them to
+// the same stage and ordering cluster as the anchor op.
+void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule,
+                          int numStages);
 
 } // namespace triton
 } // namespace mlir

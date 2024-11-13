@@ -249,6 +249,16 @@ void init_triton_ir(py::module &&m) {
       .def("is_integer",
            [](Type &self, unsigned width) { return self.isInteger(width); })
       .def("is_fp16", &Type::isF16)
+      .def("__eq__",
+           [](Type &self, py::object &other) {
+             Type *other_ty = py::cast<Type *>(other);
+             return (other_ty != nullptr) && (*other_ty == self);
+           })
+      .def("__ne__",
+           [](Type &self, py::object &other) {
+             Type *other_ty = py::cast<Type *>(other);
+             return (other_ty == nullptr) || (*other_ty != self);
+           })
       .def("__str__", [](Type &self) {
         std::string str;
         llvm::raw_string_ostream os(str);
@@ -1471,12 +1481,13 @@ void init_triton_ir(py::module &&m) {
                                        maxNumImpreciseAcc);
            })
       .def("create_dot_scaled",
-           [](TritonOpBuilder &self, mlir::Value &lhs, mlir::Value &lhs_scale,
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              std::optional<mlir::Value> &lhs_scale,
               ScaleDotElemType lhs_format, mlir::Value &rhs,
               std::optional<mlir::Value> &rhs_scale,
               ScaleDotElemType rhs_format, mlir::Value &c) -> mlir::Value {
              return self.create<DotScaledOp>(
-                 c.getType(), lhs, rhs, c, lhs_scale,
+                 c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
                  rhs_scale.value_or(Value()), lhs_format, rhs_format);
            })
       .def("create_floor",
@@ -1625,6 +1636,14 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &ptr,
               std::vector<Value> &offsets) -> Value {
              return self.create<AdvanceOp>(ptr.getType(), ptr, offsets);
+           })
+      // Make a tensor descriptor
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
+              std::vector<Value> &strides,
+              std::vector<int32_t> &tensorShape) -> Value {
+             return self.create<MakeTensorDescOp>(base, shape, strides,
+                                                  tensorShape);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())

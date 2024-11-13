@@ -35,6 +35,34 @@ void lowerDistributedToShared(
                            loc, rewriter, targetInfo, llvmOpCount);
 }
 
+struct GlobalScratchAllocOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
+  GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
+        "triton_gpu.global_scratch_memory_offset");
+    assert(opOffsetAttr);
+    auto opOffset = opOffsetAttr.getValue().getZExtValue();
+
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!funcOp) {
+      return failure();
+    }
+    Value ptr =
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+
+    rewriter.replaceOp(op, ptr);
+    return success();
+  }
+};
+
 struct LocalAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
   LocalAllocOpConversion(const LLVMTypeConverter &converter,
@@ -112,8 +140,11 @@ public:
   // Do for all DotOperandEncodingAttr once we have LLs for all of them
   static bool isSupportedDotOpLayout(Attribute layout) {
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      // Use when the SharedToDotOperandMMAv2OrV3 is known to be buggy:
+      // - kWidth == 8
       if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        return mma.isAmpere() && dot.getKWidth() == 8;
+        bool legacyLoweringIsBuggy = dot.getKWidth() >= 8;
+        return legacyLoweringIsBuggy && mma.isAmpere();
       }
       if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
         return true;
@@ -239,6 +270,7 @@ void mlir::triton::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit,
     std::optional<BackendCallbacks> backendCallbacks) {
+  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);

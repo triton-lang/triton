@@ -48,11 +48,11 @@ class HIPOptions:
     backend_name: str = 'hip'
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. The "default" variant preserves the default
+    # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
     # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
     # The option is experimental and may change at any time regarding its semantics and/or may
     # be gone entirely anytime.
-    instruction_sched_variant: str = 'default'
+    instruction_sched_variant: str = 'none'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -221,7 +221,8 @@ class HIPBackend(BaseBackend):
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
                                              "equivalent behavior in the past.")
-            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
+            prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
+            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages, prefetch)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
@@ -274,7 +275,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.num_stages, options.instruction_sched_variant)
+        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages,
+                                                         options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)

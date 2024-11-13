@@ -86,7 +86,8 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     // TODO: Add verifier
 }
 
-def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
+def TT_FpToFpOp : TT_Op<"fp_to_fp", [Elementwise,
+                                     SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
                                      /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
@@ -99,11 +100,11 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     }];
 
     let arguments = (
-      ins TT_FloatTensor:$src,
+      ins TT_FloatLike:$src,
       OptionalAttr<TT_RoundingModeAttr>:$rounding
     );
 
-    let results = (outs TT_FloatTensor:$result);
+    let results = (outs TT_FloatLike:$result);
 
     let assemblyFormat = "$src attr-dict  (`,` `rounding` `=` $rounding^)? `:` type($src) `->` type($result)";
 
@@ -675,6 +676,7 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 // DotScaled Op
 //
 def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
+                             AttrSizedOperandSegments,
                              DotLike,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
@@ -692,7 +694,7 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       RankedTensorOf<[TT_Float,I8]>:$lhs,
       RankedTensorOf<[TT_Float,I8]>:$rhs,
       TT_FloatTensor:$c,
-      RankedTensorOf<[I8]>:$lhs_scale,
+      Optional<RankedTensorOf<[I8]>>:$lhs_scale,
       Optional<RankedTensorOf<[I8]>>:$rhs_scale,
       TT_ScaleDotElemTypeAttr:$lhs_type,
       TT_ScaleDotElemTypeAttr:$rhs_type
@@ -702,8 +704,8 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     // Not sure why I need to fully specify the optional group, but otherwise it complains when loading the mlir file
     let assemblyFormat = [{
-      $lhs `,` $lhs_scale `,` $rhs (`,`) : (`,` $rhs_scale^ `,`)? $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
-      `:` type($lhs) `,` type($lhs_scale) `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
+      $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs_scale^)? `,` $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
+      `:` type($lhs) (`,` type($lhs_scale)^)? `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
     }];
 }
 
@@ -943,6 +945,41 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
         "ValueRange":$offsets,
         "ArrayRef<int32_t>":$tensorShape,
         "ArrayRef<int32_t>":$order
+    )>
+  ];
+}
+
+//
+// Make Tensor Descriptor Op
+//
+def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor",
+                               [Pure,
+                                SameVariadicOperandSize]> {
+  let summary = "Make a tensor descriptor type with meta information of the parent tensor and block size";
+
+  let description = [{
+      `tt.make_tensor_descriptor` takes both meta information of the parent tensor and the block size,
+      and returns a descriptor object which can be used to load/store from the tensor in global memory.
+  }];
+
+  let arguments = (ins
+    TT_Ptr:$base,
+    Variadic<I32>:$shape,
+    Variadic<I64>:$strides,
+    DenseI32ArrayAttr:$tensorShape
+  );
+
+  // TODO(peterbell10): define a custom IR type to represent descriptors
+  let results = (outs TT_Ptr:$result);
+
+  let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` attr-dict `:` type($base) `,` type($result)";
+
+  let builders = [
+    OpBuilder<(ins
+        "Value":$base,
+        "ValueRange":$shape,
+        "ValueRange":$strides,
+        "ArrayRef<int32_t>":$tensorShape
     )>
   ];
 }

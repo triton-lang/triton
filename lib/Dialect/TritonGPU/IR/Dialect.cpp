@@ -261,6 +261,14 @@ SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
   return getMatrixOrder(rank, rowMajor);
 }
 
+SmallVector<unsigned> getRepOrder(Attribute layout) {
+  if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
+    return distributedLayout.getRepOrder();
+  else
+    llvm::report_fatal_error("Unimplemented usage of getRepOrder");
+  return {};
+}
+
 SmallVector<unsigned> getWarpOrder(Attribute layout) {
   if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
     return distributedLayout.getWarpOrder();
@@ -269,13 +277,13 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
   return {};
 }
 
+// Returns the order of the elements in a layout from the fastest running
+// dimension to the slowest
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
     return llvm::to_vector(blockedLayout.getOrder());
   }
   if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
-    // Order doesn't really matter. We just have to be consistent when unpacking
-    // the output elements in the LLVM lowerings. We choose row-major
     auto distributedLayout = cast<DistributedEncodingTrait>(layout);
     auto rank = distributedLayout.getWarpsPerCTA().size();
     return getMatrixOrder(rank, /*rowMajor*/ true);
@@ -643,6 +651,9 @@ unsigned BlockedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 // If we only had BlockedEncodingAttr, we could simply return ArrayRefs here.
 // But we need to have a consistent interface with e.g. SliceEncodingAttr, which
 // computes some of these fields.
+SmallVector<unsigned> BlockedEncodingAttr::getRepOrder() const {
+  return SmallVector<unsigned>(getOrder());
+}
 SmallVector<unsigned> BlockedEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
@@ -708,6 +719,10 @@ SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 unsigned SliceEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                    Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+SmallVector<unsigned> SliceEncodingAttr::getRepOrder() const {
+  auto parentRepOrder = ::getRepOrder(getParent());
+  return eraseOrder(parentRepOrder, getDim());
 }
 SmallVector<unsigned> SliceEncodingAttr::getCTASplitNum() const {
   SmallVector<unsigned> res = ::getCTASplitNum(getParent());
@@ -852,28 +867,13 @@ NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   size_t rank = shape.size();
   assert(rank == 2 ||
          (rank == 3 && isAmpere()) && "Unexpected rank of mma layout");
-  assert((isVolta() || isAmpere() || isHopper()) &&
+  assert((isAmpere() || isHopper()) &&
          "For NvidiaMmaEncodingAttr only version 1~3 is supported");
 
   auto shapePerCTA = getShapePerCTA(getCTALayout().getCTASplitNum(), shape);
 
   SmallVector<unsigned> elemsPerThread(rank);
-  if (isVolta()) {
-    auto [isARow, isBRow, isAVec4, isBVec4, id] = decodeVoltaLayoutStates();
-    static constexpr std::array<unsigned, 2> fpw{{2, 2}};
-    unsigned packSize0 = (isARow || isAVec4) ? 1 : 2;
-    unsigned packSize1 = (isBRow && !isBVec4) ? 2 : 1;
-    unsigned repM = 2 * packSize0;
-    unsigned repN = 2 * packSize1;
-    unsigned spwM = fpw[0] * 4 * repM;
-    unsigned spwN = fpw[1] * 4 * repN;
-    unsigned wptM = getWarpsPerCTA()[0];
-    unsigned wptN = getWarpsPerCTA()[1];
-    unsigned resM = repM * std::max<int>(1, shapePerCTA[0] / (spwM * wptM));
-    unsigned resN = 2 * repN * std::max<int>(1, shapePerCTA[1] / (spwN * wptN));
-    elemsPerThread[0] = resM;
-    elemsPerThread[1] = resN;
-  } else if (isAmpere()) {
+  if (isAmpere()) {
     unsigned elemsRow =
         ceil<unsigned>(shapePerCTA[rank - 2], 16 * getWarpsPerCTA()[rank - 2]) *
         2;
@@ -938,11 +938,11 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     elemsPerThread[rank - 1] = (idx == 0) ? rep[2] * kWidth : rep[2];
     return elemsPerThread;
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
-    if (mma.isAmpere()) {
+    if (mma.isAmpere() || mma.isHopper()) {
       auto bitwidth = getPointeeType(eltTy).getIntOrFloatBitWidth();
       auto rep = mma.getRepForOperand(shape, bitwidth, idx);
       auto sizePerThread = getSizePerThread();
-      auto elemsPerKRep = 32 / bitwidth * 2;
+      auto elemsPerKRep = mma.isHopper() ? (kWidth * 2) : (32 / bitwidth * 2);
       if (rank == 3)
         elemsPerThread[0] = rep[0];
       elemsPerThread[rank - 2] =
@@ -964,12 +964,18 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
   if (auto mmaParent = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
-    if (auto nvidiaMmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(mmaParent);
-        nvidiaMmaParent && nvidiaMmaParent.isAmpere()) {
+    if (auto nvidiaMmaParent =
+            mlir::dyn_cast<NvidiaMmaEncodingAttr>(mmaParent)) {
       return product<unsigned>(getElemsPerThread(shape, eltTy));
     }
-    return mmaParent.getTotalElemsPerThreadForOperand(shape, eltTy, getKWidth(),
-                                                      getOpIdx());
+    if (auto amdMfmaParent = mlir::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
+      return amdMfmaParent.getTotalElemsPerThreadForOperand(
+          shape, eltTy, getKWidth(), getOpIdx());
+    }
+    if (auto amdWmmaParent = mlir::dyn_cast<AMDWmmaEncodingAttr>(getParent())) {
+      return amdWmmaParent.getTotalElemsPerThreadForOperand(
+          shape, eltTy, getKWidth(), getOpIdx());
+    }
   }
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
     auto shapePerCTA = getShapePerCTA(*this, shape);
@@ -1651,6 +1657,10 @@ AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
   return {kDim, nDim};
 }
 
+SmallVector<unsigned> AMDMfmaEncodingAttr::getRepOrder() const {
+  llvm::report_fatal_error("NYI. AMDMfmaEncodingAttr::getRepOrder");
+}
+
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
                                       int kWidth, int opIdx) const {
@@ -1733,6 +1743,9 @@ AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   shapePerCTATile[rank - 2] *= mnkDim[0];
   shapePerCTATile[rank - 1] *= mnkDim[1];
   return shapePerCTATile;
+}
+SmallVector<unsigned> AMDWmmaEncodingAttr::getRepOrder() const {
+  llvm::report_fatal_error("NYI. AMDWmmaEncodingAttr::getRepOrder");
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
@@ -1858,6 +1871,10 @@ bool NvidiaMmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
 
 bool NvidiaMmaEncodingAttr::isHopper() const { return getVersionMajor() == 3; }
 
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getRepOrder() const {
+  auto rank = getWarpsPerCTA().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
+}
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
@@ -1880,11 +1897,6 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpOrder() const {
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getThreadsPerWarp() const {
   auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
-  if (isVolta()) {
-    res[rank - 2] = 4;
-    res[rank - 1] = 8;
-    return res;
-  }
   if (isAmpere()) {
     res[rank - 2] = 8;
     res[rank - 1] = 4;
@@ -1910,11 +1922,6 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getSizePerThread() const {
     res[rank - 1] = 2;
     return res;
   }
-  if (isVolta()) {
-    res[rank - 2] = 1;
-    res[rank - 1] = 2;
-    return res;
-  }
   if (isHopper()) {
     auto instrShape = getInstrShape();
     // WGMMA instructions have an order of [0, 1] with 4 warps, each with 8
@@ -1937,14 +1944,6 @@ NvidiaMmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
     shapePerCTATile[rank - 2] *= 16;
     return shapePerCTATile;
   }
-  if (isVolta()) {
-    assert(!tensorShape.empty() && "Volta needs the tensorShape");
-    if (tensorShape.size() == 1) // must be SliceEncoding
-      return {static_cast<unsigned>(tensorShape[0]),
-              static_cast<unsigned>(tensorShape[0])};
-    return {static_cast<unsigned>(tensorShape[0]),
-            static_cast<unsigned>(tensorShape[1])};
-  }
   if (isHopper()) {
     auto instrShape = getInstrShape();
     return {16 * getWarpsPerCTA()[0], instrShape[1] * getWarpsPerCTA()[1]};
@@ -1952,65 +1951,12 @@ NvidiaMmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   llvm::report_fatal_error("Unexpected MMA layout version found");
 }
 
-// Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
-std::tuple<bool, bool, bool, bool, int>
-NvidiaMmaEncodingAttr::decodeVoltaLayoutStates() const {
-  unsigned versionMinor = getVersionMinor();
-  bool isARow = versionMinor & (1 << 0);
-  bool isBRow = versionMinor & (1 << 1);
-  bool isAVec4 = versionMinor & (1 << 2);
-  bool isBVec4 = versionMinor & (1 << 3);
-
-  int id = 0;
-  for (int i = numBitsToHoldMmaV1ID - 1; i >= 0; --i)
-    id = (id << 1) + static_cast<bool>(versionMinor & (1 << (4 + i)));
-
-  return std::make_tuple(isARow, isBRow, isAVec4, isBVec4, id);
+SmallVector<unsigned>
+NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  auto rank = getWarpsPerCTA().size();
+  return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
 }
 
-bool NvidiaMmaEncodingAttr::getMMAv1IsRow(int opIdx) const {
-  auto [isARow, isBRow, _0, _1, _2] = decodeVoltaLayoutStates();
-  return opIdx == 0 ? isARow : isBRow;
-}
-bool NvidiaMmaEncodingAttr::getMMAv1IsVec4(int opIdx) const {
-  auto [_0, _1, isAVec4, isBVec4, _2] = decodeVoltaLayoutStates();
-  return opIdx == 0 ? isAVec4 : isBVec4;
-}
-int NvidiaMmaEncodingAttr::getMMAv1NumOuter(ArrayRef<int64_t> shape,
-                                            int opIdx) const {
-  auto spw = getMMAv1ShapePerWarp(opIdx);
-  auto rep = getMMAv1Rep(opIdx);
-  auto warpsPerCTA = getWarpsPerCTA();
-  if (opIdx == 0) {
-    return rep[0] * shape[0] / (spw[0] * warpsPerCTA[0]);
-  } else {
-    return rep[1] * shape[1] / (spw[1] * warpsPerCTA[1]);
-  }
-}
-SmallVector<int> NvidiaMmaEncodingAttr::getMMAv1Rep(int opIdx) const {
-  auto [isARow, isBRow, isAVec4, isBVec4, _] = decodeVoltaLayoutStates();
-  // A
-  if (opIdx == 0) {
-    int packSize = (isARow || isAVec4) ? 1 : 2;
-    return {2 * packSize, 0, 1};
-  }
-  // B
-  else {
-    int packSize = (isBRow && !isBVec4) ? 2 : 1;
-    return {0, 2 * packSize, 1};
-  }
-}
-SmallVector<int> NvidiaMmaEncodingAttr::getMMAv1ShapePerWarp(int opIdx) const {
-  auto rep = getMMAv1Rep(opIdx);
-  if (opIdx == 0) {
-    return {8 * rep[0], 0, 1};
-  } else {
-    return {0, 8 * rep[1], 1};
-  }
-}
-int NvidiaMmaEncodingAttr::getMMAv1Vec(int opIdx) const {
-  return 2 * getMMAv1Rep(opIdx)[opIdx];
-}
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
                                         int opIdx) const {
@@ -2041,86 +1987,9 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
   }
 }
 
-unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand(
-    ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  auto shapePerCTA = getShapePerCTA(*this, shape);
-  int warpsPerCTAM = getWarpsPerCTA()[0];
-  int warpsPerCTAN = getWarpsPerCTA()[1];
-  // H100
-  if (isHopper()) {
-    assert(opIdx == 0);
-    auto instrMNK = getInstrShape();
-    int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * warpsPerCTAM);
-    int repK = ceil<unsigned>(shapePerCTA[1], instrMNK[2]);
-    // For each WGMMA instr, a 2x2 matrix fragment is loaded. Each thread holds
-    // kWidth elements for each quadrant. WGMMA is repeated repM * repK times.
-    return 4 * kWidth * repM * repK;
-  }
-  // V100
-  if (isVolta()) {
-    bool isRow = getMMAv1IsRow(opIdx);
-    bool isVec4 = getMMAv1IsVec4(opIdx);
-    if (opIdx == 0) {
-      int packSizeM = (isRow || isVec4) ? 1 : 2;
-      int repM = 2 * packSizeM;
-      int spwM = 2 * 4 * repM;
-      int numM = getMMAv1NumOuter(shape, opIdx);
-      int NK = shape[1];
-      int vec = 2 * repM;
-      // Here we mimic the logic in loadA, the result cannot be calculated
-      // directly.
-      llvm::DenseSet<std::pair<int, int>> visited;
-      auto ld = [&](int m, int k) {
-        visited.insert({m, k});
-        if (vec > 4) {
-          if (isRow)
-            visited.insert({m, k + 4});
-          else
-            visited.insert({m + 1, k});
-        }
-      };
-      for (unsigned k = 0; k < NK; k += 4)
-        for (unsigned m = 0; m < numM / 2; ++m)
-          if (!visited.count({m, k}))
-            ld(m, k);
-      return visited.size() * 2;
-    }
-    if (opIdx == 1) {
-      int packSizeN = (isRow && !isVec4) ? 2 : 1;
-      int repN = 2 * packSizeN;
-      int spwN = 2 * 4 * repN;
-      int numN = getMMAv1NumOuter(shape, opIdx);
-      int vec = 2 * repN;
-
-      int NK = shape[0];
-      // Here we mimic the logic in loadA, the result cannot be calculated
-      // directly.
-      llvm::DenseSet<std::pair<int, int>> visited;
-      int elemsPerLd = vec > 4 ? 4 : 2;
-      auto ld = [&](int n, int k) {
-        visited.insert({n, k});
-        if (vec > 4) {
-          if (isRow)
-            visited.insert({n + 1, k});
-          else
-            visited.insert({n, k + 4});
-        }
-      };
-
-      for (unsigned k = 0; k < NK; k += 4)
-        for (unsigned n = 0; n < numN / 2; ++n) {
-          if (!visited.count({n, k}))
-            ld(n, k);
-        }
-
-      return visited.size() * 2;
-    }
-  }
-  llvm_unreachable("unknown mma layout");
-}
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getShapePerCTATileForOperand(
     ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
-  assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
+  assert(isAmpere() && "mmaLayout Hopper is not implemented yet");
   auto shapePerCTATile = getShapePerCTATile(shape);
   auto rank = shapePerCTATile.size();
   auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
@@ -2130,7 +1999,6 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getShapePerCTATileForOperand(
 }
 SmallVector<unsigned>
 NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
-  assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
   auto rank = getWarpsPerCTA().size();
   auto sizePerThread = SmallVector<unsigned>(rank, 1);
   if (opIdx == 0) {
@@ -2147,6 +2015,15 @@ NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
 //===----------------------------------------------------------------------===//
 // DotOperand Encoding
 //===----------------------------------------------------------------------===//
+SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
+  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent())) {
+    return mma.getRepOrderForOperand(getOpIdx());
+  }
+  llvm::report_fatal_error(
+      "getRepOrder not implemented for DotOperandEncodingAttr");
+  return {};
+}
+
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadsPerWarp() const {
   auto parent = getParent();
   if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {

@@ -48,9 +48,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass());
   });
   m.def("lower_instruction_sched_hints",
-        [](mlir::PassManager &pm, int32_t numStages, std::string variant) {
-          pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(numStages,
-                                                                      variant));
+        [](mlir::PassManager &pm, const std::string &arch, int32_t numStages,
+           const std::string &variant) {
+          pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
+              arch, numStages, variant));
         });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
                                                     const std::string &arch) {
@@ -71,8 +72,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUConvertToBufferOpsPass);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
-  ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
-                     mlir::createTritonAMDGPUStreamPipelineV2Pass, int);
+  ADD_PASS_WRAPPER_2("add_stream_pipelinev2",
+                     mlir::createTritonAMDGPUStreamPipelineV2Pass, int, int);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,

@@ -734,26 +734,34 @@ OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
   auto srcVal = getSrc();
   auto dstTy = getType();
 
-  const llvm::fltSemantics &semantic =
-      llvm::cast<FloatType>(dstTy.getElementType()).getFloatSemantics();
+  auto resElemType = cast<FloatType>(getElementTypeOrSelf(getType()));
+  const llvm::fltSemantics &semantic = resElemType.getFloatSemantics();
 
   if (matchPattern(srcVal, m_PosZeroFloat())) {
     llvm::APFloat posZero =
         llvm::APFloat::getZero(semantic, /*negative=*/false);
-    return DenseFPElementsAttr::get(dstTy, posZero);
+    if (auto tensorTy = dyn_cast<RankedTensorType>(dstTy))
+      return DenseElementsAttr::get(tensorTy, posZero);
+    return Builder(getContext()).getFloatAttr(resElemType, posZero);
   }
 
   if (matchPattern(srcVal, m_NegZeroFloat())) {
     llvm::APFloat negZero = llvm::APFloat::getZero(semantic, /*negative=*/true);
-    return DenseFPElementsAttr::get(dstTy, negZero);
+    if (auto tensorTy = dyn_cast<RankedTensorType>(dstTy))
+      return DenseElementsAttr::get(tensorTy, negZero);
+    return Builder(getContext()).getFloatAttr(resElemType, negZero);
   }
 
   return {};
 }
 
 LogicalResult FpToFpOp::verify() {
-  auto dstType = getType().getElementType();
-  auto srcType = getSrc().getType().getElementType();
+  auto dstType = getType();
+  auto srcType = getSrc().getType();
+  if (auto dstTensorType = dyn_cast<RankedTensorType>(dstType))
+    dstType = dstTensorType.getElementType();
+  if (auto srcTensorType = dyn_cast<RankedTensorType>(srcType))
+    srcType = srcTensorType.getElementType();
   if ((dstType.getIntOrFloatBitWidth() < srcType.getIntOrFloatBitWidth()) &&
       (!getRounding().has_value())) {
     return emitError("Rounding mode is required for FP downcast");
@@ -834,6 +842,17 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
     if (offset != 0)
       return {};
   return getPtr();
+}
+
+//-- MakeTensorDescOp --
+void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
+                             Value base, ValueRange shape, ValueRange strides,
+                             ArrayRef<int32_t> tensorShape) {
+  auto resultTy = getPointerType(builder.getI8Type());
+  assert(resultTy.getContext());
+
+  return build(builder, state, resultTy, base, shape, strides,
+               builder.getDenseI32ArrayAttr(tensorShape));
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and

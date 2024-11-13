@@ -181,9 +181,9 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     int numContiguousValues = 1;
     auto encoding = cast<BlockedEncodingAttr>(
         cast<RankedTensorType>(op.getSrc().getType()).getEncoding());
-    int splitDim = encoding.getThreadOrder().size() - 1;
-    for (int i = 0; i < encoding.getThreadOrder().size(); i++) {
-      if (encoding.getThreadOrder()[i] == splitDim)
+    int splitDim = encoding.getOrder().size() - 1;
+    for (int i = 0; i < encoding.getOrder().size(); i++) {
+      if (encoding.getOrder()[i] == splitDim)
         break;
       numContiguousValues *= encoding.getSizePerThread()[i];
     }
