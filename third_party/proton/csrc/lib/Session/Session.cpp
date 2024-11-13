@@ -130,6 +130,7 @@ void SessionManager::removeSession(size_t sessionId) {
   }
   auto path = sessions[sessionId]->path;
   sessionPaths.erase(path);
+  sessionActive.erase(sessionId);
   sessions.erase(sessionId);
 }
 
