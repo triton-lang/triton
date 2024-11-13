@@ -495,7 +495,8 @@ private:
       assert(type == ScaleDotElemType::E5M2 || type == ScaleDotElemType::E4M3);
       auto vTypeBf16 = RankedTensorType::get(
           newVType.getShape(), rewriter.getBF16Type(), newVType.getEncoding());
-      ret = rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, ret);
+      ret = cast<TypedValue<RankedTensorType>>(
+          rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, ret).getResult());
     }
     if (opt_scale.has_value()) {
       auto scale = *opt_scale;

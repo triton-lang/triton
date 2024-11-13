@@ -100,11 +100,11 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [Elementwise,
     }];
 
     let arguments = (
-      ins TT_FloatTensor:$src,
+      ins TT_FloatLike:$src,
       OptionalAttr<TT_RoundingModeAttr>:$rounding
     );
 
-    let results = (outs TT_FloatTensor:$result);
+    let results = (outs TT_FloatLike:$result);
 
     let assemblyFormat = "$src attr-dict  (`,` `rounding` `=` $rounding^)? `:` type($src) `->` type($result)";
 

@@ -245,12 +245,14 @@ jobs:
 
         # Create temporary container to copy cache and installed artifacts.
         CONTAINER_ID=$(docker create llvm-build)
+
+        # We remove the existing directories, otherwise docker cp will
+        # create a subdirectory inside the existing directory.
+        rm -rf "${{ env.SCCACHE_DIR }}" "${{ env.llvm_install_dir }}"
+
         docker cp "${CONTAINER_ID}:/install" "${{ env.llvm_install_dir }}"
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
-        # We remove the existing directory, otherwise docker will
-        # create a subdirectory inside the existing directory.
-        rm -rf "${{ env.SCCACHE_DIR }}"
         docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
         sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
 
