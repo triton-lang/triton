@@ -14,7 +14,10 @@ import triton.language as tl
 
 input_dtypes = ["float16", "float32", "float64"]
 if triton.runtime.driver.active.get_current_target().backend == "cuda":
-    input_dtypes += ["int8", "float8_e4m3fn", "float8_e5m2"]
+    input_dtypes += ["int8", "float8_e5m2"]
+    cc = torch.cuda.get_device_capability(0)
+    if cc >= (8, 9):
+        input_dtypes += ["float8_e4m3fn"]
 out_dtypes = ["float16", "float32"]
 
 
