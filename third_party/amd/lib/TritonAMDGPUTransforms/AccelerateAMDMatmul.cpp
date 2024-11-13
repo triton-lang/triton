@@ -580,7 +580,8 @@ public:
 
       auto vTypeBf16 = RankedTensorType::get(
           vType.getShape(), rewriter.getBF16Type(), newVEncoding);
-      return rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v);
+      return cast<TensorValue>(
+          rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v).getResult());
     };
     a = toMMABf16(a, 0, aElemType);
     b = toMMABf16(b, 1, bElemType);

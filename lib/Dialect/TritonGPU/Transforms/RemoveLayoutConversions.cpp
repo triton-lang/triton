@@ -1024,7 +1024,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
       auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
       return getElementBitWidth(srcType) <
-             getElementBitWidth(fpToFpOp.getType());
+             getElementBitWidth(cast<RankedTensorType>(fpToFpOp.getType()));
     }
     return false;
   };
