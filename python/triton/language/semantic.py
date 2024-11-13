@@ -1679,7 +1679,7 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
 def histogram(input: tl.tensor, num_bins: int, builder: ir.builder) -> tl.tensor:
     assert len(input.shape) == 1, "histogram only supports 1D input"
     assert input.dtype.is_int(), "histogram only supports integer input"
-    return tl.tensor(builder.create_histogram(input.handle, num_bins), tl.block_type(tl.int32, (num_bins, )))
+    return tl.tensor(builder.create_histogram(input.handle, num_bins), tl.block_type(tl.int32, [num_bins]))
 
 
 ##

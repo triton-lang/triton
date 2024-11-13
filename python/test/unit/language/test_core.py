@@ -2489,6 +2489,9 @@ def test_histogram(M, N, device):
         offset2 = tl.arange(0, N)
         x = tl.load(x_ptr + offset1)
         z = tl.histogram(x, N)
+        bias = tl.full([M, N], 1, dtype=tl.int32)
+        # check that histogram produces object compatible with broadcasting
+        biased = z + bias
         tl.store(z_ptr + offset2, z)
 
     torch.manual_seed(17)
