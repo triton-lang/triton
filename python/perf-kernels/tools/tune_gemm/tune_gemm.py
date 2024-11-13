@@ -4,6 +4,7 @@ import argparse
 import sys
 import yaml
 import os
+from pathlib import Path
 import glob
 
 import torch
@@ -28,6 +29,7 @@ from utils.utils import (
     get_filename_compile_driver,
     get_filename_myKernels,
     get_filename_profile_driver,
+    get_output_dir,
     name_to_tl_types,
     patch_triton_compiler,
     run_bash_command,
@@ -197,8 +199,9 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
         kernel_name = get_filename_profile_driver(M, N, K, jobId)
         if verbose:
             print(f"profiling {kernel_name} on GPU {gpuid}")
+        here = Path(__file__).parent
         run_bash_command_wrapper(
-            f"rocprof --stats -o results_{jobId}.csv python {get_filename_profile_driver(M, N, K, jobId)}",
+            f"PYTHONPATH={here} rocprof --stats -o {get_output_dir()}/results_{jobId}.csv python {get_filename_profile_driver(M, N, K, jobId)}",
             capture=(verbose < 2))
         jobId += ngpus
 
@@ -213,8 +216,8 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
         # Generate kernel out of all configs
         fname = generate_compile_driver(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type, configs,
                                         rotating_buffer_size, bias_size)
-
-        run_bash_command(f"python {fname} -n {num_threads}", capture=(verbose < 2))
+        here = Path(__file__).parent
+        run_bash_command(f"PYTHONPATH={here} python {fname} -n {num_threads}", capture=(verbose < 2))
     compile_end = datetime.now()
     compile_time = compile_end - start_time
     if verbose:
@@ -245,7 +248,7 @@ def tune_gemm_config(M, N, K, col_a, col_b, dtype_a, dtype_b, dtype_c, init_type
     thread_pool = multiprocessing.Pool(processes=num_threads)
     tasks = []
     idx = 0
-    df_prof = [pd.read_csv(f"results_{i}.csv") for i in range(jobs)]
+    df_prof = [pd.read_csv(f"{get_output_dir()}/results_{i}.csv") for i in range(jobs)]
     for config in configs:
         file_idx = idx % jobs
         tasks += [thread_pool.apply_async(extract_kernel_time, args=(M, N, K, config, df_prof[file_idx]))]
@@ -457,7 +460,7 @@ def parse_args():
     args = parser.parse_args()
     if not args.o:
         if args.benchmark:
-            args.o = "benchmarking_results.csv"
+            args.o = f"{get_output_dir()}/benchmarking_results.csv"
         else:
             args.o = get_default_tuning_result_filename()
 

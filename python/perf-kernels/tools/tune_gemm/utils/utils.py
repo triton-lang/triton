@@ -2,7 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
-import os
+from pathlib import Path
 import subprocess
 from datetime import datetime
 
@@ -48,25 +48,27 @@ def run_bash_command(commandstring, capture=True):
     return None
 
 
+def get_output_dir():
+    output_dir = Path(__file__).parent.parent / "output"
+    if not output_dir.exists():
+        output_dir.mkdir()
+    return output_dir
+
+
 def get_filename_myKernels():
-    path = os.path.dirname(os.path.abspath(__file__))
-    return f"{path}/../myKernels.py"
+    return f"{get_output_dir()}/myKernels.py"
 
 
 def get_filename_without_extension(file_path):
-    base_name = os.path.basename(file_path)
-    file_name, _ = os.path.splitext(base_name)
-    return file_name
+    return Path(file_path).stem
 
 
 def get_filename_compile_driver():
-    path = os.path.dirname(os.path.abspath(__file__))
-    return f"{path}/../compile_driver.py"
+    return f"{get_output_dir()}/compile_driver.py"
 
 
 def get_filename_profile_driver(M, N, K, job_id):
-    path = os.path.dirname(os.path.abspath(__file__))
-    return f"{path}/../profile_driver_{M}x{N}x{K}_{job_id}.py"
+    return f"{get_output_dir()}/profile_driver_{M}x{N}x{K}_{job_id}.py"
 
 
 def get_default_tuning_result_filename():
@@ -79,8 +81,7 @@ def get_default_tuning_result_filename():
 
     dt_string = datetime.now().strftime("%m-%d-%Y-%H:%M:%S")
 
-    path = os.path.dirname(os.path.abspath(__file__))
-    defaultName = f"{path}/../tuning_results_{git_branch_name}@{git_commit_hash}_{dt_string}.yaml"
+    defaultName = f"{get_output_dir()}/tuning_results_{git_branch_name}@{git_commit_hash}_{dt_string}.yaml"
     return defaultName
 
 
@@ -93,15 +94,15 @@ def patch_triton_compiler():
     if not triton_location_str:
         print("triton source not found from pip show triton")
 
-    triton_dir = triton_location_str[0].split()[-1].decode('utf-8')
+    triton_dir = Path(triton_location_str[0].split()[-1].decode('utf-8'))
 
-    jit_filename = os.path.join(triton_dir, "triton/runtime", "jit.py")
+    jit_filename = triton_dir / "triton" / "runtime" / "jit.py"
 
     run_bash_command(f"sed -i 's/driver.active.get_current_device()/{device}/g' {jit_filename}")
     run_bash_command(f"sed -i 's/driver.active.get_current_stream(device)/{stream}/g' {jit_filename}")
 
-    hip_driver_filename = os.path.join(triton_dir, "../third_party/amd/backend/", "driver.py")
-    cuda_driver_filename = os.path.join(triton_dir, "../third_party/nvidia/backend/", "driver.py")
+    hip_driver_filename = triton_dir.parent / "third_party" / "amd" / "backend" / "driver.py"
+    cuda_driver_filename = triton_dir.parent / "third_party" / "nvidia" / "backend" / "driver.py"
 
     run_bash_command(f"sed -i 's/import torch/return True/g' {hip_driver_filename}")
     run_bash_command(
