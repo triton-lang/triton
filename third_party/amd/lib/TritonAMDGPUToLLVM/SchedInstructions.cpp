@@ -221,12 +221,13 @@ struct InstructionSchedHintsRewriter
     std::transform(variant.begin(), variant.end(), variant.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
-    this->schedulingType = llvm::StringSwitch<SchedulingType>(variant)
-                               .Case("none", SchedulingType::NONE)
-                               .Case("iglp0", SchedulingType::IGLP0)
-                               .Case("iglp1", SchedulingType::IGLP1)
-                               .Case("ck_v3", SchedulingType::CK_V3)
-                               .Default(SchedulingType::UNKNOWN);
+    this->schedulingType =
+        llvm::StringSwitch<SchedulingType>(variant)
+            .Case("none", SchedulingType::NONE)
+            .Case("llvm-iglp-0", SchedulingType::LLVM_IGLP_0)
+            .Case("llvm-iglp-1", SchedulingType::LLVM_IGLP_1)
+            .Case("local-prefetch", SchedulingType::LOCAL_PREFETCH)
+            .Default(SchedulingType::UNKNOWN);
 
     if (this->numStages < 2) {
       this->schedulingType = SchedulingType::NONE;
@@ -237,9 +238,9 @@ struct InstructionSchedHintsRewriter
 
   enum class SchedulingType : uint32_t {
     NONE = 0,
-    IGLP0,
-    IGLP1,
-    CK_V3,
+    LLVM_IGLP_0,
+    LLVM_IGLP_1,
+    LOCAL_PREFETCH,
     UNKNOWN
   };
 
@@ -435,8 +436,8 @@ struct InstructionSchedHintsRewriter
     // backend documentation.
     const bool limitSchedulingRange =
         !(schedulingType == SchedulingType::NONE ||
-          schedulingType == SchedulingType::IGLP0 ||
-          schedulingType == SchedulingType::IGLP1);
+          schedulingType == SchedulingType::LLVM_IGLP_0 ||
+          schedulingType == SchedulingType::LLVM_IGLP_1);
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
     if (limitSchedulingRange) {
@@ -448,13 +449,13 @@ struct InstructionSchedHintsRewriter
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
     switch (schedulingType) {
-    case SchedulingType::IGLP0:
+    case SchedulingType::LLVM_IGLP_0:
       [[fallthrough]];
-    case SchedulingType::IGLP1: {
+    case SchedulingType::LLVM_IGLP_1: {
       createIglpOpt(rewriter, loc, static_cast<int>(schedulingType) - 1);
       break;
     }
-    case SchedulingType::CK_V3: {
+    case SchedulingType::LOCAL_PREFETCH: {
       createCKV3Schedule(rewriter, loc, instructionSchedHint);
       break;
     }
