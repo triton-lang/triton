@@ -17,6 +17,10 @@ namespace gpu {
 /// based on the numStages value provided by the user.
 DenseMap<Operation *, int> assignLatencies(ModuleOp forOp, int numStages);
 
+/// Schedule the loop based on the latencies assigned to the operations.
+void scheduleLoop(scf::ForOp forOp,
+                  const DenseMap<Operation *, int> &opLatency);
+
 }; // namespace gpu
 
 /// This fill out the pipelining options including schedule and annotations

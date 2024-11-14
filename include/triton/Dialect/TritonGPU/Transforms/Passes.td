@@ -62,6 +62,19 @@ def TritonGPUTestPipelineAssignLatencies : Pass<"tritongpu-test-pipeline-assign-
   ];
 }
 
+def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-loop", "mlir::ModuleOp"> {
+  let summary = "test scheduling a loop for software pipelining";
+
+  let description = [{
+    This is a test pass that tests `scheduleLoop` method of `TritonGPUPipelineScheduler`.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
   let summary = "3xTF32 trick";
 

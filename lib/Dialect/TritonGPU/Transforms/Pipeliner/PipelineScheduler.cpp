@@ -39,37 +39,43 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   DenseSet<Operation *> processed;
   std::stack<std::pair<Operation *, int>> stack;
   llvm::MapVector<Operation *, int> opToStage;
-  for (auto &op : llvm::reverse(forOp.getBody()->without_terminator())) {
-    stack.push(std::make_pair(&op, 0));
-  }
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-  while (!stack.empty()) {
-    auto [op, stage] = stack.top();
-    stack.pop();
-    if (!processed.insert(op).second)
+  for (auto &startOp : forOp.getBody()->without_terminator()) {
+    if (!opLatency.count(&startOp) || processed.count(&startOp))
       continue;
-    bool hasNonTerminatorUses = llvm::any_of(
-        op->getUsers(), [&](Operation *user) { return user != terminator; });
-    if (opLatency.count(op) && !hasNonTerminatorUses ||
-        op->hasTrait<OpTrait::DotLike>()) {
+    stack.push(std::make_pair(&startOp, 0));
+    while (!stack.empty()) {
+      auto [op, stage] = stack.top();
+      stack.pop();
+      if (!processed.insert(op).second)
+        continue;
       opToStage[op] = stage;
-      stage += opLatency.at(op);
-    }
-    for (auto user : op->getUsers()) {
-      stack.push(std::make_pair(user, stage));
+      if (opLatency.count(op)) {
+        stage += opLatency.at(op);
+      }
+      for (auto user : op->getUsers()) {
+        if (user == terminator)
+          continue;
+        stack.push(std::make_pair(user, stage));
+      }
     }
   }
   auto stages = llvm::make_second_range(opToStage);
   int maxStage = *std::max_element(stages.begin(), stages.end());
   CoarseSchedule schedule(maxStage + 1);
-  SmallVector<CoarseSchedule::Cluster> clusters;
+  SmallVector<CoarseSchedule::Cluster> clusters(maxStage + 1);
   for (int i = 0; i <= maxStage; i++) {
     clusters[i] = schedule.clusters.newAtBack();
   }
+  CoarseSchedule::Cluster epilogue = schedule.clusters.newAtBack();
   // Assign ops to the clusters in reverse-stage order;
   // ops with higher stage numbers are assigned first. This way we will
   // end up with roughly reverse program order in the clusters.
   for (auto [op, stage] : opToStage) {
+    if (isa<scf::IfOp>(op)) {
+      schedule.insert(op, stage, epilogue);
+      continue;
+    }
     schedule.insert(op, stage, clusters[maxStage - stage]);
   }
 
@@ -90,6 +96,7 @@ void scheduleLoop(scf::ForOp forOp,
   // 3. Schedule the rest of the ops to the last stage
 
   // 4. Write the schedule to the IR
+  schedule.serialize(forOp);
 }
 
 struct PipelineScheduler
