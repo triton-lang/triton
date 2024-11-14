@@ -119,10 +119,10 @@ struct ConvertLayoutOpMFMAToDotOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
   explicit ConvertLayoutOpMFMAToDotOpConversion(
-        LLVMTypeConverter &typeConverter,
-        const TargetInfoBase &targetInfo,
-        PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(typeConverter, benefit),
+      LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(typeConverter,
+                                                             benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
@@ -172,17 +172,23 @@ public:
     for (size_t startIdx = 0; startIdx < inVals.size(); startIdx += 8) {
       Value vec0 = undef(vecTy);
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
-        vec0 = insert_element(vecTy, vec0, inVals[startIdx + vIdx], i32_val(vIdx));
+        vec0 =
+            insert_element(vecTy, vec0, inVals[startIdx + vIdx], i32_val(vIdx));
       }
       Value vec1 = undef(vecTy);
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
-        vec1 = insert_element(vecTy, vec1, inVals[startIdx + vIdx + 4], i32_val(vIdx));
+        vec1 = insert_element(vecTy, vec1, inVals[startIdx + vIdx + 4],
+                              i32_val(vIdx));
       }
 
-      Value shflVec0 = bitcast(
-          targetInfo.shuffleIdx(rewriter, loc, bitcast(vec0, int_ty(32)), addr0), vecTy);
-      Value shflVec1 = bitcast(
-          targetInfo.shuffleIdx(rewriter, loc, bitcast(vec1, int_ty(32)), addr1), vecTy);
+      Value shflVec0 =
+          bitcast(targetInfo.shuffleIdx(rewriter, loc,
+                                        bitcast(vec0, int_ty(32)), addr0),
+                  vecTy);
+      Value shflVec1 =
+          bitcast(targetInfo.shuffleIdx(rewriter, loc,
+                                        bitcast(vec1, int_ty(32)), addr1),
+                  vecTy);
 
       Value firstVec = select(mask, vec0, shflVec1);
       Value secondVec = select(mask, shflVec0, vec1);
@@ -213,6 +219,7 @@ void populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
-  patterns.add<ConvertLayoutOpMFMAToDotOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<ConvertLayoutOpMFMAToDotOpConversion>(typeConverter, targetInfo,
+                                                     benefit);
 }
 } // namespace mlir::triton::AMD
