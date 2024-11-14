@@ -90,6 +90,7 @@ def test_cast_matmul(M, K, N, BLOCK_K, w_dtype, x_dtype, out_dtype):
         else:
             return torch.randn(shape, device=device, dtype=dtype)
 
+    torch.manual_seed(42)
     a = init_tensor(w_dtype, (M, K))
     b = init_tensor(x_dtype, (K, N))
 
