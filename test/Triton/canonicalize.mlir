@@ -67,6 +67,19 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // -----
 
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  tt.func @fp_to_fp_pos_zero_fold_scalar() -> f8E4M3FNUZ {
+    // CHECK-LABEL: fp_to_fp_pos_zero_fold_scalar
+    // CHECK-NEXT: %[[cst_folded:.+]] = arith.constant 0.000000e+00 : f8E4M3FNUZ
+    // CHECK-NEXT: tt.return %[[cst_folded]]
+    %cst = arith.constant 0.00e+00 : f32
+    %cst_converted = tt.fp_to_fp %cst, rounding = rtne : f32 -> f8E4M3FNUZ
+    tt.return %cst_converted : f8E4M3FNUZ
+  }
+}  // end module
+
+// -----
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   tt.func @fp_to_fp_neg_zero_fold() -> tensor<32x128xf8E4M3FN, #blocked> {

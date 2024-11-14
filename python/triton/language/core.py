@@ -609,6 +609,8 @@ class block_type(dtype):
         # Note that block_type's shape is a list of int
         # while tensor's shape is a list of constexpr.
 
+        assert (isinstance(shape, list))
+
         # shape can be empty ([]) when an input is a 0D tensor.
         self.shape = _unwrap_shape(shape)
         if not self.shape:

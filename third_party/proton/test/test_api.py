@@ -3,7 +3,7 @@ import triton.profiler as proton
 import pathlib
 
 
-def test_profile(tmp_path: pathlib.Path):
+def test_profile_single_session(tmp_path: pathlib.Path):
     temp_file0 = tmp_path / "test_profile0.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")))
     proton.activate()
@@ -27,6 +27,28 @@ def test_profile(tmp_path: pathlib.Path):
     assert session_id2 == session_id1 + 1
     assert pathlib.Path("test.hatchet").exists()
     pathlib.Path("test.hatchet").unlink()
+
+
+def test_profile_multiple_sessions(tmp_path: pathlib.Path):
+    temp_file0 = tmp_path / "test_profile0.hatchet"
+    proton.start(str(temp_file0.with_suffix("")))
+    temp_file1 = tmp_path / "test_profile1.hatchet"
+    proton.start(str(temp_file1.with_suffix("")))
+    proton.activate()
+    proton.deactivate()
+    proton.finalize()
+    assert temp_file0.exists()
+    assert temp_file1.exists()
+
+    temp_file2 = tmp_path / "test_profile2.hatchet"
+    session_id2 = proton.start(str(temp_file2.with_suffix("")))
+    temp_file3 = tmp_path / "test_profile3.hatchet"
+    session_id3 = proton.start(str(temp_file3.with_suffix("")))
+    proton.deactivate(session_id2)
+    proton.deactivate(session_id3)
+    proton.finalize()
+    assert temp_file2.exists()
+    assert temp_file3.exists()
 
 
 def test_profile_decorator(tmp_path: pathlib.Path):

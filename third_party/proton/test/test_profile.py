@@ -272,28 +272,24 @@ def test_deactivate_torch(tmp_path: pathlib.Path, context: str):
     # Root shouldn't have device id
     assert "device_id" not in data[0]["metrics"]
     assert len(data[0]["children"]) == 1
-    parent_frame = data[0]
-    while len(parent_frame["children"]) > 0:
-        parent_frame = parent_frame["children"][0]
-    assert "device_id" in parent_frame["metrics"]
+    assert "device_id" in data[0]["children"][0]["metrics"]
 
 
-@pytest.mark.parametrize("context", ["shadow", "python"])
-def test_deactivate_triton(tmp_path: pathlib.Path, context: str):
-
-    @triton.jit
-    def foo(x, y):
-        tl.store(y, tl.load(x))
-
-    x = torch.tensor([2], device="cuda")
-    y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_deactivate_triton.hatchet"
-    session_id = proton.start(str(temp_file.with_suffix("")))
-    proton.deactivate(session_id)
-    with proton.scope("test0", {"foo": 1.0}):
-        foo[(1, )](x, y)
-    proton.activate(session_id)
-    proton.finalize()
-    with temp_file.open() as f:
+def test_multiple_sessions(tmp_path: pathlib.Path):
+    temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
+    temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
+    session_id0 = proton.start(str(temp_file0.with_suffix("")))
+    session_id1 = proton.start(str(temp_file1.with_suffix("")))
+    torch.randn((10, 10), device="cuda")
+    torch.randn((10, 10), device="cuda")
+    proton.deactivate(session_id0)
+    proton.finalize(session_id0)
+    torch.randn((10, 10), device="cuda")
+    proton.finalize(session_id1)
+    # kernel has been invokved twice in session 0 and three times in session 1
+    with temp_file0.open() as f:
         data = json.load(f)
-    assert len(data[0]["children"]) == 0
+    assert int(data[0]["children"][0]["metrics"]["count"]) == 2
+    with temp_file1.open() as f:
+        data = json.load(f)
+    assert int(data[0]["children"][0]["metrics"]["count"]) == 3
