@@ -34,13 +34,13 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-// TODO: We can extra some helpers into common utilities once we add more
+// TODO: We can extract some helpers into common utilities once we add more
 // schedules.
 
 namespace {
 
 struct LoadInfo {
-  // Layout of the data in the shared memory.
+  // Layout of the data in shared memory.
   ttg::SharedEncodingAttr sharedEncoding = nullptr;
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
@@ -239,9 +239,11 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
 
   Value pred = builder.createWithStage<arith::ConstantIntOp>(loc, stage,
                                                              clusterId, 1, 1);
+  Value tmaPtr =
+      builder.createWithStage<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+          loc, stage, clusterId, loadOp.getDesc());
   Operation *copy = builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
-      loc, stage, clusterId, loadOp.getDescPtr(), loadOp.getIndices(), barrier,
-      view, pred);
+      loc, stage, clusterId, tmaPtr, loadOp.getIndices(), barrier, view, pred);
 
   bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
 

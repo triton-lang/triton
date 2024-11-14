@@ -63,8 +63,10 @@ static void createTMAAsyncCopy(scf::ForOp &forOp,
   builder.create<ttng::TMAStoreWait>(loc, 0);
   builder.create<ttg::LocalStoreOp>(loc, storeOp.getSrc(), alloc);
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
+  Value tmaPtr = builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+      loc, storeOp.getDesc());
   builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
-      loc, storeOp.getDescPtr(), storeOp.getIndices(), alloc);
+      loc, tmaPtr, storeOp.getIndices(), alloc);
 
   storeOp->erase();
 }
