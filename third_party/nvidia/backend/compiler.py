@@ -40,6 +40,9 @@ def _path_to_binary(binary: str):
 
 @functools.lru_cache()
 def get_ptxas_version():
+    mock_ver = os.environ.get('TRITON_MOCK_PTX_VERSION')
+    if mock_ver != None:
+        return mock_ver  # This is not really a version of ptxas, but it is good enough for testing
     version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")
     return version
 
@@ -249,6 +252,10 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
+        if os.environ.get('TRITON_DISABLE_LLIR', '0') == '1':
+            metadata["shared"] = 0
+            metadata["name"] = ""
+            return None
         ptx_version = get_ptx_version_from_options(options)
 
         # warp-specialization mutates num_warps
@@ -313,6 +320,9 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ptx(src, metadata, opt, capability):
+        if os.environ.get('TRITON_DISABLE_PTX', '0') == '1':
+            metadata["name"] = ""
+            return ""
         ptx_version = get_ptx_version_from_options(opt)
 
         triple = 'nvptx64-nvidia-cuda'
@@ -335,6 +345,8 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_cubin(src, metadata, opt, capability):
+        if os.environ.get('TRITON_DISABLE_CUBIN', '0') == '1':
+            return ""
         ptxas, _ = _path_to_binary("ptxas")
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
