@@ -40,7 +40,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     temp_file = tmp_path / "test_mlir_attribute_parsing0.ttgir"
     temp_file.write_text(sample_ttgir)
     context = ir.context()
-    src = IRSource(str(temp_file), context)
+    src = IRSource(str(temp_file), context, target)
 
     # check name and type signature
     # should match ty_to_cpp(...)
@@ -85,7 +85,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     temp_file = tmp_path / "test_mlir_attribute_parsing1.ttgir"
     temp_file.write_text(sample_ttgir_vector_add)
     context = ir.context()
-    src = IRSource(str(temp_file), context)
+    src = IRSource(str(temp_file), context, target)
 
     # now test compilation
     triton.compile(str(temp_file), target=target)
