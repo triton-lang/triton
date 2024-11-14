@@ -154,11 +154,11 @@ def test_chained_dot(N, D, dtype):
         tri_out = chained_dot(q_f8, k_f8, v_f8, q_desc, k_desc, v_desc, s_sc, s_desc, ref_sc)
 
         assert tri_out.isnan().sum() == 0
-        torch.testing.assert_close(tri_out[0].float(), ref_f8.float(), atol=1e-2, rtol=3e-3)
+        torch.testing.assert_close(tri_out[0].float(), ref_f8.float(), atol=1e-2, rtol=0)
 
     else:
         s = torch.matmul(q, k.transpose(1, 2))
         ref = torch.matmul(s, v.transpose(1, 2))
 
         tri_out = chained_dot(q, k, v)
-        torch.testing.assert_close(tri_out, ref, atol=1e-2, rtol=3e-3)
+        torch.testing.assert_close(tri_out, ref, atol=1e-2, rtol=0)
