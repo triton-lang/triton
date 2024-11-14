@@ -1713,9 +1713,8 @@ void init_triton_ir(py::module &&m) {
           // But if the pass manager crashes, attempt to generate a local
           // reproducer.
           mod.getContext()->disableMultithreading();
-          self.enableCrashReproducerGeneration(
-              ("crash." + reproducerPath).str(),
-              /*genLocalReproducer=*/true);
+          self.enableCrashReproducerGeneration("crash." + reproducerPath,
+                                               /*genLocalReproducer=*/true);
         }
 
         if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
