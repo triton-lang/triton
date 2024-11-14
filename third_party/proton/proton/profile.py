@@ -85,36 +85,42 @@ def start(
     return libproton.start(name, context, data, backend)
 
 
-def activate(session: Optional[int] = 0) -> None:
+def activate(session: Optional[int] = None) -> None:
     """
     Activate the specified session.
     The profiling session will be active and data will be recorded.
 
     Args:
-        session (int): The session ID of the profiling session. Defaults to 0 (the first session started.)
+        session (int): The session ID of the profiling session. Defaults to None (all sessions)
 
     Returns:
         None
     """
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be activated when running from the command line.")
-    libproton.activate(session)
+    if session is None:
+        libproton.activate_all()
+    else:
+        libproton.activate(session)
 
 
-def deactivate(session: Optional[int] = 0) -> None:
+def deactivate(session: Optional[int] = None) -> None:
     """
     Stop the specified session.
     The profiling session's data will still be in the memory, but no more data will be recorded.
 
     Args:
-        session (int): The session ID of the profiling session. Defaults to 0 (the first session started.)
+        session (int): The session ID of the profiling session. Defaults to None (all sessions)
 
     Returns:
         None
     """
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
-    libproton.deactivate(session)
+    if session is None:
+        libproton.deactivate_all()
+    else:
+        libproton.deactivate(session)
 
 
 def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> None:

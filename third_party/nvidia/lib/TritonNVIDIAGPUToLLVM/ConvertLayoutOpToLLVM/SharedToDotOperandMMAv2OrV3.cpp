@@ -226,11 +226,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
                                                          Value cSwizzleOffset) {
   Value warpB = multiDimWarpId[0];
   Value warpOff = kOrder == 2 ? multiDimWarpId[1] : multiDimWarpId[2];
-  int cTileShape = tileShape[order[0]];
-  int sTileShape = tileShape[order[1]];
-  if (!needTrans) {
-    std::swap(cTileShape, sTileShape);
-  }
 
   SmallVector<Value> offs(numPtrs);
 
@@ -239,7 +234,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
   int laneHeight = 8;
   int quadWidth = laneWidth * kWidth;
   int quadHeight = laneHeight;
-  int numQuadI = 2;
 
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
@@ -544,12 +538,15 @@ Value composeValuesToDotOperandLayoutStruct(
   // unpacked into individual elements.
   // `kIters` specifies the number of contiguous int32 elements each thread
   // should load.
-  auto kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
+  // `kSize` specifies the total number of int32 elements each thread should
+  // load.
+  int kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
+  int kSize = repK >= kIters ? repK * 2 : kIters;
 
   std::vector<Value> elems;
   auto unpackVec = [&](int b, int m, int k) {
-    for (auto kIter = 0; kIter < kIters; ++kIter) {
-      auto val = vals.at({b, m, k + kIter});
+    for (int kIter = 0; kIter < kIters; ++kIter) {
+      auto val = vals.at({b, m, (k + kIter) % kSize});
       auto vec = bitcast(val, vecTy);
       for (auto i = 0; i < numElemsPerVec; ++i) {
         elems.push_back(extract_element(eltTy, vec, i32_val(i)));
