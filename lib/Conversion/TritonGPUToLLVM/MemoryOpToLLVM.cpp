@@ -138,18 +138,21 @@ public:
 
   // FIXME [Dot LL]
   // Do for all DotOperandEncodingAttr once we have LLs for all of them
-  static bool isSupportedDotOpLayout(RankedTensorType type) {
-    auto layout = type.getEncoding();
-    auto bitwidth = type.getElementType().getIntOrFloatBitWidth();
-    if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
+  static bool isSupportedDotOpLayout(RankedTensorType srcTy,
+                                     RankedTensorType dstTy) {
+    auto srcLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
+    auto dstLayout = dstTy.getEncoding();
+    auto bitwidth = dstTy.getElementType().getIntOrFloatBitWidth();
+    auto rank = dstTy.getRank();
+    if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
+      auto vecWidth = 32 / bitwidth;
       auto kWidth = dot.getKWidth();
-      // Use when the SharedToDotOperandMMAv2OrV3 is known to be buggy:
-      // - kWidth == 8
-      // - kWidth == 4, bitwidth = 32
+      auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
       if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        bool legacyLoweringIsBuggy =
-            kWidth >= 8 || (kWidth == 4 && bitwidth == 32);
-        return legacyLoweringIsBuggy && mma.isAmpere();
+        auto needTrans = kOrder != srcLayout.getOrder()[0];
+        auto canUseLdmatrix =
+            (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
+        return !canUseLdmatrix && mma.isAmpere();
       }
       if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
         return true;
@@ -164,10 +167,10 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<SharedEncodingAttr>(srcLayout) &&
-        (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+    assert(isa<SharedEncodingAttr>(srcLayout) && "Unexpected src layout");
+    if ((isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
              dstLayout) ||
-         isSupportedDotOpLayout(dstTy))) {
+         isSupportedDotOpLayout(srcTy, dstTy))) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
