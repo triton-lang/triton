@@ -125,8 +125,7 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 
   auto convertBlockLayout = [&](Value src, ttg::BlockedEncodingAttr enc) {
     auto ty = cast<RankedTensorType>(src.getType());
-    auto newTy =
-        RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
+    auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
     auto cvt = builder.createWithStage<ttg::ConvertLayoutOp>(
         loadOp->getLoc(), stage, clusterId, newTy, src);
     return cvt.getResult();
