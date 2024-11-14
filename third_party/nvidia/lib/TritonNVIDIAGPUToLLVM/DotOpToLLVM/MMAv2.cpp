@@ -114,41 +114,51 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
               si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
             }
       } else {
-        // Original register layout:
+        // Suppose kWidth=4 and type=fp32, so numElemsPerVec=1.
+        // Each tile of the dot operand layout has a size of 16x32.
+        // However, if the triton tensor size is 16x16, elements along the k
+        // dimension are duplicated. Within each tile, each register
+        // contains 2x8 elements arranged as follows:
         //
-        //      tile0         tile1
-        //   |<-kWidth->|  |<-kWidth->|
-        //   [0, 1, 2, 3], [0, 1, 2, 3]
-        //   [4, 5, 6, 7], [4, 5, 6, 7]
+        //       tile0/0           tile0/1
+        //   |<--kWidth=4-->|   |<--kWidth-->|
+        //   |<-mmaWidth=2->|
+        //   [0,  1,  2,  3]    [0,  1,  2,  3]
+        //   [4,  5,  6,  7]    [4,  5,  6,  7]
         //
-        //       tile2             tile3
-        //   |<--kWidth-->|    |<--kWidth-->|
-        //   [8, 9, 10, 11],   [8, 9, 10, 11]
-        //   [12, 13, 14, 15], [12, 13, 14, 15]
+        // tile0/1 replicates the elements in tile0/0 along the k dimension.
+        // For a tensor size of 32x32, the next tile on the m dimension is as
+        // follows:
         //
-        // Each element in the layout is a single bf16.
-        // The converted register layout should be:
+        //       tile1/0              tile1/1
+        //   |<--kWidth-->|       |<--kWidth-->|
+        //   [8,  9, 10, 11],     [8,  9, 10, 11]
+        //   [12, 13, 14, 15],    [12, 13, 14, 15]
         //
-        // 1st MMA: [[0, 1], [4, 5], [2, 3], [6, 7]]
-        // 2nd MMA: [[0, 1], [4, 5], [2, 3], [6, 7]]
-        // 3rd MMA: [[8, 9], [12, 13], [10, 11], [14, 15]]
-        // 4th MMA: [[8, 9], [12, 13], [10, 11], [14, 15]]
+        // Within a single tile, we can perform two MMAs, and the
+        // resulting register layout for each MMA is as follows:
+        //
+        //   1st MMA: [0, 4, 1, 5]
+        //   2nd MMA: [2, 6, 3, 7]
+        //   3rd MMA: [8, 12, 9, 13]
+        //   4th MMA: [10, 14, 11, 15]
         //
         // Additionally, we should reorder the elements by moving the duplicated
         // elements to the end.  In the example above, we convert the order from
-        // tile0, tile1, tile2, tile3 to tile0, tile2, tile1, tile3, so that
-        // only the first two tiles will be used in the computation.
+        // tile0/0, tile0/1, tile1/0, tile1/1 to tile0/0, tile1/0, tile0/1,
+        // tile1/1, so that only the first two tiles will be used in the
+        // computation.
         size_t elemsPerTile = 2 * 2 * kWidth;
         size_t elemsPerMma = 2 * 2 * numElemsPerVec;
-        size_t mmasPerKWidth = kWidth / numElemsPerVec / 2;
-        size_t totalMmas = elemsPerTile / (mmasPerKWidth * elemsPerMma);
-        for (size_t mma = 0; mma < totalMmas; ++mma)
+        size_t mmaWidth = kWidth / numElemsPerVec / 2;
+        size_t repMma = elemsPerTile / (mmaWidth * elemsPerMma);
+        for (size_t rep = 0; rep < repMma; ++rep)
           for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
-            for (size_t mmaKWidth = 0; mmaKWidth < mmasPerKWidth; ++mmaKWidth)
+            for (size_t mmaKWidth = 0; mmaKWidth < mmaWidth; ++mmaKWidth)
               for (size_t kTile = 0; kTile < 2; ++kTile)
                 for (size_t mTile = 0; mTile < 2; ++mTile)
                   for (size_t e = 0; e < numElemsPerVec; ++e) {
-                    si.push_back(mma * mmasPerKWidth * elemsPerMma +
+                    si.push_back(rep * mmaWidth * elemsPerMma +
                                  mmaKWidth * 2 * numElemsPerVec +
                                  tile * elemsPerTile + mTile * kWidth +
                                  kTile * numElemsPerVec + e);
@@ -172,23 +182,24 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
               si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
             }
       } else {
+        // Suppose kWidth=4 and type=fp32.
         // Original register layout:
         //
-        //       tile0          tile1
+        //       tile0/0        tile0/1
         //   [0, 1, 2, 3]^T, [0, 1, 2, 3]^T
         //
-        // We should reorder the elements by moving the duplicated elements to
-        // the end.
+        // Similar to the opIdx=0 situation, we should reorder the elements by
+        // moving the duplicated elements to the end.
         size_t elemsPerTile = 2 * kWidth;
         size_t elemsPerMma = 2 * numElemsPerVec;
-        size_t mmasPerKWidth = kWidth / numElemsPerVec / 2;
-        size_t totalMmas = elemsPerTile / (mmasPerKWidth * elemsPerMma);
-        for (size_t mma = 0; mma < totalMmas; ++mma)
+        size_t mmaWidth = kWidth / numElemsPerVec / 2;
+        size_t repMma = elemsPerTile / (mmaWidth * elemsPerMma);
+        for (size_t rep = 0; rep < repMma; ++rep)
           for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
-            for (size_t mmaKWidth = 0; mmaKWidth < mmasPerKWidth; ++mmaKWidth)
+            for (size_t mmaKWidth = 0; mmaKWidth < mmaWidth; ++mmaKWidth)
               for (size_t kTile = 0; kTile < 2; ++kTile)
                 for (size_t e = 0; e < numElemsPerVec; ++e) {
-                  si.push_back(mma * mmasPerKWidth * elemsPerMma +
+                  si.push_back(rep * mmaWidth * elemsPerMma +
                                mmaKWidth * 2 * numElemsPerVec +
                                tile * elemsPerTile + kTile * numElemsPerVec +
                                e);
