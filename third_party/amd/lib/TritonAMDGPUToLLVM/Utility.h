@@ -49,4 +49,8 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 } // namespace mlir::LLVM::AMD
 
+namespace mlir::triton::AMD {
+llvm::SetVector<scf::ForOp> getAllInnerForOps(mlir::triton::FuncOp funcOp);
+} // namespace mlir::triton::AMD
+
 #endif

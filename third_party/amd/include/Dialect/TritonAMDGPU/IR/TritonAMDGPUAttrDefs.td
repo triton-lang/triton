@@ -26,6 +26,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "TritonAMDGPUDialect.td"
+include "mlir/IR/EnumAttr.td"
 
 class TritonAMDGPU_Attr<string name, list<Trait> traits = [],
                      string baseCppClass = "::mlir::Attribute">
@@ -57,6 +58,37 @@ def TritonAMDGPU_InstCounter : TritonAMDGPU_Attr<"InstCounter"> {
   let parameters = (ins "uint32_t":$value, "Type":$type);
   let assemblyFormat = "`<` params `>`";
 }
+
+
+class TritonAMDGPU_I32Enum<string name, string description, list<I32EnumAttrCase> cases>
+    : I32EnumAttr<name, description, cases> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::triton::amdgpu";
+}
+
+class TritonAMDGPU_I32EnumAttr<string mnemonic, TritonAMDGPU_I32Enum enumInfo> :
+    EnumAttr<TritonAMDGPU_Dialect, enumInfo, mnemonic> {
+  let assemblyFormat = "`<` $value `>`";
+  let cppNamespace = "::mlir::triton::amdgpu";
+}
+
+def SchedHintCaseNone : I32EnumAttrCase<"none", 0>;
+def SchedHintCaseLLVMIglp0 : I32EnumAttrCase<"llvm_iglp_0", 1>;
+def SchedHintCaseLLVMIglp1 : I32EnumAttrCase<"llvm_iglp_1", 2>;
+def SchedHintCaseLocalPrefetch : I32EnumAttrCase<"local_prefetch", 3>;
+def SchedHintCaseGuard : I32EnumAttrCase<"guard", 4>;
+
+def TritonAMDGPU_SchedHintsEnum : TritonAMDGPU_I32Enum<
+  "SchedHint", "Instruction Scheduling Hints for AMD GPUs", [
+    SchedHintCaseNone,
+    SchedHintCaseLLVMIglp0,
+    SchedHintCaseLLVMIglp1,
+    SchedHintCaseLocalPrefetch,
+    SchedHintCaseGuard
+  ]>;
+
+def TritonAMDGPU_SchedHintVariantAttr :
+  TritonAMDGPU_I32EnumAttr<"SchedHintVariant", TritonAMDGPU_SchedHintsEnum>;
 
 
 #endif
