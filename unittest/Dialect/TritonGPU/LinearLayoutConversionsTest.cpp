@@ -307,6 +307,39 @@ TEST_F(LinearLayoutConversionsTest, Blocked4D) {
                     {S("dim0"), S("dim1"), S("dim2"), S("dim3")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, inThreadTranspose_4x8) {
+  auto ll = toLinearLayout(
+      {64, 256},
+      blocked({4, 8}, {2, 32}, {8, 1}, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+      std::nullopt, true);
+  EXPECT_EQ(ll,
+            LinearLayout(
+                {
+                    {S("register"), {{1, 0}, {2, 0}, {0, 1}, {0, 2}, {0, 4}}},
+                    {S("lane"),
+                     {{0, 8}, {0, 16}, {0, 32}, {0, 64}, {0, 128}, {4, 0}}},
+                    {S("warp"), {{8, 0}, {16, 0}, {32, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, inThreadTranspose_1x8) {
+  auto ll = toLinearLayout(
+      {32, 128},
+      blocked({1, 8}, {4, 16}, {8, 1}, {1, 1}, {1, 1}, {1, 0}, {1, 0}),
+      std::nullopt, true);
+  EXPECT_EQ(ll, LinearLayout(
+                    {
+                        {S("register"), {{0, 1}, {0, 2}, {0, 4}}},
+                        {S("lane"),
+                         {{0, 8}, {0, 16}, {0, 32}, {0, 64}, {1, 0}, {2, 0}}},
+                        {S("warp"), {{4, 0}, {8, 0}, {16, 0}}},
+                        {S("block"), {}},
+                    },
+                    {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, MMAv2_16x16) {
   EXPECT_EQ(toLinearLayout({16, 16},
                            mma(2, 0, {16, 8}, {1, 1}, {1, 1}, {1, 1}, {0, 1})),
