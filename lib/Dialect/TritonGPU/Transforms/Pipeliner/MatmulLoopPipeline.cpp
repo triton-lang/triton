@@ -810,7 +810,7 @@ createAsyncOps(scf::ForOp &forOp,
 
   tt::CoarseSchedule coarseSchedule(numStages);
   coarseSchedule.deSerialize(forOp);
-  scheduleDependencies(forOp, coarseSchedule, numStages);
+  scheduleDependencies(forOp, coarseSchedule);
   coarseSchedule.serialize(forOp);
 
   // Make sure all ops have attributes.
