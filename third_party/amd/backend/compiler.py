@@ -215,6 +215,15 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
+
+        prefetch = os.environ.get("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
+        use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+
+        # Note, `local-prefetch` scheduling variant requires both stream-prefetch,
+        # buffer-ops to be enabled
+        if options.instruction_sched_variant == "local-prefetch":
+            prefetch = use_buffer_ops = True
+
         if amd.has_matrix_core_feature(options.arch):
             assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
                                              "We used to trigger software pipelining with "
@@ -229,7 +238,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-        if os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1":
+        if use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
