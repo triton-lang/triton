@@ -178,7 +178,7 @@ TEST_F(DumpLayoutTest, Simple1DShared) {
                              1,     /* perPhase */
                              4,     /* maxPhase */
                              false, /* hasLeadingOffset */
-                             false, /* hasLeadingOffset */
+                             false, /* inThreadTranspose */
                              {1},   /* cpg */
                              {1},   /* csplit */
                              {1},   /* ord, row-major */
@@ -234,7 +234,7 @@ TEST_F(DumpLayoutTest, Larger2DShared) {
                              2,       /* perPhase */
                              8,       /* maxPhase */
                              false,   /* hasLeadingOffset */
-                             false,   /* hasLeadingOffset */
+                             false,   /* inThreadTranspose */
                              {1, 1},  /* cpg */
                              {1, 1},  /* csplit */
                              {1, 0},  /* ord, row-major */
@@ -508,7 +508,7 @@ Offset: 255 -> (7,17)
                                1,       /* perPhase */
                                32,      /* maxPhase */
                                false,   /* hasLeadingOffset */
-                               false,   /* hasLeadingOffset */
+                               false,   /* inThreadTranspose */
                                {1, 1},  /* cpg */
                                {1, 1},  /* csplit */
                                {1, 0},  /* ord, row-major */
