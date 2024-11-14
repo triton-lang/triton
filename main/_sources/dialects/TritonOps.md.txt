@@ -901,13 +901,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point values
+| `src` | floating-point or ranked tensor of floating-point values
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point values
+| `result` | floating-point or ranked tensor of floating-point values
 
 ### `tt.get_num_programs` (triton::GetNumProgramsOp)
 
