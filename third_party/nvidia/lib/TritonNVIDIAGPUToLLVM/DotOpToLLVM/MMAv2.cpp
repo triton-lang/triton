@@ -140,14 +140,19 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         // only the first two tiles will be used in the computation.
         size_t elemsPerTile = 2 * 2 * kWidth;
         size_t elemsPerMma = 2 * 2 * numElemsPerVec;
-        for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma)
+        size_t mmasPerKWidth = kWidth / numElemsPerVec / 2;
+        size_t totalMmas = elemsPerTile / (mmasPerKWidth * elemsPerMma);
+        for (size_t mma = 0; mma < totalMmas; ++mma)
           for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
-            for (size_t kTile = 0; kTile < 2; ++kTile)
-              for (size_t mTile = 0; mTile < 2; ++mTile)
-                for (size_t e = 0; e < numElemsPerVec; ++e) {
-                  si.push_back(mma * elemsPerMma + tile * elemsPerTile +
-                               mTile * kWidth + kTile * numElemsPerVec + e);
-                }
+            for (size_t mmaKWidth = 0; mmaKWidth < mmasPerKWidth; ++mmaKWidth)
+              for (size_t kTile = 0; kTile < 2; ++kTile)
+                for (size_t mTile = 0; mTile < 2; ++mTile)
+                  for (size_t e = 0; e < numElemsPerVec; ++e) {
+                    si.push_back(mma * mmasPerKWidth * elemsPerMma +
+                                 mmaKWidth * 2 * numElemsPerVec +
+                                 tile * elemsPerTile + mTile * kWidth +
+                                 kTile * numElemsPerVec + e);
+                  }
       }
     } else {
       // Original register layout:
@@ -176,13 +181,18 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         // the end.
         size_t elemsPerTile = 2 * kWidth;
         size_t elemsPerMma = 2 * numElemsPerVec;
-        for (size_t mma = 0; mma < elemsPerTile / elemsPerMma; ++mma)
+        size_t mmasPerKWidth = kWidth / numElemsPerVec / 2;
+        size_t totalMmas = elemsPerTile / (mmasPerKWidth * elemsPerMma);
+        for (size_t mma = 0; mma < totalMmas; ++mma)
           for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
-            for (size_t kTile = 0; kTile < 2; ++kTile)
-              for (size_t e = 0; e < numElemsPerVec; ++e) {
-                si.push_back(mma * elemsPerMma + tile * elemsPerTile +
-                             kTile * numElemsPerVec + e);
-              }
+            for (size_t mmaKWidth = 0; mmaKWidth < mmasPerKWidth; ++mmaKWidth)
+              for (size_t kTile = 0; kTile < 2; ++kTile)
+                for (size_t e = 0; e < numElemsPerVec; ++e) {
+                  si.push_back(mma * mmasPerKWidth * elemsPerMma +
+                               mmaKWidth * 2 * numElemsPerVec +
+                               tile * elemsPerTile + kTile * numElemsPerVec +
+                               e);
+                }
       }
     }
 
