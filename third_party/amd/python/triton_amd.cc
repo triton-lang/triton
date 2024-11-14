@@ -161,6 +161,18 @@ void init_triton_amd(py::module &&m) {
       module->eraseNamedMetadata(openclVersion);
   });
 
+  m.def("disable_print_inline", [](llvm::Module *module) {
+    std::set<llvm::StringRef> noinlineFunctions = {
+        "__ockl_fprintf_stdout_begin",  "__ockl_fprintf_stderr_begin",
+        "__ockl_fprintf_append_args",   "__ockl_fprintf_append_string_n",
+        "__ockl_printf_begin",          "__ockl_printf_append_args",
+        "__ockl_printf_append_string_n"};
+
+    for (llvm::Function &f : module->functions())
+      if (f.hasName() && noinlineFunctions.count(f.getName()) != 0)
+        f.addFnAttr(llvm::Attribute::NoInline);
+  });
+
   m.def(
       "assemble_amdgcn",
       [](const std::string &assembly, const std::string &arch,

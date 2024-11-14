@@ -2563,8 +2563,6 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("add_overflow_check", [False, True])
 def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_path: pathlib.Path):
-    if add_overflow_check is True and is_hip():
-        pytest.skip("overflow check disabled on HIP while fixing issues")
 
     overflow_check = """
         %17 = arith.extsi %arg2 : i32 to i64
