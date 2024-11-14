@@ -23,16 +23,11 @@ void lowerDistributedToShared(
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
-  assert(srcTy.getShape().size() <= 2 ||
-         (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
-             "Unexpected rank of ConvertLayout(blocked->shared)");
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
-  auto smemBase = smemObj.getBase();
-  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
-                           loc, rewriter, targetInfo, llvmOpCount);
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
+                           targetInfo, llvmOpCount);
 }
 
 struct GlobalScratchAllocOpConversion
@@ -47,7 +42,7 @@ struct GlobalScratchAllocOpConversion
     Location loc = op.getLoc();
 
     auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
-        "triton_gpu.global_scratch_memory_offset");
+        "ttg.global_scratch_memory_offset");
     assert(opOffsetAttr);
     auto opOffset = opOffsetAttr.getValue().getZExtValue();
 
@@ -138,11 +133,11 @@ public:
 
   // FIXME [Dot LL]
   // Do for all DotOperandEncodingAttr once we have LLs for all of them
-  static bool isSupportedDotOpLayout(RankedTensorType srcTy,
+  static bool isSupportedDotOpLayout(MemDescType srcTy,
                                      RankedTensorType dstTy) {
     auto srcLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto dstLayout = dstTy.getEncoding();
-    auto bitwidth = dstTy.getElementType().getIntOrFloatBitWidth();
+    auto bitwidth = dstTy.getElementTypeBitWidth();
     auto rank = dstTy.getRank();
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
       auto vecWidth = 32 / bitwidth;
@@ -152,7 +147,17 @@ public:
         auto needTrans = kOrder != srcLayout.getOrder()[0];
         auto canUseLdmatrix =
             (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
-        return !canUseLdmatrix && mma.isAmpere();
+        if (mma.isHopper()) {
+          // I think we should be able to remove this condition, but it's here
+          // as the legacy ldmatrix path does not support it
+          canUseLdmatrix &= srcTy.getElementTypeBitWidth() * kWidth == 32;
+        }
+        // If we remove this one, ldmatrix will IMA. It can probably be relaxed
+        // though
+        canUseLdmatrix &=
+            srcTy.getShape()[0] >= 8 &&
+            srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
+        return !canUseLdmatrix;
       }
       if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
         return true;
@@ -165,12 +170,10 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    assert(isa<SharedEncodingAttr>(srcLayout) && "Unexpected src layout");
-    if ((isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-             dstLayout) ||
-         isSupportedDotOpLayout(srcTy, dstTy))) {
+    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
+            LinearEncodingAttr>(dstLayout) ||
+        isSupportedDotOpLayout(srcTy, dstTy)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -209,8 +212,8 @@ private:
     auto dstTy = op.getResult().getType();
     auto dstShape = dstTy.getShape();
     auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    auto dstLayout = dstTy.getEncoding();
-    assert((dstShape.size() <= 2 || isSupportedDotOpLayout(dstTy)) &&
+    assert((!isa<DotOperandEncodingAttr>(dstTy.getEncoding()) ||
+            isSupportedDotOpLayout(srcTy, dstTy)) &&
            "Unexpected rank of ConvertLayout(shared->distributed)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(

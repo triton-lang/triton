@@ -95,6 +95,8 @@ public:
                   const std::map<std::string, MetricValueType> &metrics,
                   bool aggregable);
 
+  void setState(std::optional<Context> context);
+
 private:
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
                                        const std::string &profilerName,
@@ -146,6 +148,8 @@ private:
   std::map<ScopeInterface *, size_t> scopeInterfaceCounts;
   // op -> active count
   std::map<OpInterface *, size_t> opInterfaceCounts;
+  // context source -> active count
+  std::map<ContextSource *, size_t> contextSourceCounts;
 };
 
 } // namespace proton

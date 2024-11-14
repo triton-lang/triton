@@ -42,8 +42,10 @@ mlir::LogicalResult WarpGroupDotOp::inferReturnTypes(
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto aEnc =
+      cast<triton::gpu::TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto bEnc =
+      cast<triton::gpu::TensorOrMemDesc>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
@@ -62,10 +64,10 @@ void WarpGroupDotOp::getEffects(
         &effects) {
   auto &a = getAMutable();
   auto &b = getBMutable();
-  if (isa<MemDescType>(a.get().getType()))
+  if (isa<mlir::triton::gpu::MemDescType>(a.get().getType()))
     effects.emplace_back(MemoryEffects::Read::get(), &a,
                          mlir::triton::gpu::SharedMemory::get());
-  if (isa<MemDescType>(b.get().getType()))
+  if (isa<mlir::triton::gpu::MemDescType>(b.get().getType()))
     effects.emplace_back(MemoryEffects::Read::get(), &b,
                          mlir::triton::gpu::SharedMemory::get());
 }
@@ -73,11 +75,12 @@ void WarpGroupDotOp::getEffects(
 bool WarpGroupDotOp::needsPartialAccumulator() {
   const auto &a = getA();
   const auto &d = getD();
-  auto aTensorTy = cast<TensorOrMemDesc>(a.getType());
-  auto aElTy = cast<TensorOrMemDesc>(a.getType()).getElementType();
+  auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
+  auto aElTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
   bool isFP8 = aElTy.isFloat8E5M2() || aElTy.isFloat8E4M3FN() ||
                aElTy.isFloat8E5M2FNUZ() || aElTy.isFloat8E4M3FNUZ();
-  bool accFP32 = cast<TensorOrMemDesc>(d.getType()).getElementType().isF32();
+  bool accFP32 =
+      cast<triton::gpu::TensorOrMemDesc>(d.getType()).getElementType().isF32();
   uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
   return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
 }
@@ -93,7 +96,8 @@ LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
   return mlir::success();
 }
 
-static LogicalResult verifyBarrierType(Operation *op, MemDescType barrierType) {
+static LogicalResult
+verifyBarrierType(Operation *op, mlir::triton::gpu::MemDescType barrierType) {
   if (!barrierType.getElementType().isInteger(64) ||
       barrierType.getShape() != ArrayRef<int64_t>({1}))
     return op->emitOpError(
@@ -158,6 +162,18 @@ void WaitBarrierOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
                        mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- TensorDescToTMAPtrOp --
+LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
+                                                 PatternRewriter &rewriter) {
+  // tensor_desc_to_tma_ptr(reinterpret_tensor_desc(ptr)) -> ptr
+  if (auto reinterpret =
+          op.getDesc().getDefiningOp<triton::ReinterpretTensorDescOp>()) {
+    rewriter.replaceOp(op, reinterpret.getRawDesc());
+    return success();
+  }
+  return failure();
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --

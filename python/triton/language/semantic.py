@@ -1138,18 +1138,24 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
         return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
 
 
-def descriptor_load(desc_ptr: tl.tensor, offsets, cache_modifier: str, eviction_policy: str, type,
+def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, builder: ir.builder):
+    handle = builder.create_reinterpret_tensor_descriptor(desc_ptr.handle, block_ty.to_ir(builder))
+    return tl._experimental_tensor_descriptor_base(handle, block_ty)
+
+
+def descriptor_load(desc: tl.tensor, offsets, cache_modifier: str, eviction_policy: str,
                     builder: ir.builder) -> tl.tensor:
+    assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
-    x = builder.create_descriptor_load(desc_ptr.handle, offsets, type.to_ir(builder),
-                                       _str_to_load_cache_modifier(cache_modifier),
+    x = builder.create_descriptor_load(desc.handle, offsets, _str_to_load_cache_modifier(cache_modifier),
                                        _str_to_eviction_policy(eviction_policy))
-    return tl.tensor(x, type)
+    return tl.tensor(x, desc.type)
 
 
-def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+def descriptor_store(desc: tl.tensor, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
-    return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
+    return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
 
 
 def tensormap_create(
@@ -1669,6 +1675,30 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
     scan_op.verify()
 
     return tuple(wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar, shape) for i in range(len(inputs)))
+
+
+# ===----------------------------------------------------------------------===
+#                               Gather
+# ===----------------------------------------------------------------------===
+
+
+def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    assert index.dtype.is_int(), "index must be an integer tensor"
+
+    rank = len(src.type.shape)
+    assert len(index.type.shape) == rank, "source and index tensors must have the same rank"
+
+    assert -rank <= axis < rank, f"gather axis {axis} must be < source rank ({rank})"
+    if axis < 0:
+        axis += rank
+
+    for d in range(rank):
+        if d == axis:
+            continue
+        assert index.type.shape[d] == src.type.shape[d], f"index dim {axis} must match the corresponding source dim"
+
+    gather = builder.create_gather(src.handle, index.handle, axis)
+    return wrap_tensor(gather, src.type.scalar, index.type.shape)
 
 
 # ===----------------------------------------------------------------------===

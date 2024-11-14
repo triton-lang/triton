@@ -14,6 +14,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -399,7 +400,7 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
 
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-      "triton_gpu.global_scratch_memory_size");
+      "ttg.global_scratch_memory_size");
   if (!allocSizeAttr) {
     return gmemBase;
   }
@@ -1124,6 +1125,11 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
+//
+// For example, for a thread a owns `elemsPerThread` elements of a tensor with
+// type `type` and layout `layout`, the result will contain `elemsPerThread`
+// vectors. Each vector contains the SSA values of the indices required to
+// access the corresponding element, starting from the inner dimension.
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
@@ -1141,16 +1147,16 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 //
 // Returns true on success.
 [[nodiscard]] bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, Value shmemBase,
-    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
+    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
+    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
+    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     Location loc, const TargetInfoBase &target, unsigned inVec,
     RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
-    Type resElemTy, SharedMemoryObject smemObj, RewriterBase &rewriter,
+    Type resElemTy, const SharedMemoryObject &smemObj, RewriterBase &rewriter,
     ArrayRef<Value> offsetVals, ArrayRef<Value> srcStrides) {
   // This utility computes the pointers for accessing the provided swizzled
   // shared memory layout `resSharedLayout`. More specifically, it computes,
@@ -1310,15 +1316,16 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 }
 
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           MemDescType srcTy, Type elemLlvmTy,
-                                           SharedMemoryObject smemObj,
+                                           triton::gpu::MemDescType srcTy,
+                                           Type elemLlvmTy,
+                                           const SharedMemoryObject &smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target);
 
 void storeDistributedToShared(
-    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
-    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    triton::gpu::MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
+    ArrayRef<Value> srcVals, const SharedMemoryObject &smemObj, Location loc,
+    RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 inline Value getStructFromSharedMemoryObject(Location loc,

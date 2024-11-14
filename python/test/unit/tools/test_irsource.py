@@ -1,12 +1,13 @@
-import tempfile
+import pathlib
 import triton
-from triton.compiler import IRSource
+from triton.compiler import IRSource, make_backend
 from triton._C.libtriton import ir
 
 target = triton.runtime.driver.active.get_current_target()
+backend = make_backend(target)
 
 
-def test_mlir_attribute_parsing() -> None:
+def test_mlir_attribute_parsing(tmp_path: pathlib.Path) -> None:
     '''
     Tests that MLIR attributes are parsed correctly from input ttir/ttgir.
 
@@ -17,12 +18,12 @@ def test_mlir_attribute_parsing() -> None:
     '''
 
     sample_ttgir = r"""
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
-#mma = #triton_gpu.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [16, 8]}>
-#shared = #triton_gpu.shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
-#shared1 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, triton_gpu.target = "cuda:80", "triton_gpu.threads-per-warp" = 32 : i32} {
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [16, 8]}>
+#shared = #ttg.shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
+#shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                                 %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                                 %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32},
@@ -37,25 +38,24 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   }
 }
 """
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(sample_ttgir)
-        f.flush()
-        context = ir.context()
-        src = IRSource(f.name, context)
+    temp_file = tmp_path / "test_mlir_attribute_parsing0.ttgir"
+    temp_file.write_text(sample_ttgir)
+    context = ir.context()
+    src = IRSource(str(temp_file), context, backend)
 
-        # check name and type signature
-        # should match ty_to_cpp(...)
-        assert  src.signature == \
-                    {0: "*f32", 1: "*f32", 2: "*f32", 3: "i32", \
-                           4: "i32", 5: "i32", 6: "i32", 7: "i32", 8: "nvTmaDesc", 9: "nvTmaDesc"}
-        assert src.name == "@matmul_kernel"
+    # check name and type signature
+    # should match ty_to_cpp(...)
+    assert  src.signature == \
+                {0: "*f32", 1: "*f32", 2: "*f32", 3: "i32", \
+                        4: "i32", 5: "i32", 6: "i32", 7: "i32", 8: "nvTmaDesc", 9: "nvTmaDesc"}
+    assert src.name == "@matmul_kernel"
 
-        # check num warps
-        assert src.parse_options()['num_warps'] == 8
+    # check num warps
+    assert src.parse_options()['num_warps'] == 8
 
     sample_ttgir_vector_add = r"""
-    #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-    module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+    #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
        tt.func public @add_kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32},
        %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32},
        %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32},
@@ -83,11 +83,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
        }
      }
     """
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(sample_ttgir_vector_add)
-        f.flush()
-        context = ir.context()
-        src = IRSource(f.name, context)
+    temp_file = tmp_path / "test_mlir_attribute_parsing1.ttgir"
+    temp_file.write_text(sample_ttgir_vector_add)
+    context = ir.context()
+    src = IRSource(str(temp_file), context, backend)
 
-        # now test compilation
-        triton.compile(f.name, target=target)
+    # now test compilation
+    triton.compile(str(temp_file), target=target)

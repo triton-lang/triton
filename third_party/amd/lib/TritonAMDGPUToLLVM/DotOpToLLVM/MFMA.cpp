@@ -274,11 +274,9 @@ struct DotOpMFMAConversionHelper {
     return success();
   }
 
-  /**
-   * @brief extract vector from rawElems based on kWidth and kBase
-   * rawElems is a vector of kWidth elements. We need to prepare vector(s) of
-   * kBase elements for each mfma instruction
-   */
+  /// Extract vector from rawElems based on kWidth and kBase
+  /// rawElems is a vector of kWidth elements. We need to prepare vector(s) of
+  /// kBase elements for each mfma instruction
   SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
                                      Type type) const {
     int kpack = kWidth / kBase;
@@ -294,8 +292,9 @@ struct DotOpMFMAConversionHelper {
           // rocdl.mfma.f32.32x32x8bf16.1k calls for input of i16 type
           auto cast = bitcast(val, i16_ty);
           vec = insert_element(vecTy, vec, cast, i32_val(elemId));
-        } else
+        } else {
           vec = insert_element(vecTy, vec, val, i32_val(elemId));
+        }
       }
       if (type.getIntOrFloatBitWidth() == 8) {
         if (4 == kBase)
@@ -303,16 +302,15 @@ struct DotOpMFMAConversionHelper {
           results.push_back(bitcast(vec, i32_ty));
         if (8 == kBase)
           results.push_back(bitcast(vec, i64_ty));
-      } else
+      } else {
         results.push_back(vec);
+      }
     }
     return results;
   }
 
-  /**
-   * @brief Converts dot operand structure to value table and converts types
-   * appropriate for mfma instructions
-   */
+  /// Converts dot operand structure to value table and converts types
+  /// appropriate for mfma instructions
   SmallVector<ValueTable>
   getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
                                       int kWidth, int kBase, Type type) const {

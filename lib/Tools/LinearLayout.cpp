@@ -212,42 +212,6 @@ void assertCommonDimsSameOrder(T &&aDims, U &&bDims) {
                              "\nb: " + triton::join(bDims, ", "));
   }
 }
-
-void eraseEmptyInOutDims(BasesT &bases,
-                         llvm::MapVector<StringAttr, int32_t> &outDims) {
-  // Erase empty out-dims.
-  SmallVector<int> emptyOutDims;
-  for (auto [i, outDim] : llvm::enumerate(
-           llvm::to_vector_of<StringAttr>(llvm::make_first_range(outDims)))) {
-    if (outDims[outDim] == 1) {
-      emptyOutDims.push_back(i);
-      outDims.erase(outDim);
-    }
-  }
-  if (outDims.empty()) {
-    bases.clear();
-    return;
-  }
-
-  for (auto &[inDim, inDimBases] : bases) {
-    for (auto &basis : inDimBases) {
-      // Erase the basis elements corresponding to the empty out-dims.
-      for (int i : llvm::reverse(emptyOutDims)) {
-        basis.erase(basis.begin() + i);
-      }
-    }
-  }
-
-  // Erase empty in-dims.
-  // TODO: This needs a test-case.
-  for (StringAttr inDim :
-       llvm::to_vector_of<StringAttr>(llvm::make_first_range(bases))) {
-    if (bases[inDim].empty()) {
-      bases.erase(inDim);
-    }
-  }
-}
-
 } // anonymous namespace
 
 /*static*/ std::optional<LinearLayout>
@@ -954,6 +918,17 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
 }
 
+LinearLayout LinearLayout::invert() const {
+  // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
+  assert(isSurjective && getTotalInDimSize() == getTotalOutDimSize() &&
+         "ll must be surjective and square to be invertible");
+  LinearLayout identity = LinearLayout::empty();
+  for (auto outDim : getOutDimNames()) {
+    identity *= LinearLayout::identity1D(getOutDimSize(outDim), outDim, outDim);
+  }
+  return identity.invertAndCompose(*this);
+}
+
 llvm::MapVector<StringAttr, int32_t>
 LinearLayout::getFreeVariableMasks() const {
   std::unique_ptr<uint64_t[]> mat = getMatrix(*this);
@@ -987,6 +962,30 @@ LinearLayout::getFreeVariableMasks() const {
     ret[dim] = mask;
   }
   return ret;
+}
+
+size_t hash_value(const LinearLayout &layout) {
+  size_t seed = 0;
+
+  // Hash the bases
+  for (const auto &base : layout.getBases()) {
+    // Hash the input dimension name
+    seed = llvm::hash_combine(seed, base.first);
+
+    // Hash the vectors in bases
+    for (const auto &vec : base.second) {
+      for (int32_t val : vec) {
+        seed = llvm::hash_combine(seed, val);
+      }
+    }
+  }
+
+  // Hash the output dimensions and their sizes
+  for (const auto &outDim : layout.getOutDimNames()) {
+    seed = llvm::hash_combine(seed, outDim, layout.getOutDimSize(outDim));
+  }
+  // Don't hash the surjective flag as it's a cached property
+  return seed;
 }
 
 bool operator==(LinearLayout lhs, LinearLayout rhs) {

@@ -325,13 +325,12 @@ struct ElementwiseInlineAsmOpConversion
     // asmResults is a flat struct; pack its values into
     // [return_value][op.getPackedElement()].
     SmallVector<SmallVector<Value>> ret(op->getNumResults());
+    int structIdx = 0;
     for (int i = 0; i < op->getNumResults(); i++) {
-      int structIdx = 0;
       for (int j = 0; j < op.getPackedElement(); j++) {
         Value val;
         if (asmRetTypes.size() > 1) {
-          val =
-              extract_val(asmResults, i * op.getPackedElement() + structIdx++);
+          val = extract_val(asmResults, structIdx++);
         } else {
           val = asmResults;
         }

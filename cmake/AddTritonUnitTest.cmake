@@ -35,5 +35,8 @@ function(add_triton_ut)
   # Without the TEST_DISCOVERY_TIMEOUT, the tests randomly time out on my mac
   # laptop.  I think the issue may be that the very first time you run a program
   # it's a bit slow.
-  gtest_discover_tests(${__NAME} PROPERTIES TEST_DISCOVERY_TIMEOUT 60)
+  gtest_discover_tests(${__NAME} DISCOVERY_TIMEOUT 60)
+
+  # Add the unit test to the top-level unit test target.
+  add_dependencies(TritonUnitTests ${__NAME})
 endfunction()

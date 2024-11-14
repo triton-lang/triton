@@ -72,6 +72,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUOptimizeAccumulatorInit);
   ADD_PASS_OPTION_WRAPPER_1("add_loop_scheduling",
                             createTritonGPULoopScheduling, int);
+  ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
+                     createTritonGPUCoalesceAsyncCopy);
 }
 
 void init_triton_passes_convert(py::module &&m) {

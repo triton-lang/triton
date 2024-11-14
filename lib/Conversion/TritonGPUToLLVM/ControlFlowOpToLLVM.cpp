@@ -91,7 +91,7 @@ private:
     }
 
     auto opOffsetAttr = caller->getAttrOfType<mlir::IntegerAttr>(
-        "triton_gpu.global_scratch_memory_offset");
+        "ttg.global_scratch_memory_offset");
     Value opOffsetVal;
     if (opOffsetAttr) {
       auto opOffset = opOffsetAttr.getValue().getZExtValue();

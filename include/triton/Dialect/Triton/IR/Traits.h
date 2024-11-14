@@ -69,9 +69,9 @@ public:
   static LogicalResult verifyTrait(Operation *op) {
     if (op->getNumOperands() < 3)
       return op->emitOpError("expected at least 3 operands");
-    auto aTy = cast<TensorOrMemDesc>(op->getOperand(0).getType());
-    auto bTy = cast<TensorOrMemDesc>(op->getOperand(1).getType());
-    auto cTy = cast<TensorOrMemDesc>(op->getOperand(2).getType());
+    auto aTy = cast<ShapedType>(op->getOperand(0).getType());
+    auto bTy = cast<ShapedType>(op->getOperand(1).getType());
+    auto cTy = cast<ShapedType>(op->getOperand(2).getType());
     auto aShape = aTy.getShape();
     auto bShape = bTy.getShape();
     auto cShape = cTy.getShape();

@@ -64,6 +64,13 @@ void initProton(pybind11::module &&m) {
     SessionManager::instance().exitOp(Scope(scopeId, name));
   });
 
+  m.def("enter_state", [](const std::string &state) {
+    SessionManager::instance().setState(state);
+  });
+
+  m.def("exit_state",
+        []() { SessionManager::instance().setState(std::nullopt); });
+
   m.def("add_metrics",
         [](size_t scopeId,
            const std::map<std::string, MetricValueType> &metrics) {

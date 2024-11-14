@@ -5,15 +5,12 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 
 using mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
 namespace {
 // declare vprintf(i8*, i8*) as external function
 LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
@@ -468,6 +465,46 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     }
   }
   return false;
+}
+
+// TODO (Keren): Currently, we have more restrictions than necessary when using
+// stmatrix.  These restrictions are retained from legacy code, and we could
+// relax some of them in the future.
+// TODO (Lezcano): The proper way of doing this is to directly try to fit the
+// relevant layout and return an std::optional<LinearLayout>. I'm keeping this
+// split to keep the current PR smaller
+bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
+                                ArrayRef<unsigned> repShape,
+                                ArrayRef<unsigned> paddedRepShape,
+                                ArrayRef<unsigned> order,
+                                int swizzleByteSize) const {
+  if (computeCapability < 90) {
+    return false;
+  }
+  auto mmaLayout =
+      mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  if (!mmaLayout || !mmaLayout.isHopper())
+    return false;
+  if (isa<PointerType>(tensorTy.getElementType()))
+    return false;
+  if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
+    return false;
+  if (order[0] != 1)
+    return false;
+
+  auto tensorShapePerCTA = getShapePerCTA(mmaLayout, tensorTy.getShape());
+  if (tensorShapePerCTA.size() != 2)
+    return false;
+  auto numIterations = ceil<unsigned>(tensorShapePerCTA[1], repShape[1]) *
+                       ceil<unsigned>(tensorShapePerCTA[0], repShape[0]);
+  if (numIterations > 1)
+    return false;
+  if (paddedRepShape[1] % 8 != 0)
+    return false;
+  if (swizzleByteSize != 0 && swizzleByteSize != 32 && swizzleByteSize != 64 &&
+      swizzleByteSize != 128)
+    return false;
+  return true;
 }
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
