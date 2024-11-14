@@ -1707,7 +1707,15 @@ void init_triton_ir(py::module &&m) {
           auto anchorName = self.getOpAnchorName();
           auto passes = self.getPasses();
           Operation *op = mod.getOperation();
+          // Save a reproducer for the current pass manager invocation
+          // immediately.
           makeReproducer(anchorName, passes, op, reproducerPath);
+          // But if the pass manager crashes, attempt to generate a local
+          // reproducer.
+          mod.getContext()->disableMultithreading();
+          self.enableCrashReproducerGeneration(
+              ("crash." + reproducerPath).str(),
+              /*genLocalReproducer=*/true);
         }
 
         if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
