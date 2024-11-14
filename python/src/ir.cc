@@ -1707,7 +1707,14 @@ void init_triton_ir(py::module &&m) {
           auto anchorName = self.getOpAnchorName();
           auto passes = self.getPasses();
           Operation *op = mod.getOperation();
+          // Save a reproducer for the current pass manager invocation
+          // immediately.
           makeReproducer(anchorName, passes, op, reproducerPath);
+          // But if the pass manager crashes, attempt to generate a local
+          // reproducer instead.
+          mod.getContext()->disableMultithreading();
+          self.enableCrashReproducerGeneration(reproducerPath,
+                                               /*genLocalReproducer=*/true);
         }
 
         if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
@@ -1740,6 +1747,12 @@ void init_triton_ir(py::module &&m) {
           self.enableTiming();
         }
 
+        // Run the pass manager under a source manager diagnostic handler, which
+        // enables emitted MLIR diagnostics to directly reference Python source
+        // code.
+        llvm::SourceMgr sourceMgr;
+        SourceMgrDiagnosticHandler diagHandler(sourceMgr, mod.getContext(),
+                                               llvm::errs());
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });
