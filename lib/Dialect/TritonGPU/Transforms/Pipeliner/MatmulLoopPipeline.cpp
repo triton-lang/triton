@@ -123,10 +123,12 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   Value other = loadOp.getOther();
   tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
 
-  auto convertBlockLayout = [&](Value val, ttg::BlockedEncodingAttr enc) {
-    auto ty = cast<RankedTensorType>(val.getType());
-    auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
-    auto cvt = builder.create<ttg::ConvertLayoutOp>(loc, newTy, val);
+  auto convertBlockLayout = [&](Value src, ttg::BlockedEncodingAttr enc) {
+    auto ty = cast<RankedTensorType>(src.getType());
+    auto newTy =
+        RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
+    auto cvt = builder.createWithStage<ttg::ConvertLayoutOp>(
+        loadOp->getLoc(), stage, clusterId, newTy, src);
     return cvt.getResult();
   };
 
@@ -134,57 +136,11 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     // For inexpensive loads that do not directly feed into dot ops
     // we want to use optimal layout for the data.
     ttg::BlockedEncodingAttr encoding = loadToInfo[loadOp].blockedEncoding;
-    auto convertBlockLayout = [&](Value src) {
-      auto ty = cast<RankedTensorType>(src.getType());
-      auto newTy =
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
-      auto cvt = builder.createWithStage<ttg::ConvertLayoutOp>(
-          loadOp->getLoc(), stage, clusterId, newTy, src);
-      return cvt.getResult();
-    };
-    src = convertBlockLayout(src);
+    src = convertBlockLayout(src, encoding);
     if (mask)
-      mask = convertBlockLayout(mask);
+      mask = convertBlockLayout(mask, encoding);
     if (other)
-      other = convertBlockLayout(other);
-  } else if (loadToInfo[loadOp].isMMAv3Registers) {
-    // If the following are true...
-    //   1) Operand A is for WGMMA and is to be loaded in registers
-    //   2) We upcast operand A in registers before the WGMMA
-    //      (downcasting is not yet supported)
-    //
-    // ...then the SharedEncoding vec will be less than BlockedEncoding's
-    // sizePerThread for k-dim. E.g. if shared vec is 8 and sizePerThread
-    // for k is 16, then AsyncCopyGlobalToLocal will generate two 8B-LDGSTS's
-    // for each contiguous 16B global data owned by each thread. This breaks
-    // coalescing (i.e. results 2x the minimum required transactions)
-    //
-    // The fix is to clip the BlockedEnc's sizePerThread using SharedEnc's vec.
-    auto tensorTy = cast<RankedTensorType>(src.getType());
-    auto blockEnc = cast<ttg::BlockedEncodingAttr>(tensorTy.getEncoding());
-    auto sharedEnc = cast<ttg::SharedEncodingAttr>(allocTy.getEncoding());
-    auto sharedVec = sharedEnc.getVec();
-
-    SmallVector<unsigned> newSizePerThread;
-    llvm::transform(blockEnc.getSizePerThread(),
-                    std::back_inserter(newSizePerThread),
-                    [&](auto size) { return std::min(size, sharedVec); });
-
-    if (newSizePerThread != blockEnc.getSizePerThread()) {
-      auto mod = loadOp->getParentOfType<ModuleOp>();
-      int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
-      int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-      auto newBlockEnc = ttg::BlockedEncodingAttr::get(
-          loadOp.getContext(), tensorTy.getShape(), newSizePerThread,
-          blockEnc.getOrder(), numWarps, threadsPerWarp,
-          blockEnc.getCTALayout());
-
-      src = convertBlockLayout(src, newBlockEnc);
-      if (mask)
-        mask = convertBlockLayout(mask, newBlockEnc);
-      if (other)
-        other = convertBlockLayout(other, newBlockEnc);
-    }
+      other = convertBlockLayout(other, encoding);
   }
 
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);

@@ -576,9 +576,8 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<MMAV3HoistLayoutConversion>(context);
     patterns.add<SwizzleShmemConvert>(context);
-    if (this->hoistLayoutConversion.getValue()) {
+    if (this->hoistLayoutConversion.getValue())
       patterns.add<HoistLayoutConversion>(context);
-    }
     patterns.add<FuseTransHopper>(context);
     patterns.add<MMAV3UseRegOperand>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
