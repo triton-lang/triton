@@ -117,11 +117,13 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         // Original register layout:
         //
         //      tile0         tile1
+        //   |<-kWidth->|  |<-kWidth->|
         //   [0, 1, 2, 3], [0, 1, 2, 3]
         //   [4, 5, 6, 7], [4, 5, 6, 7]
         //
-        //      tile2         tile3
-        //   [8, 9, 10, 11], [8, 9, 10, 11]
+        //       tile2             tile3
+        //   |<--kWidth-->|    |<--kWidth-->|
+        //   [8, 9, 10, 11],   [8, 9, 10, 11]
         //   [12, 13, 14, 15], [12, 13, 14, 15]
         //
         // Each element in the layout is a single bf16.
