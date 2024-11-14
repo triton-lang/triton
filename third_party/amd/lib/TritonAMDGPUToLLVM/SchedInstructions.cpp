@@ -221,6 +221,21 @@ struct InstructionSchedHintsRewriter
     std::transform(variant.begin(), variant.end(), variant.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
+    // Scheduling variants:
+    // none: performs no manipulations with instruction scheduling.
+    // llvm-iglp-0: injects `llvm.amdgcn.iglp_opt` intrinsic call  with value
+    // `0` to
+    //              the gemm's k-loop i.e., "interleave DS and MFMA instructions
+    //              for small GEMM kernels".
+    // llvm-iglp-1: injects `llvm.amdgcn.iglp_opt` intrinsic call  with value
+    // `1` to
+    //              the gemm's k-loop i.e., "interleave DS and MFMA instructions
+    //              for single wave small GEMM kernels.".
+    // local-prefetch: implements instruction scheduling similar to the one from
+    //                 the CK library. Note, this variant requires the use of
+    //                 buffer load/store ops and a special software pipelining
+    //                 style - i.e., 1x LDS and 1x register prefetch buffers for
+    //                 each GEMM tile.
     this->schedulingType =
         llvm::StringSwitch<SchedulingType>(variant)
             .Case("none", SchedulingType::NONE)
@@ -250,9 +265,9 @@ struct InstructionSchedHintsRewriter
   // local (LDS to registers) and global (HBM to registers) data prefetching.
   // see:
   // include/ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.h
-  void
-  createCKV3Schedule(PatternRewriter &rewriter, Location loc,
-                     triton::amdgpu::InstructionSchedHint schedHint) const {
+  void createLocalPrefetchSchedule(
+      PatternRewriter &rewriter, Location loc,
+      triton::amdgpu::InstructionSchedHint schedHint) const {
 
     if (!(schedHint.getIsBufferLoadsAEnabled() &&
           schedHint.getIsBufferLoadsBEnabled())) {
@@ -456,7 +471,7 @@ struct InstructionSchedHintsRewriter
       break;
     }
     case SchedulingType::LOCAL_PREFETCH: {
-      createCKV3Schedule(rewriter, loc, instructionSchedHint);
+      createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
       break;
     }
     case SchedulingType::NONE:
