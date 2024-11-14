@@ -66,7 +66,7 @@ struct ExtractSliceOpConversion
     auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
     auto elemsPerThread = triton::gpu::getElemsPerThread(srcTy);
     auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
-    auto totalSizePerThread = sizePerThread[0] * sizePerThread[1];
+    auto totalSizePerThread = product<unsigned>(sizePerThread);
     auto order = triton::gpu::getOrder(srcLayout);
 
     // Calculate valid total number of workers in each dimension
@@ -85,11 +85,11 @@ struct ExtractSliceOpConversion
     auto offsets = op.getStaticOffsets();
 
     // Calculate offsets and sizes in terms of CTA units.
-    std::vector<int64_t> CTAOffsets{offsets[0] / shapePerCTA[0],
+    std::array<int64_t,2> CTAOffsets{offsets[0] / shapePerCTA[0],
                                     offsets[1] / shapePerCTA[1]};
-    std::vector<int64_t> CTASizes{sizes[0] / shapePerCTA[0],
+    std::array<int64_t,2> CTASizes{sizes[0] / shapePerCTA[0],
                                   sizes[1] / shapePerCTA[1]};
-    std::vector<int64_t> CTAPerShape{srcShape[0] / shapePerCTA[0],
+    std::array<int64_t,2> CTAPerShape{srcShape[0] / shapePerCTA[0],
                                      srcShape[1] / shapePerCTA[1]};
 
     // The diagram above illustrates the graphical representation of the

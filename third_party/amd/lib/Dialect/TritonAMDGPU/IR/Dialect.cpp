@@ -95,6 +95,12 @@ LogicalResult ExtractSliceOp::verify() {
   for (auto i = 0; i < 2; ++i) {
     auto resultDimSize = resultTy.getDimSize(i);
     auto srcDimSize = srcTy.getDimSize(i);
+    if (resultDimSize == 0) {
+      return emitError("result tensor dimension size zero at dimension ") << i;
+    }
+    if (srcDimSize == 0) {
+      return emitError("source tensor dimension size zero at dimension ") << i;
+    }
     if (resultDimSize > srcDimSize) {
       return emitError(
                  "result shape cannot be larger than input shape at dimension ")
