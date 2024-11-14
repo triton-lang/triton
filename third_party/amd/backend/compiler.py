@@ -52,6 +52,18 @@ class HIPOptions:
     # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
     # The option is experimental and may change at any time regarding its semantics and/or may
     # be gone entirely anytime.
+    #
+    # Current experimental scheduling variants:
+    #
+    # llvm-iglp-0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
+    #              k-loop; i.e., "interleave DS and MFMA instructions for small GEMM kernels".
+    # llvm-iglp-1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
+    #              k-loop; i.e., "interleave DS and MFMA instructions for single wave small
+    #              GEMM kernels.".
+    # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
+    #                 Kernel library. Note, this variant requires the use of buffer load/store ops
+    #                 and a special software pipelining style - i.e., 1x LDS and 1x register
+    #                 prefetch buffers for each GEMM tile.
     instruction_sched_variant: str = 'none'
 
     def __post_init__(self):
@@ -216,13 +228,13 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
 
-        prefetch = os.environ.get("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
+        stream_prefetch = os.environ.get("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
         use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
 
-        # Note, `local-prefetch` scheduling variant requires both stream-prefetch,
-        # buffer-ops to be enabled
+        # The `local-prefetch` scheduling variant requires turning on stream prefetch and
+        # buffer ops.
         if options.instruction_sched_variant == "local-prefetch":
-            prefetch = use_buffer_ops = True
+            stream_prefetch = use_buffer_ops = True
 
         if amd.has_matrix_core_feature(options.arch):
             assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
