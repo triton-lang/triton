@@ -82,12 +82,12 @@ def get_hip_autotune_config():
         # triton.Config(
         #     {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 3},
         #     num_warps=4, num_stages=2),
-        # triton.Config(
-        #     {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'matrix_instr_nonkdim': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 8, 'kpack': 1},
-        #     num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'matrix_instr_nonkdim': 16, 'GROUP_SIZE_M': 1, 'waves_per_eu': 8, 'kpack': 1},
-            num_warps=1, num_stages=2),
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'matrix_instr_nonkdim': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 8, 'kpack': 1},
+            num_warps=8, num_stages=2),
+        # triton.Config(
+        #     {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'matrix_instr_nonkdim': 16, 'GROUP_SIZE_M': 1, 'waves_per_eu': 8, 'kpack': 1},
+        #     num_warps=1, num_stages=2),
     ]
 
 
@@ -226,14 +226,14 @@ def matmul(a, b, activation=""):
 
 
 torch.manual_seed(0)
-# a = torch.randn((4864, 8256), device='cuda', dtype=torch.float16)
-# b = torch.randn((8256, 4096), device='cuda', dtype=torch.float16)
+a = torch.randn((4864, 8256), device='cuda', dtype=torch.float16)
+b = torch.randn((8256, 4096), device='cuda', dtype=torch.float16)
 # # b = torch.randn((4096, 8256), device='cuda', dtype=torch.float16)
 # # b = b.T
-size = 64
-a = torch.eye(size, device='cuda', dtype=torch.float16)
-b = torch.arange(size*size, device='cuda').reshape((size, size)).to(torch.float16)
-aux = torch.complex(torch.arange(size)[:, None]*torch.ones((size, size)), torch.arange(size)[None, :]*torch.ones((size, size))).to(device='cuda')
+# size = 64
+# a = torch.eye(size, device='cuda', dtype=torch.float16)
+# b = torch.arange(size*size, device='cuda').reshape((size, size)).to(torch.float16)
+# aux = torch.complex(torch.arange(size)[:, None]*torch.ones((size, size)), torch.arange(size)[None, :]*torch.ones((size, size))).to(device='cuda')
 print("A stride:", a.stride())
 print("B stride:", b.stride())
 triton_output = matmul(a, b)
@@ -244,13 +244,13 @@ else:
     print("❌ Triton and Torch differ")
     # print("B tensor")
     # print(b)
-    print("triton_output")
-    print(triton_output.T)
+    # print("triton_output")
+    # print(triton_output.T)
     # print("torch_output")
     # print(torch_output)
-    print("diff")
-    print(torch.where(triton_output==torch_output, 0, aux).T)
-torch.testing.assert_close(triton_output, torch_output, atol=0.125, rtol=0)
+    # print("diff")
+    # print(torch.where(triton_output==torch_output, 0, aux).T)
+    torch.testing.assert_close(triton_output, torch_output, atol=0.125, rtol=0)
 
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
 # if TORCH_HAS_FP8 and is_cuda():
