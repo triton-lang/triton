@@ -1711,9 +1711,9 @@ void init_triton_ir(py::module &&m) {
           // immediately.
           makeReproducer(anchorName, passes, op, reproducerPath);
           // But if the pass manager crashes, attempt to generate a local
-          // reproducer.
+          // reproducer instead.
           mod.getContext()->disableMultithreading();
-          self.enableCrashReproducerGeneration("crash." + reproducerPath,
+          self.enableCrashReproducerGeneration(reproducerPath,
                                                /*genLocalReproducer=*/true);
         }
 
