@@ -94,3 +94,79 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return
   }
 }
+
+// -----
+
+#blocked3 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: reduce_dpp_max
+  tt.func @reduce_dpp_max(%arg0: tensor<64xf32, #blocked3>) {
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 280, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 276, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 274, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 273, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 322, 10, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 323, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK: llvm.amdgcn.readlane
+    %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %1 = arith.maxnumf %arg1, %arg2 : f32
+      tt.reduce.return %1 : f32
+    }) : (tensor<64xf32, #blocked3>) -> f32
+    tt.return
+  }
+}
+
+// -----
+
+#blocked4 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: reduce_xor_max
+  tt.func @reduce_xor_max(%arg0: tensor<32xf32, #blocked4>) {
+    // CHECK: rocdl.ds_swizzle
+    // CHECK: llvm.intr.maxnum
+
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 280, 15, 12, false : i32
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 264, 15, 3, false : i32
+    // CHECK: llvm.intr.maxnum
+
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 276, 15, 10, false : i32
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 260, 15, 5, false : i32
+    // CHECK: llvm.intr.maxnum
+
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 78, 15, 15, false : i32
+    // CHECK: llvm.intr.maxnum
+
+    // CHECK: rocdl.update.dpp
+    // CHECK-SAME: with 177, 15, 15, false : i32
+    %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %1 = arith.maxnumf %arg1, %arg2 : f32
+      tt.reduce.return %1 : f32
+    }) : (tensor<32xf32, #blocked4>) -> f32
+    tt.return
+  }
+}
