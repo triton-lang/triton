@@ -101,8 +101,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 // Should NOT apply: tile size 256x64x128 with single dot
 // CHECK-LABEL: sink_2nd_load_256x64x128
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
@@ -140,8 +140,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 // Should NOT apply: tile size 256x256x32 with single dot
 // CHECK-LABEL: sink_2nd_load_256x256x32
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
@@ -181,8 +181,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 // Should NOT apply: the 2nd load has a user before the dot
 // CHECK-LABEL: sink_2nd_load_128x128x128_user_before_dot
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.store
 //  CHECK-NEXT: tt.dot
