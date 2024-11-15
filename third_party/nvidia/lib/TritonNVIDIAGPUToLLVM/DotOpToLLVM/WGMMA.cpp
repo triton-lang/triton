@@ -264,6 +264,28 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 
 // Return a vector of Value of the accumulator start at startIndex and pack the
 // values into 32bits in case the accumulator is fp16.
+//
+// `elements` contains all loaded register values for operand A.
+// This consists of operand A for possibly multiple wgmma instructions.
+// For each wgmma, each warp in a warp group feeds a single "warp matrix"
+// Each warp matrix consists of 2x2 "quads".
+// Each thread holds several elements in each quad. Right before a wgmma,
+// the sum of bitwidth of
+// the elements in each quad should add up to 32.
+//
+// These values are stored unrolled in `elements`.
+// The ordering of dimensions is as follows:
+// batch (only 1 batch for Hopper currently)
+// matM (m-index of the "warp matrix")
+// matK (k-index of the "warp matrix")
+// quadK (k-index of the "quad" in the core matrix)
+// quadM (m-index of the "quad" in the core matrix)
+// vecIdx (index of the element in the quad; this is always along the k-dim)
+//
+// This ordering is decided when a tensor in DotOpEnc is lowered into llvm.
+// For WGMMA this happens in both SharedToDotOperand and MMAToDotOperand.
+// Thus, both lowerings must obey this above ordering for the below code to be
+// correct.
 llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Location loc,
                                  const SmallVector<Value> &elements,
