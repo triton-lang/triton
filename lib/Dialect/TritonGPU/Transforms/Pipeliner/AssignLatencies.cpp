@@ -22,6 +22,18 @@ namespace gpu {
 
 namespace {
 
+// Return true if the preconditions for pipelining the loop are met.
+bool preCondition(scf::ForOp forOp) {
+  // Skip loop with distance > 1 for now.
+  // TODO: relax the constraint in the expander.
+  if (loopHasDistGreaterThanOne(forOp))
+    return false;
+  // Don't pipeline outer loops.
+  if (isOuterLoop(forOp))
+    return false;
+  return true;
+}
+
 bool canHaveSharedEncoding(Operation *op) {
   if (isa<tt::ExperimentalDescriptorLoadOp>(op))
     return true;

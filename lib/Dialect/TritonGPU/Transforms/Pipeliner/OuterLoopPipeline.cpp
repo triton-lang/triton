@@ -77,8 +77,7 @@ static void hoistAllocAndConst(scf::ForOp forOp) {
   }
 }
 
-// TODO: Revert name change when possible
-static bool preConditionOuter(scf::ForOp forOp) {
+static bool preCondition(scf::ForOp forOp) {
   // Check if there is a dependency from the loop to the async copy op. In this
   // case we cannot pipeline the async copy.
   SmallVector<Operation *> insertOps;
@@ -108,7 +107,7 @@ bool mlir::triton::getOuterLoopSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   assert(numStages == 2 && "only support 2 stage pipelining for now");
   // 1. Check precondition, we cannot have a recurrence involving async cp ops
-  if (!preConditionOuter(forOp))
+  if (!preCondition(forOp))
     return false;
 
   // 2. pre-process the loop by hosting allocations.

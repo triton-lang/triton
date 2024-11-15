@@ -121,12 +121,6 @@ public:
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
 void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule);
-void scheduleDistanceOneDependencies(scf::ForOp forOp,
-                                     CoarseSchedule &schedule);
-CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
-                                                    CoarseSchedule &schedule);
-void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
-                                  CoarseSchedule::Cluster afterPrologue);
 
 } // namespace triton
 } // namespace mlir

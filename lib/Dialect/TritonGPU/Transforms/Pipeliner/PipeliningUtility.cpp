@@ -13,27 +13,18 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-// Return true if the preconditions for pipelining the loop are met.
-bool mlir::triton::preCondition(scf::ForOp forOp) {
-  // Skip loop with distance > 1 for now.
-  if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
-                   [](Value operand) {
-                     Operation *def = operand.getDefiningOp();
-                     return !def;
-                   }))
-    return false;
-  // Don't pipeline outer loops.
-  if (forOp
-          ->walk([&](Operation *op) {
-            if (forOp.getOperation() == op)
-              return WalkResult::advance();
-            if (isa<scf::ForOp, scf::WhileOp>(op))
-              return WalkResult::interrupt();
-            return WalkResult::advance();
-          })
-          .wasInterrupted())
-    return false;
-  return true;
+bool mlir::triton::loopHasDistGreaterThanOne(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
+                      [](Value operand) {
+                        Operation *def = operand.getDefiningOp();
+                        return !def;
+                      });
+}
+
+bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getOperations(), [](Operation &op) {
+    return isa<scf::ForOp, scf::WhileOp>(op);
+  });
 }
 
 // Combine the current mask with the given predicate.
