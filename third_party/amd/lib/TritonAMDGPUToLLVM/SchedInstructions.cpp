@@ -243,20 +243,18 @@ struct InstructionSchedHintsRewriter
     UNKNOWN
   };
 
-  // This is the implementation of the CK's V3 pipelining (see
-  // see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
+  // The following is inspired by ROCm Composable Kernel library's V3 pipelining
+  // (see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
   // This scheduling requires 1x register and 1x LDS buffers combined with the
   // local (LDS to registers) and global (HBM to registers) data prefetching.
-  // see:
-  // include/ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.h
   void createLocalPrefetchSchedule(
       PatternRewriter &rewriter, Location loc,
       triton::amdgpu::InstructionSchedHint schedHint) const {
 
     if (!(schedHint.getIsBufferLoadsAEnabled() &&
           schedHint.getIsBufferLoadsBEnabled())) {
-      LDBG("Skipping instruction scheduling because `ck_v3` "
-           "scheduling can be used only with `buffer_load` instructions.");
+      LDBG("skipping `local-prefetch` scheduling given it needs `buffer_load` "
+           "instructions");
       return;
     }
 
