@@ -101,7 +101,7 @@ static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
   return firstUser;
 }
 
-static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                            Value insertIdx, Value extractIdx,
                            llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                            int numStages, int maxClusterId) {
@@ -190,8 +190,10 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     Value other = loadOp.getOther();
     if (other && !isZeroConst(other)) {
       auto select = builder.createWithStage<arith::SelectOp>(
-          loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(), mask,
-          sharedLoad.getResult(), other);
+          loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(),
+          // Use the mask operand from the original load, not the one with a
+          // potentially transformed layout.
+          loadOp.getMask(), sharedLoad.getResult(), other);
       result = select->getResults();
     }
 
