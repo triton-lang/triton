@@ -19,10 +19,10 @@ namespace ttg = mlir::triton::gpu;
 
 // Return true if the given moduleOp contains a pure matmul problem; i.e.,
 // single dot in the main loop.
-static bool isPureMatmulProblem(ModuleOp moduleOp) {
+static bool isPureMatmulProblem(triton::FuncOp funcOp) {
   bool isMatmul = true;
   bool foundLoop = false;
-  moduleOp.walk([&](scf::ForOp forOp) -> void {
+  funcOp.walk([&](scf::ForOp forOp) -> void {
     int counter = 0;
     forOp.walk([&counter](triton::DotOp dotOp) { ++counter; });
     isMatmul = (isMatmul && (counter == 1));
@@ -98,9 +98,9 @@ static bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
 
 // Sink dot layout conversions into loops to decrease register pressure when
 // possible.
-static void sinkDotConversion(ModuleOp moduleOp) {
+static void sinkDotConversion(triton::FuncOp funcOp) {
   DenseMap<Operation *, Operation *> opToMove;
-  moduleOp.walk([&](ttg::ConvertLayoutOp op) {
+  funcOp.walk([&](ttg::ConvertLayoutOp op) {
     Attribute encoding = op.getType().getEncoding();
     if (!isa_and_nonnull<ttg::DotOperandEncodingAttr>(encoding))
       return;
@@ -139,8 +139,8 @@ static void sinkDotConversion(ModuleOp moduleOp) {
 //    %2 = local_alloc
 //    %3 = local_store %1, %2
 //    %4 = local_load %2
-static void hoistLocalLoad(ModuleOp moduleOp) {
-  moduleOp.walk([&](ttg::LocalLoadOp localLoad) {
+static void hoistLocalLoad(triton::FuncOp funcOp) {
+  funcOp.walk([&](ttg::LocalLoadOp localLoad) {
     auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
     if (!localAlloc)
       return;
@@ -190,9 +190,9 @@ static void hoistLocalLoad(ModuleOp moduleOp) {
 
 // Sink conversion after the last dealloc but before the first use in its block.
 // This helps to avoid unnecessary shared memory allocation.
-static void moveDownCoversion(ModuleOp moduleOp) {
+static void moveDownCoversion(triton::FuncOp funcOp) {
   SmallVector<ttg::ConvertLayoutOp> convertOps;
-  moduleOp.walk([&](ttg::ConvertLayoutOp op) { convertOps.push_back(op); });
+  funcOp.walk([&](ttg::ConvertLayoutOp op) { convertOps.push_back(op); });
 
   for (auto op : convertOps) {
     Operation *user = getFirstUseInSameBlock(op);
@@ -204,9 +204,9 @@ static void moveDownCoversion(ModuleOp moduleOp) {
 }
 
 // Move transpositions just after their definition.
-static void moveUpTranspose(ModuleOp moduleOp) {
+static void moveUpTranspose(triton::FuncOp funcOp) {
   SmallVector<triton::TransOp> transOps;
-  moduleOp.walk([&](triton::TransOp op) { transOps.push_back(op); });
+  funcOp.walk([&](triton::TransOp op) { transOps.push_back(op); });
 
   for (auto op : transOps)
     if (Operation *argOp = op.getSrc().getDefiningOp())
@@ -214,14 +214,14 @@ static void moveUpTranspose(ModuleOp moduleOp) {
 }
 
 // Schedule global load and local store ops for better GEMM performance.
-static void scheduleGlobalLoadLocalStore(ModuleOp m) {
+static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
   SmallVector<Operation *> moveOps;
   // Move global loads early to prefetch. This may increase register pressure
   // but it enables issuing global loads early.
-  m.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+  funcOp.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
   // Move local_stores early if dependence distance greater than one iteration.
   // Best perf on GEMM when these precede global loads.
-  m.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
+  funcOp.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
 
   for (auto op : llvm::reverse(moveOps)) {
     // Gather use-def chain in block.
@@ -311,8 +311,8 @@ static void scheduleGlobalLoadLocalStore(ModuleOp m) {
  * are experimenting how to better control instruction scheduling and enable
  * such optimizations.
  */
-static void sinkSecondLoad(ModuleOp m) {
-  m.walk([&](scf::ForOp forOp) -> void {
+static void sinkSecondLoad(triton::FuncOp funcOp) {
+  funcOp.walk([&](scf::ForOp forOp) -> void {
     SetVector<triton::LoadOp> loadOps;
     triton::DotOp dotOp;
     for (Operation &op : forOp) {
@@ -358,18 +358,21 @@ struct TritonAMDGPUReorderInstructionsPass
           TritonAMDGPUReorderInstructionsPass> {
   void runOnOperation() override {
     ModuleOp m = getOperation();
+    for (auto funcOp : m.getOps<triton::FuncOp>()) {
+      hoistLocalLoad(funcOp);
 
-    hoistLocalLoad(m);
+      sinkDotConversion(funcOp);
+      moveDownCoversion(funcOp);
 
-    sinkDotConversion(m);
-    moveDownCoversion(m);
+      moveUpTranspose(funcOp);
 
-    moveUpTranspose(m);
+      moveUpTranspose(funcOp);
 
-    if (isPureMatmulProblem(m))
-      sinkSecondLoad(m);
-    else
-      scheduleGlobalLoadLocalStore(m);
+      if (isPureMatmulProblem(funcOp)) {
+        scheduleGlobalLoadLocalStore(funcOp);
+        sinkSecondLoad(funcOp);
+      }
+    }
   }
 };
 } // namespace
