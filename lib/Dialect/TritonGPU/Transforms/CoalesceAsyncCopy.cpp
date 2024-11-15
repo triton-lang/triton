@@ -55,7 +55,7 @@ struct ClipAsyncCopySizePerThread
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
     auto regToSharedLayout =
         getRegToSharedLayout(rewriter.getContext(), srcTy.getShape(), blockEnc,
-                             sharedEnc, elemBitWidth);
+                             sharedEnc, elemBitWidth, false);
     auto copyContigSize = regToSharedLayout->getNumConsecutiveInOut();
 
     // obtain block sizePerThread along contig dim

@@ -163,7 +163,7 @@ bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
     Type elemLlvmTy, std::optional<int32_t> maxVecElems, Value shmemBase,
     ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
+    const TargetInfoBase &target, bool crossGrain,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
 
@@ -177,7 +177,7 @@ bool emitTransferBetweenRegistersAndShared(
 
   auto regToSharedLayout = getRegToSharedLayout(
       ctx, shape, registerTy.getEncoding(), sharedTy.getEncoding(),
-      elemLlvmTy.getIntOrFloatBitWidth());
+      elemLlvmTy.getIntOrFloatBitWidth(), crossGrain);
   if (!regToSharedLayout.has_value())
     return false;
 
@@ -258,7 +258,7 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj.getBase(),
-      smemObj.getStrides(), loc, rewriter, target,
+      smemObj.getStrides(), loc, rewriter, target, /*crossGrain = */ false,
       [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
@@ -279,26 +279,62 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
                               ArrayRef<Value> srcVals, Value smemBase,
                               ArrayRef<Value> dstStrides, Location loc,
                               RewriterBase &rewriter,
-                              const TargetInfoBase &target,
+                              const TargetInfoBase &target, bool crossGrain,
                               std::pair<size_t, Type> *const llvmOpCount) {
-  bool success = emitTransferBetweenRegistersAndShared(
-      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-      dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-        srcVals = srcVals.drop_front(vecTy.getNumElements());
+  bool success;
+  std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback;
+  if (!crossGrain) {
+    // callback for every situation except the non-KContig dotOperand
+    // blocked->shared on AMD platform
+    perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
+      ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
+      srcVals = srcVals.drop_front(vecTy.getNumElements());
 
-        Value vec = undef(vecTy);
-        for (int i = 0; i < vals.size(); i++) {
-          vec = insert_element(vec, vals[i], i32_val(i));
-        }
-        store(vec, vecAddr)
-            .setAlignment(vecTy.getNumElements() *
-                          elemLlvmTy.getIntOrFloatBitWidth() / 8);
-        if (llvmOpCount) {
-          ++(llvmOpCount->first);
-          llvmOpCount->second = vecTy;
-        }
-      });
+      Value vec = undef(vecTy);
+      for (int i = 0; i < vals.size(); i++) {
+        vec = insert_element(vec, vals[i], i32_val(i));
+      }
+      store(vec, vecAddr)
+          .setAlignment(vecTy.getNumElements() *
+                        elemLlvmTy.getIntOrFloatBitWidth() / 8);
+    };
+  } else {
+    // This section is only for inThreadTranspose for AMD path, where we want to
+    // transpose during the blocked->shared tranfer.
+    // For example, the thread-local register holds a [4, 8] section of matrix,
+    // where it is contiguous on the dim of 8. We want the perVectorCallback to
+    // access the column of 4 elements, 8 times, instead of row of 8 elements,
+    // 4 times like the callback above. For the specific example, the variables
+    // accessed or derived below will be the following:
+    // sizePerThread: [4, 8]
+    // order: [1, 0]
+    // numElemsPerIter: 4 x 8 = 32
+    // colIndex: initialized as 0, increment to 8 every time callback is called
+    // innerVecSize: 8, since it is the vector size of inner dimension
+    auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+    auto sizePerThread = blockedEncoding.getSizePerThread();
+    auto order = blockedEncoding.getOrder();
+    unsigned int numElemsPerIter = product<unsigned>(sizePerThread);
+    unsigned int colIndex = 0;
+    unsigned int innerVecSize = sizePerThread[order[0]];
+    perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
+      Value vec = undef(vecTy);
+      auto startPos = colIndex / innerVecSize *
+                          numElemsPerIter +    // start pos of different iter
+                      colIndex % innerVecSize; // start pos of single iter
+      for (int i = 0; i < vecTy.getNumElements(); i++) {
+        auto idx = startPos + i * innerVecSize; // iterate within a vector
+        vec = insert_element(vec, srcVals[idx], i32_val(i));
+      }
+      colIndex++;
+      store(vec, vecAddr)
+          .setAlignment(vecTy.getNumElements() *
+                        elemLlvmTy.getIntOrFloatBitWidth() / 8);
+    };
+  }
+  success = emitTransferBetweenRegistersAndShared(
+      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
+      dstStrides, loc, rewriter, target, crossGrain, perVectorCallback);
 
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from register to shared");

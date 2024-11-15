@@ -1150,7 +1150,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
     Type elemLlvmTy, std::optional<int32_t> maxVecElems, Value shmemBase,
     ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
+    const TargetInfoBase &target, bool crossGrain,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
@@ -1326,6 +1326,7 @@ void storeDistributedToShared(
     triton::gpu::MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
     ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
     Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    bool crossGrain = false,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 inline Value getStructFromSharedMemoryObject(Location loc,
