@@ -23,8 +23,33 @@ namespace gpu {
 namespace {
 
 bool canHaveSharedEncoding(Operation *op) {
+  if (isa<tt::ExperimentalDescriptorLoadOp>(op))
+    return true;
   auto loadOp = cast<tt::LoadOp>(op);
   auto dst = loadOp.getResult();
+  // If the load is used by a WarpGroupDotOp through a LocalAllocaOp with a
+  // layout incompatible with MMAv3, we cannot pipeline the load.
+  if (loadOp->hasOneUse()) {
+    auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
+    if (alloc && alloc->hasOneUse()) {
+      auto dot = dyn_cast<ttng::WarpGroupDotOp>(*alloc->getUsers().begin());
+      if (dot) {
+        auto sharedEnc =
+            cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
+        if (!sharedEnc.getHasLeadingOffset())
+          return false;
+        auto newOrder = sharedEnc.getOrder();
+        auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+        auto oldOrder = ttg::getOrder(ty.getEncoding());
+        return oldOrder == newOrder;
+      }
+    }
+  }
+  // If used by an user with DotOp encoding, all the uses must be compatible.
+  bool incompatible = false;
+  getSharedEncIfAllUsersAreDotEnc(dst, incompatible);
+  if (incompatible)
+    return false;
   // If the load is used by a LocalAllocOp, all the users need to have the same
   // encoding.
   if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {

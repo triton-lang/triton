@@ -11,7 +11,9 @@ static const char *kNumStagesAttrName = "tt.num_stages";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 
-// Return true if the preconditions for pipelining the loop are met.
+// TODO: This should be moved to the specific pipeline pass, out of general
+// utility file Return true if the preconditions for pipelining the loop are
+// met.
 bool preCondition(scf::ForOp forOp);
 
 /// Function to mask operations during scheduling.
