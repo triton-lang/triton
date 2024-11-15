@@ -160,6 +160,18 @@ void WaitBarrierOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
+// -- TensorDescToTMAPtrOp --
+LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
+                                                 PatternRewriter &rewriter) {
+  // tensor_desc_to_tma_ptr(reinterpret_tensor_desc(ptr)) -> ptr
+  if (auto reinterpret =
+          op.getDesc().getDefiningOp<triton::ReinterpretTensorDescOp>()) {
+    rewriter.replaceOp(op, reinterpret.getRawDesc());
+    return success();
+  }
+  return failure();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyBarrierType(*this, getBarrier().getType())))

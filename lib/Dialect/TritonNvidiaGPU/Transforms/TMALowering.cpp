@@ -60,8 +60,10 @@ public:
     Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
     rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
                                                          sizeInBytes, pred);
+    Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+        loc, op.getDesc());
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-        loc, op.getDescPtr(), op.getIndices(), barrierAlloc, alloc, pred);
+        loc, tmaPtr, op.getIndices(), barrierAlloc, alloc, pred);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
@@ -95,8 +97,10 @@ public:
                          encoding, sharedMemorySpace, /*mutableMemory=*/true);
     Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
     rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
+    Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+        loc, op.getDesc());
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
-        loc, op.getDescPtr(), op.getIndices(), alloc);
+        loc, tmaPtr, op.getIndices(), alloc);
     rewriter.create<triton::nvidia_gpu::TMAStoreWait>(loc, 0);
     rewriter.eraseOp(op);
     return success();
@@ -194,7 +198,9 @@ public:
         /*fill_mode=*/rewriter.getI32IntegerAttr(0));
     rewriter.create<triton::ExperimentalTensormapFenceproxyAcquireOp>(
         loc, alloc.getResult());
-    rewriter.replaceOp(op, alloc);
+    auto newDesc = rewriter.create<triton::ReinterpretTensorDescOp>(
+        loc, op.getType(), alloc.getResult());
+    rewriter.replaceOp(op, newDesc);
     return success();
   }
 };
