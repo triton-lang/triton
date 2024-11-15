@@ -6,7 +6,6 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "llvm/TargetParser/TargetParser.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_TRITONAMDGPUINSERTINSTRUCTIONSCHEDHINTS
@@ -221,12 +220,13 @@ struct InstructionSchedHintsRewriter
     std::transform(variant.begin(), variant.end(), variant.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
-    this->schedulingType = llvm::StringSwitch<SchedulingType>(variant)
-                               .Case("none", SchedulingType::NONE)
-                               .Case("iglp0", SchedulingType::IGLP0)
-                               .Case("iglp1", SchedulingType::IGLP1)
-                               .Case("ck_v3", SchedulingType::CK_V3)
-                               .Default(SchedulingType::UNKNOWN);
+    this->schedulingType =
+        llvm::StringSwitch<SchedulingType>(variant)
+            .Case("none", SchedulingType::NONE)
+            .Case("llvm-iglp-0", SchedulingType::LLVM_IGLP_0)
+            .Case("llvm-iglp-1", SchedulingType::LLVM_IGLP_1)
+            .Case("local-prefetch", SchedulingType::LOCAL_PREFETCH)
+            .Default(SchedulingType::UNKNOWN);
 
     if (this->numStages < 2) {
       this->schedulingType = SchedulingType::NONE;
@@ -237,26 +237,24 @@ struct InstructionSchedHintsRewriter
 
   enum class SchedulingType : uint32_t {
     NONE = 0,
-    IGLP0,
-    IGLP1,
-    CK_V3,
+    LLVM_IGLP_0,
+    LLVM_IGLP_1,
+    LOCAL_PREFETCH,
     UNKNOWN
   };
 
-  // This is the implementation of the CK's V3 pipelining (see
-  // see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
+  // The following is inspired by ROCm Composable Kernel library's V3 pipelining
+  // (see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
   // This scheduling requires 1x register and 1x LDS buffers combined with the
   // local (LDS to registers) and global (HBM to registers) data prefetching.
-  // see:
-  // include/ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.h
-  void
-  createCKV3Schedule(PatternRewriter &rewriter, Location loc,
-                     triton::amdgpu::InstructionSchedHint schedHint) const {
+  void createLocalPrefetchSchedule(
+      PatternRewriter &rewriter, Location loc,
+      triton::amdgpu::InstructionSchedHint schedHint) const {
 
     if (!(schedHint.getIsBufferLoadsAEnabled() &&
           schedHint.getIsBufferLoadsBEnabled())) {
-      LDBG("Skipping instruction scheduling because `ck_v3` "
-           "scheduling can be used only with `buffer_load` instructions.");
+      LDBG("skipping `local-prefetch` scheduling given it needs `buffer_load` "
+           "instructions");
       return;
     }
 
@@ -435,8 +433,8 @@ struct InstructionSchedHintsRewriter
     // backend documentation.
     const bool limitSchedulingRange =
         !(schedulingType == SchedulingType::NONE ||
-          schedulingType == SchedulingType::IGLP0 ||
-          schedulingType == SchedulingType::IGLP1);
+          schedulingType == SchedulingType::LLVM_IGLP_0 ||
+          schedulingType == SchedulingType::LLVM_IGLP_1);
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
     if (limitSchedulingRange) {
@@ -448,21 +446,16 @@ struct InstructionSchedHintsRewriter
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
     switch (schedulingType) {
-    case SchedulingType::IGLP0:
-      [[fallthrough]];
-    case SchedulingType::IGLP1: {
+    case SchedulingType::LLVM_IGLP_0:
+    case SchedulingType::LLVM_IGLP_1:
       createIglpOpt(rewriter, loc, static_cast<int>(schedulingType) - 1);
       break;
-    }
-    case SchedulingType::CK_V3: {
-      createCKV3Schedule(rewriter, loc, instructionSchedHint);
+    case SchedulingType::LOCAL_PREFETCH:
+      createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
       break;
-    }
     case SchedulingType::NONE:
-      [[fallthrough]];
-    default: {
+    default:
       break;
-    }
     }
 
     if (limitSchedulingRange)

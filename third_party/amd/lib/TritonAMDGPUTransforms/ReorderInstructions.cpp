@@ -366,8 +366,6 @@ struct TritonAMDGPUReorderInstructionsPass
 
       moveUpTranspose(funcOp);
 
-      moveUpTranspose(funcOp);
-
       if (isPureMatmulProblem(funcOp)) {
         scheduleGlobalLoadLocalStore(funcOp);
         sinkSecondLoad(funcOp);

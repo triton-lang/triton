@@ -44,7 +44,8 @@ struct LoadInfo {
   ttg::SharedEncodingAttr sharedEncoding = nullptr;
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
-  bool loadIsMMAV3 = false;
+  bool isMMAv3Shared = false;
+  bool isMMAv3Registers = false;
   int distToUse = 0;
   bool usedByDot = false;
 };
@@ -101,7 +102,7 @@ static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
   return firstUser;
 }
 
-static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                            Value insertIdx, Value extractIdx,
                            llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                            int numStages, int maxClusterId) {
@@ -120,26 +121,27 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   Value src = loadOp.getPtr();
   Value mask = loadOp.getMask();
   Value other = loadOp.getOther();
+  tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
+
+  auto convertBlockLayout = [&](Value src, ttg::BlockedEncodingAttr enc) {
+    auto ty = cast<RankedTensorType>(src.getType());
+    auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
+    auto cvt = builder.createWithStage<ttg::ConvertLayoutOp>(
+        loadOp->getLoc(), stage, clusterId, newTy, src);
+    return cvt.getResult();
+  };
+
   if (!isExpensiveLoadOrStore(loadOp) && loadToInfo[loadOp].blockedEncoding) {
     // For inexpensive loads that do not directly feed into dot ops
     // we want to use optimal layout for the data.
     ttg::BlockedEncodingAttr encoding = loadToInfo[loadOp].blockedEncoding;
-    auto convertBlockLayout = [&](Value src) {
-      auto ty = cast<RankedTensorType>(src.getType());
-      auto newTy =
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
-      auto cvt = builder.createWithStage<ttg::ConvertLayoutOp>(
-          loadOp->getLoc(), stage, clusterId, newTy, src);
-      return cvt.getResult();
-    };
-    src = convertBlockLayout(src);
+    src = convertBlockLayout(src, encoding);
     if (mask)
-      mask = convertBlockLayout(mask);
+      mask = convertBlockLayout(mask, encoding);
     if (other)
-      other = convertBlockLayout(other);
+      other = convertBlockLayout(other, encoding);
   }
 
-  tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
   Attribute sharedMemorySpace =
@@ -157,14 +159,14 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
       loc, stageForFirstUse, clusterForFirstUse, commmit->getResult(0), 0);
 
-  bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
+  auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
 
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
-  if (isMMV3Load) {
+  if (loadIsMMAv3Shared) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
     replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
@@ -190,8 +192,10 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     Value other = loadOp.getOther();
     if (other && !isZeroConst(other)) {
       auto select = builder.createWithStage<arith::SelectOp>(
-          loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(), mask,
-          sharedLoad.getResult(), other);
+          loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(),
+          // Use the mask operand from the original load, not the one with a
+          // potentially transformed layout.
+          loadOp.getMask(), sharedLoad.getResult(), other);
       result = select->getResults();
     }
 
@@ -245,7 +249,7 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
   Operation *copy = builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
       loc, stage, clusterId, tmaPtr, loadOp.getIndices(), barrier, view, pred);
 
-  bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
+  auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
 
   builder.setInsertionPointAfter(waitOp);
   // Extract part.
@@ -253,7 +257,7 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
   loadOffsets[0] = extractIdx;
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
-  if (isMMV3Load) {
+  if (loadIsMMAv3Shared) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
     replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
@@ -298,7 +302,7 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
 }
 
 static std::optional<ttg::SharedEncodingAttr>
-getSharedEncoding(Operation *loadOp, bool isMMAV3) {
+getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto blockedOrder = ttg::getOrder(ty.getEncoding());
@@ -313,7 +317,7 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3) {
   } else {
     order = blockedOrder;
   }
-  if (isMMAV3) {
+  if (isMMAV3Shared) {
     return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
                                         ctaLayout, ty.getElementType());
   }
@@ -471,15 +475,22 @@ assignMemoryLayouts(scf::ForOp &forOp,
     for (auto use : users) {
       if (use->hasTrait<OpTrait::DotLike>()) {
         LDBG("set shared encoding with dot user: " << *use);
+        auto mmaLoadType = getMMALoadType(&op);
+        auto dot = dyn_cast<tt::DotOp>(use);
+        auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
+
         loadInfo.usedByDot = true;
-        if (loadIsMMAv3(&op)) {
-          loadInfo.loadIsMMAV3 = true;
+        loadInfo.isMMAv3Shared = mmaLoadType == MMALoadType::SharedV3;
+        loadInfo.isMMAv3Registers =
+            (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
+
+        if (loadInfo.isMMAv3Shared) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
         } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
-        } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
+        } else if (loadInfo.isMMAv3Registers || dot) {
           bool incompatible = false;
           loadInfo.sharedEncoding =
               getSharedEncIfAllUsersAreDotEnc(op.getResult(0), incompatible)
@@ -492,7 +503,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
       if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
         LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
-            getSharedEncoding(&op, /*isMMAV3=*/loadInfo.loadIsMMAV3)
+            getSharedEncoding(&op, /*isMMAV3=*/loadInfo.isMMAv3Shared)
                 .value_or(nullptr);
         if (auto loadOp = dyn_cast<tt::LoadOp>(op))
           loadInfo.blockedEncoding =
@@ -593,7 +604,7 @@ static void createTMABarrierAndWait(
         if (it != loadToInfo.end()) {
           // Special case for MMAv3 loads, we can ignore the alloc and only
           // consider uses of the alloc op since it will be removed.
-          if (it->second.loadIsMMAV3) {
+          if (it->second.isMMAv3Shared) {
             auto alloc = cast<ttg::LocalAllocOp>(
                 (*loadInfo->loadOp->getUsers().begin()));
             if (alloc->getBlock() == loadBlock) {
@@ -713,8 +724,9 @@ createAsyncOps(scf::ForOp &forOp,
                                                                 auto &rhs) {
         return lhs.distToUse < rhs.distToUse;
       })->distToUse;
-  bool hasMMAV3 =
-      llvm::any_of(loadToInfo, [](auto &kv) { return kv.second.loadIsMMAV3; });
+  bool hasMMAV3 = llvm::any_of(loadToInfo, [](auto &kv) {
+    return kv.second.isMMAv3Shared || kv.second.isMMAv3Registers;
+  });
   if (hasMMAV3) {
     // For MMAv3, we need an extra buffer as this is assumed in the wgmma
     // pipelining post-processing.
@@ -1123,6 +1135,15 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
 //
 //  1. All operands that touch shared memory are multi-buffered, i.e. can't read
 //     an incomplete value while it's being written asynchronously by a load.
+//     1a. If operand A is in registers, these registers cannot be updated
+//     inside
+//         the loop.
+//         **Exception** if the operand is produced by a preceding WGMMA,
+//         then this op can be properly async. Either the f16 shortcut is
+//         possible and the WGMMA's can run back-to-back (see rule 3 below), or
+//         elementwise truncate is needed, in which case the preceding WGMMA is
+//         not async and a WarpGroupDotWait is inserted right after, which
+//         guarantees exclusive access to the operand registers.
 //
 //  2. If the dot is used by any op in the loop, it must be used under an `if`,
 //     and will be synced with a `wait 0` at the beginning of the `if` block.
@@ -1158,7 +1179,15 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
   auto checkOperand = [&](Value operand) {
     if (!isa<ttg::SharedEncodingAttr>(
             cast<TensorOrMemDesc>(operand.getType()).getEncoding())) {
-      return true;
+      // Rule 1a: Register operands must not be modified within the loop.
+      // First, check for chained WGMMA as an exception.
+      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(operand.getDefiningOp())) {
+        return isa<ttg::NvidiaMmaEncodingAttr>(
+            cvt.getSrc().getType().getEncoding());
+      }
+      // And then, do a stricter-than-necessary check for now, that the operand
+      // is defined outside the loop.
+      return forOp.isDefinedOutsideOfLoop(operand);
     }
 
     // If it's a shmem operand, it must either be defined outside the loop, or
