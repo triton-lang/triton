@@ -1,3 +1,10 @@
+"""
+SageAttention
+===============
+This is a Triton implementation of the SageAttention algorithm from (https://arxiv.org/pdf/2112.05682v2.pdf)
+* Original SageAttention paper (https://arxiv.org/abs/2410.02367)
+"""
+
 import torch, math
 import triton
 import triton.language as tl
