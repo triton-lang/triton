@@ -1757,10 +1757,23 @@ void init_triton_ir(py::module &&m) {
 
         // Run the pass manager under a source manager diagnostic handler, which
         // enables emitted MLIR diagnostics to directly reference Python source
-        // code.
-        llvm::SourceMgr sourceMgr;
-        SourceMgrDiagnosticHandler diagHandler(sourceMgr, mod.getContext(),
-                                               llvm::errs());
+        // code. This diagnostic handler will only filter for errors.
+        struct SourceMgrErrorDiagnosticHandler
+            : public SourceMgrDiagnosticHandler {
+          SourceMgrErrorDiagnosticHandler(MLIRContext *ctx)
+              : SourceMgrDiagnosticHandler(sourceMgr, ctx, llvm::errs()) {
+            setHandler([this](Diagnostic &diag) {
+              if (diag.getSeverity() != DiagnosticSeverity::Error)
+                return failure();
+              emitDiagnostic(diag);
+              return success();
+            });
+          }
+
+          llvm::SourceMgr sourceMgr;
+        };
+        SourceMgrErrorDiagnosticHandler diagHandler(mod.getContext());
+
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });
