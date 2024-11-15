@@ -848,6 +848,15 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
                builder.getDenseI32ArrayAttr(order));
 }
 
+//-- AddPtrOp --
+OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
+  // addptr(ptr, 0) -> ptr
+  if (matchPattern(adaptor.getOffset(), m_Zero())) {
+    return getPtr();
+  }
+  return {};
+}
+
 //-- AdvanceOp --
 OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
   // advance(ptr, 0, 0) -> ptr
