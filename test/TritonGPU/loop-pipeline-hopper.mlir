@@ -617,7 +617,7 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
 module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: async_following_sync
   tt.func @async_following_sync(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> (tensor<128x64xf32, #mma>, tensor<128x16xf32, #mma1>) {
-    %cst = arith.constant dense<0> : tensor<64x16xi32, #blocked>
+    %cst = arith.constant dense<64> : tensor<64x16xi32, #blocked>
     %c0_i32 = arith.constant 0 : i32
     %cst_0 = arith.constant dense<0> : tensor<1x16xi32, #blocked>
     %cst_1 = arith.constant dense<0> : tensor<128x1xi32, #blocked1>
