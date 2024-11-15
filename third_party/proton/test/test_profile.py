@@ -257,3 +257,23 @@ def test_deactivate(tmp_path: pathlib.Path):
     assert "device_id" not in data[0]["metrics"]
     assert len(data[0]["children"]) == 1
     assert "device_id" in data[0]["children"][0]["metrics"]
+
+
+def test_multiple_sessions(tmp_path: pathlib.Path):
+    temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
+    temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
+    session_id0 = proton.start(str(temp_file0.with_suffix("")))
+    session_id1 = proton.start(str(temp_file1.with_suffix("")))
+    torch.randn((10, 10), device="cuda")
+    torch.randn((10, 10), device="cuda")
+    proton.deactivate(session_id0)
+    proton.finalize(session_id0)
+    torch.randn((10, 10), device="cuda")
+    proton.finalize(session_id1)
+    # kernel has been invokved twice in session 0 and three times in session 1
+    with temp_file0.open() as f:
+        data = json.load(f)
+    assert int(data[0]["children"][0]["metrics"]["count"]) == 2
+    with temp_file1.open() as f:
+        data = json.load(f)
+    assert int(data[0]["children"][0]["metrics"]["count"]) == 3

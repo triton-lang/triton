@@ -226,11 +226,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
                                                          Value cSwizzleOffset) {
   Value warpB = multiDimWarpId[0];
   Value warpOff = kOrder == 2 ? multiDimWarpId[1] : multiDimWarpId[2];
-  int cTileShape = tileShape[order[0]];
-  int sTileShape = tileShape[order[1]];
-  if (!needTrans) {
-    std::swap(cTileShape, sTileShape);
-  }
 
   SmallVector<Value> offs(numPtrs);
 
@@ -239,7 +234,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
   int laneHeight = 8;
   int quadWidth = laneWidth * kWidth;
   int quadHeight = laneHeight;
-  int numQuadI = 2;
 
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
@@ -408,8 +402,9 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     int canonWidth = (8 * elemBytes * inc) / canonBits;
     Type canonInt = int_ty(canonBits);
     std::array<Value, 4> retElems;
-    // don't pack to 32b for Hopper
-    int vecSize = isHopper ? 1 : 32 / canonBits;
+    // Hopper may not contain 32b contiguously along k-dimension
+    int kBits = isHopper ? (8 * elemBytes * kWidth) : 32;
+    int vecSize = kBits / canonBits;
     retElems.fill(undef(vec_ty(canonInt, vecSize)));
     for (int r = 0; r < 2; ++r) {
       for (int em = 0; em < 2 * vecWidth; em += inc) {
@@ -430,7 +425,7 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     if (isActualTrans)
       std::swap(retElems[1], retElems[2]);
 
-    auto iTy = isHopper ? int_ty(8 * elemBytes * inc) : i32_ty;
+    auto iTy = isHopper ? int_ty(kBits) : i32_ty;
 
     return {bitcast(retElems[0], iTy), bitcast(retElems[1], iTy),
             bitcast(retElems[2], iTy), bitcast(retElems[3], iTy)};
@@ -535,21 +530,23 @@ Value composeValuesToDotOperandLayoutStruct(
     bool isA) {
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   assert(32 >= bitwidth && "only support 32-bit or less");
-  auto numElemsPerVec = 32 / bitwidth;
+  auto numElemsPerVec = isHopper ? kWidth : 32 / bitwidth;
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
-  // FIXME: Fix the hopper path
   // FIXME: [DOT LL]
   // `kWidth` specifies the number of contiguous elements each thread will load.
   // Loaded elements are packed into a vector of int32, which will then be
   // unpacked into individual elements.
   // `kIters` specifies the number of contiguous int32 elements each thread
   // should load.
-  auto kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
+  // `kSize` specifies the total number of int32 elements each thread should
+  // load.
+  int kIters = isHopper ? 1 : kWidth / (32 / bitwidth);
+  int kSize = repK >= kIters ? repK * 2 : kIters;
 
   std::vector<Value> elems;
   auto unpackVec = [&](int b, int m, int k) {
-    for (auto kIter = 0; kIter < kIters; ++kIter) {
-      auto val = vals.at({b, m, k + kIter});
+    for (int kIter = 0; kIter < kIters; ++kIter) {
+      auto val = vals.at({b, m, (k + kIter) % kSize});
       auto vec = bitcast(val, vecTy);
       for (auto i = 0; i < numElemsPerVec; ++i) {
         elems.push_back(extract_element(eltTy, vec, i32_val(i)));

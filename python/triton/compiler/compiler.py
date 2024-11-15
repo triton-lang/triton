@@ -91,12 +91,13 @@ class ASTSource:
 
 class IRSource:
 
-    def __init__(self, path, context):
+    def __init__(self, path, context, backend):
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
         ir.load_dialects(context)
+        backend.load_dialects(context)
 
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
@@ -223,7 +224,7 @@ def compile(src, target=None, options=None):
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
         context = ir.context()
-        src = IRSource(src, context)
+        src = IRSource(src, context, backend)
 
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
@@ -266,14 +267,13 @@ def compile(src, target=None, options=None):
     if ir_source:
         first_stage += 1
 
+    # For IRSource, we have already grabbed the context + called both
+    # ir.load_dialects and backend.load_dialects.
     if not isinstance(src, IRSource):
         context = ir.context()
         ir.load_dialects(context)
         backend.load_dialects(context)
-    else:
-        # For IRSource, we have already grabbed the context + called ir.load_dialects
-        # just need to load the dialects for the backend.
-        backend.load_dialects(context)
+
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
     try:
