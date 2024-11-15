@@ -849,25 +849,9 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
 }
 
 //-- AddPtrOp --
-static std::optional<APInt> getIntegerSplatValue(Attribute attr) {
-  // Matches IntegerAttr or SplatElementsAttr
-  if (!attr) {
-    return std::nullopt;
-  }
-  if (auto splat = dyn_cast<SplatElementsAttr>(attr)) {
-    attr = splat.getSplatValue<IntegerAttr>();
-  }
-
-  if (auto int_attr = dyn_cast<IntegerAttr>(attr)) {
-    return int_attr.getValue();
-  }
-  return std::nullopt;
-}
-
 OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
   // addptr(ptr, 0) -> ptr
-  auto value = getIntegerSplatValue(adaptor.getOffset());
-  if (value && *value == 0) {
+  if (matchPattern(adaptor.getOffset(), m_Zero())) {
     return getPtr();
   }
   return {};
