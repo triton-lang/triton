@@ -267,6 +267,8 @@ def compile(src, target=None, options=None):
     if ir_source:
         first_stage += 1
 
+    # For IRSource, we have already grabbed the context + called both
+    # ir.load_dialects and backend.load_dialects.
     if not isinstance(src, IRSource):
         context = ir.context()
         ir.load_dialects(context)
