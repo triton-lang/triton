@@ -50,7 +50,7 @@ module {
     // INSTR_COUNT_NS1-SAME: isBufferLoadsAEnabled = false
     // INSTR_COUNT_NS1-SAME: isBufferLoadsBEnabled = false
     // INSTR_COUNT_NS1-SAME: numDsReadsA = #amdgpu.InstCounter<8, vector<4xf16>>
-    // INSTR_COUNT_NS1-SAME: numDsReadsB = #amdgpu.InstCounter<32, vector<1xf16>>
+    // INSTR_COUNT_NS1-SAME: numDsReadsB = #amdgpu.InstCounter<8, vector<4xf16>>
     // INSTR_COUNT_NS1-SAME: numDsWritesA = #amdgpu.InstCounter<0, none>
     // INSTR_COUNT_NS1-SAME: numDsWritesB = #amdgpu.InstCounter<0, none>
     // INSTR_COUNT_NS1-SAME: numGlobalLoadsA = #amdgpu.InstCounter<4, vector<4xf16>>
@@ -61,7 +61,7 @@ module {
     // INSTR_COUNT_NS2-SAME: isBufferLoadsAEnabled = false
     // INSTR_COUNT_NS2-SAME: isBufferLoadsBEnabled = false
     // INSTR_COUNT_NS2-SAME: numDsReadsA = #amdgpu.InstCounter<8, vector<4xf16>>
-    // INSTR_COUNT_NS2-SAME: numDsReadsB = #amdgpu.InstCounter<32, vector<1xf16>>
+    // INSTR_COUNT_NS2-SAME: numDsReadsB = #amdgpu.InstCounter<8, vector<4xf16>>
     // INSTR_COUNT_NS2-SAME: numDsWritesA = #amdgpu.InstCounter<4, vector<4xf16>>
     // INSTR_COUNT_NS2-SAME: numDsWritesB = #amdgpu.InstCounter<4, vector<4xf16>>
     // INSTR_COUNT_NS2-SAME: numGlobalLoadsA = #amdgpu.InstCounter<4, vector<4xf16>>

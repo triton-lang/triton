@@ -173,7 +173,7 @@ bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
     Type elemLlvmTy, std::optional<int32_t> maxVecElems, Value shmemBase,
     ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
+    const TargetInfoBase &target, bool crossGrain,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
 
@@ -187,7 +187,7 @@ bool emitTransferBetweenRegistersAndShared(
 
   auto regToSharedLayout = getRegToSharedLayout(
       ctx, shape, registerTy.getEncoding(), sharedTy.getEncoding(),
-      elemLlvmTy.getIntOrFloatBitWidth());
+      elemLlvmTy.getIntOrFloatBitWidth(), crossGrain);
   if (!regToSharedLayout.has_value())
     return false;
 
@@ -267,7 +267,7 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj.getBase(),
-      smemObj.getStrides(), loc, rewriter, target,
+      smemObj.getStrides(), loc, rewriter, target, /*crossGrain = */ false,
       [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
@@ -288,26 +288,11 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
                               ArrayRef<Value> srcVals, Value smemBase,
                               ArrayRef<Value> dstStrides, Location loc,
                               RewriterBase &rewriter,
-                              const TargetInfoBase &target,
+                              const TargetInfoBase &target, bool crossGrain,
                               std::pair<size_t, Type> *const llvmOpCount) {
   bool success = emitTransferBetweenRegistersAndShared(
       srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-      dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-        srcVals = srcVals.drop_front(vecTy.getNumElements());
-
-        Value vec = undef(vecTy);
-        for (int i = 0; i < vals.size(); i++) {
-          vec = insert_element(vec, vals[i], i32_val(i));
-        }
-        store(vec, vecAddr)
-            .setAlignment(vecTy.getNumElements() *
-                          elemLlvmTy.getIntOrFloatBitWidth() / 8);
-        if (llvmOpCount) {
-          ++(llvmOpCount->first);
-          llvmOpCount->second = vecTy;
-        }
-      });
+      dstStrides, loc, rewriter, target, crossGrain, perVectorCallback);
 
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from register to shared");
