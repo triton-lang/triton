@@ -1077,10 +1077,13 @@ class GridExecutor:
                 kwarg_dev.data.copy_(kwarg_hst.to(kwarg_dev.device).data)
 
     def __call__(self, *args_dev, **kwargs):
-        # removes reserved keywords from kwargs
-        kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
         if kwargs.pop("warmup", False):
             return
+        # Removes not used reserved keywords from kwargs
+        # Triton doesn't support keyword-only, variable positional or variable keyword arguments
+        # It's safe to inspect only positional arguments
+        req_args = inspect.getfullargspec(self.fn)
+        kwargs = {k: v for k, v in kwargs.items() if k in req_args.args}
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # remaps core language functions to interpreted ones
