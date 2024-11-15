@@ -161,3 +161,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     tt.return %cst_converted : tensor<32x128xf8E4M3FNUZ, #blocked>
   }
 }  // end module
+
+// -----
+
+// CHECK-LABEL: @fold_broadcast_constant_pattern
+tt.func @fold_broadcast_constant_pattern(%cst : f32) -> tensor<8x2xf32> {
+    // CHECK: %[[cst:.*]] = arith.constant dense<1.000000e+00> : tensor<8x2xf32>
+    %const = arith.constant dense<1.0> : tensor<8x1xf32>
+    %bst_out = tt.broadcast %const : tensor<8x1xf32> -> tensor<8x2xf32>
+
+    // CHECK-NEXT: tt.return %[[cst]] : tensor<8x2xf32>
+    tt.return %bst_out : tensor<8x2xf32>
+}
