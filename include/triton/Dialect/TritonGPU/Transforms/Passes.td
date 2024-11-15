@@ -23,31 +23,11 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   ];
 }
 
-def TritonGPUPipelineScheduler : Pass<"tritongpu-pipeline-scheduler", "mlir::ModuleOp"> {
-  let summary = "pipeline scheduler";
-
-  let description = [{
-    This pass builds the schedule for the software pipelined loops and encodes the
-    schedule in the ops attributes.
-  }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithDialect"];
-
-  let options = [
-    Option<"numStages", "num-stages",
-           "int32_t", /*default*/"3",
-           "number of pipeline stages">
-  ];
-}
-
 def TritonGPUTestPipelineAssignLatencies : Pass<"tritongpu-test-pipeline-assign-latencies", "mlir::ModuleOp"> {
   let summary = "test assigning latencies to interesting ops ahead of pipelining";
 
   let description = [{
-    This is a test pass that tests `assignLatencies` method of `TritonGPUPipelineScheduler`.
+    This is a test pass that tests `assignLatencies` method of `TritonGPULoopScheduling`.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -66,7 +46,7 @@ def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-l
   let summary = "test scheduling a loop for software pipelining";
 
   let description = [{
-    This is a test pass that tests `scheduleLoop` method of `TritonGPUPipelineScheduler`.
+    This is a test pass that tests `scheduleLoop` method of `TritonGPULoopScheduling`.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
