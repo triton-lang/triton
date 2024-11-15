@@ -189,8 +189,8 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
-        passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
+        passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
@@ -221,8 +221,7 @@ class HIPBackend(BaseBackend):
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
                                              "equivalent behavior in the past.")
-            prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
-            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages, prefetch)
+            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)

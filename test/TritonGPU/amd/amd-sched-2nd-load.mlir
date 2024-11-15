@@ -35,11 +35,11 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     %c1 = arith.constant 1 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x256xf32, #mma>)  : i32 {
-      %4 = tt.load %A_ptr : tensor<256x128x!tt.ptr<f16>, #blocked>
       %1 = triton_gpu.local_load %A_LDS : !tt.memdesc<256x128xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<256x128xf16, #dotOp0>
-      %5 = tt.load %B_ptr : tensor<128x256x!tt.ptr<f16>, #blocked1>
       %2 = triton_gpu.local_load %B_LDS : !tt.memdesc<128x256xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<128x256xf16, #dotOp1>
       %3 = tt.dot %1, %2, %arg1 : tensor<256x128xf16, #dotOp0> * tensor<128x256xf16, #dotOp1> -> tensor<256x256xf32, #mma>
+      %4 = tt.load %A_ptr : tensor<256x128x!tt.ptr<f16>, #blocked>
+      %5 = tt.load %B_ptr : tensor<128x256x!tt.ptr<f16>, #blocked1>
       triton_gpu.local_store %4, %A_LDS : tensor<256x128xf16, #blocked> -> !tt.memdesc<256x128xf16, #shared, #triton_gpu.shared_memory, mutable>
       triton_gpu.local_store %5, %B_LDS : tensor<128x256xf16, #blocked1> -> !tt.memdesc<128x256xf16, #shared1, #triton_gpu.shared_memory, mutable>
       scf.yield %3 : tensor<256x256xf32, #mma>
@@ -74,11 +74,11 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     %c1 = arith.constant 1 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x256xf32, #mma>)  : i32 {
-      %4 = tt.load %A_ptr : tensor<256x64x!tt.ptr<f16>, #blocked>
       %1 = triton_gpu.local_load %A_LDS : !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<256x64xf16, #dotOp0>
-      %5 = tt.load %B_ptr : tensor<64x256x!tt.ptr<f16>, #blocked1>
       %2 = triton_gpu.local_load %B_LDS : !tt.memdesc<64x256xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<64x256xf16, #dotOp1>
       %3 = tt.dot %1, %2, %arg1 : tensor<256x64xf16, #dotOp0> * tensor<64x256xf16, #dotOp1> -> tensor<256x256xf32, #mma>
+      %4 = tt.load %A_ptr : tensor<256x64x!tt.ptr<f16>, #blocked>
+      %5 = tt.load %B_ptr : tensor<64x256x!tt.ptr<f16>, #blocked1>
       triton_gpu.local_store %4, %A_LDS : tensor<256x64xf16, #blocked> -> !tt.memdesc<256x64xf16, #shared, #triton_gpu.shared_memory, mutable>
       triton_gpu.local_store %5, %B_LDS : tensor<64x256xf16, #blocked1> -> !tt.memdesc<64x256xf16, #shared1, #triton_gpu.shared_memory, mutable>
       scf.yield %3 : tensor<256x256xf32, #mma>
@@ -101,8 +101,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 // Should NOT apply: tile size 256x64x128 with single dot
 // CHECK-LABEL: sink_2nd_load_256x64x128
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
@@ -113,11 +113,11 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     %c1 = arith.constant 1 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<256x64xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x64xf32, #mma>)  : i32 {
-      %4 = tt.load %A_ptr : tensor<256x128x!tt.ptr<f16>, #blocked>
       %1 = triton_gpu.local_load %A_LDS : !tt.memdesc<256x128xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<256x128xf16, #dotOp0>
-      %5 = tt.load %B_ptr : tensor<128x64x!tt.ptr<f16>, #blocked1>
       %2 = triton_gpu.local_load %B_LDS : !tt.memdesc<128x64xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<128x64xf16, #dotOp1>
       %3 = tt.dot %1, %2, %arg1 : tensor<256x128xf16, #dotOp0> * tensor<128x64xf16, #dotOp1> -> tensor<256x64xf32, #mma>
+      %4 = tt.load %A_ptr : tensor<256x128x!tt.ptr<f16>, #blocked>
+      %5 = tt.load %B_ptr : tensor<128x64x!tt.ptr<f16>, #blocked1>
       triton_gpu.local_store %4, %A_LDS : tensor<256x128xf16, #blocked> -> !tt.memdesc<256x128xf16, #shared, #triton_gpu.shared_memory, mutable>
       triton_gpu.local_store %5, %B_LDS : tensor<128x64xf16, #blocked1> -> !tt.memdesc<128x64xf16, #shared1, #triton_gpu.shared_memory, mutable>
       scf.yield %3 : tensor<256x64xf32, #mma>
@@ -140,8 +140,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 // Should NOT apply: tile size 256x256x32 with single dot
 // CHECK-LABEL: sink_2nd_load_256x256x32
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: triton_gpu.local_store %[[tileA]]
@@ -152,11 +152,11 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     %c1 = arith.constant 1 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x256xf32, #mma>)  : i32 {
-      %4 = tt.load %A_ptr : tensor<256x32x!tt.ptr<f16>, #blocked>
       %1 = triton_gpu.local_load %A_LDS : !tt.memdesc<256x32xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<256x32xf16, #dotOp0>
-      %5 = tt.load %B_ptr : tensor<32x256x!tt.ptr<f16>, #blocked1>
       %2 = triton_gpu.local_load %B_LDS : !tt.memdesc<32x256xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<32x256xf16, #dotOp1>
       %3 = tt.dot %1, %2, %arg1 : tensor<256x32xf16, #dotOp0> * tensor<32x256xf16, #dotOp1> -> tensor<256x256xf32, #mma>
+      %4 = tt.load %A_ptr : tensor<256x32x!tt.ptr<f16>, #blocked>
+      %5 = tt.load %B_ptr : tensor<32x256x!tt.ptr<f16>, #blocked1>
       triton_gpu.local_store %4, %A_LDS : tensor<256x32xf16, #blocked> -> !tt.memdesc<256x32xf16, #shared, #triton_gpu.shared_memory, mutable>
       triton_gpu.local_store %5, %B_LDS : tensor<32x256xf16, #blocked1> -> !tt.memdesc<32x256xf16, #shared1, #triton_gpu.shared_memory, mutable>
       scf.yield %3 : tensor<256x256xf32, #mma>
@@ -181,8 +181,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 // Should NOT apply: the 2nd load has a user before the dot
 // CHECK-LABEL: sink_2nd_load_128x128x128_user_before_dot
 //       CHECK: %[[tileA:.*]] = tt.load
-//  CHECK-NEXT: local_load
 //  CHECK-NEXT: %[[tileB:.*]] = tt.load
+//  CHECK-NEXT: local_load
 //  CHECK-NEXT: local_load
 //  CHECK-NEXT: tt.store
 //  CHECK-NEXT: tt.dot
@@ -193,10 +193,10 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     %c1 = arith.constant 1 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<128x128xf32, #mma>)  : i32 {
-      %4 = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked>
       %1 = triton_gpu.local_load %A_LDS : !tt.memdesc<128x128xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<128x128xf16, #dotOp0>
-      %5 = tt.load %B_ptr : tensor<128x128x!tt.ptr<i64>, #blocked>
       %2 = triton_gpu.local_load %B_LDS : !tt.memdesc<128x128xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<128x128xf16, #dotOp1>
+      %4 = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked>
+      %5 = tt.load %B_ptr : tensor<128x128x!tt.ptr<i64>, #blocked>
       tt.store %B_ptr, %5 : tensor<128x128x!tt.ptr<i64>, #blocked>
       %3 = tt.dot %1, %2, %arg1 : tensor<128x128xf16, #dotOp0> * tensor<128x128xf16, #dotOp1> -> tensor<128x128xf32, #mma>
       triton_gpu.local_store %4, %A_LDS : tensor<128x128xf16, #blocked> -> !tt.memdesc<128x128xf16, #shared, #triton_gpu.shared_memory, mutable>
@@ -213,12 +213,12 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 // Category 3: two dots in the for loop. Make sure the optimization is not applied
 // should NOT apply: two dots
 // CHECK-LABEL: sink_2nd_load_256x256x64_two_dot
-//  CHECK: tt.load
+//       CHECK: triton_gpu.local_load
+//  CHECK-NEXT: triton_gpu.local_load
+//  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: tt.dot
 //  CHECK-NEXT: tt.load
-//  CHECK-NEXT: triton_gpu.local_load
-//  CHECK-NEXT: triton_gpu.local_load
-//  CHECK-NEXT: tt.dot
-//  CHECK-NEXT: tt.dot
+//  CHECK-NEXT: tt.load
 //  CHECK-NEXT: triton_gpu.local_store
 //  CHECK-NEXT: triton_gpu.local_store
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>

@@ -1,9 +1,10 @@
 import pathlib
 import triton
-from triton.compiler import IRSource
+from triton.compiler import IRSource, make_backend
 from triton._C.libtriton import ir
 
 target = triton.runtime.driver.active.get_current_target()
+backend = make_backend(target)
 
 
 def test_mlir_attribute_parsing(tmp_path: pathlib.Path) -> None:
@@ -40,7 +41,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     temp_file = tmp_path / "test_mlir_attribute_parsing0.ttgir"
     temp_file.write_text(sample_ttgir)
     context = ir.context()
-    src = IRSource(str(temp_file), context)
+    src = IRSource(str(temp_file), context, backend)
 
     # check name and type signature
     # should match ty_to_cpp(...)
@@ -85,7 +86,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     temp_file = tmp_path / "test_mlir_attribute_parsing1.ttgir"
     temp_file.write_text(sample_ttgir_vector_add)
     context = ir.context()
-    src = IRSource(str(temp_file), context)
+    src = IRSource(str(temp_file), context, backend)
 
     # now test compilation
     triton.compile(str(temp_file), target=target)

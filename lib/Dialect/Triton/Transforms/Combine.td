@@ -44,11 +44,4 @@ def CombineAddPtrPattern : Pat<
         (TT_AddPtrOp $ptr, (Arith_AddIOp $idx0, $idx1, DefOverflow)),
         [(Constraint<CPred<"isAddPtrOffsetCombinable($0, $1)">> $idx0, $idx1)]>;
 
-// broadcast(cst) => cst
-def getConstantValue : NativeCodeCall<"getConstantValue($_builder, $0, $1)">;
-def CombineBroadcastConstantPattern : Pat<
-    (TT_BroadcastOp:$bcast_res (Arith_ConstantOp $value)),
-    (Arith_ConstantOp (getConstantValue $value, $bcast_res), (location $bcast_res)),
-    [(Constraint<CPred<"isBroadcastConstantCombinable($0)">> $value)]>;
-
 #endif
