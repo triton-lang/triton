@@ -11,6 +11,8 @@ tt.func @dead_load(%ptr: tensor<32x128x!tt.ptr<f16>>) {
   tt.return
 }
 
+// -----
+
 // CHECK-LABEL: make_range
 tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
   // CHECK-DAG: %[[c:.*]] = arith.constant dense<0> : tensor<128x1xi32>
@@ -25,6 +27,32 @@ tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
   tt.return %c, %d : tensor<128x1xi32>, tensor<1xi32>
 }
 
+// -----
+
+// CHECK-LABEL: fold_addptr
+tt.func @fold_addptr(%arg: tensor<64x64x!tt.ptr<f16>>) -> (tensor<64x64x!tt.ptr<f16>>) {
+  // CHECK-NOT: tt.addptr
+  // CHECK-NOT: arith.constant
+  //     CHECK: tt.return %arg
+  %c0_i32 = arith.constant dense<0> : tensor<64x64xi32>
+  %0 = tt.addptr %arg, %c0_i32 : tensor<64x64x!tt.ptr<f16>>, tensor<64x64xi32>
+  tt.return %0 : tensor<64x64x!tt.ptr<f16>>
+}
+
+// -----
+
+// CHECK-LABEL: fold_addptr_scalar
+tt.func @fold_addptr_scalar(%arg: !tt.ptr<f16>) -> (!tt.ptr<f16>) {
+  // CHECK-NOT: tt.addptr
+  // CHECK-NOT: arith.constant
+  //     CHECK: tt.return %arg
+  %c0_i32 = arith.constant 0 : i32
+  %0 = tt.addptr %arg, %c0_i32 : !tt.ptr<f16>, i32
+  tt.return %0 : !tt.ptr<f16>
+}
+
+// -----
+
 // CHECK-LABEL: fold_advance
 tt.func @fold_advance(%arg: !tt.ptr<tensor<64x64xf16>>) -> (!tt.ptr<tensor<64x64xf16>>) {
   %c0_i32 = arith.constant 0 : i32
@@ -33,7 +61,6 @@ tt.func @fold_advance(%arg: !tt.ptr<tensor<64x64xf16>>) -> (!tt.ptr<tensor<64x64
   //     CHECK: tt.return %arg
   tt.return %0 : !tt.ptr<tensor<64x64xf16>>
 }
-
 
 // -----
 

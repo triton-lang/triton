@@ -848,6 +848,31 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
                builder.getDenseI32ArrayAttr(order));
 }
 
+//-- AddPtrOp --
+static std::optional<APInt> getIntegerSplatValue(Attribute attr) {
+  // Matches IntegerAttr or SplatElementsAttr
+  if (!attr) {
+    return std::nullopt;
+  }
+  if (auto splat = dyn_cast<SplatElementsAttr>(attr)) {
+    attr = splat.getSplatValue<IntegerAttr>();
+  }
+
+  if (auto int_attr = dyn_cast<IntegerAttr>(attr)) {
+    return int_attr.getValue();
+  }
+  return std::nullopt;
+}
+
+OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
+  // addptr(ptr, 0) -> ptr
+  auto value = getIntegerSplatValue(adaptor.getOffset());
+  if (value && *value == 0) {
+    return getPtr();
+  }
+  return {};
+}
+
 //-- AdvanceOp --
 OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
   // advance(ptr, 0, 0) -> ptr
