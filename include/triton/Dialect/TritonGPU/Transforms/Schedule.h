@@ -78,7 +78,7 @@ public:
     }
   };
 
-  CoarseSchedule(int numStages = 0) : numStages(numStages) {}
+  CoarseSchedule(int numStages) : numStages(numStages) {}
   int numStages;
   ClusterList clusters;
   using Cluster = decltype(clusters)::iterator;
