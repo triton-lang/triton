@@ -22,7 +22,6 @@
  */
 
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/OpDefinition.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
@@ -162,13 +161,15 @@ void WaitBarrierOp::getEffects(
 }
 
 // -- TensorDescToTMAPtrOp --
-OpFoldResult TensorDescToTMAPtrOp::fold(FoldAdaptor adaptor) {
+LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
+                                                 PatternRewriter &rewriter) {
   // tensor_desc_to_tma_ptr(reinterpret_tensor_desc(ptr)) -> ptr
   if (auto reinterpret =
-          getDesc().getDefiningOp<triton::ReinterpretTensorDescOp>()) {
-    return reinterpret.getRawDesc();
+          op.getDesc().getDefiningOp<triton::ReinterpretTensorDescOp>()) {
+    rewriter.replaceOp(op, reinterpret.getRawDesc());
+    return success();
   }
-  return {};
+  return failure();
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --

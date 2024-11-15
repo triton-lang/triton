@@ -202,7 +202,7 @@ def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
     }]>
   ];
 
-  let hasFolder = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 
