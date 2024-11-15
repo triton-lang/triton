@@ -10,13 +10,13 @@ public:
   using Data::Data;
   virtual ~TraceData() = default;
 
-  size_t addScope(size_t scopeId, const std::string &name) override final;
+  size_t addScope(size_t scopeId, const std::string &name) override;
 
-  void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override final;
+  void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
 
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &metrics,
-                  bool aggregable) override final;
+                  bool aggregable) override;
 
 protected:
   void startOp(const Scope &scope) override final;

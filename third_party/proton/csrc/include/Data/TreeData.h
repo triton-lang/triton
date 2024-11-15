@@ -15,24 +15,24 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
-  size_t addScope(size_t scopeId, const std::string &name) override final;
+  size_t addScope(size_t scopeId, const std::string &name) override;
 
-  void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override final;
+  void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
 
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &metrics,
-                  bool aggregable) override final;
+                  bool aggregable) override;
 
 protected:
   // OpInterface
-  void startOp(const Scope &scope) override final;
+  void startOp(const Scope &scope) override;
 
-  void stopOp(const Scope &scope) override final;
+  void stopOp(const Scope &scope) override;
 
 private:
   void init();
   void dumpHatchet(std::ostream &os) const;
-  void doDump(std::ostream &os, OutputFormat outputFormat) const override final;
+  void doDump(std::ostream &os, OutputFormat outputFormat) const override;
 
   class Tree;
   std::unique_ptr<Tree> tree;

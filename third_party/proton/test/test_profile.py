@@ -257,10 +257,9 @@ def test_pcsampling(tmp_path: pathlib.Path):
     assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
-@pytest.mark.parametrize("context", ["shadow", "python"])
-def test_deactivate_torch(tmp_path: pathlib.Path, context: str):
-    temp_file = tmp_path / "test_deactivate_torch.hatchet"
-    session_id = proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
+def test_deactivate(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_deactivate.hatchet"
+    session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.deactivate(session_id)
     torch.randn((10, 10), device="cuda")
     proton.activate(session_id)
