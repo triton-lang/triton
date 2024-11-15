@@ -1144,39 +1144,26 @@ class tensor(_value):
         ...
 
 
-class _experimental_tensor_descriptor(_value):
-    """A descriptor representing a tensor in global memory.
+class _experimental_tensor_descriptor_base(_value):
+    """"
+    A tensor descriptor with unknown shape and strides
     """
 
-    def __init__(self, handle, shape: List[tensor], strides: List[tensor], type: block_type):
+    def __init__(self, handle, type: block_type):
         """Not called by user code."""
         # IR handle
         super().__init__(handle)
-        # Global shape
-        self.shape = shape
-        self.strides = strides
 
         self.type = type  # Tensor type (block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
 
     def _flatten_ir(self):
-        handles = [self.handle]
-        handles.extend(s.handle for s in self.shape)
-        handles.extend(s.handle for s in self.strides)
-        return handles
+        return [self.handle]
 
     def _unflatten_ir(self, handles):
-        ndim = len(self.shape)
-        assert len(handles) == 2 * ndim + 1
-        handle = handles[0]
-        shape = [tensor(handle, s.type) for handle, s in zip(handles[1:1 + ndim], self.shape)]
-        strides = [tensor(handle, s.type) for handle, s in zip(handles[1 + ndim:], self.strides)]
-        return _experimental_tensor_descriptor(handle, shape, strides, self.type)
-
-    @builtin
-    def _as_ptr(self, _builder):
-        return tensor(self.handle, pointer_type(int8))
+        assert len(handles) == 1
+        return _experimental_tensor_descriptor_base(handles[0], self.type)
 
     @property
     def block_shape(self):
@@ -1194,7 +1181,7 @@ class _experimental_tensor_descriptor(_value):
 
         :note: Offset must be a multiple of 16-bytes
         """
-        return _experimental_descriptor_load(self, offsets, self.type.shape, self.type.element_ty, _builder=_builder)
+        return semantic.descriptor_load(self, offsets, "", "", _builder)
 
     @builtin
     def store(self, offsets: List[tensor], value: tensor, _builder=None) -> tensor:
@@ -1204,8 +1191,34 @@ class _experimental_tensor_descriptor(_value):
 
         :note: Offset must be a multiple of 16-bytes
         """
-        value = cast(value, self.type, _builder=_builder)
-        return _experimental_descriptor_store(self, value, offsets, _builder=_builder)
+        return semantic.descriptor_store(self, value, offsets, _builder)
+
+
+class _experimental_tensor_descriptor(_experimental_tensor_descriptor_base):
+    """A descriptor representing a tensor in global memory.
+    """
+
+    def __init__(self, handle, shape: List[tensor], strides: List[tensor], type: block_type):
+        """Not called by user code."""
+        # IR handle
+        super().__init__(handle, type)
+        # Global shape
+        self.shape = shape
+        self.strides = strides
+
+    def _flatten_ir(self):
+        handles = [self.handle]
+        handles.extend(s.handle for s in self.shape)
+        handles.extend(s.handle for s in self.strides)
+        return handles
+
+    def _unflatten_ir(self, handles):
+        ndim = len(self.shape)
+        assert len(handles) == 2 * ndim + 1
+        handle = handles[0]
+        shape = [tensor(handle, s.type) for handle, s in zip(handles[1:1 + ndim], self.shape)]
+        strides = [tensor(handle, s.type) for handle, s in zip(handles[1 + ndim:], self.strides)]
+        return _experimental_tensor_descriptor(handle, shape, strides, self.type)
 
 
 def get_bool_env_var(var_name):
@@ -1718,6 +1731,16 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
 
 @builtin
+def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype,
+                                                _builder=None) -> _experimental_tensor_descriptor_base:
+    """
+    Reinterpret a generic pointer as a TMA-backed tensor descriptor object.
+    """
+    block_ty = block_type(_constexpr_to_value(dtype), block_shape)
+    return semantic.reinterpret_tensor_descriptor(desc_ptr, block_ty, _builder)
+
+
+@builtin
 def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=None):
     """
     Experimental feature to access TMA descriptors loads. This is an escape hatch to easily exercise TTGIR operations.
@@ -1725,8 +1748,8 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
 
     This loads a tensor of data based on the descriptor and offsets.
     """
-    type = block_type(_constexpr_to_value(dtype), shape)
-    return semantic.descriptor_load(desc_pointer, offsets, "", "", type, _builder)
+    desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, shape, dtype, _builder=_builder)
+    return desc.load(offsets, _builder=_builder)
 
 
 @builtin
@@ -1737,7 +1760,8 @@ def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
 
     This stores a tensor of data based on the descriptor and offsets.
     """
-    return semantic.descriptor_store(desc_pointer, value, offsets, _builder)
+    desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, value.shape, value.dtype, _builder=_builder)
+    return desc.store(offsets, value, _builder=_builder)
 
 
 @_tensor_member_fn

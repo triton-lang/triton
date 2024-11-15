@@ -47,6 +47,7 @@ public:
   }
 
   OpBuilder &getBuilder() { return *builder; }
+  MLIRContext *getContext() { return builder->getContext(); }
 
   bool isLineInfoEnabled() { return lineInfoEnabled; }
 
@@ -1318,19 +1319,26 @@ void init_triton_ir(py::module &&m) {
              self.create<StoreOp>(ptrs, val, mask, cacheModifier,
                                   evictionPolicy);
            })
+      .def("create_reinterpret_tensor_descriptor",
+           [](TritonOpBuilder &self, Value desc_ptr, Type blockTy) -> Value {
+             auto ctx = self.getContext();
+             auto resultTy = triton::TensorDescType::get(
+                 ctx, cast<RankedTensorType>(blockTy));
+             return self.create<ReinterpretTensorDescOp>(resultTy, desc_ptr);
+           })
       .def("create_descriptor_load",
-           [](TritonOpBuilder &self, Value desc_ptr,
-              std::vector<Value> &indices, Type type,
+           [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
               CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> Value {
+             auto descTy = cast<triton::TensorDescType>(desc.getType());
+             auto resTy = descTy.getBlockType();
              return self.create<ExperimentalDescriptorLoadOp>(
-                 type, desc_ptr, indices, cacheModifier, evictionPolicy);
+                 resTy, desc, indices, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_store",
-           [](TritonOpBuilder &self, Value desc_ptr, Value value,
+           [](TritonOpBuilder &self, Value desc, Value value,
               std::vector<Value> &indices) -> void {
-             self.create<ExperimentalDescriptorStoreOp>(desc_ptr, value,
-                                                        indices);
+             self.create<ExperimentalDescriptorStoreOp>(desc, value, indices);
            })
       .def("create_tensormap_create",
            [](TritonOpBuilder &self, Value desc_ptr, Value global_address,

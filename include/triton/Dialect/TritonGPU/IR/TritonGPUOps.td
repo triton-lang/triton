@@ -295,7 +295,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
                        $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
   ];
 
-  let assemblyFormat = [{attr-dict `:` type($result)}];
+  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
 #endif
