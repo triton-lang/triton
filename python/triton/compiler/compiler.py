@@ -11,6 +11,7 @@ from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
+from .experimental_code_genarator import experimental_codegen_to_ttir
 from pathlib import Path
 import re
 import functools
@@ -103,6 +104,15 @@ class ASTSource:
     def parse_options(self):
         return dict()
 
+class ExperimentalASTSource(ASTSource):
+    def __init__(self, fn, signature, constants=None, attrs=None):
+        super().__init__(fn, signature, constants, attrs)
+
+    def make_ir(self, options, codegen_fns, module_map, context):
+        from  ..language import str_to_ty
+        args = {k: str_to_ty(v) for k, v in self.signature.items() if k not in self.constants}
+        args.update(self.constants)
+        return experimental_codegen_to_ttir(self.fn.experimental_frontend_fn, options, codegen_fns, context, args, module_map=module_map)
 
 class IRSource:
 
@@ -129,7 +139,6 @@ class IRSource:
         if self.ext == "ttgir":
             return {'num_warps': _get_num_warps_from_ir_str(self.src)}
         return dict()
-
 
 @functools.lru_cache()
 def triton_key():

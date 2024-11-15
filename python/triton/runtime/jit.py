@@ -548,10 +548,11 @@ class JITFunction(KernelInterface[T]):
         """
         Precompute as much as possible.
         """
-        from ..compiler import CompiledKernel, compile, ASTSource, make_backend
+        from ..compiler import CompiledKernel, compile, ASTSource, ExperimentalASTSource, make_backend
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource
+        self.ExperimentalASTSource = ExperimentalASTSource
         self.make_backend = make_backend
         self.binder = create_function_from_signature(self.signature, self.params, backend)
         self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
@@ -619,7 +620,11 @@ class JITFunction(KernelInterface[T]):
             if self._call_hook(key, signature, device, constants, options, configs, warmup, before=True):
                 return None
             # compile the kernel
-            src = self.ASTSource(self, signature, constants, configs[0])
+            if self.experimental_frontend_fn:
+                src = self.ExperimentalASTSource(self, signature, constants, configs[0])
+            else:
+                src = self.ASTSource(self, signature, constants, configs[0])
+            
             kernel = self.compile(
                 src,
                 target=target,
@@ -655,11 +660,17 @@ class JITFunction(KernelInterface[T]):
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, do_not_specialize_on_alignment=None, debug=None,
-                 noinline=None, repr=None, launch_metadata=None):
+                 noinline=None, repr=None, launch_metadata=None, use_experimental_frontend=False):
+        from ..compiler.experimental_code_genarator import generate_code_generator
         do_not_specialize = do_not_specialize if do_not_specialize else []
         do_not_specialize_on_alignment = do_not_specialize_on_alignment if do_not_specialize_on_alignment else []
 
         self.fn = fn
+        
+        self.experimental_frontend_fn = None
+        if use_experimental_frontend:
+            self.experimental_frontend_fn = generate_code_generator(fn, debug=True)
+        
         self.module = fn.__module__
         self.version = version
         self.signature = inspect.signature(fn)
@@ -728,6 +739,7 @@ class JITFunction(KernelInterface[T]):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
     def preload(self, specialization_data):
+        #NOTE(kuter): WTF does this thing even do? 
         from ..compiler import compile, ASTSource
         from triton.backends.compiler import AttrsDescriptor
         import json
@@ -796,6 +808,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
+    use_experimental_frontend: Optional[bool] = None
 ) -> Callable[[T], JITFunction[T]]:
     ...
 
@@ -810,6 +823,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
+    use_experimental_frontend: Optional[bool] = None
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -846,6 +860,7 @@ def jit(
                 noinline=noinline,
                 repr=repr,
                 launch_metadata=launch_metadata,
+                use_experimental_frontend=use_experimental_frontend,
             )
 
     if fn is not None:

@@ -407,6 +407,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         # initialize function
         visibility = "public" if self.is_kernel else "private"
+        print("function prototype", self.function_name, self.prototype)
         self.fn = self.builder.get_or_insert_function(self.module, self.function_name,
                                                       self.prototype.to_ir(self.builder), visibility, self.noinline)
         self.module.push_back(self.fn)
@@ -1278,6 +1279,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     # visit kernel AST
     gscope = fn.__globals__.copy()
     function_name = fn.repr(specialization)
+    print(type(fn), "mangled function name", function_name, specialization)
     tys = list(specialization.signature.values())
     new_constants = attrs.get_constants()
     for k in new_constants:
