@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
 namespace triton {
@@ -847,6 +848,15 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
                builder.getDenseI32ArrayAttr(order));
 }
 
+//-- AddPtrOp --
+OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
+  // addptr(ptr, 0) -> ptr
+  if (matchPattern(adaptor.getOffset(), m_Zero())) {
+    return getPtr();
+  }
+  return {};
+}
+
 //-- AdvanceOp --
 OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
   // advance(ptr, 0, 0) -> ptr
@@ -863,12 +873,17 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
 //-- MakeTensorDescOp --
 void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
                              Value base, ValueRange shape, ValueRange strides,
-                             ArrayRef<int32_t> tensorShape) {
-  auto resultTy = getPointerType(builder.getI8Type());
-  assert(resultTy.getContext());
+                             ArrayRef<int32_t> blockShape) {
+  auto ptrTy = dyn_cast<triton::PointerType>(base.getType());
+  if (!ptrTy) {
+    llvm::report_fatal_error("Expected pointer type");
+  }
+  auto elemTy = ptrTy.getPointeeType();
 
-  return build(builder, state, resultTy, base, shape, strides,
-               builder.getDenseI32ArrayAttr(tensorShape));
+  SmallVector<int64_t> blockShape64(blockShape);
+  auto blockTy = RankedTensorType::get(blockShape64, elemTy);
+  auto descTy = TensorDescType::get(builder.getContext(), blockTy);
+  return build(builder, state, descTy, base, shape, strides);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and
