@@ -26,6 +26,8 @@ class Pingponger {
   IntegerAttr lowPrioAttr;
   IntegerAttr highPrioAttr;
 
+  int32_t kWidth;
+
 public:
   Pingponger(scf::ForOp forOp) : forOp(forOp){};
   void getDotPingponged();
@@ -66,9 +68,23 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
                                         Attribute dotEncoding, unsigned opIdx,
                                         unsigned numSlices) {
   SmallVector<Value> slices;
-  auto type = cast<triton::MemDescType>(v.getType());
+  //v.dump();
+  auto getIncomingOp = [this](Value v) -> Value {
+    if (auto arg = mlir::dyn_cast<BlockArgument>(v))
+      if (arg.getOwner()->getParentOp() == forOp.getOperation())
+        return forOp.getTiedLoopInit(arg)->get();
+    return Value();
+  };
+
+  auto memDesc = getIncomingOp(v.getDefiningOp()->getOperand(0));
+
+  auto type = cast<triton::MemDescType>(memDesc.getType());
+  auto encoding = cast<RankedTensorType>(v.getType()).getEncoding();
+  //auto encoding = cast<RankedTensorType>(type.getEncoding());
+  //auto encoding = type.getEncoding();
   auto srcEncoding =
-      mlir::cast<ttg::DotOperandEncodingAttr>(type.getEncoding());
+      mlir::cast<ttg::DotOperandEncodingAttr>(encoding);
+  //auto srcEncoding = mlir::cast<ttg::DotOperandEncodingAttr>(dotEncoding);
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
   Type elementType = type.getElementType();
 
@@ -88,7 +104,7 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
         v.getLoc(),
         triton::MemDescType::get(shape, elementType, type.getEncoding(),
                                  type.getMemorySpace()),
-        v, offsetsVal);
+        memDesc, offsetsVal);
     auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
         builder.getContext(), opIdx, dotEncoding, srcEncoding.getKWidth());
     Value prefetchSlice = builder.create<triton::gpu::LocalLoadOp>(
@@ -114,15 +130,30 @@ void Pingponger::transformTwoWave(OpBuilder &builder, Location loc) {
   // dot (4/4)
 
   // First, slice local_loads and dot into 4 parts
+  unsigned numSlices = 4;
   auto op = cast<triton::DotOp>(dotOps[0]);
+
   auto dotEncoding = op.getType().getEncoding();
-  if (genLocalSlice(builder, op.getA(), dotEncoding, 0, 4).failed() ||
-      genLocalSlice(builder, op.getB(), dotEncoding, 1, 4).failed())
+  if (genLocalSlice(builder, op.getA(), dotEncoding, 0, numSlices).failed() ||
+      genLocalSlice(builder, op.getB(), dotEncoding, 1, numSlices).failed())
     return;
 
   // Clone dots four times and use slices
-  
+  op->setOperand(0, loadSlices[0][0]);
+  op->setOperand(1, loadSlices[1][0]);
 
+  Operation *prevDot = op;
+  for (int i=1; i<numSlices; i++){
+        auto newOp = builder.clone(*op);
+        newOp->setOperand(0, loadSlices[0][i]);
+        newOp->setOperand(1, loadSlices[1][i]);
+        newOp->setOperand(2, prevDot->getResult(0));
+        prevDot = newOp;
+  }
+  op->replaceAllUsesWith(prevDot);
+  lLoadOps[0]->erase();
+  lLoadOps[1]->erase();
+/*
   lLoadOps[0]->moveBefore(gLoadOps[0]);
   auto schedB0 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
   schedB0->moveAfter(lLoadOps[0]);
@@ -139,6 +170,9 @@ void Pingponger::transformTwoWave(OpBuilder &builder, Location loc) {
   auto setPrioBack0 = builder.create<ROCDL::SetPrioOp>(loc, lowPrioAttr);
   setPrio1->moveBefore(dotOps[0]);
   setPrioBack0->moveAfter(dotOps[0]);
+
+
+  */
 }
 
 void Pingponger::getDotPingponged() {
@@ -170,7 +204,9 @@ void Pingponger::getDotPingponged() {
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2 || dotOps.size() != 1)
     return;
 
-  transformOneWave(builder, loc);
+  
+  //transformOneWave(builder, loc);
+  transformTwoWave(builder, loc);
 }
 
 class TritonAMDGPUBlockPingpongPass
@@ -181,13 +217,14 @@ public:
   void runOnOperation() override {
     ModuleOp m = getOperation();
     int numWarps = ttg::TritonGPUDialect::getNumWarps(m);
-    if (numWarps != 4)
-      return;
+    //if (numWarps != 4)
+    //  return;
 
     m.walk([&](scf::ForOp forOp) {
       Pingponger pingponger(forOp);
       pingponger.getDotPingponged();
     });
+    m.dump();
   }
 };
 
