@@ -2,12 +2,28 @@ import os
 import re
 import hashlib
 import subprocess
-
 from abc import ABCMeta, abstractmethod, abstractclassmethod
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 from types import ModuleType
 
+def find_paths_if(iterable, pred):
+    is_iterable = lambda x: isinstance(x, (list, tuple))
+    ret = []
+    def _impl(current, path):
+        if pred(current):
+            if len(path) == 1:
+                ret.append((path[0],))
+            else:
+                ret.append(tuple(path))
+        elif is_iterable(current):
+            for idx, item in enumerate(current):
+                _impl(item, path + [idx])
+    if is_iterable(iterable):
+        _impl(iterable, [])
+    else:
+        ret = [tuple()] if pred(iterable) else []
+    return ret
 
 class AttrsDescriptor:
     """
@@ -71,17 +87,22 @@ class AttrsDescriptor:
         assert (len(params) == len(values))
 
         # Divisibility property
-        self.arg_properties["tt.divisibility"] = [
-            param.num for param, arg in zip(params, values) if AttrsDescriptor.is_divisible_by_16(arg)
-            and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-        ]
+        divisibility_16 = []
+        for param, arg in zip(params, values):
+            if param.do_not_specialize or param.do_not_specialize_on_alignment:
+                continue
+            paths = find_paths_if(arg, AttrsDescriptor.is_divisible_by_16)
+            divisibility_16 += [(param.num,) + x for x in paths]
+        self.arg_properties["tt.divisibility"] = divisibility_16
 
         # Equal to 1 property
-        self.arg_properties["tt.equal_to"] = [
-            param.num
-            for param, arg in zip(params, values)
-            if AttrsDescriptor.is_equal_to_1(arg) and not param.do_not_specialize
-        ]
+        equal_to_1 = []
+        for param, arg in zip(params, values):
+            if param.do_not_specialize:
+                continue
+            paths = find_paths_if(arg, AttrsDescriptor.is_equal_to_1)
+            equal_to_1 += [(param.num,) + x for x in paths]
+        self.arg_properties["tt.equal_to"] = equal_to_1
 
     def _add_backend_properties(self, params=None, values=None):
         """ This method is for different subclasses to implement their own compile-time properties """

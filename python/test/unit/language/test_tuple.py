@@ -61,6 +61,27 @@ def test_assign(device="cuda"):
     assert y[1] == 10
     assert y[2] == vals[1]
 
+# -------
+
+# test serialization/deserialization of tuple arguments in
+# the frontend.
+@triton.jit
+def _tuple_serdes(Ptr, tuple1, cst1: tl.constexpr, val1, tuple2):
+    # tl.store(Ptr + 0, tl.load(tuple1[0]))
+    # tl.store(Ptr + 1, tuple1[1])
+    # tl.store(Ptr + 2, tl.load(tuple1[2]))
+    tl.store(Ptr + 0, tuple1[0])
+    tl.store(Ptr + 1, tuple1[1])
+    tl.store(Ptr + 2, tuple1[2])
+
+def test_serdes(device="cuda"):
+    x = torch.tensor([8], dtype=torch.int32, device=device)
+    y = torch.tensor([12], dtype=torch.int32, device=device)
+    z = torch.empty((3,), dtype=torch.int32, device=device)
+    # we want to check that JIT specialization propagates to tuples:
+    tuple1 = (8, 1, 12)
+    _tuple_serdes[(1,)](z, tuple1, 20, 1, (3,4,5))
+    
 
 # function call (tuple argument)
 # function call (tuple return value)

@@ -65,7 +65,6 @@ from .core import (
     float8e5,
     float8e5b16,
     full,
-    function_type,
     histogram,
     inline_asm_elementwise,
     int1,
@@ -183,7 +182,6 @@ __all__ = [
     "floor",
     "fma",
     "full",
-    "function_type",
     "histogram",
     "inline_asm_elementwise",
     "interleave",
@@ -276,6 +274,9 @@ def str_to_ty(name):
 
     if name == "nvTmaDesc":
         return nv_tma_desc_type()
+    
+    if name == "constexpr":
+        return constexpr
 
     tys = {
         "fp8e4nv": float8e4nv,

@@ -15,6 +15,7 @@ from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 from types import ModuleType
+from functools import reduce
 
 
 def insert_multiple(lst, elements, indices):
@@ -231,7 +232,7 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, jit_fn: JITFunction, options,
+    def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options,
                  codegen_fns, module_map, module=None, is_kernel=False, function_types: Optional[Dict] = None,
                  noinline=False, file_name: Optional[str] = None, begin_line=0):
         self.context = context
@@ -263,8 +264,6 @@ class CodeGenerator(ast.NodeVisitor):
                 self.gscope[k] = v
 
         self.lscope = {}
-        self.attributes = attributes
-        self.constants = constants
         self.jit_fn = jit_fn
         self.function_name = function_name
         self.is_kernel = is_kernel
@@ -446,17 +445,13 @@ class CodeGenerator(ast.NodeVisitor):
 
         # initialize function
         visibility = "public" if self.is_kernel else "private"
+        fn_ty = self.prototype.serialize(self.builder)
+        breakpoint()
         self.fn = self.builder.get_or_insert_function(self.module, self.function_name,
-                                                      self.prototype.to_ir(self.builder), visibility, self.noinline)
+                                                      fn_ty, visibility, self.noinline)
+        arg_values = self.prototype.deserialize(self.fn)
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
-        arg_values = [self.fn.args(i) for i in range(self.fn.get_num_args())]
-        for i, (idx, _) in enumerate(self.prototype.native_types.items()):
-            if idx in self.attributes:
-                for name, value in self.attributes[idx]:
-                    self.fn.set_arg_attr(i, name, value)
-        insert_multiple(arg_values, self.constants.values(), self.constants.keys())
-        arg_values = self.prototype.deserialize(arg_values)
         # bind arguments to symbols
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
@@ -1242,6 +1237,8 @@ class CodeGenerator(ast.NodeVisitor):
                 ret = super().visit(node)
             except CompilationError:
                 raise
+            except AssertionError:
+                raise
             except Exception as e:
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.
@@ -1311,32 +1308,87 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
+def find_paths_if(iterable, pred):
+    is_iterable = lambda x: isinstance(x, (list, tuple, language.tuple_type))
+    ret = []
+    def _impl(current, path):
+        path = (path[0], ) if len(path) == 1 else tuple(path)
+        if is_iterable(current):
+            for idx, item in enumerate(current):
+                _impl(item, path + (idx,))
+        elif pred(path, current):
+            if len(path) == 1:
+                ret.append((path[0],))
+            else:
+                ret.append(tuple(path))
+    if is_iterable(iterable):
+        _impl(iterable, [])
+    else:
+        ret = [tuple()] if pred(iterable) else []
+    return ret
+
+
+class ASTFunction:
+    
+    def get_path(self, x, path):
+        return reduce(lambda a, idx: a[idx], path, x)
+
+    def set_path(self, x, path, val):
+        prev = x if len(path) == 1 else get_path(x, path[:-1])
+        prev[path[-1]] = val
+        
+    def __init__(self, ret_types, arg_types, constants, attrs):
+        self.ret_types = ret_types
+        self.arg_types = arg_types
+        self.constants = constants
+        self.attrs = attrs
+    
+    def serialize(self, builder: ir.builder):
+        # fill up IR values in template
+        # > build function
+        is_val = lambda path, _: path not in self.constants
+        val_paths = find_paths_if(self.arg_types, is_val)
+        arg_types = [self.get_path(self.arg_types, path).to_ir(builder) for path in val_paths]
+        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
+        return builder.get_function_ty(arg_types, ret_types)
+    
+    def deserialize(self, fn):
+        breakpoint()
+        # create "template" 
+        def make_template(val):
+            if isinstance(val, (list, tuple, language.tuple_type)):
+                return language.tuple([make_template(x) for x in val])
+            return language.constexpr(None)
+        vals = make_template(self.arg_types)
+        is_val = lambda path, _: path not in self.constants
+        val_paths = find_paths_if(self.arg_types, is_val)
+        # > set attributes
+        for attr_path, attr_specs in self.attrs.items():
+            for attr_name, attr_val in attr_specs:
+                fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
+        # > add IR values to the template
+        for i, path in enumerate(val_paths):
+            self.set_path(vals, path, fn.args(i))
+        # > add constexpr values to the template
+        for path, val in self.constants.items():
+            self.set_path(vals, path, val)
+        return vals
+        
+        
+
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
-    import itertools
-    # create kernel prototype
-    def get_arg_type(name):
-        if name in specialization.signature and fn.arg_names.index(name) not in specialization.constants:
-            return str_to_ty(specialization.signature[name])
-        return language.core.constexpr
-    arg_types = [get_arg_type(x) for x in fn.arg_names]
-    prototype = language.function_type([], arg_types)
+    constants = specialization.constants | specialization.attrs.get_constants()
+    arg_types = [str_to_ty(ty) for ty in specialization.signature.values()]
     # find index of constants in serialized order
     attrs = specialization.attrs
     new_attrs = attrs.filter_out_constants()
     fn_attrs = new_attrs.get_fn_attrs()
     file_name, begin_line = get_jit_fn_file_line(fn)
-    # compute constant idxs
-    cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
-    n_types = {x: 1 for x in fn.arg_names}
-    for k, v in specialization.signature.items():
-        n_types[k] = str_to_ty(v).num_composite_types
-    cumsums = [i for i in itertools.accumulate(n_types.values())]
-    constant_idxs = {cumsums[cst_key(k)]-1: v for k, v in specialization.constants.items()}
+    prototype = ASTFunction([], arg_types, constants, fn_attrs)
     generator = CodeGenerator(context, prototype, 
                               gscope=fn.__globals__.copy(), 
-                              constants=constant_idxs, 
                               function_name=fn.repr(specialization),
-                              jit_fn=fn, attributes=fn_attrs, is_kernel=True, file_name=file_name,
+                              jit_fn=fn, is_kernel=True, file_name=file_name,
                               begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())
 

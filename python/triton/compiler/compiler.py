@@ -77,10 +77,6 @@ class ASTSource:
                     raise TypeError("Signature keys must be string")
         if self.constants is None:
             self.constants = {}
-        else:
-            for k in self.constants.keys():
-                if not isinstance(k, str):
-                    raise TypeError("Constants keys must be string")
         if self.attrs is None:
             self.attrs = AttrsDescriptor()
 

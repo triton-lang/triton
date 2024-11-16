@@ -370,6 +370,7 @@ def create_function_from_signature(sig, kparams, backend):
             func_args.append(f"{name}=default_{name}")
             dict_entries.append(f"'{name}': {name}")
         if kp.is_constexpr:
+            signature_types.append('"constexpr"')
             constexpr_vals.append(name)
         else:
             non_constexpr_vals.append(name)
@@ -603,14 +604,14 @@ class JITFunction(KernelInterface[T]):
             # done here rather than when we build the signature as otherwise
             # the kernel cache key could not distinguish between byte pointers
             # and None arguments, resulting in a downstream mismatch:
-            sigkeys = [self.params[i].name for i in self.non_constexpr_indices]
+            sigkeys = [param.name for param in self.params]
             sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
-            configs = (backend.get_attrs_descriptor(self.params, bound_vals), )
-            constant_params = configs[0].get_constants()
+            attrs = backend.get_attrs_descriptor(self.params, bound_vals)
+            constant_params = attrs.get_constants()
             constants = {
-                p.name: v
+                (p.num,): v
                 for (v, p) in zip(bound_vals, self.params)
                 if p.is_constexpr or (p.num in constant_params) or v is None
             }
@@ -618,17 +619,17 @@ class JITFunction(KernelInterface[T]):
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
-            if self._call_hook(key, signature, device, constants, options, configs, warmup, before=True):
+            if self._call_hook(key, signature, device, constants, options, [attrs], warmup, before=True):
                 return None
             # compile the kernel
-            src = self.ASTSource(self, signature, constants, configs[0])
+            src = self.ASTSource(self, signature, constants, attrs)
             kernel = self.compile(
                 src,
                 target=target,
                 options=options.__dict__,
             )
             self.cache[device][key] = kernel
-            self._call_hook(key, signature, device, constants, options, configs, warmup, before=False)
+            self._call_hook(key, signature, device, constants, options, [attrs], warmup, before=False)
 
         # Check that used global values have not changed.
         not_present = object()

@@ -564,10 +564,6 @@ class dtype:
         """Output of repr needs to be an evaluatable expression"""
         return f'triton.language.{self.codegen_name()}'
 
-    def make_ast_values(self, ir_args):
-        assert len(ir_args) == 1
-        return tensor(ir_args[0], self)
-
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
 # We can't change the param name because it is part of function's public API.
@@ -609,10 +605,6 @@ class pointer_type(dtype):
 
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
-
-    def make_ast_values(self, ir_args):
-        assert len(ir_args) == 1
-        return tensor(ir_args[0], self)
 
     @property
     def scalar(self):
@@ -678,39 +670,6 @@ class block_type(dtype):
         return self.element_ty
 
 
-class function_type(dtype):
-
-    def __init__(self, ret_types: List[dtype], param_types: List[dtype]) -> None:
-        self.ret_types = ret_types
-        # self.param_types = param_types
-        self.serialized_param_types =  list(_flatten_list(param_types))
-        self.param_types = param_types
-        self.native_types = {i: ty for i, ty in enumerate(self.serialized_param_types) if isinstance(ty, dtype)}
-
-    def __str__(self):
-        return f'fn ({self.param_types}) -> {self.ret_types}'
-
-    def to_ir(self, builder: ir.builder):
-        ir_param_types = [ty.to_ir(builder) for ty in self.native_types.values()]
-        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
-        return builder.get_function_ty(ir_param_types, ret_types)
-
-    def deserialize(self, arg_values):
-        assert len(arg_values) == len(self.serialized_param_types)
-        ret = []
-        indx = 0
-        for ty in self.param_types:
-            if ty in (constexpr, dtype, int, bool, None):
-                ret.append(constexpr(arg_values[indx]))
-                indx += 1
-            else:
-                n_vals = ty.num_composite_types
-                curr = arg_values[indx:indx+n_vals]
-                ret.append(ty.make_ast_values(curr))
-                indx += n_vals
-        return ret
-
-
 class tuple_type(dtype):
 
     def __init__(self, types):
@@ -724,19 +683,12 @@ class tuple_type(dtype):
     def __iter__(self):
         return iter(self.types)
 
-    def make_ast_values(self, ir_args):
-        assert len(ir_args) == len(self.types)
-        vals = []
-        for ty, ir_arg in zip(self.types, ir_args):
-            if ty == constexpr or ty == dtype:
-                vals.append(constexpr(ir_arg))
-            else:
-                vals.append(tensor(ir_arg, ty))
-        return tuple(vals)
-
     def to_ir(self, builder: ir.builder):
         return [ty.to_ir(builder) for ty in self.types]
 
+    def __getitem__(self, index: int) -> dtype:
+        return self.types[index]
+    
     def is_tuple(self):
         return True
 
@@ -1263,6 +1215,9 @@ class tuple:
     def __hash__(self):
         import builtins
         return hash(builtins.tuple(self.values))
+    
+    def __str__(self):
+        return str([str(x) for x in self.values])
     
     def __iter__(self):
         return iter(self.values)
