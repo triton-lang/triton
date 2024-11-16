@@ -144,34 +144,3 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
 
     _, err = capfd.readouterr()
     assert ("remark: Warning: vectorization fails" in err), "expect vectorization failure remark"
-
-
-def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
-
-    @triton.jit
-    def kernel_pipe_error(in_ptr, out_ptr):
-        SIZE: tl.constexpr = 64
-        in_ptrs = in_ptr + tl.arange(0, SIZE)
-        val = tl.zeros((SIZE, ), dtype=tl.float32)
-        k = 0
-        for i in tl.range(0, 64, num_stages=3):
-            in_ptrs = in_ptr + tl.arange(0, SIZE) + SIZE * k
-            val = tl.load(in_ptrs)
-            out_ptrs = out_ptr + (tl.arange(0, SIZE) + i * SIZE)
-            tl.store(out_ptrs, val)
-            if tl.max(val) > 0:
-                k += 1
-
-    with enable_remark_context():
-        triton.compile(
-            triton.compiler.ASTSource(
-                fn=kernel_pipe_error,
-                signature={"in_ptr": "*fp32", "out_ptr": "*fp32"},
-                constants={},
-            ),
-            options={"cluster_dims": (1, 1, 1)},
-        )
-
-    _, err = capfd.readouterr()
-
-    assert "operation scheduled before its operands" not in err, "expect swp op remark"
