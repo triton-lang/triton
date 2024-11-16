@@ -11,14 +11,13 @@ namespace proton {
 class ShadowContextSource : public ContextSource, public ScopeInterface {
 public:
   ShadowContextSource() = default;
-  ~ShadowContextSource() = default;
 
-  void enterScope(const Scope &scope) override final;
+  void enterScope(const Scope &scope) override;
 
-  void exitScope(const Scope &scope) override final;
+  void exitScope(const Scope &scope) override;
 
 private:
-  std::vector<Context> getContextsImpl() override final { return contextStack; }
+  std::vector<Context> getContextsImpl() override { return contextStack; }
   std::vector<Context> contextStack;
 };
 
