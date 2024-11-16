@@ -446,12 +446,11 @@ class CodeGenerator(ast.NodeVisitor):
         # initialize function
         visibility = "public" if self.is_kernel else "private"
         fn_ty = self.prototype.serialize(self.builder)
-        breakpoint()
         self.fn = self.builder.get_or_insert_function(self.module, self.function_name,
                                                       fn_ty, visibility, self.noinline)
-        arg_values = self.prototype.deserialize(self.fn)
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
+        arg_values = self.prototype.deserialize(self.fn)
         # bind arguments to symbols
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
@@ -1334,7 +1333,7 @@ class ASTFunction:
         return reduce(lambda a, idx: a[idx], path, x)
 
     def set_path(self, x, path, val):
-        prev = x if len(path) == 1 else get_path(x, path[:-1])
+        prev = x if len(path) == 1 else self.get_path(x, path[:-1])
         prev[path[-1]] = val
         
     def __init__(self, ret_types, arg_types, constants, attrs):
@@ -1353,7 +1352,6 @@ class ASTFunction:
         return builder.get_function_ty(arg_types, ret_types)
     
     def deserialize(self, fn):
-        breakpoint()
         # create "template" 
         def make_template(val):
             if isinstance(val, (list, tuple, language.tuple_type)):
@@ -1368,7 +1366,8 @@ class ASTFunction:
                 fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
         # > add IR values to the template
         for i, path in enumerate(val_paths):
-            self.set_path(vals, path, fn.args(i))
+            ty = self.get_path(self.arg_types, path)
+            self.set_path(vals, path, language.tensor(fn.args(i), ty))
         # > add constexpr values to the template
         for path, val in self.constants.items():
             self.set_path(vals, path, val)
@@ -1383,6 +1382,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     attrs = specialization.attrs
     new_attrs = attrs.filter_out_constants()
     fn_attrs = new_attrs.get_fn_attrs()
+    fn_attrs = {k: v for k, v in fn_attrs.items() if k not in constants}
     file_name, begin_line = get_jit_fn_file_line(fn)
     prototype = ASTFunction([], arg_types, constants, fn_attrs)
     generator = CodeGenerator(context, prototype, 
