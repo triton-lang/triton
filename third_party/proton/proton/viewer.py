@@ -30,6 +30,8 @@ def match_available_metrics(metrics, raw_metrics):
 
 def remove_metadata(database: json):
     # Find all frames with the name COMPUTE_METADATA_SCOPE_NAME, remove them and their children
+    # Then go up from the metadata node and remove the parent if all its children were
+    # metadata nodes
     def remove_metadata_helper(node):
         if "frame" not in node:
             return node
@@ -41,7 +43,6 @@ def remove_metadata(database: json):
             new_child = remove_metadata_helper(child)
             if new_child is not None:
                 new_children.append(new_child)
-        # Initially there's no child or not all children are metadata
         if len(new_children) > 0 or len(children) == 0:
             node["children"] = new_children
             return node
