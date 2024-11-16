@@ -1,6 +1,7 @@
 #include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -39,15 +40,27 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto sizePerThread = triton::gpu::getSizePerThread(layout);
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-    auto order = triton::gpu::getOrder(layout);
+    auto threadOrder = triton::gpu::getThreadOrder(layout);
+    SmallVector<unsigned> warpOrder(rank);
+    if (auto enc = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      warpOrder =
+          triton::gpu::getMatrixOrder(rank, /*rowMajor=*/enc.getOpIdx() == 1);
+    } else {
+      warpOrder = triton::gpu::getWarpOrder(layout);
+    }
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
     Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
+    // TODO: [DOT LL]
+    // The delinearize function is not entirely correct for certain layouts,
+    // such as wgmma. The correct approach is to convert a legacy layout to its
+    // corresponding linear layout and use the linear layout's
+    // getFreeVariableMasks to identify redundant elements.
     SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+        delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
     SmallVector<Value> multiDimThreadId =
-        delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+        delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
     for (unsigned dim = 0; dim < rank; ++dim) {
       // if there is no data replication across threads on this dimension
       if (shape[dim] >= shapePerCTATile[dim])
@@ -165,7 +178,7 @@ struct LoadStoreConversionBase {
     // Get alignment from the pointer. Since this is a scalar pointer
     // we should not take the pointer contiguity to consider alignment
     auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
-    auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
+    auto maxMultipleBytes = axisInfo->getDivisibility(0);
     auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
     auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
     auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
@@ -276,6 +289,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     auto cacheMod = op.getCache();
     SmallVector<Value> loadedVals;
+    Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -286,8 +300,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(wordNElems * nWords * numVecs == numElems);
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
-      auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
-      Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
+      Value ptr = ptrElems[vecStart];
 
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       // If we need to mask the loaded value with other elements
@@ -309,6 +322,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
+
+    setNumGeneratedGlobalLoads(op, numVecs, vecTy);
+
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -391,6 +407,10 @@ struct BufferLoadOpConversion
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
+
+    const int numVecs = numElems / vec;
+    setNumGeneratedGlobalLoads(op, numVecs, vecTy);
+
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -457,7 +477,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
       SmallVector<std::pair<Value, std::string>> asmArgs;
       Value elem = valueElems[vecStart];
-      Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
+      Value ptr = ptrElems[vecStart];
 
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
@@ -694,6 +714,32 @@ struct AtomicCASOpConversion
   }
 };
 
+bool supportsGlobalAtomicF16PackedAndDpp(triton::AMD::ISAFamily isaFamily) {
+  return isaFamily == triton::AMD::ISAFamily::CDNA1 ||
+         isaFamily == triton::AMD::ISAFamily::CDNA2 ||
+         isaFamily == triton::AMD::ISAFamily::CDNA3;
+}
+
+Value generateI32DppMove(PatternRewriter &rewriter, Value val, int dppCtrl) {
+  assert(val.getType().isInteger(32));
+  auto loc = val.getLoc();
+  Value old = i32_val(0);
+  int rowMask = 0b1111;  // enable all rows
+  int bankMask = 0b1111; // enable all banks
+  bool boundCtrl = false;
+  auto dppMovOp = rewriter.create<ROCDL::DPPUpdateOp>(
+      loc, i32_ty, old, val, dppCtrl, rowMask, bankMask, boundCtrl);
+  return dppMovOp.getResult();
+}
+
+Value shiftLeftI32ByDpp(PatternRewriter &rewriter, Value val) {
+  return generateI32DppMove(rewriter, val, 0x101); // shift left 1 lane
+}
+
+Value shiftRightI32ByDpp(PatternRewriter &rewriter, Value val) {
+  return generateI32DppMove(rewriter, val, 0x111); // shift right 1 lane
+}
+
 struct AtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicRMWOp>,
       public LoadStoreConversionBase {
@@ -765,10 +811,36 @@ struct AtomicRMWOpConversion
     // vec = 1, numElements = 1 for scalar
     auto vec = getVectorSize(ptr);
     int numElems = 1;
+    Type packF16Ty = vec_ty(valueElemTy, 2);
+
+    // In the case of unpaired f16 elements utilize dpp instructions to
+    // accelerate atomics. Here is an algorithm of lowering
+    // tt::atomicRmwOp(%ptr, %val, %mask):
+    // 0. Group thread by pairs. Master thread is (tid % 2 == 0);
+    // 1. All the threads send %val to (tid - 1) thread via dppUpdateOp shl, so
+    //    all the masters recieve value from secondary threads;
+    // 2. Take into account parity in the %mask value, build control flow
+    //    structures according to it;
+    // 3. Generate llvm::atomicRmwOp in the threads enabled by %mask value;
+    // 4. All the threads send result of generated operation to (tid + 1) thread
+    //    via dppUpdateOp shl, so all secondary thread also recieve their
+    //    result.
+    //
+    // This approach enables us to use half the active threads committing atomic
+    // requests to avoid generating of code providing unified access to f16
+    // element and reduce contantion.
+    bool useDppForPackedF16 = false;
     // tensor
     if (tensorTy) {
       auto valTy = cast<RankedTensorType>(val.getType());
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
+      bool isF16Ty = valueElemTy.isF16() || valueElemTy.isBF16();
+      unsigned availableVecSize = isF16Ty ? 2 : 1;
+      vec = std::min<unsigned>(vec, availableVecSize);
+      // Force F16 packing  in the case it's not comming in as packed, but the
+      // ISA can support packed atomic instructions.
+      useDppForPackedF16 =
+          supportsGlobalAtomicF16PackedAndDpp(targetInfo.getISAFamily()) &&
+          vec == 1 && isF16Ty && atomicRmwAttr == RMWOp::FADD;
       // mask
       numElems = tensorTy.getNumElements();
     }
@@ -776,19 +848,48 @@ struct AtomicRMWOpConversion
     auto tid = tid_val();
     mask = and_(mask,
                 icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
+    if (useDppForPackedF16)
+      mask = and_(mask, icmp_eq(urem(tid, i32_val(2)), i32_val(0)));
 
     auto memOrdering = op.getSem();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
 
     auto vecTy = vec_ty(valueElemTy, vec);
     auto retType = vec == 1 ? valueElemTy : vecTy;
+    retType = useDppForPackedF16 ? packF16Ty : retType;
     SmallVector<Value> resultVals(elemsPerThread);
-    const bool f16v2 = vec == 2 && valueElemTy.isF16();
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value rmwPtr = ptrElements[i];
       // TODO: in case llMask is zero we can create only one branch for all
       // elemsPerThread.
       Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
+
+      Value operand;
+      if (useDppForPackedF16) {
+        // Move %val to left neighbour to proceed packed atomic further.
+        Value packedVal = null(packF16Ty);
+        packedVal =
+            insert_element(packF16Ty, packedVal, valElements[i], i32_val(0));
+        // Pack to i32 type to simplify transaction
+        packedVal = bitcast(packedVal, i32_ty);
+        Value dppMoveRes = shiftLeftI32ByDpp(rewriter, packedVal);
+        // Unpack results back
+        Value unpackedDppRes = bitcast(dppMoveRes, packF16Ty);
+        operand = undef(packF16Ty);
+        operand =
+            insert_element(packF16Ty, operand, valElements[i], i32_val(0));
+        operand = insert_element(
+            packF16Ty, operand,
+            extract_element(valueElemTy, unpackedDppRes, i32_val(0)),
+            i32_val(1));
+      } else if (vec == 1) {
+        operand = valElements[i];
+      } else {
+        operand = undef(vecTy);
+        for (size_t ii = 0; ii < vec; ++ii)
+          operand =
+              insert_element(vecTy, operand, valElements[i + ii], i32_val(ii));
+      }
 
       Value undefVal = undef(retType);
       // Build blocks to bypass the atomic instruction for ~rmwMask.
@@ -806,25 +907,11 @@ struct AtomicRMWOpConversion
       auto maybeKind = matchAtomicOp(atomicRmwAttr);
       // TODO: use rocdl.raw.buffer.atomic from ROCDL dialect to use efficient
       // atomics for MI-* series of AMD GPU.
-      Value atom = rewriter
-                       .create<LLVM::AtomicRMWOp>(
-                           loc, *maybeKind, rmwPtr, valElements[i],
-                           atomicMemOrdering, StringRef("agent"))
-                       .getResult();
-
-      // NV for the f16v2 case generates one packed instruction. We have to
-      // create two separate instructions since LLVM::AtomicRMWOp doesn't
-      // support this. Can be optimized out with rocdl.raw.buffer.atomic.
-      if (f16v2) {
-        Value atom2 =
-            rewriter
-                .create<LLVM::AtomicRMWOp>(
-                    loc, *maybeKind, ptrElements[i + 1], valElements[i + 1],
-                    atomicMemOrdering, StringRef("agent"))
-                .getResult();
-        auto tmp = insert_element(vecTy, undef(vecTy), atom, i32_val(0));
-        atom = insert_element(vecTy, tmp, atom2, i32_val(1)).getResult();
-      }
+      Value atom =
+          rewriter
+              .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr, operand,
+                                         atomicMemOrdering, StringRef("agent"))
+              .getResult();
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
           Value atomPtr =
@@ -837,10 +924,25 @@ struct AtomicRMWOpConversion
       rewriter.setInsertionPointToStart(endBlock);
       Value retVal = endBlock->getArgument(0);
       if (tensorTy) {
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? retVal
-                       : extract_element(valueElemTy, retVal, i32_val(ii));
+        if (useDppForPackedF16) {
+          // Return packed to i32 result after atomic operation back from master
+          // lane.
+          auto packedRet = bitcast(retVal, i32_ty);
+          Value dppMovRes = shiftRightI32ByDpp(rewriter, packedRet);
+          // Unpack results back
+          Value unpackedDppRes = bitcast(dppMovRes, packF16Ty);
+          retVal = insert_element(
+              packF16Ty, retVal,
+              extract_element(valueElemTy, unpackedDppRes, i32_val(1)),
+              i32_val(1));
+          resultVals[i] =
+              extract_element(valueElemTy, retVal, urem(tid, i32_val(2)));
+        } else {
+          for (int ii = 0; ii < vec; ++ii) {
+            resultVals[i + ii] =
+                vec == 1 ? retVal
+                         : extract_element(valueElemTy, retVal, i32_val(ii));
+          }
         }
       } else {
         if (!atomicNeedsSharedMemory(op.getResult())) {

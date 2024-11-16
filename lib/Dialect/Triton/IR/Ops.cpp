@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
 namespace triton {
@@ -503,6 +504,22 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   return getElementTypesImpl(this->getOperands());
 }
 
+::mlir::Operation *ReduceOp::getSingleCombiner() {
+  if (getNumOperands() != 1 || getNumResults() != 1)
+    return nullptr;
+  Block *block = &(*getCombineOp().begin());
+  Operation *yield = block->getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return nullptr;
+  if (reduceOp->getOperand(0) != block->getArgument(0) ||
+      reduceOp->getOperand(1) != block->getArgument(1))
+    return nullptr;
+
+  return reduceOp;
+}
+
 unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 
 //-- ScanOp --
@@ -728,9 +745,40 @@ LogicalResult ReshapeOp::verify() {
 }
 
 //-- FpToFpOp --
+
+// Fold FpToFpOp when the input operand is a constant zero.
+OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
+  auto srcVal = getSrc();
+  auto dstTy = getType();
+
+  auto resElemType = cast<FloatType>(getElementTypeOrSelf(getType()));
+  const llvm::fltSemantics &semantic = resElemType.getFloatSemantics();
+
+  if (matchPattern(srcVal, m_PosZeroFloat())) {
+    llvm::APFloat posZero =
+        llvm::APFloat::getZero(semantic, /*negative=*/false);
+    if (auto tensorTy = dyn_cast<RankedTensorType>(dstTy))
+      return DenseElementsAttr::get(tensorTy, posZero);
+    return Builder(getContext()).getFloatAttr(resElemType, posZero);
+  }
+
+  if (matchPattern(srcVal, m_NegZeroFloat())) {
+    llvm::APFloat negZero = llvm::APFloat::getZero(semantic, /*negative=*/true);
+    if (auto tensorTy = dyn_cast<RankedTensorType>(dstTy))
+      return DenseElementsAttr::get(tensorTy, negZero);
+    return Builder(getContext()).getFloatAttr(resElemType, negZero);
+  }
+
+  return {};
+}
+
 LogicalResult FpToFpOp::verify() {
-  auto dstType = getType().getElementType();
-  auto srcType = getSrc().getType().getElementType();
+  auto dstType = getType();
+  auto srcType = getSrc().getType();
+  if (auto dstTensorType = dyn_cast<RankedTensorType>(dstType))
+    dstType = dstTensorType.getElementType();
+  if (auto srcTensorType = dyn_cast<RankedTensorType>(srcType))
+    srcType = srcTensorType.getElementType();
   if ((dstType.getIntOrFloatBitWidth() < srcType.getIntOrFloatBitWidth()) &&
       (!getRounding().has_value())) {
     return emitError("Rounding mode is required for FP downcast");
@@ -800,6 +848,15 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
                builder.getDenseI32ArrayAttr(order));
 }
 
+//-- AddPtrOp --
+OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
+  // addptr(ptr, 0) -> ptr
+  if (matchPattern(adaptor.getOffset(), m_Zero())) {
+    return getPtr();
+  }
+  return {};
+}
+
 //-- AdvanceOp --
 OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
   // advance(ptr, 0, 0) -> ptr
@@ -811,6 +868,22 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
     if (offset != 0)
       return {};
   return getPtr();
+}
+
+//-- MakeTensorDescOp --
+void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
+                             Value base, ValueRange shape, ValueRange strides,
+                             ArrayRef<int32_t> blockShape) {
+  auto ptrTy = dyn_cast<triton::PointerType>(base.getType());
+  if (!ptrTy) {
+    llvm::report_fatal_error("Expected pointer type");
+  }
+  auto elemTy = ptrTy.getPointeeType();
+
+  SmallVector<int64_t> blockShape64(blockShape);
+  auto blockTy = RankedTensorType::get(blockShape64, elemTy);
+  auto descTy = TensorDescType::get(builder.getContext(), blockTy);
+  return build(builder, state, descTy, base, shape, strides);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and
@@ -1014,6 +1087,12 @@ void ExternElementwiseOp::getEffects(
                        SideEffects::DefaultResource::get());
   effects.emplace_back(MemoryEffects::Read::get(),
                        SideEffects::DefaultResource::get());
+}
+
+Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
+  if (getPure())
+    return Speculation::Speculatable;
+  return Speculation::NotSpeculatable;
 }
 
 // -- ExperimentalTensormapCreateOp --

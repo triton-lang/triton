@@ -38,16 +38,27 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto sizePerThread = triton::gpu::getSizePerThread(layout);
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-    auto order = triton::gpu::getOrder(layout);
-    auto warpOrder = triton::gpu::getWarpOrder(layout);
+    auto threadOrder = triton::gpu::getThreadOrder(layout);
+    SmallVector<unsigned> warpOrder(rank);
+    if (auto enc = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      warpOrder =
+          triton::gpu::getMatrixOrder(rank, /*rowMajor=*/enc.getOpIdx() == 1);
+    } else {
+      warpOrder = triton::gpu::getWarpOrder(layout);
+    }
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
     Value warpSize = i32_val(32);
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
+    // TODO: [DOT LL]
+    // The delinearize function is not entirely correct for certain layouts,
+    // such as wgmma. The correct approach is to convert a legacy layout to its
+    // corresponding linear layout and use the linear layout's
+    // getFreeVariableMasks to identify redundant elements.
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
     SmallVector<Value> multiDimThreadId =
-        delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+        delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
     for (unsigned dim = 0; dim < rank; ++dim) {
       // if there is no data replication across threads on this dimension
       if (shape[dim] >= shapePerCTATile[dim])
@@ -649,13 +660,11 @@ struct AtomicRMWOpConversion
       : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  bool supportsVectorized(Operation *moduleOp, RMWOp opType,
-                          Type elementType) const {
+  bool supportsVectorized(RMWOp opType, Type elementType) const {
     // vectorized atomics are only supported on hopper,
     // and only for specific atomic ops (add, min, max).
     // Note that "packed types" like f16x2 are supported sm60+.
-    auto computeCapability = getNVIDIAComputeCapability(moduleOp);
-    if (computeCapability < 90) {
+    if (!targetInfo.supportVectorizedAtomics()) {
       return false;
     }
 
@@ -707,8 +716,7 @@ struct AtomicRMWOpConversion
       vecOrig = vec;
       packed = 1;
       auto valTy = cast<RankedTensorType>(val.getType());
-      if (!supportsVectorized(moduleOp, atomicRmwAttr,
-                              valTy.getElementType())) {
+      if (!supportsVectorized(atomicRmwAttr, valTy.getElementType())) {
         packed =
             std::min<unsigned>(vecOrig, valTy.getElementType().isF16() ? 2 : 1);
         vec = 1;

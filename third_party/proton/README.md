@@ -128,6 +128,7 @@ The following examples demonstrate how to use Proton command-line.
 proton [options] script.py [script_args] [script_options]
 proton [options] pytest [pytest_args] [script_options]
 python -m triton.profiler.proton [options] script.py [script_args] [script_options]
+proton --instrument=[instrumentation pass] script.py
 ```
 
 When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported. Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
@@ -143,11 +144,44 @@ proton-viewer -m time/s <profile.hatchet>
 
 NOTE: `pip install hatchet` does not work because the API is slightly different.
 
+### Visualizing sorted profile data
+
+In addition visualizing the profile data on terminal through Hatchet. A sorted list of the kernels by the first metric can be done using the --print-sorted flag with proton-viewer
+
+```bash
+proton-viewer -m time/ns,time/% <profile.hatchet> --print-sorted
+```
+
+prints the sorted kernels by the time/ns since it is the first listed.
+
 More options can be found by running the following command.
 
 ```bash
 proton-viewer -h
 ```
+
+## Advanced features
+
+### Instrumentation (experimental)
+
+In addition to profiling, Proton also incorporates MLIR/LLVM based compiler instrumentation passes to get Triton level analysis
+and optimization information. This feature is under active development and the list of available passes is expected to grow.
+
+#### Available passes
+
+print-mem-spaces: this pass prints the load and store address spaces (e.g. global, flat, shared) chosen by the compiler and attributes back to Triton source information.
+
+Example usage with the Proton matmul tutorial:
+
+```bash
+$ proton --instrument=print-mem-spaces matmul.py
+0     matmul_kernel     matmul.py:180:20     SHARED     STORE
+1     matmul_kernel     matmul.py:181:20     SHARED     STORE
+2     matmul_kernel     matmul.py:180:20     SHARED     LOAD
+3     matmul_kernel     matmul.py:181:20     SHARED     LOAD
+```
+
+Notes: The instrument functionality is currently only available from the command line. Additionally the instrument and profile command line arguments can not be use simulantously.
 
 ### Instruction sampling (experimental)
 
@@ -209,3 +243,7 @@ If you encounter permission related problems when using instruction sampling, yo
 
 The overhead of instruction sampling on NVIDIA GPUs is about 20x using Proton because we haven't enabled continuous sampling yet.
 Continuous sampling can allow for more runtime optimizations, but it makes it more challenging to attribute performance data back to the GPU kernels because: (1) it enables profiling of concurrent kernels, (2) it doesn't allow profiling of time and instruction samples simultaneously, and (3) it works best if we have a separate thread dedicated to attributing instruction samples to the GPU kernels
+
+- Visible devices on AMD GPUs
+
+Environment variables such as `HIP_VISIBLE_DEVICES`, and `CUDA_VISIBLE_DEVICES` are not supported on AMD GPUs. Once it's set, we cannot find a valid mapping between the device ID returned by RocTracer and the physical device ID. Instead, `ROCR_VISIBLE_DEVICES` is recommended to be used.

@@ -155,10 +155,6 @@ jobs:
       - name: Check pre-commit
         run: |
           python3 -m pip install --upgrade pre-commit
-          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
-          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
-          # If first run of yapf worked and made changes reset the tree to the original state
-          git reset --hard
           python3 -m pre_commit run --all-files --verbose
 
       - name: Print diff of changes if pre-commit failed
@@ -319,8 +315,9 @@ jobs:
       - &run-proton-tests-step
         name: Run Proton tests
         run: |
-          cd third_party/proton
-          python3 -m pytest -s test
+          cd third_party/proton/test
+          python3 -m pytest -s .
+          cd ..
 
       # If we're on branch `main`, save the ccache Triton compilation artifacts
       # to the cache so they can be used by other (non-main) CI runs.

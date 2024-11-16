@@ -140,5 +140,16 @@ def TT_MemDescType : TritonTypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> 
   let hasCustomAssemblyFormat = 1;
 }
 
+// Result type of ExperimentalMakeTensorDescriptor
+def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
+  let summary = "Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system";
+
+  let description = [{
+      A portable abstraction for nvidia-TMA descriptors.
+  }];
+
+  let parameters = (ins "RankedTensorType":$blockType);
+  let assemblyFormat = "`<` $blockType `>`";
+}
 
 #endif

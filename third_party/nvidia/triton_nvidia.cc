@@ -1,4 +1,4 @@
-﻿#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "cublas_instance.h"
@@ -18,9 +18,11 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
-  m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
-    pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(capability));
-  });
+  m.def("add_to_llvmir",
+        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
+          pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
+              capability, ptxVersion));
+        });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(NVIDIA::createDecomposeUnsupportedConversionsPass());
   });

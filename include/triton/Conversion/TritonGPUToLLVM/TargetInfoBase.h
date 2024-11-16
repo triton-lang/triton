@@ -82,6 +82,8 @@ public:
 
   virtual int getSharedAddressSpace() const = 0;
 
+  virtual bool supportVectorizedAtomics() const = 0;
+
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton

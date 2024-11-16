@@ -17,134 +17,17 @@ Type getElementType(Value value) {
     return tensorType.getElementType();
   return type;
 }
-// MMA encoding has a different order depending on the element's bit width;
-// reorder if we're in this case.
-SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
-                                 Type ouType) {
-  auto inTensorTy = dyn_cast<RankedTensorType>(inType);
-  auto ouTensorTy = dyn_cast<RankedTensorType>(ouType);
-  if (!inTensorTy || !ouTensorTy)
-    return values;
-  auto inEncoding = dyn_cast<DotOperandEncodingAttr>(inTensorTy.getEncoding());
-  auto ouEncoding = dyn_cast<DotOperandEncodingAttr>(ouTensorTy.getEncoding());
-  assert(inEncoding == ouEncoding);
-  if (!inEncoding)
-    return values;
-  // If the parent of the dot operand is in block encoding, we don't need to
-  // reorder elements
-  auto parentEncoding = dyn_cast<NvidiaMmaEncodingAttr>(ouEncoding.getParent());
-  if (!parentEncoding)
-    return values;
-  size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
-  size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
-  auto ouEltTy = ouTensorTy.getElementType();
-  if (inBitWidth == ouBitWidth)
-    return values;
-  if (inBitWidth == 16 && ouBitWidth == 32) {
-    SmallVector<Value> ret;
-    for (unsigned i = 0; i < values.size(); i += 8) {
-      ret.push_back(values[i]);
-      ret.push_back(values[i + 1]);
-      ret.push_back(values[i + 4]);
-      ret.push_back(values[i + 5]);
-      ret.push_back(values[i + 2]);
-      ret.push_back(values[i + 3]);
-      ret.push_back(values[i + 6]);
-      ret.push_back(values[i + 7]);
-    }
-    return ret;
-  }
-  if (inBitWidth == 8 && ouBitWidth == 16) {
-    SmallVector<Value> ret;
-    for (unsigned i = 0; i < values.size(); i += 16) {
-      ret.push_back(values[i + 0]);
-      ret.push_back(values[i + 1]);
-      ret.push_back(values[i + 2]);
-      ret.push_back(values[i + 3]);
-      ret.push_back(values[i + 8]);
-      ret.push_back(values[i + 9]);
-      ret.push_back(values[i + 10]);
-      ret.push_back(values[i + 11]);
-      ret.push_back(values[i + 4]);
-      ret.push_back(values[i + 5]);
-      ret.push_back(values[i + 6]);
-      ret.push_back(values[i + 7]);
-      ret.push_back(values[i + 12]);
-      ret.push_back(values[i + 13]);
-      ret.push_back(values[i + 14]);
-      ret.push_back(values[i + 15]);
-    }
-    return ret;
-  }
-  llvm_unreachable("unimplemented code path");
-}
-
-SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
-                             ConversionPatternRewriter &rewriter, Location loc,
-                             const LLVMTypeConverter *typeConverter) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return inValues;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return inValues;
-  SmallVector<Value> outValues;
-  for (auto v : inValues) {
-    // cast i32 to appropriate eltType vector and extract elements
-    auto eltType = typeConverter->convertType(tensorTy.getElementType());
-    auto vecType = vec_ty(eltType, 32 / eltType.getIntOrFloatBitWidth());
-    auto vec = bitcast(v, vecType);
-    for (int i = 0; i < 32 / eltType.getIntOrFloatBitWidth(); i++) {
-      outValues.push_back(extract_element(vec, i32_val(i)));
-    }
-  }
-  return outValues;
-}
-
-SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
-                           ConversionPatternRewriter &rewriter, Location loc,
-                           const LLVMTypeConverter *typeConverter) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return inValues;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return inValues;
-  SmallVector<Value> outValues;
-  auto eltType = typeConverter->convertType(tensorTy.getElementType());
-  int vecWidth = 32 / eltType.getIntOrFloatBitWidth();
-  auto vecType = vec_ty(eltType, vecWidth);
-  for (int i = 0; i < inValues.size(); i += vecWidth) {
-    Value vec = undef(vecType);
-    for (int j = 0; j < vecWidth; j++) {
-      vec = insert_element(vec, inValues[i + j], i32_val(j));
-    }
-    outValues.push_back(bitcast(vec, i32_ty));
-  }
-  return outValues;
-}
 
 int getNumElementsPerThreads(Type type,
                              const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
-  auto tensorTy = dyn_cast<RankedTensorType>(type);
-  if (!tensorTy)
-    return numElemsPerThread;
-  auto structType =
-      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
-  if (structType) {
-    numElemsPerThread = structType.getBody().size();
+  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
+    auto structType =
+        dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
+    if (structType)
+      numElemsPerThread = structType.getBody().size();
   }
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return numElemsPerThread;
-  auto eltType = tensorTy.getElementType();
-  assert(eltType.getIntOrFloatBitWidth() <= 32 &&
-         "Only support element type with bit width <= 32 in dot operand mma "
-         "layout");
-  // dot operand data are packed into i32 elements so use the following formula
-  // to get the number of elements per thread.
-  return (32 / eltType.getIntOrFloatBitWidth()) * numElemsPerThread;
+  return numElemsPerThread;
 }
 
 } // namespace mlir::triton::gpu
@@ -475,8 +358,7 @@ struct ElementwiseInlineAsmOpConversion
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
-      unpackedOperands.push_back(
-          unpackI32(subOperands, argTy, rewriter, loc, getTypeConverter()));
+      unpackedOperands.push_back(subOperands);
     }
 
     int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
@@ -529,17 +411,8 @@ struct ElementwiseInlineAsmOpConversion
     // Reorder and pack the results.
     SmallVector<Value> outs;
     for (int i = 0; i < unpackedResults.size(); i++) {
-      // We reordered all the inputs so they match operand 0.  Reorder the
-      // outputs accordingly.
-      if (op->getNumOperands() > 0) {
-        unpackedResults[i] = reorderValues(
-            unpackedResults[i], /*inType=*/op->getOperand(0).getType(),
-            /*ouType=*/op->getResult(i).getType());
-      }
-      auto packed = packI32(unpackedResults[i], op->getResult(i).getType(),
-                            rewriter, loc, getTypeConverter());
-      outs.push_back(packLLElements(loc, getTypeConverter(), packed, rewriter,
-                                    op->getResult(i).getType()));
+      outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
+                                    rewriter, op->getResult(i).getType()));
     }
 
     rewriter.replaceOp(op, outs);

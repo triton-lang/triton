@@ -13,7 +13,7 @@ def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir
 
   let constructor = "mlir::createTritonAMDGPUStreamPipelineV2Pass()";
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"numStages", "num_stages",
@@ -109,6 +109,16 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
   let constructor = "mlir::createTritonAMDGPUReorderInstructionsPass()";
 
   let dependentDialects = [];
+}
+
+def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "mlir::ModuleOp"> {
+  let summary = "Convert memory operations to buffer operations";
+
+  let description = "This pass converts memory operations (e.g., tt.load/tt.store) to  amdgpu buffer operations, if possible";
+
+  let constructor = "mlir::createTritonAMDGPUConvertToBufferOpsPass()";
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 #endif

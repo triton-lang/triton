@@ -282,6 +282,37 @@ struct ExperimentalTensormapCreateOpConversion
   }
 };
 
+struct ReinterpretTensorDescOpConversion
+    : public ConvertOpToLLVMPattern<ReinterpretTensorDescOp> {
+
+  ReinterpretTensorDescOpConversion(LLVMTypeConverter &converter,
+                                    PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::ReinterpretTensorDescOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getRawDesc());
+    return success();
+  }
+};
+
+struct TensorDescToTMAPtrOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TensorDescToTMAPtrOp> {
+
+  TensorDescToTMAPtrOpConversion(LLVMTypeConverter &converter,
+                                 PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::TensorDescToTMAPtrOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getDesc());
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
@@ -289,6 +320,8 @@ void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<ExperimentalTensormapCreateOpConversion>(typeConverter,
                                                         targetInfo, benefit);
-  patterns.add<ExperimentalTensormapFenceproxyAcquireOpConversion>(
-      typeConverter, benefit);
+  patterns
+      .add<ExperimentalTensormapFenceproxyAcquireOpConversion,
+           ReinterpretTensorDescOpConversion, TensorDescToTMAPtrOpConversion>(
+          typeConverter, benefit);
 }

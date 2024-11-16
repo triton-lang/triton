@@ -15,17 +15,6 @@ namespace mlir::triton {
 
 namespace gpu {
 
-SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
-                                 Type ouType);
-
-SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
-                             ConversionPatternRewriter &rewriter, Location loc,
-                             const LLVMTypeConverter *typeConverter);
-
-SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
-                           ConversionPatternRewriter &rewriter, Location loc,
-                           const LLVMTypeConverter *typeConverter);
-
 Type getElementType(Value value);
 
 class MultipleOperandsRange
@@ -187,8 +176,6 @@ public:
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
-      subOperands = unpackI32(subOperands, argTy, rewriter, loc,
-                              this->getTypeConverter());
       allOperands.resize(subOperands.size());
       for (auto v : llvm::enumerate(subOperands))
         allOperands[v.index()].push_back(v.value());
@@ -209,13 +196,7 @@ public:
       }
       it += curr.size();
     }
-    if (op->getNumOperands() > 0) {
-      auto argTy = op->getOperand(0).getType();
-      resultVals = reorderValues(resultVals, argTy, resultTy);
-    }
     resultVals = maybeDeduplicate(op, resultVals);
-    resultVals =
-        packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
                                 rewriter, resultTy);
     rewriter.replaceOp(op, view);

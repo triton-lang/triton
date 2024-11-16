@@ -29,7 +29,6 @@ def builtin(fn: T) -> T:
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "_builder" not in kwargs or kwargs["_builder"] is None:
-            print(kwargs)
             raise ValueError("Did you forget to add @triton.jit ? "
                              "(`_builder` argument must be provided outside of JIT functions.)")
         return fn(*args, **kwargs)
@@ -610,6 +609,8 @@ class block_type(dtype):
         # Note that block_type's shape is a list of int
         # while tensor's shape is a list of constexpr.
 
+        assert (isinstance(shape, list))
+
         # shape can be empty ([]) when an input is a 0D tensor.
         self.shape = _unwrap_shape(shape)
         if not self.shape:
@@ -715,6 +716,12 @@ class _value:
     def __init__(self, handle):
         self.handle = handle
 
+    def _flatten_ir(self):
+        raise NotImplementedError
+
+    def _unflatten_ir(self, handles):
+        raise NotImplementedError
+
 
 # -----------------------
 # tensor
@@ -755,6 +762,13 @@ class tensor(_value):
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
         self.shape = [constexpr(s) for s in self.shape]
+
+    def _flatten_ir(self):
+        return [self.handle]
+
+    def _unflatten_ir(self, handles):
+        assert len(handles) == 1
+        return tensor(handles[0], self.type)
 
     def __str__(self) -> str:
         # ex. "float32[16, 32]"
@@ -1130,6 +1144,83 @@ class tensor(_value):
         ...
 
 
+class _experimental_tensor_descriptor_base(_value):
+    """"
+    A tensor descriptor with unknown shape and strides
+    """
+
+    def __init__(self, handle, type: block_type):
+        """Not called by user code."""
+        # IR handle
+        super().__init__(handle)
+
+        self.type = type  # Tensor type (block_type)
+        # Following the practice in pytorch, dtype is scalar type
+        self.dtype = type.scalar
+
+    def _flatten_ir(self):
+        return [self.handle]
+
+    def _unflatten_ir(self, handles):
+        assert len(handles) == 1
+        return _experimental_tensor_descriptor_base(handles[0], self.type)
+
+    @property
+    def block_shape(self):
+        return self.type.shape
+
+    def __str__(self) -> str:
+        # ex. "tensor_descriptor<float32[16, 32]>"
+        return f"tensor_descriptor<{self.type}>"
+
+    @builtin
+    def load(self, offsets: List[tensor], _builder=None) -> tensor:
+        """Load a block from the descriptor starting at the given element offsets.
+
+        Values outside of the tensor bounds will be filled with zeros.
+
+        :note: Offset must be a multiple of 16-bytes
+        """
+        return semantic.descriptor_load(self, offsets, "", "", _builder)
+
+    @builtin
+    def store(self, offsets: List[tensor], value: tensor, _builder=None) -> tensor:
+        """Store a block from the descriptor starting at the given element offsets.
+
+        Values outside of the tensor bounds will be ignored.
+
+        :note: Offset must be a multiple of 16-bytes
+        """
+        return semantic.descriptor_store(self, value, offsets, _builder)
+
+
+class _experimental_tensor_descriptor(_experimental_tensor_descriptor_base):
+    """A descriptor representing a tensor in global memory.
+    """
+
+    def __init__(self, handle, shape: List[tensor], strides: List[tensor], type: block_type):
+        """Not called by user code."""
+        # IR handle
+        super().__init__(handle, type)
+        # Global shape
+        self.shape = shape
+        self.strides = strides
+
+    def _flatten_ir(self):
+        handles = [self.handle]
+        handles.extend(s.handle for s in self.shape)
+        handles.extend(s.handle for s in self.strides)
+        return handles
+
+    def _unflatten_ir(self, handles):
+        ndim = len(self.shape)
+        assert len(handles) == 2 * ndim + 1
+        handle = handles[0]
+        shape = [tensor(handle, s.type) for handle, s in zip(handles[1:1 + ndim], self.shape)]
+        strides = [tensor(handle, s.type) for handle, s in zip(handles[1 + ndim:], self.strides)]
+        return _experimental_tensor_descriptor(handle, shape, strides, self.type)
+
+
 def get_bool_env_var(var_name):
     v = os.getenv(var_name, "0")
     return v == "1" or v == "true" or v == "on"
@@ -1290,6 +1381,7 @@ def trans(input: tensor, *dims, _builder=None):
     :py:func:`permute` is equivalent to this function, except it doesn't
     have the special case when no permutation is specified.
     """
+    dims = _unwrap_iterable(dims)
     if not dims:
         dims = (1, 0)
     return semantic.permute(input, dims, _builder)
@@ -1522,9 +1614,9 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     where the first dimension of each block represents the batch dimension.
 
     :param input: The first tensor to be multiplied.
-    :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type input: 2D or 3D tensor of scalar-type in {:code:`int8`, :code:`float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param other: The second tensor to be multiplied.
-    :type other: 2D or 3D tensor of scalar-type in {:code:`int8`, :code: `float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
+    :type other: 2D or 3D tensor of scalar-type in {:code:`int8`, :code:`float8_e5m2`, :code:`float16`, :code:`bfloat16`, :code:`float32`}
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     :type acc: 2D or 3D tensor of scalar-type in {:code:`float16`, :code:`float32`, :code:`int32`}
     :param input_precision: How to exercise the Tensor Cores for f32 x f32. If
@@ -1555,15 +1647,17 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     lhs and rhs use microscaling formats described here:
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
     :param lhs: The first tensor to be multiplied.
-    :type lhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :type lhs: 2D tensor representing fp4 or fp8 elements packed into uint8 for fp4 inputs, or in uint8 or the corresponding fp8 type for fp8 inputs.
     :param lhs_scale: Scale factor for lhs tensor.
-    :type lhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
-    :param lhs_format: format of the lhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :type lhs_scale: e8m0 type represented as an uint8 tensor.
+    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`}.
+    :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
-    :type rhs: 2D tensor of f8, f6 or f4 format packed in int32 format.
+    :type rhs: 2D tensor representing fp8 or bf16 elements in uint8 or the corresponding fp8 type for fp8 inputs or bf16 for bf16 inputs.
     :param rhs_scale: Scale factor for rhs tensor.
-    :type rhs_scale: ue8m0 float8 type (currently represented as an int8 tensor).
-    :param rhs_format: format of the rhs tensor, available formats: {:code:`e4m3`, :code: `e5m2`, :code:`e2m3`, :code:`e3m2`, :code:`e2m1`}.
+    :type rhs_scale: e8m0 type represented as an uint8 tensor.
+    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
+    :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     """
     out_dtype = _constexpr_to_value(out_dtype)
@@ -1637,6 +1731,16 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
 
 @builtin
+def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype,
+                                                _builder=None) -> _experimental_tensor_descriptor_base:
+    """
+    Reinterpret a generic pointer as a TMA-backed tensor descriptor object.
+    """
+    block_ty = block_type(_constexpr_to_value(dtype), block_shape)
+    return semantic.reinterpret_tensor_descriptor(desc_ptr, block_ty, _builder)
+
+
+@builtin
 def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=None):
     """
     Experimental feature to access TMA descriptors loads. This is an escape hatch to easily exercise TTGIR operations.
@@ -1644,8 +1748,8 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
 
     This loads a tensor of data based on the descriptor and offsets.
     """
-    type = block_type(_constexpr_to_value(dtype), shape)
-    return semantic.descriptor_load(desc_pointer, offsets, "", "", type, _builder)
+    desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, shape, dtype, _builder=_builder)
+    return desc.load(offsets, _builder=_builder)
 
 
 @builtin
@@ -1656,7 +1760,8 @@ def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
 
     This stores a tensor of data based on the descriptor and offsets.
     """
-    return semantic.descriptor_store(desc_pointer, value, offsets, _builder)
+    desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, value.shape, value.dtype, _builder=_builder)
+    return desc.store(offsets, value, _builder=_builder)
 
 
 @_tensor_member_fn
@@ -1735,6 +1840,64 @@ def advance(base, offsets, _builder=None):
     :param offsets: the offsets to advance, a tuple by dimension
     """
     return semantic.advance(base, offsets, _builder)
+
+
+@builtin
+def _experimental_make_tensor_descriptor(
+    base: tensor,
+    shape: List[tensor],
+    strides: List[tensor],
+    block_shape: List[constexpr],
+    _builder=None,
+) -> _experimental_tensor_descriptor:
+    """Make an experimental tensor descriptor object
+
+    :param base: the base pointer of the tensor, must be 16-byte aligned
+    :param shape: A list of non-negative integers represeting the tensor shape
+    :param strides: A list of tensor strides. Leading dimensions must be multiples
+        of 16-byte strides and the last dimension must be contiguous.
+    :param block_shape: The shape of block to be loaded/stored from global memory
+
+    Notes
+    *****
+    On NVIDIA GPUs with TMA support, this will result in a TMA descriptor object
+    and loads and stores from the descriptor will be backed by the TMA hardware.
+
+    Currently only 2d tensors are supported.
+
+    Example
+    *******
+    .. code-block:: python
+
+        @triton.jit
+        def inplace_abs(in_out_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+            desc = tl._experimental_make_tensor_descriptor(
+                in_out_ptr,
+                shape=[M, N],
+                strides=[N, 1],
+                block_shape=[M_BLOCK, N_BLOCK],
+            )
+
+            moffset = tl.program_id(0) * M_BLOCK
+            noffset = tl.program_id(1) * N_BLOCK
+
+            value = desc.load([moffset, noffset])
+            desc.store([moffset, noffset], tl.abs(value))
+
+        # TMA descriptors require a global memory allocation
+        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+            return torch.empty(size, device="cuda", dtype=torch.int8)
+
+        triton.set_allocator(alloc_fn)
+
+        M, N = 256, 256
+        x = torch.randn(M, N, device="cuda")
+        M_BLOCK, N_BLOCK = 32, 32
+        grid = (M / M_BLOCK, N / N_BLOCK)
+        inplace_abs[grid](x, M, N, M_BLOCK, N_BLOCK)
+
+    """
+    return semantic.make_tensor_descriptor(base, shape, strides, block_shape, _builder)
 
 
 # -----------------------

@@ -187,7 +187,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
       }
       Value mask = icmp_sge(warpId, i32_val(i + 1));
       accumulator.acc =
-          accumulate(helper, rewriter, accumulator.acc, partialReduce, mask);
+          accumulate(helper, rewriter, accumulator.acc, partialReduce);
       for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
         accumulator.maskedAcc[j] =
             select(mask, accumulator.acc[j], accumulator.maskedAcc[j]);
@@ -389,10 +389,10 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
 
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
-  auto order = triton::gpu::getOrder(srcEncoding);
+  auto threadOrder = triton::gpu::getThreadOrder(srcEncoding);
   auto warpOrder = triton::gpu::getWarpOrder(srcEncoding);
   SmallVector<Value> multiDimLaneId =
-      delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+      delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
 
@@ -402,7 +402,7 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   multiDimLaneId[axis] = i32_val(0);
   threadsPerWarp[axis] = 1;
   Value laneIdParallel =
-      linearize(rewriter, loc, multiDimLaneId, threadsPerWarp, order);
+      linearize(rewriter, loc, multiDimLaneId, threadsPerWarp, threadOrder);
   multiDimWarpId[axis] = i32_val(0);
   warpsPerCTA[axis] = 1;
   Value warpIdParallel =

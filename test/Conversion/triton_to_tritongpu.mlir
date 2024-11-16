@@ -95,3 +95,16 @@ tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg
   tt.return
 }
 }
+
+// -----
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
+tt.func @arith_splat_bool(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+  // CHECK-LABEL: arith_splat_bool
+
+  // Test arith.constant with splatted bool.
+  // CHECK-NEXT: arith.constant dense<true> : tensor<128xi1, #{{.*}}>
+  %mask = arith.constant dense<true> : tensor<128xi1>
+  tt.return
+}
+}

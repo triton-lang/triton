@@ -33,11 +33,14 @@ createOptimizeLDSUsagePass(StringRef arch, int32_t customLDSLimit = 0);
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz);
-std::unique_ptr<OperationPass<ModuleOp>> createConvertBuiltinFuncToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-createInsertInstructionSchedHintsPass();
+createConvertBuiltinFuncToLLVMPass(bool ftz);
 std::unique_ptr<OperationPass<ModuleOp>>
-createLowerInstructionSchedHintsPass(std::string variant);
+createTritonAMDGPUInsertInstructionSchedHintsPass();
+std::unique_ptr<OperationPass<ModuleOp>>
+createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
+                                                 int32_t numStages,
+                                                 StringRef variant);
 
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUToLLVM/Passes.h.inc"

@@ -41,6 +41,17 @@ SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
   return ret;
 }
 
+// TODO Have order be a mandatory argument of standardOutDimNames.
+SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
+                                        const SmallVector<unsigned> &order) {
+  assert(names.size() == order.size());
+  SmallVector<StringAttr> ret;
+  for (unsigned i : order) {
+    ret.push_back(names[i]);
+  }
+  return ret;
+}
+
 void assertIsRegisterLayout(const LinearLayout &layout) {
   assert(layout.getNumInDims() > 0);
   MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
@@ -282,14 +293,18 @@ LinearLayout ampereMmaToLinearLayout(ArrayRef<int64_t> shape,
   MLIRContext *ctx = mma.getContext();
   SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
 
+  auto orderedDimNames = permuteDimNames(dimNames, mma.getRepOrder());
+  assert(mma.getRepOrder() == getMatrixOrder(rank, /*rowMajor=*/true));
+
   LinearLayout ctaLayout(
       {{S("register"), {{1, 0}, {0, 8}}},
        {S("lane"), {{2, 0}, {4, 0}, {0, 1}, {0, 2}, {0, 4}}}},
-      llvm::to_vector(llvm::reverse(ArrayRef(dimNames).take_back(2))));
-
-  ctaLayout *= identityND(
-      S("warp"), mma.getWarpsPerCTA(),
-      llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank))), dimNames);
+      ArrayRef(orderedDimNames).take_front(2));
+  assert(getWarpOrder(mma) == getMatrixOrder(rank, /*rowMajor=*/true));
+  // FIXME(Lezcano). identityND should not have an `order` param as it's
+  // redundant with the order of the out dims.
+  ctaLayout *=
+      identityND(S("warp"), mma.getWarpsPerCTA(), mma.getWarpOrder(), dimNames);
 
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
 }
@@ -322,10 +337,14 @@ LinearLayout hopperMmaToLinearLayout(ArrayRef<int64_t> shape,
   ctaLayout *= LinearLayout::identity1D(n / ctaLayout.getOutDimSize(S("dim1")),
                                         S("register"), S("dim1"));
 
-  // Expand the `warp` dimension according to warpsPerCTA.
-  //
-  // It's weird that this is order [0,1] when MMAv2's warpsPerCTA is [1,0], but
-  // this really does seem to be correct.
+  // The order given by choosing (`dim1`, `dim0`) is [1, 0], that is, N-major.
+  // Since the warpOrder needs to be M-major, we need to transpose the out
+  // dimensions AND transpose the order
+  // FIXME(Lezcano). identityND should not have an `order` param as it's
+  //                 redundant. The order is already given by the order of the
+  //                 out dims, and if it has an order, it shouldn't change the
+  //                 order of the out dims.
+  assert(getWarpOrder(mma) == SmallVector<unsigned>({0, 1}));
   ctaLayout *= identityND(S("warp"), mma.getWarpsPerCTA(), /*order=*/{0, 1},
                           {S("dim0"), S("dim1")})
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
@@ -551,8 +570,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 std::optional<LinearLayout>
-dotOperandMfmaToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
-                             ArrayRef<int64_t> shape) {
+mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
+                      ArrayRef<int64_t> shape) {
 
   // Current linear layout conversion for dot operand is only necessary to
   // enable LDS bypass for operand B in the MFMA dot path. To achieve
@@ -843,20 +862,30 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
                                      DotOperandEncodingAttr dot) {
-  // TODO,BE. Implement ampereMMA in terms of this one
+  // Note that, even though MMAv2 looks similar to this layout, they are just
+  // the same at a register and lane level. The warps treatment is different!
   int rank = shape.size();
   auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
   int kWidth = dot.getKWidth();
   bool isA = dot.getOpIdx() == 0;
 
-  assert(mma.isAmpere());
   assert((rank == 2 && mma.getInstrShape() == ArrayRef<unsigned>({16, 8})) ||
          (rank == 3 && mma.getInstrShape() == ArrayRef<unsigned>({1, 16, 8})));
+  assert(mma.isAmpere());
 
   MLIRContext *ctx = mma.getContext();
-  SmallVector<StringAttr> dimNames = standardOutDimNames(ctx, rank);
 
-  // Implement A. For B transpose in the end
+  // The A and B operands are tiled in a kMajor fashion
+  auto kMajorOrder = dot.getRepOrder();
+  assert(kMajorOrder ==
+         getOrderForDotOperand(dot.getOpIdx(), rank, /*kMajor=*/true));
+
+  auto kMajorDims =
+      permuteDimNames(standardOutDimNames(ctx, rank), kMajorOrder);
+  // This agrees with the order of the elements, which means that we can share
+  // the code below for both A and B without having to perform any swaps
+  assert(getOrder(dot) == kMajorOrder);
+
   std::vector<std::vector<int32_t>> registers;
   std::vector<std::vector<int32_t>> lanes;
   int32_t i = 1;
@@ -881,35 +910,60 @@ LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
   }
   registers.push_back({i, 0});
 
-  if (!isA) {
-    for (auto &r : registers) {
-      std::swap(r[0], r[1]);
+  LinearLayout ctaLayout({{S("register"), registers}, {S("lane"), lanes}},
+                         ArrayRef(kMajorDims).take_front(2));
+
+  // Let warpsPerCTAMma = {2, 2}, then
+  // warpsPerCTA = {2, 1} for opA and warpsPerCTA = {1, 2} for opB
+  // assume warpOrder = {0, 1}
+  // Assume that C is tiled by 2x2 tiles. Since warpOrder={1, 0}, we have that
+  // the C is owned as per the following layout:
+  // C: 0 | 1
+  //    - | -
+  //    2 | 3
+  // In order to be able to compute C, we need the following warp tiling of
+  // A and B:
+  // A: 0 1 | 0 1    B: 0 2 | 1 3
+  //    - - | - -       - - | - -
+  //    2 3 | 2 3       0 2 | 1 3
+  // In particular, for A and B we need to broadcast along K
+
+  assert(mma.getWarpOrder() == getMatrixOrder(rank, /*rowMajor=*/true));
+  auto warpsPerCTAMma = mma.getWarpsPerCTA();
+  std::vector<std::vector<int32_t>> warps;
+  if (isA) {
+    for (int i = 1; i < warpsPerCTAMma[1]; i *= 2) {
+      warps.push_back({0, 0});
     }
-    for (auto &l : lanes) {
-      std::swap(l[0], l[1]);
+    for (int i = 1; i < warpsPerCTAMma[0]; i *= 2) {
+      warps.push_back({0, i});
+    }
+  } else {
+    for (int i = 1; i < warpsPerCTAMma[1]; i *= 2) {
+      warps.push_back({0, i});
+    }
+    for (int i = 1; i < warpsPerCTAMma[0]; i *= 2) {
+      warps.push_back({0, 0});
+    }
+  }
+  if (rank == 3) {
+    for (auto &w : warps) {
+      w.push_back(0);
     }
   }
 
-  LinearLayout ctaLayout(
-      {{S("register"), registers}, {S("lane"), lanes}},
-      llvm::to_vector(llvm::reverse(ArrayRef(dimNames).take_back(2))));
+  ctaLayout *= LinearLayout({{S("warp"), warps}}, kMajorDims);
 
-  auto order = dot.getCTAOrder();
-  assert(order[0] == 1 && order[1] == 0);
-  ctaLayout *= identityND(S("warp"), dot.getWarpsPerCTA(), order, dimNames);
-
-  return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCTALayout(dot), shape);
 }
 
 std::optional<LinearLayout>
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
-    return dotOperandMfmaToLinearLayout(*this, shape);
-  } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent())) {
-    // FIXME [Dot LL]
-    // Do this unconditionally
-    auto largeKWidth = getKWidth() == 8;
-    if (mma.isAmpere() && largeKWidth) {
+  auto parent = getParent();
+  if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
+    return mfmaDotToLinearLayout(*this, shape);
+  } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
+    if (mma.isAmpere()) {
       return ampereDotToLinearLayout(shape, *this);
     }
   }
@@ -933,25 +987,6 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 
   // TODO(jlebar): Other layouts
   return std::nullopt;
-}
-
-bool isCrossCTAConversion(const LinearLayout &layout) {
-  assert(!layout.getInDimNames().empty());
-  MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
-
-  StringAttr kBlock = S("block");
-  assert(layout.hasInDim(kBlock));
-  assert(layout.hasOutDim(kBlock));
-
-  SetVector<StringAttr> nonBlockInDims(layout.getInDimNames().begin(),
-                                       layout.getInDimNames().end());
-  nonBlockInDims.remove(kBlock);
-
-  // This layout moves data between CTAs if
-  // - the value for any input dim other than block affects the output block, or
-  // - input (0, ..., block=i) does not map to output (0, ..., block=i).
-  return !layout.sublayoutIsZero(nonBlockInDims.getArrayRef(), {kBlock}) ||
-         !layout.sublayoutIsIdentity({kBlock}, {kBlock});
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

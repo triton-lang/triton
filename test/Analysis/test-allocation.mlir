@@ -1,4 +1,11 @@
 // RUN: triton-opt %s -split-input-file --mlir-disable-threading -test-print-allocation 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --mlir-disable-threading -test-print-allocation="get-scratch-size-function=ValidConstant" 2>&1 | FileCheck %s --check-prefix=CHECK-128
+
+// Check there are no lines with a size different to 128 and we have at least a line with size 128.
+
+// CHECK-128-NOT: scratch offset = {{.*}}, size = {{^(128)}}
+// CHECK-128: scratch offset = {{.*}}, size = 128
+// CHECK-128-NOT: scratch offset = {{.*}}, size = {{^(128)}}
 
 #AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #triton_gpu.slice<{dim = 0, parent = #AL}>
@@ -6,7 +13,7 @@
 #A_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 

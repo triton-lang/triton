@@ -6,11 +6,9 @@ The Triton Conference is happening again on September 17th, 2024 in Fremont (CA)
 
 If you are interested in attending, please fill up [this form](https://docs.google.com/forms/d/e/1FAIpQLSecHC1lkalcm0h3JDUbspekDX5bmBvMxgVTLaK3e-61bzDDbg/viewform).
 
-
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
-
 
 # Triton
 
@@ -24,20 +22,21 @@ The [official documentation](https://triton-lang.org) contains installation inst
 
 You can install the latest stable release of Triton from pip:
 
-```bash
+```shell
 pip install triton
 ```
+
 Binary wheels are available for CPython 3.8-3.12 and PyPy 3.8-3.9.
 
 And the latest nightly release:
 
-```bash
+```shell
 pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
 ```
 
 # Install from source
 
-```
+```shell
 git clone https://github.com/triton-lang/triton.git;
 cd triton;
 
@@ -47,7 +46,7 @@ pip install -e python
 
 Or with a virtualenv:
 
-```
+```shell
 git clone https://github.com/triton-lang/triton.git;
 cd triton;
 
@@ -156,14 +155,14 @@ $ lit test
 You may find it helpful to make a symlink to the builddir and tell your local
 git to ignore it.
 
-```
+```shell
 $ ln -s python/build/cmake<...> build
 $ echo build >> .git/info/exclude
 ```
 
 Then you can e.g. rebuild and run lit with the following command.
 
-```
+```shell
 $ ninja -C build && ( cd build ; lit test )
 ```
 
@@ -177,6 +176,9 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
+- `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
+  at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
+  `<reproducer_path>` will be a local MLIR reproducer captured right before the failing pass.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
   GPU.  You can insert Python breakpoints in your kernel code!
 - `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
@@ -217,6 +219,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 # Changelog
 
 Version 2.0 is out! New features include:
+
 - Many, many bug fixes
 - Performance improvements
 - Backend rewritten to use MLIR
@@ -226,13 +229,14 @@ Version 2.0 is out! New features include:
 
 Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/triton-lang/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
-
 # Compatibility
 
 Supported Platforms:
-  * Linux
+
+- Linux
 
 Supported Hardware:
-  * NVIDIA GPUs (Compute Capability 7.0+)
-  * AMD GPUs (ROCm 5.2+)
-  * Under development: CPUs
+
+- NVIDIA GPUs (Compute Capability 8.0+)
+- AMD GPUs (ROCm 5.2+)
+- Under development: CPUs

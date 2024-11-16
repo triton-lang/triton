@@ -1,6 +1,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -12,7 +13,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/raw_ostream.h"
 #include <array>
 
 using namespace mlir;
@@ -29,73 +29,6 @@ public:
                       const TargetInfoBase &targetInfo, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<UpcastMXFPOp>(typeConverter, benefit),
         targetInfo(targetInfo) {}
-
-  llvm::SmallVector<Value>
-  unpackFP4Elements(Location loc, ConversionPatternRewriter &rewriter,
-                    const llvm::SmallVector<Value> &vals, Value laneId) const {
-    auto fp4x2ToBf16x2 = [&loc, &rewriter](Value v) -> Value {
-      auto em0 = and_(v, i8_val(0x70));
-      auto em1 = and_(v, i8_val(0x7));
-      Value v0 = or_(shl(zext(i16_ty, em0), i16_val(2)),
-                     shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
-      Value v1 = or_(shl(zext(i16_ty, em1), i16_val(6)),
-                     shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
-
-      // Three cases:
-      // 1) x is normal and non-zero: Correct bias
-      v0 = select(icmp_ne(and_(em0, i8_val(0x60)), i8_val(0)),
-                  add(v0, i16_val((127 - 1) << 7)), v0);
-      v1 = select(icmp_ne(and_(em1, i8_val(0x6)), i8_val(0)),
-                  add(v1, i16_val((127 - 1) << 7)), v1);
-
-      // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
-      // bf16
-      v0 = select(icmp_eq(em0, i8_val(0x10)),
-                  or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0);
-      v1 = select(icmp_eq(em1, i8_val(0x1)),
-                  or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1);
-      // 3) x is zero, nothing to do
-
-      // Swap as they come packed in big endian
-      return or_(zext(i32_ty, v0), shl(zext(i32_ty, v1), i32_val(16)));
-    };
-
-    auto fp4x8ToBf16x2 = [&loc, &rewriter, &fp4x2ToBf16x2](
-                             Value v) -> llvm::SmallVector<Value, 4> {
-      llvm::SmallVector<Value, 4> results(4);
-      for (int i = 0; i < 4; ++i) {
-        auto v_i = trunc(i8_ty, lshr(v, i32_val(8 * i)));
-        results[i] = fp4x2ToBf16x2(v_i);
-      }
-      return results;
-    };
-
-    // Split fp4x8 into 4 bf16x2
-    llvm::SmallVector<Value> ret;
-    ret.reserve(vals.size() * 4);
-    for (int i = 0; i < vals.size(); ++i) {
-      auto vs = fp4x8ToBf16x2(vals[i]);
-      assert(vs.size() == 4);
-      for (auto v : vs) {
-        ret.push_back(v);
-      }
-    }
-    // FIXME [Dot LL]
-    // The DotOperandEncodingAttr without LLs encodes the
-    // layout as
-    // e0 e1
-    // e2 e3
-    // rather than transposed that, as the PTX docs say
-    // We transpose every block of 4 elements (kWidth = 8 -> 4 bf16x2)
-    assert(ret.size() % 16 == 0);
-    for (int i = 0; i < ret.size() / 16; ++i) {
-      for (int j = 0; j < 4; ++j) {
-        std::swap(ret[16 * i + j + 4], ret[16 * i + j + 8]);
-      }
-    }
-
-    return ret;
-  }
 
   LogicalResult
   matchAndRewrite(UpcastMXFPOp op, OpAdaptor adaptor,
@@ -116,27 +49,8 @@ public:
     Value warpId = udiv(tid, warpSize);
     Value laneId = urem(tid, warpSize);
 
-    if (fpType == F8F6F4Type::E2M1) {
-      xVals = unpackFP4Elements(loc, rewriter, xVals, laneId);
-    }
-
-    auto scaleBf16x2 = [&loc, &rewriter](Value v, Value s) -> Value {
-      // Split bf16x2 into 2 bf16, scale each of them, and pack them back
-      // TODO Is it true that the bfloats are always packed as bf16x2?
-      auto bf16_0 = bitcast(trunc(i16_ty, v), bf16_ty);
-      auto bf16_1 = bitcast(trunc(i16_ty, lshr(v, i32_val(16))), bf16_ty);
-      auto scaleIsNan = icmp_eq(s, i8_val(0xff));
-      auto scaleBf16 = bitcast(shl(zext(i16_ty, s), i16_val(7)), bf16_ty);
-      auto scaledBf16_0 = fmul(bf16_0, scaleBf16);
-      auto scaledBf16_1 = fmul(bf16_1, scaleBf16);
-      auto i16_0 = bitcast(scaledBf16_0, i16_ty);
-      auto i16_1 = bitcast(scaledBf16_1, i16_ty);
-      auto packed =
-          or_(zext(i32_ty, i16_0), shl(zext(i32_ty, i16_1), i32_val(16)));
-      // Account for NaN in the scale as per the mxfp specification
-      auto packed_nan = select(scaleIsNan, i32_val(0x7fff7fff), packed);
-      return packed_nan;
-    };
+    if (fpType == ScaleDotElemType::E2M1)
+      xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
 
     // Each thread owns elements of 4 mxfp vectors so we need 4 scales
     // Letting c = tid / 4 * 2, we need the elements from threads c, c + 1, c +
@@ -154,8 +68,9 @@ public:
           targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[3]),
       };
 
-      for (int j = 0; j < 16; ++j) {
-        xVals[16 * i + j] = scaleBf16x2(xVals[16 * i + j], si[j / 4]);
+      for (int j = 0; j < 32; ++j) {
+        xVals[32 * i + j] =
+            LLVM::mxfpScaleBf16(rewriter, loc, xVals[32 * i + j], si[j / 8]);
       }
     }
 

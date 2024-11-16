@@ -268,12 +268,34 @@ def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<In
   let arguments = (ins
                    TT_Tensor:$src,
                    TT_Tensor:$scale,
-                   TT_F8F6F4TypeAttr:$fp_type);
+                   TT_ScaleDotElemTypeAttr:$fp_type);
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
     $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
   }];
+}
+
+// Allocate global memory
+def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+  let summary = "allocate a global memory buffer";
+  let description = [{
+    This operation allocates a buffer in global memory that is private to the current program.
+  }];
+  let arguments = (
+    ins
+    I32Attr:$nbytes,
+    I32Attr:$alignment
+  );
+  let results = (outs TT_Ptr:$result);
+
+  let builders = [
+    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
+              [{ build($_builder, $_state, result,
+                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
+  ];
+
+  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
 #endif

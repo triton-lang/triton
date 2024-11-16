@@ -84,16 +84,30 @@ void SessionManager::activateSession(size_t sessionId) {
   activateSessionImpl(sessionId);
 }
 
+void SessionManager::activateAllSessions() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  for (auto iter : sessionActive) {
+    activateSessionImpl(iter.first);
+  }
+}
+
 void SessionManager::deactivateSession(size_t sessionId) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   deActivateSessionImpl(sessionId);
 }
 
+void SessionManager::deactivateAllSessions() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  for (auto iter : sessionActive) {
+    deActivateSessionImpl(iter.first);
+  }
+}
+
 void SessionManager::activateSessionImpl(size_t sessionId) {
   throwIfSessionNotInitialized(sessions, sessionId);
-  if (activeSessions[sessionId])
+  if (sessionActive[sessionId])
     return;
-  activeSessions[sessionId] = true;
+  sessionActive[sessionId] = true;
   sessions[sessionId]->activate();
   registerInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   registerInterface<OpInterface>(sessionId, opInterfaceCounts);
@@ -101,10 +115,10 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
 
 void SessionManager::deActivateSessionImpl(size_t sessionId) {
   throwIfSessionNotInitialized(sessions, sessionId);
-  if (!activeSessions[sessionId]) {
+  if (!sessionActive[sessionId]) {
     return;
   }
-  activeSessions[sessionId] = false;
+  sessionActive[sessionId] = false;
   sessions[sessionId]->deactivate();
   unregisterInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   unregisterInterface<OpInterface>(sessionId, opInterfaceCounts);
@@ -116,6 +130,7 @@ void SessionManager::removeSession(size_t sessionId) {
   }
   auto path = sessions[sessionId]->path;
   sessionPaths.erase(path);
+  sessionActive.erase(sessionId);
   sessions.erase(sessionId);
 }
 
@@ -204,7 +219,7 @@ void SessionManager::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics,
     bool aggregable) {
   std::shared_lock<std::shared_mutex> lock(mutex);
-  for (auto [sessionId, active] : activeSessions) {
+  for (auto [sessionId, active] : sessionActive) {
     if (active) {
       sessions[sessionId]->data->addMetrics(scopeId, metrics, aggregable);
     }
