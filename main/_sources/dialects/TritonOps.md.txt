@@ -99,6 +99,38 @@ Interfaces: `CallableOpInterface`, `FunctionOpInterface`, `OpAsmOpInterface`, `S
 <tr><td><code>res_attrs</code></td><td>::mlir::ArrayAttr</td><td>Array of dictionary attributes</td></tr>
 </table>
 
+### `tt.reinterpret_tensor_descriptor` (triton::ReinterpretTensorDescOp)
+
+_Reinterpret a pointer as a tensor descriptor_
+
+
+Syntax:
+
+```
+operation ::= `tt.reinterpret_tensor_descriptor` $rawDesc attr-dict `:` qualified(type($rawDesc))  `to` qualified(type($result))
+```
+
+This Op exists to help the transition from untyped raw TMA objects to typed Tensor descriptor objects.
+Ideally, we can remove this once the APIs are fully fleshed out.
+
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `rawDesc` | ptr
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system
+
 ### `tt.return` (triton::ReturnOp)
 
 _Function return operation_
@@ -677,16 +709,16 @@ _Load from descriptor_
 Syntax:
 
 ```
-operation ::= `tt.experimental_descriptor_load` $desc_ptr `[` $indices `]`
+operation ::= `tt.experimental_descriptor_load` $desc `[` $indices `]`
               oilist(
               `cacheModifier` `=` $cache |
               `evictionPolicy` `=` $evict
               )
-              attr-dict `:` qualified(type($desc_ptr)) `->` type($result)
+              attr-dict `:` qualified(type($desc)) `->` type($result)
 ```
 
 This operation will be lowered to Nvidia TMA load operation on targets supporting it.
-`desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
+`desc` is a tensor descriptor object.
 The destination tensor type and shape must match the descriptor otherwise the result is undefined.
 
 This is an escape hatch and is only there for testing/experimenting.
@@ -720,7 +752,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system
 | `indices` | variadic of 32-bit signless integer
 
 #### Results:
@@ -737,12 +769,12 @@ _Store value based on descriptor_
 Syntax:
 
 ```
-operation ::= `tt.experimental_descriptor_store` $desc_ptr `[` $indices `]` `,` $src
-              attr-dict `:` qualified(type($desc_ptr)) `,` type($src)
+operation ::= `tt.experimental_descriptor_store` $desc `[` $indices `]` `,` $src
+              attr-dict `:` qualified(type($desc)) `,` type($src)
 ```
 
 This operation will be lowered to Nvidia TMA store operation on targets supporting it.
-`desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
+`desc` is a tensor descriptor object.
 The shape and types of `src` must match the descriptor otherwise the result is undefined.
 
 This is an escape hatch and is only there for testing/experimenting.
@@ -758,7 +790,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 
 | Operand | Description |
 | :-----: | ----------- |
-| `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system
 | `src` | ranked tensor of floating-point or integer or ptr values
 | `indices` | variadic of 32-bit signless integer
 
@@ -1183,13 +1215,6 @@ Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterfac
 
 Effects: `MemoryEffects::Effect{}`
 
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>tensorShape</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
-</table>
-
 #### Operands:
 
 | Operand | Description |
@@ -1202,7 +1227,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ptr
+| `result` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system
 
 ### `tt.make_tensor_ptr` (triton::MakeTensorPtrOp)
 

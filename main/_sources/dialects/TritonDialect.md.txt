@@ -63,3 +63,23 @@ Pointer type in Triton IR type system, which could be pointing to scalars or ten
 | pointeeType | `Type` |  |
 | addressSpace | `int` |  |
 
+### TensorDescType
+
+Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system
+
+Syntax:
+
+```
+!tt.tensordesc<
+  RankedTensorType   # blockType
+>
+```
+
+A portable abstraction for nvidia-TMA descriptors.
+
+#### Parameters:
+
+| Parameter | C++ type | Description |
+| :-------: | :-------: | ----------- |
+| blockType | `RankedTensorType` |  |
+

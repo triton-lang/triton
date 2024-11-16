@@ -246,6 +246,36 @@ Traits: `VerifyTensorLayoutsTrait`
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
+### `triton_nvidia_gpu.tensor_desc_to_tma_ptr` (triton::nvidia_gpu::TensorDescToTMAPtrOp)
+
+_Convert tensor descriptor to pointer to tma descriptor_
+
+
+Syntax:
+
+```
+operation ::= `triton_nvidia_gpu.tensor_desc_to_tma_ptr` $desc attr-dict `:` qualified(type($desc)) `to` qualified(type($ptr))
+```
+
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `ptr` | ptr
+
 ### `triton_nvidia_gpu.wait_barrier` (triton::nvidia_gpu::WaitBarrierOp)
 
 _Wait until the mbarrier phase completes._

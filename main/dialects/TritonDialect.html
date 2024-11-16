@@ -73,6 +73,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#types">Types</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#memdesctype">MemDescType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#pointertype">PointerType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tensordesctype">TensorDescType</a></li>
 </ul>
 </li>
 </ul>
@@ -219,6 +220,34 @@ can be changed without changing the underlying memory.</p>
 </tr>
 <tr class="row-odd"><td class="text-center"><p>addressSpace</p></td>
 <td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="tensordesctype">
+<h3>TensorDescType<a class="headerlink" href="#tensordesctype" title="Link to this heading">¶</a></h3>
+<p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>!tt.tensordesc&lt;
+  RankedTensorType   # blockType
+&gt;
+</pre></div>
+</div>
+<p>A portable abstraction for nvidia-TMA descriptors.</p>
+<section id="id3">
+<h4>Parameters:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Parameter</p></th>
+<th class="head text-center"><p>C++ type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p>blockType</p></td>
+<td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">RankedTensorType</span></code></p></td>
 <td><p></p></td>
 </tr>
 </tbody>

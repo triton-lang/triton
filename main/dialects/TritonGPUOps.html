@@ -373,7 +373,7 @@ operands are the same as tt.load.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.global_scratch_alloc</span></code> (triton::gpu::GlobalScratchAllocOp)<a class="headerlink" href="#triton-gpu-global-scratch-alloc-triton-gpu-globalscratchallocop" title="Link to this heading">¶</a></h2>
 <p><em>Allocate a global memory buffer</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.global_scratch_alloc` attr-dict `:` type($result)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.global_scratch_alloc` attr-dict `:` qualified(type($result))
 </pre></div>
 </div>
 <p>This operation allocates a buffer in global memory that is private to the current program.</p>

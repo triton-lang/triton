@@ -156,7 +156,7 @@ _Allocate a global memory buffer_
 Syntax:
 
 ```
-operation ::= `triton_gpu.global_scratch_alloc` attr-dict `:` type($result)
+operation ::= `triton_gpu.global_scratch_alloc` attr-dict `:` qualified(type($result))
 ```
 
 This operation allocates a buffer in global memory that is private to the current program.
