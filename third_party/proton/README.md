@@ -166,7 +166,7 @@ proton-viewer -h
 
 In addition to `proton.scope`, we can also customize the call path of each GPU operation using `proton.state`.
 
-The `state` is different from `scope` in several ways:
+`state` is different from `scope` in several ways:
 
 1. State is not recursive; each operation can have only a single state. Inner most state will overwrite the outer most state.
 2. A states is a suffix, meaning that the original call path will append a state above the name of each kernel.
