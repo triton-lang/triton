@@ -257,6 +257,31 @@ __all__ = [
 ]
 
 
+def parse_list_string(s):
+    s = s.strip()
+    if s.startswith('[') and s.endswith(']'):
+        s = s[1:-1]
+    result = []
+    current = ''
+    depth = 0
+    for c in s:
+        if c == '[':
+            depth += 1
+            current += c
+        elif c == ']':
+            depth -= 1
+            current += c
+        elif c == ',' and depth == 0:
+            result.append(current.strip())
+            current = ''
+        else:
+            current += c
+    if current.strip():
+        result.append(current.strip())
+    return result
+
+
+
 def str_to_ty(name):
     if name[0] == "*":
         name = name[1:]
@@ -268,7 +293,7 @@ def str_to_ty(name):
         return pointer_type(element_ty=ty, const=const)
 
     if name[0] == "[":
-        names = [] if name == "[]" else name[1:-1].split(',')
+        names = parse_list_string(name)
         tys = [str_to_ty(x) for x in names]
         return tuple_type(types=tys)
 

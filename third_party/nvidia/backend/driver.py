@@ -15,6 +15,29 @@ libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
 
 
+def parse_list_string(s):
+    s = s.strip()
+    if s.startswith('[') and s.endswith(']'):
+        s = s[1:-1]
+    result = []
+    current = ''
+    depth = 0
+    for c in s:
+        if c == '[':
+            depth += 1
+            current += c
+        elif c == ']':
+            depth -= 1
+            current += c
+        elif c == ',' and depth == 0:
+            result.append(current.strip())
+            current = ''
+        else:
+            current += c
+    if current.strip():
+        result.append(current.strip())
+    return result
+
 @functools.lru_cache()
 def libcuda_dirs():
     env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
@@ -142,17 +165,17 @@ def make_launcher(constants, signature, ids):
             return "PyObject*"
         if ty[0] == '[':
             if ty == "[]":
-                return "()"
-            tys = ty[1:-1].split(",")
+                return "[]"
+            tys = parse_list_string(ty)
             val = ','.join(map(_extracted_type, tys))
-            return f"({val})"
+            return f"[{val}]"
         return ty_to_cpp(ty)
 
     def format_of(ty):
-        if ty[0] == "(":
-            if ty == "()":
+        if ty[0] == "[":
+            if ty == "[]":
                 return "()"
-            tys = ty[1:-1].split(",")
+            tys = parse_list_string(ty)
             val = ''.join(map(format_of, tys))
             return f"({val})"
         return {
@@ -170,12 +193,12 @@ def make_launcher(constants, signature, ids):
             "uint64_t": "K",
         }[ty]
 
+
     signature = {k: v for k, v in signature.items() if v != 'constexpr'}
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiKKOOOO" + args_format
-
-    # expand signature
-    signature, kvmap = _serialize_signature(signature)
+    signature = ','.join(signature.values()).replace('[','').replace(']','').split(',')
+    signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
@@ -189,7 +212,7 @@ def make_launcher(constants, signature, ids):
             internal_args_list.append(f"*tma_ptr{i}")
         else:
             internal_args_list.append(f"_arg{i}")
-    params = [i for i in kvmap.keys() if kvmap[i] not in constants]
+    params = range(len(signature))
 
     # generate glue code
     src = f"""

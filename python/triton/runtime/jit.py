@@ -609,11 +609,10 @@ class JITFunction(KernelInterface[T]):
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
-            constant_params = attrs.get_constants()
             constants = {
                 (p.num,): v
                 for (v, p) in zip(bound_vals, self.params)
-                if p.is_constexpr or (p.num in constant_params) or v is None
+                if p.is_constexpr or v is None
             }
             for i, arg in constants.items():
                 if callable(arg):
@@ -642,15 +641,11 @@ class JITFunction(KernelInterface[T]):
             # canonicalize grid
             assert grid is not None
             if callable(grid):
-                # Arguments are passed as a dict to `grid`, by contract.
-                # TODO(jlebar): In the new launch API, pass the compiler flags as a
-                # second parameter to `grid`.
                 grid = grid(bound_args)
             grid_size = len(grid)
             grid_0 = grid[0]
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
-
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,

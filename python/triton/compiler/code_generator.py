@@ -1336,16 +1336,17 @@ class ASTFunction:
         prev = x if len(path) == 1 else self.get_path(x, path[:-1])
         prev[path[-1]] = val
         
-    def __init__(self, ret_types, arg_types, constants, attrs):
+    def __init__(self, ret_types, arg_types, constexprs, constants, attrs):
         self.ret_types = ret_types
         self.arg_types = arg_types
+        self.constexprs = constexprs
         self.constants = constants
         self.attrs = attrs
     
     def serialize(self, builder: ir.builder):
         # fill up IR values in template
         # > build function
-        is_val = lambda path, _: path not in self.constants
+        is_val = lambda path, _: path not in self.constexprs
         val_paths = find_paths_if(self.arg_types, is_val)
         arg_types = [self.get_path(self.arg_types, path).to_ir(builder) for path in val_paths]
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
@@ -1358,7 +1359,7 @@ class ASTFunction:
                 return language.tuple([make_template(x) for x in val])
             return language.constexpr(None)
         vals = make_template(self.arg_types)
-        is_val = lambda path, _: path not in self.constants
+        is_val = lambda path, _: path not in self.constexprs
         val_paths = find_paths_if(self.arg_types, is_val)
         # > set attributes
         for attr_path, attr_specs in self.attrs.items():
@@ -1369,14 +1370,16 @@ class ASTFunction:
             ty = self.get_path(self.arg_types, path)
             self.set_path(vals, path, language.tensor(fn.args(i), ty))
         # > add constexpr values to the template
-        for path, val in self.constants.items():
+        constants = self.constants | self.constexprs
+        for path, val in constants.items():
             self.set_path(vals, path, val)
         return vals
         
         
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
-    constants = specialization.constants | specialization.attrs.get_constants()
+    constexprs = specialization.constants
+    constants = specialization.attrs.get_constants()
     arg_types = [str_to_ty(ty) for ty in specialization.signature.values()]
     # find index of constants in serialized order
     attrs = specialization.attrs
@@ -1384,7 +1387,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     fn_attrs = new_attrs.get_fn_attrs()
     fn_attrs = {k: v for k, v in fn_attrs.items() if k not in constants}
     file_name, begin_line = get_jit_fn_file_line(fn)
-    prototype = ASTFunction([], arg_types, constants, fn_attrs)
+    prototype = ASTFunction([], arg_types, constexprs, constants, fn_attrs)
     generator = CodeGenerator(context, prototype, 
                               gscope=fn.__globals__.copy(), 
                               function_name=fn.repr(specialization),
