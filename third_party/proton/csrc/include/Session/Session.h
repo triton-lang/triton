@@ -77,7 +77,11 @@ public:
 
   void activateSession(size_t sessionId);
 
+  void activateAllSessions();
+
   void deactivateSession(size_t sessionId);
+
+  void deactivateAllSessions();
 
   void enterScope(const Scope &scope);
 

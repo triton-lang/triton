@@ -32,6 +32,7 @@ from triton._internal_testing import (
     is_hip_cdna,
     is_hip_mi200,
     is_hip_mi300,
+    is_xpu,
     get_arch,
     torch_float8_dtypes,
     torch_dtypes,
@@ -2488,6 +2489,9 @@ def test_histogram(M, N, device):
         offset2 = tl.arange(0, N)
         x = tl.load(x_ptr + offset1)
         z = tl.histogram(x, N)
+        bias = tl.full([M, N], 1, dtype=tl.int32)
+        # check that histogram produces object compatible with broadcasting
+        biased = z + bias
         tl.store(z_ptr + offset2, z)
 
     torch.manual_seed(17)
@@ -3382,8 +3386,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if rhs_scale:
-            pytest.skip("scales on rhs not yet support for HIP")
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
         if "e4m3" in (normal_type, mxfp_type) and not is_hip_mi300():
@@ -4088,13 +4090,12 @@ def test_load_cache_modifier(cache, device):
         cv_cache_modifier_str = 'sc0 sc1'
         buffer_load_line = [line for line in amdgcn.splitlines() if "buffer_load" in line]
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
-        flat_load_line = [line for line in amdgcn.splitlines() if "flat_load" in line]
         if cache == '' or cache == '.ca':
             assert cg_cache_modifier_str not in (global_load_line[0] if global_load_line else buffer_load_line[0])
         if cache == '.cg':
             assert cg_cache_modifier_str in global_load_line[0]
         if cache == '.cv':
-            assert cv_cache_modifier_str in flat_load_line[0]
+            assert cv_cache_modifier_str in global_load_line[0]
 
     if is_cuda():
         ptx = pgm.asm['ptx']
@@ -5181,7 +5182,9 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel[(1, )](a)
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    assert "poison" in h.asm["llir"], h.asm["llir"]
+    # xpu uses llvm.store, which in this case is removed by the optimizer
+    if not is_xpu():
+        assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
 # -----------------------
@@ -5578,7 +5581,7 @@ def matmul_kernel(  #
         stride_cm, stride_cn,  #
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
         low_precision_acc: tl.constexpr,  #
-        num_pipeline_stages: tl.constexpr = 3  #
+        num_stages: tl.constexpr = 3  #
 ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -5590,7 +5593,7 @@ def matmul_kernel(  #
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=num_pipeline_stages):
+    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=num_stages):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         accumulator = tl.dot(a, b, acc=accumulator, max_num_imprecise_acc=low_precision_acc)
@@ -5629,7 +5632,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
                             C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps,
-                            num_pipeline_stages=num_stages)
+                            num_stages=num_stages)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
@@ -5821,7 +5824,7 @@ def test_tl_range(device):
     pgm = matmul_kernel[
         1,
     ](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_M, BLOCK_N,
-      BLOCK_K, 0, num_pipeline_stages=5)
+      BLOCK_K, 0, num_stages=5)
     ref_out = torch.matmul(a, b).to(torch.float32)
     if is_interpreter():
         # GPU invokes tensor core for float16 matmul, which is not supported in interpreter.
@@ -5847,8 +5850,8 @@ def maxnreg_noinline2(X):
     tl.store(X, 0)
 
 
+@pytest.mark.interpreter
 def test_maxnreg(device):
-    assert not is_interpreter(), "this test won't work with the interpreter"
     if not is_cuda():
         pytest.skip('maxnreg only works on CUDA')
 
@@ -5862,14 +5865,15 @@ def test_maxnreg(device):
     X = torch.empty(1, dtype=torch.int32, device=device)
     k = kernel[(1, )](X, maxnreg=42)
 
-    # Ensure that .maxnreg is set on the kernel function (marked with .entry)
-    # and not on either of the noinline functions (marked with .func).
-    try:
-        assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
-        assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
-    except AssertionError:
-        print("Failing ptx:\n", k.asm["ptx"])
-        raise
+    if not is_interpreter():
+        # Ensure that .maxnreg is set on the kernel function (marked with .entry)
+        # and not on either of the noinline functions (marked with .func).
+        try:
+            assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
+            assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
+        except AssertionError:
+            print("Failing ptx:\n", k.asm["ptx"])
+            raise
 
 
 @pytest.mark.interpreter

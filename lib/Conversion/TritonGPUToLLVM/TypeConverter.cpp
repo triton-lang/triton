@@ -28,6 +28,10 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](MemDescType type) -> std::optional<Type> {
     return convertMemDescType(type, targetInfo);
   });
+  addConversion([](TensorDescType type) -> std::optional<Type> {
+    auto ctx = type.getContext();
+    return LLVM::LLVMPointerType::get(ctx, 1);
+  });
   addConversion([&](triton::gpu::AsyncTokenType type) -> std::optional<Type> {
     return convertAsyncToken(type);
   });

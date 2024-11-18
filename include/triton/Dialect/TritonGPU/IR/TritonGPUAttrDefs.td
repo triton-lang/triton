@@ -772,19 +772,16 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                          "int":$kWidth,
                          "int":$opIdx)>,
 
-    InterfaceMethod<"Return total element size per thread for dot operands.",
-                    "unsigned",
-                    "getTotalElemsPerThreadForOperand",
-                    (ins "ArrayRef<int64_t>":$tensorShape,
-                         "Type":$eltTy,
-                         "int":$kWidth,
-                         "int":$opIdx)>,
-
     InterfaceMethod<"Return size per thread for dot operands.",
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperand",
                     (ins "int":$opIdx,
                          "int":$kWidth)>,
+
+    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getRepOrderForOperand",
+                    (ins "int":$opIdx)>,
   ];
 }
 
@@ -1143,7 +1140,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     };
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
       assert(isAmpere() || isHopper());
