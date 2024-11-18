@@ -65,6 +65,8 @@ std::optional<std::pair<Operation *, int>> findZeroInitOp(Value accUse,
     return std::nullopt;
   }
   if (auto selOp = dyn_cast<arith::SelectOp>(defOp)) {
+    if (!selOp.getCondition().getType().isInteger(1))
+      return std::nullopt;
     if (isConstantZeroTensor(selOp.getTrueValue()) ||
         isConstantZeroTensor(selOp.getFalseValue())) {
       return std::make_pair(selOp, 0);
