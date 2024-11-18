@@ -2,7 +2,7 @@
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
-#include "third_party/proton/dialect/include/proton/Dialect/Proton/IR/Dialect.h"
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"

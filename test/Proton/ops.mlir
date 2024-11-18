@@ -3,11 +3,11 @@
 module {
   // CHECK-LABEL: proton_record
   tt.func @proton_record() {
-    // CHECK: proton.record <1, "start", "cycle", "warpgroup">
-    // CHECK-NEXT: proton.record <1, "end", "cycle", "warpgroup">
+    // CHECK: proton.record() {isStart = true, regionId = 1 : i32}
+    // CHECK-NEXT: proton.record() {isStart = false, regionId = 1 : i32}
     // CHECK-NEXT: tt.return
-    proton.record <1, "start", "cycle", "warpgroup">
-    proton.record <1, "end", "cycle", "warpgroup">
+    proton.record() {isStart = true, regionId = 1 : i32}
+    proton.record() {isStart = false, regionId = 1 : i32}
     tt.return
   }
 } // end module

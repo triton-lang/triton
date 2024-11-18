@@ -1,25 +1,3 @@
-// Copyright (c) 2024 Meta Platforms Corporation & Affiliates. All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining
-// a copy of this software and associated documentation files
-// (the "Software"), to deal in the Software without restriction,
-// including without limitation the rights to use, copy, modify, merge,
-// publish, distribute, sublicense, and/or sell copies of the Software,
-// and to permit persons to whom the Software is furnished to do so,
-// subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be
-// included in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-// SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
 #ifndef PROTON_OPS
 #define PROTON_OPS
 
@@ -42,7 +20,6 @@ def MetricAttr : I32EnumAttr<
     "Metric", "",
     [
         I32EnumAttrCase<"CYCLE", 0, "cycle">,
-        I32EnumAttrCase<"INVALID", 1, "invalid">,
     ]> {
     let cppNamespace = "::mlir::triton::proton";
 }
@@ -63,16 +40,26 @@ def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffect
   let description = [{
     The operator records GPU events from performance counters.
     Currently only cycle counter is supported.
+
+    Example:
+
+    ```mlir
+    proton.record() {isStart = true, regionId = 4 : i32}
+    ...
+    proton.record() {isStart = false, regionId = 4 : i32}
+    ...
+    proton.record() {isStart = true, regionId = 1 : i32, granularity = 1 : i32}
+    ...
+    proton.record() {isStart = false, regionId = 1 : i32, granularity = 1 : i32}
+    ```
   }];
   let arguments = (
     ins BoolAttr: $isStart,
-    I32Attr: $regionId,
+    ConfinedAttr<I32Attr, [IntNonNegative]>:$regionId,
     DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
     DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
   );
-
-  let hasCustomAssemblyFormat = 1;
-  let hasVerifier = 1;
+  let assemblyFormat = " `(` operands `)` attr-dict";
 }
 
 #endif // PROTON_OPS
