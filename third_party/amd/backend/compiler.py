@@ -64,7 +64,7 @@ class HIPOptions:
     #                 Kernel library. Note, this variant requires the use of buffer load/store ops
     #                 and a special software pipelining style - i.e., 1x LDS and 1x register
     #                 prefetch buffers for each GEMM tile.
-    instruction_sched_variant: str = 'none'
+    instruction_sched_variant: str = 'guard'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
