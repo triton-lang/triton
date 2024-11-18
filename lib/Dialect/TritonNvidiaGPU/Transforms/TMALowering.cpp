@@ -36,7 +36,7 @@ public:
     auto ctaLayout = getCTALayout(tensorType.getEncoding());
     Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
                                                  1, order, ctaLayout);
-    if (tensorType.getRank() > 1) {
+    if (tensorType.getRank() == 2) {
       encoding = SharedEncodingAttr::get(
           tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
           tensorType.getElementType());

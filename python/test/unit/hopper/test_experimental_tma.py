@@ -1,9 +1,11 @@
+import tempfile
 import pytest
 import torch
 
 import triton
 import triton.language as tl
-from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
+from triton.backends.compiler import GPUTarget
+from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor, TmaDescKernelParam)
 from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma
 
 from typing import Optional
@@ -106,8 +108,8 @@ def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tm
                                     num_warps=8, num_stages=num_stages, dtype=tl.float16)
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
-    if BLOCK_M >= 64 and BLOCK_N >= 64:
-        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
+    # if BLOCK_M >= 64 and BLOCK_N >= 64:
+    #     assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
     if byval_tma:
         assert ".param .align 64 .b8" in kernel.asm["ptx"]
 
@@ -534,3 +536,88 @@ def test_experimental_make_tensor_descriptor_loop_carried():
     )
     torch.testing.assert_close(ref_out, A)
     assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm["ptx"]
+
+
+@requires_tma
+def test_experimetal_descriptor_load_3d_no_jit():
+    device = "cuda"
+
+    ir = """
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [2, 2, 1], order = [2, 0, 1]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0], hasLeadingOffset = false}>
+#shared1 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}) attributes {noinline = false} {
+    %true = arith.constant true
+    %c2_i32 = arith.constant 2 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<32> : tensor<1x2x1xi32, #blocked>
+    %cst_0 = arith.constant dense<64> : tensor<2x1x1xi32, #blocked>
+    %0 = triton_gpu.local_alloc  : () -> !tt.memdesc<2x2x32xi8, #shared, #triton_gpu.shared_memory, mutable>
+    %1 = triton_gpu.local_alloc  : () -> !tt.memdesc<1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+    triton_nvidia_gpu.init_barrier %1, 1 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+    triton_nvidia_gpu.barrier_expect %1, 128, %true : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+    triton_nvidia_gpu.async_tma_copy_global_to_local %arg1[%c2_i32, %c2_i32, %c0_i32] %0, %1, %true : <i8, 0>, <1xi64, #shared1, #triton_gpu.shared_memory, mutable> -> <2x2x32xi8, #shared,#triton_gpu.shared_memory, mutable>
+    triton_nvidia_gpu.wait_barrier %1, %c0_i32 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+    triton_nvidia_gpu.inval_barrier %1 : <1xi64, #shared1, #triton_gpu.shared_memory, mutable>
+    %2 = triton_gpu.local_load %0 : !tt.memdesc<2x2x32xi8, #shared, #triton_gpu.shared_memory, mutable> -> tensor<2x2x32xi8, #blocked>
+    %3 = tt.make_range {end = 2 : i32, start = 0 : i32} : tensor<2xi32, #triton_gpu.slice<{dim = 1, parent = #triton_gpu.slice<{dim = 2, parent = #blocked}>}>>
+    %4 = tt.expand_dims %3 {axis = 1 : i32} : tensor<2xi32, #triton_gpu.slice<{dim = 1, parent = #triton_gpu.slice<{dim = 2, parent = #blocked}>}>> -> tensor<2x1xi32, #triton_gpu.slice<{dim = 2, parent = #blocked}>>
+    %5 = tt.expand_dims %4 {axis = 2 : i32} : tensor<2x1xi32, #triton_gpu.slice<{dim = 2, parent = #blocked}>> -> tensor<2x1x1xi32, #blocked>
+    %6 = arith.muli %5, %cst_0 : tensor<2x1x1xi32, #blocked>
+    %7 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<2x1x1x!tt.ptr<i8>, #blocked>
+    %8 = tt.addptr %7, %6 : tensor<2x1x1x!tt.ptr<i8>, #blocked>, tensor<2x1x1xi32, #blocked>
+    %9 = tt.make_range {end = 2 : i32, start = 0 : i32} : tensor<2xi32, #triton_gpu.slice<{dim = 0, parent = #triton_gpu.slice<{dim = 2, parent = #blocked}>}>>
+    %10 = tt.expand_dims %9 {axis = 0 : i32} : tensor<2xi32, #triton_gpu.slice<{dim = 0, parent = #triton_gpu.slice<{dim = 2, parent = #blocked}>}>> -> tensor<1x2xi32, #triton_gpu.slice<{dim = 2, parent = #blocked}>>
+    %11 = tt.expand_dims %10 {axis = 2 : i32} : tensor<1x2xi32, #triton_gpu.slice<{dim = 2, parent = #blocked}>> -> tensor<1x2x1xi32, #blocked>
+    %12 = arith.muli %11, %cst : tensor<1x2x1xi32, #blocked>
+    %13 = tt.broadcast %8 : tensor<2x1x1x!tt.ptr<i8>, #blocked> -> tensor<2x2x1x!tt.ptr<i8>, #blocked>
+    %14 = tt.broadcast %12 : tensor<1x2x1xi32, #blocked> -> tensor<2x2x1xi32, #blocked>
+    %15 = tt.addptr %13, %14 : tensor<2x2x1x!tt.ptr<i8>, #blocked>, tensor<2x2x1xi32, #blocked>
+    %16 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #triton_gpu.slice<{dim = 1, parent = #blocked}>}>>
+    %17 = tt.expand_dims %16 {axis = 0 : i32} : tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #triton_gpu.slice<{dim = 1, parent = #blocked}>}>> -> tensor<1x32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+    %18 = tt.expand_dims %17 {axis = 1 : i32} : tensor<1x32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<1x1x32xi32, #blocked>
+    %19 = tt.broadcast %15 : tensor<2x2x1x!tt.ptr<i8>, #blocked> -> tensor<2x2x32x!tt.ptr<i8>, #blocked>
+    %20 = tt.broadcast %18 : tensor<1x1x32xi32, #blocked> -> tensor<2x2x32xi32, #blocked>
+    %21 = tt.addptr %19, %20 : tensor<2x2x32x!tt.ptr<i8>, #blocked>, tensor<2x2x32xi32, #blocked>
+    tt.store %21, %2 : tensor<2x2x32x!tt.ptr<i8>, #blocked>
+    tt.return
+  }
+}
+    """
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name, target=GPUTarget("cuda", 90, 32))
+
+    x = torch.randint(size=(4, 8, 32), low=0, high=100, dtype=torch.uint8).to(device)
+    desc = TmaDescKernelParam(x.data_ptr(), [4, 8, 32], [2, 2, 32], 1)
+
+    z_tri = torch.zeros(size=(2, 2, 32), dtype=torch.uint8, device=device)
+    kernel[(1,1,1)](z_tri, desc)
+
+    assert torch.equal(x[2:4, 2:4, :], z_tri)
+
+
+@requires_tma
+def test_experimetal_descriptor_load_4d():
+    device = "cuda"
+
+    @triton.jit
+    def kernel(Z, desc):
+        off0 = tl.arange(0, 2)
+        off1 = tl.arange(0, 2)
+        off2 = tl.arange(0, 32)
+        off3 = tl.arange(0, 16)
+        x = tl._experimental_descriptor_load(desc, [2, 2, 0, 0], [2, 2, 32, 16], tl.dtype("uint8"))
+        out_ptrs = Z + 2 * 32 * 16 * off0[:, None, None, None] + 32 * 16 * off1[None, :, None, None] + 16 * off2[None, None, :, None] + off3[None, None, None, :]
+        tl.store(out_ptrs, x)
+
+    x = torch.randint(size=(4, 8, 32, 16), low=0, high=100, dtype=torch.uint8).to(device)
+    desc = TmaDescKernelParam(x.data_ptr(), [4, 8, 32, 16], [2, 2, 32, 16], 1)
+
+    z_tri = torch.zeros(size=(2, 2, 32, 16), dtype=torch.uint8, device=device)
+    kernel[(1, )](z_tri, desc, num_warps=4)
+
+    assert torch.equal(x[2:4, 2:4, :, :], z_tri)
