@@ -11,13 +11,22 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._internal_testing import is_hip_mi300, is_cuda
 
 input_dtypes = ["float16", "float32", "float64"]
-if triton.runtime.driver.active.get_current_target().backend == "cuda":
+if is_cuda():
     input_dtypes += ["int8", "float8_e5m2"]
     cc = torch.cuda.get_device_capability(0)
     if cc >= (8, 9):
         input_dtypes += ["float8_e4m3fn"]
+elif is_hip_mi300():
+    input_dtypes += [
+        "int8",
+        "float8_e5m2",
+        # natively supported on mi300 (see CDNA3 ISA, section 7.2)
+        "float8_e4m3fnuz",
+    ]
+
 out_dtypes = ["float16", "float32"]
 
 
@@ -84,12 +93,13 @@ def test_cast_matmul(M, K, N, BLOCK_K, w_dtype, x_dtype, out_dtype):
 
     def init_tensor(dtype, shape):
         if dtype == torch.int8:
-            return torch.randint(0, 3, shape, device=device, dtype=dtype)
-        elif dtype == torch.float8_e4m3fn or dtype == torch.float8_e5m2:
+            return torch.randint(0, 2, shape, device=device, dtype=dtype)
+        elif dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz, torch.float8_e5m2):
             return torch.randn(shape, device=device, dtype=torch.float16).to(dtype)
         else:
             return torch.randn(shape, device=device, dtype=dtype)
 
+    torch.manual_seed(42)
     a = init_tensor(w_dtype, (M, K))
     b = init_tensor(x_dtype, (K, N))
 
