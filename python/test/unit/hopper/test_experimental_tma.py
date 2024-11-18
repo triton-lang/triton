@@ -108,8 +108,8 @@ def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tm
                                     num_warps=8, num_stages=num_stages, dtype=tl.float16)
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
-    # if BLOCK_M >= 64 and BLOCK_N >= 64:
-    #     assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
+    if BLOCK_M >= 64 and BLOCK_N >= 64:
+        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
     if byval_tma:
         assert ".param .align 64 .b8" in kernel.asm["ptx"]
 
