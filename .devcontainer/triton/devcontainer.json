@@ -7,7 +7,9 @@
       "USERNAME": "${localEnv:USER}",
       "USER_UID": 1000,
       "USER_GID": 1000,
-      "INSTALL_CUDNN": "true"
+      "INSTALL_CUDNN": "true",
+      // Uncomment CUSTOM_LLVM to enable specific LLVM build
+      //"CUSTOM_LLVM": "true"
     }
   },
   "remoteUser": "${localEnv:USER}",

@@ -90,31 +90,25 @@ python python/tutorials/01-vector-add.py
 
 ## Building Trion with a custom LLVM in Dev Container
 
-To build Triton with a custom version of LLVM, please enable the following in
-the [Dockerfile](../triton/Dockerfile)
+> **_NOTE_**: This setup takes a few minutes to complete
 
-```dockerfile
-FROM registry.access.redhat.com/ubi9/ubi:latest as build
-USER 0
-RUN dnf update -y
-RUN dnf -y install clang rpm-build git ninja-build cmake
-RUN git clone https://github.com/llvm/llvm-project
-WORKDIR /llvm-project
-# UPDATE COMMIT SHA if required.
-RUN git checkout 49af6502
-RUN mkdir build
-WORKDIR /llvm-project/build
-RUN cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
-RUN ninja
+To build Triton with a custom version of LLVM, please enable the following in
+the [devcontainer.json](../triton/devcontainer.json)
+
+```json
+"CUSTOM_LLVM": "true"
 ```
 
-and
+To use different commit for LLVM than what's specified in
+[cmake/llvm.hash](../../cmake/llvm-hash.txt)
+set the change the following line in the [Dockerfile](../triton/Dockerfile) from:
 
 ```dockerfile
-## Uncomment to enable specific LLVM build
-COPY --from=build /llvm-project/build /llvm-project/build
-ENV LLVM_BUILD_DIR=/llvm-project/build \
-    LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
-    LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
-    LLVM_SYSPATH=$LLVM_BUILD_DIR
+COMMIT=$(curl -s https://raw.githubusercontent.com/triton-lang/triton/refs/heads/main/cmake/llvm-hash.txt) &&\
+```
+
+to
+
+```dockerfile
+COMMIT=49af6502 &&\
 ```
