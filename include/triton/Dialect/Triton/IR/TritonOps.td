@@ -18,6 +18,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 
 
 //
@@ -44,8 +45,7 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
                                          SameOperandsAndResultShape,
                                          SameOperandsAndResultEncoding,
-                                         Pure,
-                                         /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+                                         Pure]> {
     let summary = "Cast int64 to pointer";
 
     let arguments = (ins TT_I64Like:$src);
@@ -58,8 +58,7 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
                                          SameOperandsAndResultShape,
                                          SameOperandsAndResultEncoding,
-                                         Pure,
-                                         /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+                                         Pure]> {
     let summary = "Cast pointer to int64";
 
     let arguments = (ins TT_PtrLike:$src);
@@ -73,8 +72,7 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
 def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
                                      SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
-                                     Pure,
-                                     /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+                                     Pure]> {
     let summary = "Cast between types of the same bitwidth";
 
     let arguments = (ins TT_Type:$src);
@@ -89,8 +87,7 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
 def TT_FpToFpOp : TT_Op<"fp_to_fp", [Elementwise,
                                      SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
-                                     Pure,
-                                     /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+                                     Pure]> {
     let summary = "Floating point casting for custom types";
 
     let description = [{
@@ -118,8 +115,8 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [Elementwise,
 //
 
 def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
-                                  SameOperandsAndResultType,
-                                  Pure]> {
+                                   SameOperandsAndResultType,
+                                   Pure]> {
     let summary = "Clamp operation for floating point types";
 
     let description = [{
@@ -149,8 +146,8 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
 //
 
 def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
-                                  SameOperandsAndResultType,
-                                  Pure]> {
+                                              SameOperandsAndResultType,
+                                              Pure]> {
     let summary = "Precise sqrt for floating point types";
 
     let description = [{
@@ -165,8 +162,8 @@ def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
 }
 
 def TT_PreciseDivFOp : TT_Op<"precise_divf", [Elementwise,
-                                  SameOperandsAndResultType,
-                                  Pure]> {
+                                              SameOperandsAndResultType,
+                                              Pure]> {
     let summary = "Precise div for floating point types";
 
     let description = [{
@@ -181,8 +178,8 @@ def TT_PreciseDivFOp : TT_Op<"precise_divf", [Elementwise,
 }
 
 def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
-                                  SameOperandsAndResultType,
-                                  Pure]> {
+                                     SameOperandsAndResultType,
+                                     Pure]> {
     let summary = "Most significant N bits of the 2N-bit product of two integers";
 
     let description = [{
@@ -200,12 +197,12 @@ def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
 // Pointer Arith Ops
 //
 def TT_AddPtrOp : TT_Op<"addptr",
-                     [Pure,
-                      Elementwise,
-                      SameOperandsAndResultShape,
-                      SameOperandsAndResultEncoding,
-                      TypesMatchWith<"result type matches ptr type",
-                                     "result", "ptr", "$_self">]> {
+                        [Pure,
+                         Elementwise,
+                         SameOperandsAndResultShape,
+                         SameOperandsAndResultEncoding,
+                         TypesMatchWith<"result type matches ptr type",
+                                        "result", "ptr", "$_self">]> {
     let arguments = (ins TT_PtrLike:$ptr, TT_IntLike:$offset);
 
     let results = (outs TT_PtrLike:$result);
@@ -546,6 +543,7 @@ def TT_SplitOp : TT_Op<"split", [
 }
 
 def TT_TransOp : TT_Op<"trans", [Pure,
+                                 TransposeOpInterface,
                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                  SameOperandsAndResultElementType]> {
 
@@ -677,10 +675,10 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 // DotScaled Op
 //
 def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
-                             AttrSizedOperandSegments,
-                             DotLike,
-                             TypesMatchWith<"result's type matches accumulator's type",
-                                            "d", "c", "$_self">]> {
+                                          AttrSizedOperandSegments,
+                                          DotLike,
+                                          TypesMatchWith<"result's type matches accumulator's type",
+                                                         "d", "c", "$_self">]> {
     let summary = "dot_scaled";
 
     let description = [{
@@ -783,10 +781,10 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
 // External Elementwise op
 //
 def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
-                                                            SameOperandsAndResultEncoding,
-                                                            SameVariadicOperandSize,
-                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-                                                            ConditionallySpeculatable]> {
+                                                          SameOperandsAndResultEncoding,
+                                                          SameVariadicOperandSize,
+                                                          DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                                          ConditionallySpeculatable]> {
 
     let description = [{
         call an external function $symbol implemented in $libpath/$libname with $args

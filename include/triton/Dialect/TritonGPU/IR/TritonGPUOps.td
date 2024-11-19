@@ -7,6 +7,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -219,6 +220,26 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let results = (outs TT_MemDescType:$result);
 
   let hasVerifier = 1;
+}
+
+def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure, TransposeOpInterface]> {
+  let summary = "transpose the descriptor";
+
+  let description = [{
+    This operation returns a new descriptor
+    representing a transposed view of the buffer.
+  }];
+
+  let arguments = (ins TT_MemDescType:$src, Variadic<I32>:$order);
+
+  let arguments = (
+    ins TT_MemDescType:$src,
+    DenseI32ArrayAttr:$order
+  );
+
+  let results = (outs TT_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
