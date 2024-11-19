@@ -654,17 +654,17 @@ class InterpreterBuilder:
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
 
-    def create_make_block_ptr(self, base, shape, strides, offsets, tensor_shape, order):
+    def create_make_block_ptr(self, base, shape, strides, offsets, block_shape, order):
         # Create new offsets to avoid modifying the original
         new_offsets = [offset.clone() for offset in offsets]
-        return BlockPointerHandle(base, shape, strides, new_offsets, tensor_shape, order)
+        return BlockPointerHandle(base, shape, strides, new_offsets, block_shape, order)
 
     def create_advance(self, ptr, offsets):
         if len(ptr.offsets) != len(offsets):
             raise ValueError("len(ptr.offsets) != len(offsets)")
         # Create new offsets to avoid modifying the original
         new_offsets = [offset.clone() for offset in ptr.offsets]
-        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.tensor_shape, ptr.order)
+        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.block_shape, ptr.order)
         for i in range(len(offsets)):
             ret.offsets[i].data += offsets[i].data
         return ret
