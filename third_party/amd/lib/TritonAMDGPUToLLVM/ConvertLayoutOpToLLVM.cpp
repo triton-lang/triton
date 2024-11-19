@@ -159,7 +159,8 @@ public:
       return failure();
 
     Value threadId = tid_val();
-    Value warpSize = i32_val(64); // MFMA Warp Size
+    auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
+    Value warpSize = i32_val(triton::gpu::getWarpSize(mfmaLayout));
     Value laneId = urem(threadId, warpSize);
     Value laneOffset = i32_val(32);
     Value mask = icmp_slt(laneId, laneOffset);
