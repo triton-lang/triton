@@ -622,11 +622,7 @@ class JITFunction(KernelInterface[T]):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constants, attrs)
-            kernel = self.compile(
-                src,
-                target=target,
-                options=options.__dict__,
-            )
+            kernel = self.compile(src, target=target, options=options.__dict__)
             self.cache[device][key] = kernel
             self._call_hook(key, signature, device, constants, options, [attrs], warmup, before=False)
 
