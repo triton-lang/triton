@@ -21,7 +21,7 @@ class TensorHandle:
         '''
             data: numpy array
             dtype: triton type, either pointer_type or scalar_type.
-            we don't store block_type here because the shape information is already availale in the data field
+            we don't store block_type here because the shape information is already available in the data field
             attr: a dictionary of attributes
         '''
         self.data = data
