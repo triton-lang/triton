@@ -89,7 +89,7 @@ def condBarrierOp :
 
   let description = [{
       condBarrierOp sets barrier instruction only when the given argument is true.
-      This provides a way to synchronize partial threads in a block, deliberately 
+      This provides a way to synchronize partial threads in a block, deliberately
       diverges the execution sequences. However, user should guarantee all threads
       converge at the end by calling condBarrierOp(true) with the remaining threads.
       NB. This doesn't set memory fence.

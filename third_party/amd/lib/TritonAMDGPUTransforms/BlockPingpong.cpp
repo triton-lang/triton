@@ -39,7 +39,7 @@ class Pingponger {
 
 public:
   Pingponger(scf::ForOp forOp, int32_t numWarps)
-      : forOp(forOp), numWarps(numWarps){};
+      : forOp(forOp), numWarps(numWarps) {};
   void getDotPingponged();
   void genOffsetConstants(Location loc, OpBuilder &builder, unsigned numSlices,
                           int64_t sliceWidth);
@@ -213,8 +213,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
   attachOp(subViewOps[1][0]);
   attachOp(loadSliceOps[0][0]);
   attachOp(loadSliceOps[1][0]);
-  attachOp(schedBarriers.back());
   attachOp(barriers.back());
+  attachOp(schedBarriers.back());
+
   schedBarriers.pop_back();
   barriers.pop_back();
 
@@ -222,8 +223,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
   attachOp(setPrioHighs.back());
   attachOp(dotSliceOps[0]);
   attachOp(setPrioLows.back());
-  attachOp(schedBarriers.back());
   attachOp(barriers.back());
+  attachOp(schedBarriers.back());
+
   setPrioHighs.pop_back();
   setPrioLows.pop_back();
   schedBarriers.pop_back();
@@ -235,8 +237,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
   attachOp(subViewOps[1][1]);
   attachOp(loadSliceOps[0][1]);
   attachOp(loadSliceOps[1][1]);
-  attachOp(schedBarriers.back());
   attachOp(barriers.back());
+  attachOp(schedBarriers.back());
+
   schedBarriers.pop_back();
   barriers.pop_back();
 
@@ -244,8 +247,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
   attachOp(setPrioHighs.back());
   attachOp(dotSliceOps[1]);
   attachOp(setPrioLows.back());
-  attachOp(schedBarriers.back());
   attachOp(barriers.back());
+  attachOp(schedBarriers.back());
+
   setPrioHighs.pop_back();
   setPrioLows.pop_back();
   schedBarriers.pop_back();
@@ -260,8 +264,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
   attachOp(subViewOps[1][3]);
   attachOp(loadSliceOps[0][3]);
   attachOp(loadSliceOps[1][3]);
-  attachOp(schedBarriers.back());
   attachOp(barriers.back());
+  attachOp(schedBarriers.back());
+
   schedBarriers.pop_back();
   barriers.pop_back();
 
@@ -269,8 +274,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
   attachOp(setPrioHighs.back());
   attachOp(dotSliceOps[2]);
   attachOp(setPrioLows.back());
-  attachOp(schedBarriers.back());
   attachOp(barriers.back());
+  attachOp(schedBarriers.back());
+
   setPrioHighs.pop_back();
   setPrioLows.pop_back();
   schedBarriers.pop_back();
@@ -278,8 +284,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
 
   // mem3: local store A and B
   initOpInsertion(lStoreOps[1]);
-  attachOp(schedBarriers.back());
   attachOp(barriers.back());
+  attachOp(schedBarriers.back());
+
   schedBarriers.pop_back();
   barriers.pop_back();
 
@@ -287,8 +294,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
   attachOp(setPrioHighs.back());
   attachOp(dotSliceOps[3]);
   attachOp(setPrioLows.back());
-  attachOp(schedBarriers.back());
   attachOp(barriers.back());
+  attachOp(schedBarriers.back());
+
   setPrioHighs.pop_back();
   setPrioLows.pop_back();
   schedBarriers.pop_back();
