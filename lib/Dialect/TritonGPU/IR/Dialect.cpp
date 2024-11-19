@@ -940,7 +940,10 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (mma.isAmpere() || mma.isHopper()) {
       auto bitwidth = getPointeeType(eltTy).getIntOrFloatBitWidth();
-      auto rep = mma.getRepForOperand(shape, bitwidth, idx);
+      // On hopper, the number of elements per thread is independent on the type
+      // and will only depend on kWidth.
+      int repBitwidth = mma.isHopper() ? 32 / kWidth : bitwidth;
+      auto rep = mma.getRepForOperand(shape, repBitwidth, idx);
       auto sizePerThread = getSizePerThread();
       auto elemsPerKRep = mma.isHopper() ? (kWidth * 2) : (32 / bitwidth * 2);
       if (rank == 3)
