@@ -70,11 +70,11 @@ struct ExtractSliceOpConversion
     auto order = triton::gpu::getOrder(srcLayout);
 
     // Calculate valid total number of workers in each dimension
-    auto shapePerCTA = triton::gpu::getShapePerCTATile(srcLayout, srcShape);
-    shapePerCTA[0] =
-        std::min(static_cast<unsigned>(srcShape[0]), shapePerCTA[0]);
-    shapePerCTA[1] =
-        std::min(static_cast<unsigned>(srcShape[1]), shapePerCTA[1]);
+    auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcLayout, srcShape);
+    shapePerCTATile[0] =
+        std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
+    shapePerCTATile[1] =
+        std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
 
     // Rank == 2 checked in the verifier
     SmallVector<int64_t, 2> sizes;
@@ -85,12 +85,12 @@ struct ExtractSliceOpConversion
     auto offsets = op.getStaticOffsets();
 
     // Calculate offsets and sizes in terms of CTA units.
-    std::array<int64_t,2> CTAOffsets{offsets[0] / shapePerCTA[0],
-                                    offsets[1] / shapePerCTA[1]};
-    std::array<int64_t,2> CTASizes{sizes[0] / shapePerCTA[0],
-                                  sizes[1] / shapePerCTA[1]};
-    std::array<int64_t,2> CTAPerShape{srcShape[0] / shapePerCTA[0],
-                                     srcShape[1] / shapePerCTA[1]};
+    std::array<int64_t, 2> CTAOffsets{offsets[0] / shapePerCTATile[0],
+                                      offsets[1] / shapePerCTATile[1]};
+    std::array<int64_t, 2> CTASizes{sizes[0] / shapePerCTATile[0],
+                                    sizes[1] / shapePerCTATile[1]};
+    std::array<int64_t, 2> CTAPerShape{srcShape[0] / shapePerCTATile[0],
+                                       srcShape[1] / shapePerCTATile[1]};
 
     // The diagram above illustrates the graphical representation of the
     // skipElems, tensorStride, and lastIdx variables.
@@ -124,8 +124,8 @@ struct ExtractSliceOpConversion
   matchAndRewrite(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSource().getType();
-    if (isa<BlockedEncodingAttr>(op.getSource().getType().getEncoding()) ||
-        isa<AMDMfmaEncodingAttr>(op.getSource().getType().getEncoding())) {
+    if (isa<BlockedEncodingAttr, AMDMfmaEncodingAttr>(
+            op.getSource().getType().getEncoding())) {
       return processLayout(op, adaptor, rewriter);
     }
     return failure();

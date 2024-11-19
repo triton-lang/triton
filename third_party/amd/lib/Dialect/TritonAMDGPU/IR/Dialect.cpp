@@ -78,13 +78,16 @@ LogicalResult ExtractSliceOp::verify() {
   }
 
   auto srcShape = srcTy.getShape();
-  auto shapePerCTA = mlir::triton::gpu::getShapePerCTATile(srcLayout, srcShape);
-  shapePerCTA[0] = std::min(static_cast<unsigned>(srcShape[0]), shapePerCTA[0]);
-  shapePerCTA[1] = std::min(static_cast<unsigned>(srcShape[1]), shapePerCTA[1]);
+  auto shapePerCTATile =
+      mlir::triton::gpu::getShapePerCTATile(srcLayout, srcShape);
+  shapePerCTATile[0] =
+      std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
+  shapePerCTATile[1] =
+      std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
 
   // ExtractSlice only supports slicing where offsets and sizes are multiples of
-  // shapePerCTA. This condition ensures that slice has the same layout as the
-  // original tensor.
+  // shapePerCTATile. This condition ensures that slice has the same layout as
+  // the original tensor.
 
   auto offsets = getStaticOffsets();
   if (offsets.size() != 2) {
@@ -113,16 +116,18 @@ LogicalResult ExtractSliceOp::verify() {
     sizes.push_back(resultDimSize);
   }
 
-  if (sizes[0] % shapePerCTA[0] != 0 || sizes[1] % shapePerCTA[1] != 0) {
+  if (sizes[0] % shapePerCTATile[0] != 0 ||
+      sizes[1] % shapePerCTATile[1] != 0) {
     return emitError() << "sizes [" << sizes
-                       << "] must be a multiple of shapePerCTA [" << shapePerCTA
-                       << "]";
+                       << "] must be a multiple of shapePerCTATile ["
+                       << shapePerCTATile << "]";
   }
 
-  if (offsets[0] % shapePerCTA[0] != 0 || offsets[1] % shapePerCTA[1] != 0) {
+  if (offsets[0] % shapePerCTATile[0] != 0 ||
+      offsets[1] % shapePerCTATile[1] != 0) {
     return emitError() << "offset [" << offsets
-                       << "] must be a multiple of shapePerCTA [" << shapePerCTA
-                       << "]";
+                       << "] must be a multiple of shapePerCTATile ["
+                       << shapePerCTATile << "]";
   }
 
   return success();

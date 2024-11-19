@@ -3,7 +3,7 @@
 // Invalid size
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_size_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
-  // expected-error @+1 {{sizes [256, 2] must be a multiple of shapePerCTA [256, 16]}}
+  // expected-error @+1 {{sizes [256, 2] must be a multiple of shapePerCTATile [256, 16]}}
   %1 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x2xi32, #blocked1>
   tt.return
 }
@@ -33,7 +33,7 @@ tt.func @invalid_size_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibili
 // Invalid offset, not multiple of shapePerTile
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 tt.func @invalid_offset_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
-  // expected-error @+1 {{offset [0, 5] must be a multiple of shapePerCTA [256, 16]}}
+  // expected-error @+1 {{offset [0, 5] must be a multiple of shapePerCTATile [256, 16]}}
   %1 = amdgpu.extract_slice %arg0 [0,5] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
   tt.return
 }
