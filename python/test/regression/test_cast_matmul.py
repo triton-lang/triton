@@ -11,7 +11,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip_mi300, is_cuda
+from triton._internal_testing import is_hip_mi300, is_cuda, is_hip
 
 input_dtypes = ["float16", "float32", "float64"]
 if is_cuda():
@@ -88,6 +88,8 @@ def matmul_kernel(A, B, C, M, N, K,  #
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, w_dtype, x_dtype, out_dtype):
     if x_dtype == w_dtype:
         pytest.skip("skip the same input dtype")
+    if is_hip() and BLOCK_M == 64 and w_dtype in ["float8_e5m2", "float8_e4m3fnuz"]:
+        pytest.skip("skip due to bug on HIP path")
     device = torch.cuda.current_device()
     x_dtype: torch.dtype = getattr(torch, x_dtype)
     w_dtype: torch.dtype = getattr(torch, w_dtype)
