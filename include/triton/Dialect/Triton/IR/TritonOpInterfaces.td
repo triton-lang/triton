@@ -20,6 +20,13 @@ def TransposeOpInterface : OpInterface<"TransposeOpInterface"> {
 			/*retType=*/"::mlir::Value",
 			/*methodName=*/"getSrc",
 			/*args=*/(ins)>,
+		InterfaceMethod<
+			/*desc=*/[{
+				Get the rank of the source operand.
+			}],
+			/*retType=*/"int64_t",
+			/*methodName=*/"getRank",
+			/*args=*/(ins)>,
     InterfaceMethod<
 			/*desc=*/[{
 			  Get the order of the transposition.
