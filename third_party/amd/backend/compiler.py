@@ -48,23 +48,28 @@ class HIPOptions:
     backend_name: str = 'hip'
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
-    # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
-    # The option is experimental and may change at any time regarding its semantics and/or may
-    # be gone entirely anytime.
+    # for all `tt.dot` operations in a kernel. The option is experimental and may change at any
+    # time regarding its semantics and/or may be gone entirely anytime.
     #
     # Current experimental scheduling variants:
     #
-    # llvm-iglp-0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
+    # none: preserves the default instruction scheduling of the AMDGPU backend which aims at
+    #       maximizing occupancy.
+    # llvm_iglp_0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
     #              k-loop; i.e., "interleave DS and MFMA instructions for small GEMM kernels".
-    # llvm-iglp-1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
+    # llvm_iglp_1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
     #              k-loop; i.e., "interleave DS and MFMA instructions for single wave small
     #              GEMM kernels.".
-    # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
+    # local_prefetch: implements instruction scheduling similar to the one from the ROCm Composable
     #                 Kernel library. Note, this variant requires the use of buffer load/store ops
     #                 and a special software pipelining style - i.e., 1x LDS and 1x register
     #                 prefetch buffers for each GEMM tile.
-    instruction_sched_variant: str = 'guard'
+    instruction_sched_variant: str = 'none'
+
+    # The following option prevents moves of instructions from the regions where they are defined.
+    # This influences ordering of instructions between adjacent regions (basic blocks) and, thus,
+    # affects register pressure.
+    use_instructions_sched_guards: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -243,7 +248,8 @@ class HIPBackend(BaseBackend):
                                              "equivalent behavior in the past.")
             amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
-        amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.instruction_sched_variant)
+        amd.passes.ttgpuir.insert_instruction_control_logic(pm, options.instruction_sched_variant,
+                                                            options.use_instructions_sched_guards)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
@@ -296,6 +302,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
+        amd.passes.ttgpuir.lower_instruction_sched_guards(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)

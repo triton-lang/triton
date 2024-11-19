@@ -153,6 +153,21 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   let assemblyFormat = [{ attr-dict }];
 }
 
+def InstructionSchedGuard : TT_AMDGPU_Op<"instruction_sched_guard", []> {
+  let summary = "A placeholder op for instruction scheduling guards within an MLIR region";
+  let description = [{
+    A placeholder op for instruction scheduling guard is applied to instructions within
+    an MLIR region where the placeholder op is located. Lowering of this instruction
+    results in inserting two @llvm.amdgcn.sched.barrier(0) calls (at the begining and
+    at the end of a region). The intrinsic calls prevent motions instrusion between
+    adjacent regions (basic blocks). This affects ordering of instructions and, thus,
+    register pressure.
+  }];
+
+  let arguments = (ins);
+  let assemblyFormat = [{ attr-dict }];
+}
+
 //
 // AMD Buffer operations.
 //

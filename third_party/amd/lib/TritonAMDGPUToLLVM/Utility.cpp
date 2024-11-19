@@ -359,24 +359,17 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
 }
 } // namespace mlir::LLVM::AMD
 
-namespace {
-void getAllInnerForOps(scf::ForOp forOp,
-                       llvm::SetVector<scf::ForOp> &innermostForOps) {
-  bool found = false;
-  forOp.getBody()->walk([&found, &innermostForOps](scf::ForOp innerForOp) {
-    getAllInnerForOps(innerForOp, innermostForOps);
-    found = true;
-  });
-  if (!found)
-    innermostForOps.insert(forOp);
-}
-} // namespace
-
 namespace mlir::triton::AMD {
-llvm::SetVector<scf::ForOp> getAllInnerForOps(mlir::triton::FuncOp funcOp) {
-  llvm::SetVector<scf::ForOp> innermostForOps{};
-  funcOp->walk(
-      [&](scf::ForOp forOp) { ::getAllInnerForOps(forOp, innermostForOps); });
-  return innermostForOps;
+SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp) {
+  SmallVector<scf::ForOp> allOps;
+  funcOp->walk([&](scf::ForOp forOp) { allOps.push_back(forOp); });
+
+  SmallVector<scf::ForOp> leafOps;
+  for (scf::ForOp forOp : allOps) {
+    auto r = forOp->walk([](scf::ForOp) { return WalkResult::interrupt(); });
+    if (!r.wasInterrupted())
+      leafOps.push_back(forOp);
+  }
+  return leafOps;
 }
 } // namespace mlir::triton::AMD

@@ -59,16 +59,18 @@ def ConvertBuiltinFuncToLLVM : Pass<"convert-builtin-func-to-llvm", "mlir::Modul
     ];
 }
 
-def TritonAMDGPUInsertInstructionSchedHints : Pass<"triton-amdgpu-insert-instruction-sched-hints", "mlir::ModuleOp"> {
-    let summary = "Insert instruction scheduling hints after the dot ops in the main loop";
-    let constructor = "mlir::triton::createTritonAMDGPUInsertInstructionSchedHintsPass(/*variant=*/\"\")";
+def TritonAMDGPUInsertInstructionControlLogic : Pass<"triton-amdgpu-insert-instruction-control-logic", "mlir::ModuleOp"> {
+    let summary = "Insert instruction control logic in all `scf.ForOp`";
+    let constructor = "mlir::triton::createTritonAMDGPUInsertInstructionControlLogicPass(/*schedVariant=*/\"none\", /*useInstructionSchedGuards=*/false)";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect",
                              "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
     let options = [
-        Option<"variant", "variant", "std::string", /*default*/"\"\"",
+        Option<"schedVariant", "sched-variant", "std::string", /*default*/"\"none\"",
                "instruction scheduling variant">,
+        Option<"useInstructionSchedGuards", "use-instruction-sched-guards", "bool", /*default*/"false",
+               "use instruction scheduling guards">,
     ];
 }
 
@@ -88,5 +90,13 @@ def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-in
     ];
 }
 
+def TritonAMDGPULowerInstructionSchedGuards : Pass<"triton-amdgpu-lower-instruction-sched-guards", "mlir::ModuleOp"> {
+    let summary = "Lower instruction scheduling guards to LLVM intrinsics";
+    let constructor = "mlir::triton::createTritonAMDGPULowerInstructionSchedGuardsPass()";
+
+    let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::ROCDL::ROCDLDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
 
 #endif

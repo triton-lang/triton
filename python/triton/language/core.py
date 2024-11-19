@@ -2730,7 +2730,8 @@ class range:
         this value implies no unrolling.
     """
 
-    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None):
+    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
+                 use_instructions_guard=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2743,6 +2744,7 @@ class range:
             self.end = arg2
         self.num_stages = num_stages
         self.loop_unroll_factor = loop_unroll_factor
+        self.use_instructions_guard = use_instructions_guard
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

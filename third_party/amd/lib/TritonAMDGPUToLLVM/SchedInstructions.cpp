@@ -10,8 +10,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton {
-#define GEN_PASS_DEF_TRITONAMDGPUINSERTINSTRUCTIONSCHEDHINTS
+#define GEN_PASS_DEF_TRITONAMDGPUINSERTINSTRUCTIONCONTROLLOGIC
 #define GEN_PASS_DEF_TRITONAMDGPULOWERINSTRUCTIONSCHEDHINTS
+#define GEN_PASS_DEF_TRITONAMDGPULOWERINSTRUCTIONSCHEDGUARDS
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace mlir::triton
 
@@ -396,30 +397,15 @@ struct InstructionSchedHintsRewriter
 
     triton::amdgpu::SchedHint schedulingType =
         instructionSchedHint.getSchedVariant();
-    if (this->numStages < 2 &&
-        schedulingType != triton::amdgpu::SchedHint::guard) {
+    if (this->numStages < 2) {
       LDBG(
           "rewriting advanced scheduling hint to 'none' given unpipelined loop "
           "due to num_stages < 2");
       schedulingType = triton::amdgpu::SchedHint::none;
     }
 
-    // The switch controls whether instructions are allowed to cross the basic
-    // block boundaries at the very top and at the very bottom. Note, this is
-    // not supposed to be used together with IGLP OPT according to the AMDGPU
-    // backend documentation.
-    const bool limitSchedulingRange =
-        !(schedulingType == triton::amdgpu::SchedHint::none ||
-          schedulingType == triton::amdgpu::SchedHint::llvm_iglp_0 ||
-          schedulingType == triton::amdgpu::SchedHint::llvm_iglp_1);
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
-    if (limitSchedulingRange) {
-      rewriter.setInsertionPointToStart(block);
-      createSchedBarrier(rewriter, loc,
-                         mlir::amdgpu::sched_barrier_opt_enum::none);
-    }
-
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
     switch (schedulingType) {
@@ -433,18 +419,25 @@ struct InstructionSchedHintsRewriter
       createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
       break;
     }
-    case triton::amdgpu::SchedHint::guard:
-      [[fallthrough]];
-    case triton::amdgpu::SchedHint::none:
-      [[fallthrough]];
     default: {
       break;
     }
     }
 
-    if (limitSchedulingRange)
-      createSchedBarrier(rewriter, loc,
-                         mlir::amdgpu::sched_barrier_opt_enum::none);
+    // The switch controls whether instructions are allowed to cross the basic
+    // block boundaries at the very top and at the very bottom. Note, this is
+    // not supposed to be used together with IGLP OPT according to the AMDGPU
+    // backend documentation.
+    const bool limitSchedulingRange =
+        schedulingType == triton::amdgpu::SchedHint::local_prefetch;
+
+    auto scanResult = block->walk([](triton::amdgpu::InstructionSchedGuard) {
+      return WalkResult::interrupt();
+    });
+    const bool isRegionAlreadyGuarded = scanResult.wasInterrupted();
+
+    if (limitSchedulingRange && !isRegionAlreadyGuarded)
+      rewriter.create<triton::amdgpu::InstructionSchedGuard>(loc);
 
     rewriter.eraseOp(instructionSchedHint);
     return success();
@@ -472,6 +465,7 @@ struct TritonAMDGPULowerInstructionSchedHints
     ConversionTarget target(*ctx);
     target.addLegalDialect<LLVM::LLVMDialect>();
     target.addIllegalOp<triton::amdgpu::InstructionSchedHint>();
+    target.addLegalOp<triton::amdgpu::InstructionSchedGuard>();
     target.addLegalOp<ROCDL::SchedBarrier>();
     target.addLegalOp<ROCDL::IglpOpt>();
     target.addLegalOp<ROCDL::SchedGroupBarrier>();
@@ -489,37 +483,41 @@ struct TritonAMDGPULowerInstructionSchedHints
   }
 };
 
-struct TritonAMDGPUInsertInstructionSchedHints
-    : public triton::impl::TritonAMDGPUInsertInstructionSchedHintsBase<
-          TritonAMDGPUInsertInstructionSchedHints> {
+struct TritonAMDGPUInsertInstructionControlLogic
+    : public triton::impl::TritonAMDGPUInsertInstructionControlLogicBase<
+          TritonAMDGPUInsertInstructionControlLogic> {
 
-  explicit TritonAMDGPUInsertInstructionSchedHints(StringRef variant) {
-    this->variant = variant.str();
-  }
-
-  void guardFlashAttentionLikeProblems(triton::FuncOp funcOp) {
-    llvm::SetVector<scf::ForOp> innermostForOps =
-        triton::AMD::getAllInnerForOps(funcOp);
-    for (auto forOp : innermostForOps) {
-      size_t gemmCounter = 0;
-      size_t reduceCounter = 0;
-      bool hasExpOp = false;
-      forOp->walk([&](triton::DotOp) { ++gemmCounter; });
-      forOp->walk([&](triton::ReduceOp) { ++reduceCounter; });
-      forOp->walk([&](math::Exp2Op) { hasExpOp = true; });
-      if ((gemmCounter > 1) && (reduceCounter > 1) && hasExpOp) {
-        OpBuilder builder(forOp->getContext());
-        Block *block = forOp.getBody();
-        builder.setInsertionPoint(block, std::prev(block->end()));
-        builder.create<triton::amdgpu::InstructionSchedHint>(
-            forOp->getLoc(), triton::amdgpu::SchedHint::guard);
-      }
-    }
+  explicit TritonAMDGPUInsertInstructionControlLogic(
+      StringRef schedVariant, bool useInstructionSchedGuards) {
+    this->schedVariant = schedVariant.str();
+    this->useInstructionSchedGuards = useInstructionSchedGuards;
   }
 
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
+
+    mod->walk([&](scf::ForOp forOp) {
+      // use the global kernel parameter to decide whether instruction guards
+      // need to be inserted
+      bool insertInstructionGuards = this->useInstructionSchedGuards;
+
+      // use a region local parameter to decide whether instruction guards need
+      // to be inserted Note, the local parameter has higher precedency of the
+      // global one
+      static const std::string localInstructionSchedGuardAttrName =
+          "tt.use_instructions_sched_guard";
+      if (auto localInstructionGuardingInfo = forOp->getAttrOfType<BoolAttr>(
+              localInstructionSchedGuardAttrName)) {
+        insertInstructionGuards = localInstructionGuardingInfo.getValue();
+      }
+      if (insertInstructionGuards) {
+        OpBuilder builder(forOp->getContext());
+        Block *block = forOp.getBody();
+        builder.setInsertionPoint(block, std::prev(block->end()));
+        builder.create<triton::amdgpu::InstructionSchedGuard>(forOp.getLoc());
+      }
+    });
 
     std::string allSchedVariants;
     llvm::raw_string_ostream os(allSchedVariants);
@@ -528,17 +526,14 @@ struct TritonAMDGPUInsertInstructionSchedHints
       os << triton::amdgpu::symbolizeSchedHint(i) << ", ";
     os << triton::amdgpu::symbolizeSchedHint(maxNumVariants);
 
-    auto maybeSchedHint = triton::amdgpu::symbolizeSchedHint(this->variant);
+    auto maybeSchedHint =
+        triton::amdgpu::symbolizeSchedHint(this->schedVariant);
     if (!maybeSchedHint) {
       LDBG("skipping instruction scheduling: unknown scheduling hint. "
            "supported hints: "
            << os.str());
       return;
     }
-
-    mod.walk([this](triton::FuncOp funcOp) {
-      guardFlashAttentionLikeProblems(funcOp);
-    });
 
     triton::amdgpu::SchedHint schedHint = maybeSchedHint.value();
     if (schedHint == triton::amdgpu::SchedHint::none)
@@ -557,6 +552,51 @@ struct TritonAMDGPUInsertInstructionSchedHints
     });
   }
 };
+
+struct InstructionSchedGuardsRewriter
+    : public OpRewritePattern<triton::amdgpu::InstructionSchedGuard> {
+  InstructionSchedGuardsRewriter(MLIRContext *ctx) : OpRewritePattern(ctx) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::InstructionSchedGuard instructionSchedGuard,
+                  PatternRewriter &rewriter) const override {
+
+    Location loc = instructionSchedGuard->getLoc();
+    Block *block = instructionSchedGuard->getBlock();
+    rewriter.setInsertionPointToStart(block);
+    createSchedBarrier(rewriter, loc,
+                       mlir::amdgpu::sched_barrier_opt_enum::none);
+
+    rewriter.setInsertionPoint(block, std::prev(block->end()));
+    createSchedBarrier(rewriter, loc,
+                       mlir::amdgpu::sched_barrier_opt_enum::none);
+    rewriter.eraseOp(instructionSchedGuard);
+    return success();
+  }
+};
+
+struct TritonAMDGPULowerInstructionSchedGuards
+    : public triton::impl::TritonAMDGPULowerInstructionSchedGuardsBase<
+          TritonAMDGPULowerInstructionSchedGuards> {
+
+  void runOnOperation() override {
+    MLIRContext *ctx = &getContext();
+    ModuleOp mod = getOperation();
+
+    ConversionTarget target(*ctx);
+    target.addLegalDialect<LLVM::LLVMDialect>();
+    target.addLegalDialect<ROCDL::ROCDLDialect>();
+    target.addIllegalOp<triton::amdgpu::InstructionSchedGuard>();
+
+    RewritePatternSet patterns(ctx);
+    patterns.add<InstructionSchedGuardsRewriter>(ctx);
+    if (failed(applyPartialConversion(getOperation(), target,
+                                      std::move(patterns)))) {
+
+      signalPassFailure();
+    }
+  }
+};
 } // namespace
 
 namespace mlir::triton {
@@ -568,7 +608,14 @@ createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPUInsertInstructionSchedHintsPass(StringRef variant) {
-  return std::make_unique<TritonAMDGPUInsertInstructionSchedHints>(variant);
+createTritonAMDGPUInsertInstructionControlLogicPass(
+    StringRef schedVariant, bool useInstructionSchedGuards) {
+  return std::make_unique<TritonAMDGPUInsertInstructionControlLogic>(
+      schedVariant, useInstructionSchedGuards);
+}
+
+std::unique_ptr<OperationPass<ModuleOp>>
+createTritonAMDGPULowerInstructionSchedGuardsPass() {
+  return std::make_unique<TritonAMDGPULowerInstructionSchedGuards>();
 }
 } // namespace mlir::triton
