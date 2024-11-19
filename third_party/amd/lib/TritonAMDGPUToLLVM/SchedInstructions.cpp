@@ -225,7 +225,7 @@ struct InstructionSchedHintsRewriter
   // (see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
   // This scheduling requires 1x register and 1x LDS buffers combined with the
   // local (LDS to registers) and global (HBM to registers) data prefetching.
-  void createLocalPrefetchSchedule(
+  LogicalResult createLocalPrefetchSchedule(
       PatternRewriter &rewriter, Location loc,
       triton::amdgpu::InstructionSchedHint schedHint) const {
 
@@ -233,12 +233,12 @@ struct InstructionSchedHintsRewriter
           schedHint.getIsBufferLoadsBEnabled())) {
       LDBG("skipping `local_prefetch` scheduling given it needs `buffer_load` "
            "instructions.");
-      return;
+      return failure();
     }
 
     if (!machineDescr) {
       schedHint.emitError("unknown target architecture detected");
-      return;
+      return failure();
     }
 
     const uint32_t numDsReadInstA = schedHint.getNumDsReadsA().getValue();
@@ -254,12 +254,12 @@ struct InstructionSchedHintsRewriter
 
     if (numBufferLoadInstA == 0) {
       schedHint.emitError("buffer load count for tile A must be initialized");
-      return;
+      return failure();
     }
 
     if (numBufferLoadInstB == 0) {
       schedHint.emitError("buffer load count for tile B must be initialized");
-      return;
+      return failure();
     }
 
     const uint32_t numMmaInst = schedHint.getNumMMAs().getValue();
@@ -268,7 +268,7 @@ struct InstructionSchedHintsRewriter
     auto maybeMmaExecCycle = machineDescr->getMmaExecCycle(mmaType.getShape());
     if (llvm::failed(maybeMmaExecCycle)) {
       schedHint.emitError("unknown mma instruction type");
-      return;
+      return failure();
     }
     const uint32_t mmaExecCycle = maybeMmaExecCycle.value();
 
@@ -389,6 +389,7 @@ struct InstructionSchedHintsRewriter
     targetFeatures.push_back(str_attr("-load-store-opt"));
     funcOp.setTargetFeaturesAttr(
         ::mlir::LLVM::TargetFeaturesAttr::get(ctx, targetFeatures));
+    return success();
   }
 
   LogicalResult
@@ -404,6 +405,13 @@ struct InstructionSchedHintsRewriter
       schedulingType = triton::amdgpu::SchedHint::none;
     }
 
+    // The switch controls whether instructions are allowed to cross the basic
+    // block boundaries at the very top and at the very bottom. Note, this is
+    // not supposed to be used together with IGLP OPT according to the AMDGPU
+    // backend documentation.
+    bool limitSchedulingRange =
+        schedulingType == triton::amdgpu::SchedHint::local_prefetch;
+
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
     rewriter.setInsertionPoint(block, std::prev(block->end()));
@@ -416,20 +424,16 @@ struct InstructionSchedHintsRewriter
       break;
     }
     case triton::amdgpu::SchedHint::local_prefetch: {
-      createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
+      LogicalResult result =
+          createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
+      if (failed(result))
+        limitSchedulingRange = false;
       break;
     }
     default: {
       break;
     }
     }
-
-    // The switch controls whether instructions are allowed to cross the basic
-    // block boundaries at the very top and at the very bottom. Note, this is
-    // not supposed to be used together with IGLP OPT according to the AMDGPU
-    // backend documentation.
-    const bool limitSchedulingRange =
-        schedulingType == triton::amdgpu::SchedHint::local_prefetch;
 
     auto scanResult = block->walk([](triton::amdgpu::InstructionSchedGuard) {
       return WalkResult::interrupt();
@@ -497,27 +501,19 @@ struct TritonAMDGPUInsertInstructionControlLogic
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
 
-    mod->walk([&](scf::ForOp forOp) {
-      // use the global kernel parameter to decide whether instruction guards
-      // need to be inserted
-      bool insertInstructionGuards = this->useInstructionSchedGuards;
-
-      // use a region local parameter to decide whether instruction guards need
-      // to be inserted Note, the local parameter has higher precedency of the
-      // global one
-      static const std::string localInstructionSchedGuardAttrName =
-          "tt.use_instructions_sched_guard";
-      if (auto localInstructionGuardingInfo = forOp->getAttrOfType<BoolAttr>(
-              localInstructionSchedGuardAttrName)) {
-        insertInstructionGuards = localInstructionGuardingInfo.getValue();
-      }
-      if (insertInstructionGuards) {
-        OpBuilder builder(forOp->getContext());
-        Block *block = forOp.getBody();
-        builder.setInsertionPoint(block, std::prev(block->end()));
-        builder.create<triton::amdgpu::InstructionSchedGuard>(forOp.getLoc());
-      }
-    });
+    // use the global kernel parameter to decide whether to insert instruction
+    // scheduling guards
+    if (this->useInstructionSchedGuards) {
+      mod.walk([&](triton::FuncOp funcOp) {
+        SmallVector<scf::ForOp> leafForOps = AMD::getLeafForOps(funcOp);
+        for (auto forOp : leafForOps) {
+          OpBuilder builder(forOp->getContext());
+          Block *block = forOp.getBody();
+          builder.setInsertionPoint(block, std::prev(block->end()));
+          builder.create<triton::amdgpu::InstructionSchedGuard>(forOp.getLoc());
+        }
+      });
+    }
 
     std::string allSchedVariants;
     llvm::raw_string_ostream os(allSchedVariants);

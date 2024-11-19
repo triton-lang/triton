@@ -236,8 +236,8 @@ class HIPBackend(BaseBackend):
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
         use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
 
-        # The `local-prefetch` scheduling variant requires turning on buffer ops.
-        if options.instruction_sched_variant == "local-prefetch":
+        # The `local_prefetch` scheduling variant requires turning on buffer ops.
+        if options.instruction_sched_variant == "local_prefetch":
             stream_prefetch = use_buffer_ops = True
 
         if amd.has_matrix_core_feature(options.arch):
