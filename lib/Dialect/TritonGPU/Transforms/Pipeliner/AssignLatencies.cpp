@@ -34,41 +34,19 @@ bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-bool canHaveSharedEncoding(Operation *op) {
-  if (isa<tt::ExperimentalDescriptorLoadOp>(op))
-    return true;
-  auto loadOp = cast<tt::LoadOp>(op);
-  auto dst = loadOp.getResult();
-  // If the load is used by a WarpGroupDotOp through a LocalAllocaOp with a
-  // layout incompatible with MMAv3, we cannot pipeline the load.
-  if (loadOp->hasOneUse()) {
-    auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
-    if (alloc && alloc->hasOneUse()) {
-      auto dot = dyn_cast<ttng::WarpGroupDotOp>(*alloc->getUsers().begin());
-      if (dot) {
-        auto sharedEnc =
-            cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
-        if (!sharedEnc.getHasLeadingOffset())
-          return false;
-        auto newOrder = sharedEnc.getOrder();
-        auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-        auto oldOrder = ttg::getOrder(ty.getEncoding());
-        return oldOrder == newOrder;
-      }
-    }
-  }
+bool canHaveSharedEncoding(tt::LoadOp op) {
   // If used by an user with DotOp encoding, all the uses must be compatible.
   bool incompatible = false;
-  getSharedEncIfAllUsersAreDotEnc(dst, incompatible);
+  getSharedEncIfAllUsersAreDotEnc(op.getResult(), incompatible);
   if (incompatible)
     return false;
   // If the load is used by a LocalAllocOp, all the users need to have the same
   // encoding.
-  if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
+  if (llvm::any_of(op->getUsers(), [&](Operation *user) {
         return isa<ttg::LocalAllocOp>(user);
       })) {
     ttg::SharedEncodingAttr localAllocEnc;
-    for (auto user : loadOp->getUsers()) {
+    for (auto user : op->getUsers()) {
       auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
       if (!localAlloc)
         continue;
@@ -109,15 +87,22 @@ bool isSmallLoad(tt::LoadOp loadOp,
   return width < 32;
 }
 
-bool isLoadGoodForPipelining(Operation *op,
-                             tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
+                            tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
     if (isSmallLoad(loadOp, axisInfoAnalysis)) {
       LDBG("Load " << *loadOp << " is too small for pipelining");
       return false;
     }
   }
-  if (!canHaveSharedEncoding(op)) {
+  if (isa<tt::ExperimentalDescriptorLoadOp>(op))
+    return true;
+  if (isa<ttng::WarpGroupDotOp>(finalUser) &&
+      getMMALoadType(op) == MMALoadType::DoNotPipeline) {
+    LDBG("Load " << *op << " used by WarpGroupDotOp with incompatible layout");
+    return false;
+  }
+  if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
     LDBG("Load " << *op << " cannot have shared encoding");
     return false;
   }
@@ -136,38 +121,41 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
   DenseSet<Operation *> seen;
   DenseSet<Operation *> excluded;
 
-  std::function<void(Operation * op, int)> dfs = [&](Operation *op,
-                                                     int distance) {
-    if (!seen.insert(op).second || excluded.count(op))
-      return;
-    if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
-      if (!isLoadGoodForPipelining(op, axisInfoAnalysis))
-        return;
-      if (loadOpToIndLevel.count(op)) {
-        int level = loadOpToIndLevel[op];
-        if (level != distance) {
-          // If we have multiple uses at different distances, we don't know
-          // which one to pick.
-          LDBG("Load " << *op << " has multiple uses at different distances:"
-                       << level << " and " << distance);
-          loadOpToIndLevel.erase(op);
-          excluded.insert(op);
+  std::function<void(Operation *, Operation *, int)> dfs =
+      [&](Operation *op, Operation *finalUser, int distance) {
+        if (!seen.insert(op).second || excluded.count(op))
+          return;
+        if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
+          if (!isPipeliningBeneficial(op, finalUser, axisInfoAnalysis))
+            return;
+          if (loadOpToIndLevel.count(op)) {
+            int level = loadOpToIndLevel[op];
+            if (level != distance) {
+              // If we have multiple uses at different distances, we don't know
+              // which one to pick.
+              LDBG("Load " << *op
+                           << " has multiple uses at different distances:"
+                           << level << " and " << distance);
+              loadOpToIndLevel.erase(op);
+              excluded.insert(op);
+              return;
+            }
+          } else {
+            LDBG("Load " << *op << " considered for pipelining with distance "
+                         << distance);
+            loadOpToIndLevel[op] = distance;
+          }
+          finalUser = op;
+          distance++;
         }
-      } else {
-        LDBG("Load " << *op << " considered for pipelining with distance "
-                     << distance);
-        loadOpToIndLevel[op] = distance;
-      }
-      distance++;
-    }
-    for (Value operand : op->getOperands()) {
-      Value v = operand;
-      Operation *defOp = v.getDefiningOp();
-      if (defOp && defOp->getBlock() == op->getBlock()) {
-        dfs(defOp, distance);
-      }
-    }
-  };
+        for (Value operand : op->getOperands()) {
+          Value v = operand;
+          Operation *defOp = v.getDefiningOp();
+          if (defOp && defOp->getBlock() == op->getBlock()) {
+            dfs(defOp, finalUser, distance);
+          }
+        }
+      };
 
   bool seenDot = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
@@ -175,7 +163,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
       continue;
     seenDot = true;
     seen.clear();
-    dfs(&op, 0);
+    dfs(&op, &op, 0);
   }
 
   // If the loop has numStages attribute, also consider pipelining other loads
@@ -183,7 +171,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
   if (pipelineWithoutDot && !seenDot) {
     for (Operation &op : forOp.getBody()->without_terminator()) {
       if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op))
-        dfs(&op, 0);
+        dfs(&op, &op, 0);
     }
   }
 
