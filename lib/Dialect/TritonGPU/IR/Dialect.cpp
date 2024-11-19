@@ -1981,6 +1981,9 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
   // {batch, m, n, k}
   // Hopper path never uses the n value, since this method is only invoked
   // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
+  // TODO: rep per operand is not accurate for Hopper. It is currently done that
+  // way to allow us to get the correct total number of elements. this will be
+  // fixed when moving to linear layout.
   SmallVector<int> shapePerWarp = {
       1, 16, 8, isHopper() ? 4 * 2 * kWidth : 4 * 64 / bitwidth};
   int numRepBatch =
