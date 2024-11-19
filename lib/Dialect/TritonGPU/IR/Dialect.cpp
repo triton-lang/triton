@@ -1658,7 +1658,14 @@ AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
 }
 
 SmallVector<unsigned> AMDMfmaEncodingAttr::getRepOrder() const {
-  llvm::report_fatal_error("NYI. AMDMfmaEncodingAttr::getRepOrder");
+  auto rank = getWarpsPerCTA().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
+}
+
+SmallVector<unsigned>
+AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  auto rank = getWarpsPerCTA().size();
+  return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
 }
 
 SmallVector<int64_t>
@@ -1745,8 +1752,16 @@ AMDWmmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   return shapePerCTATile;
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getRepOrder() const {
-  llvm::report_fatal_error("NYI. AMDWmmaEncodingAttr::getRepOrder");
+  auto rank = getWarpsPerCTA().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
 }
+
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  auto rank = getWarpsPerCTA().size();
+  return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
+}
+
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
@@ -2016,7 +2031,7 @@ NvidiaMmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
 // DotOperand Encoding
 //===----------------------------------------------------------------------===//
 SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
-  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent())) {
+  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
     return mma.getRepOrderForOperand(getOpIdx());
   }
   llvm::report_fatal_error(

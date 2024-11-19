@@ -1034,9 +1034,6 @@ def _implicit_cvt(arg):
 
 interpreter_builder = InterpreterBuilder()
 
-# These keywords are not supported by the interpreter
-RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_fp_fusion", "grid", "maxnreg"]
-
 
 class GridExecutor:
 
@@ -1077,10 +1074,13 @@ class GridExecutor:
                 kwarg_dev.data.copy_(kwarg_hst.to(kwarg_dev.device).data)
 
     def __call__(self, *args_dev, **kwargs):
-        # removes reserved keywords from kwargs
-        kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
         if kwargs.pop("warmup", False):
             return
+        # Removes not used reserved keywords from kwargs
+        # Triton doesn't support keyword-only, variable positional or variable keyword arguments
+        # It's safe to inspect only positional or keyword arguments (i.e., argspec.args)
+        argspec = inspect.getfullargspec(self.fn)
+        kwargs = {k: v for k, v in kwargs.items() if k in argspec.args}
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # remaps core language functions to interpreted ones
