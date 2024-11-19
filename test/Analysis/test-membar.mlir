@@ -132,7 +132,7 @@ tt.func @subview() {
 // CHECK-LABEL: trans
 tt.func @trans(%a: !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory>) {
   // CHECK-NOT: gpu.barrier
-  %b = tt.trans %a {order=array<i32: 1,0>} : !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> !tt.memdesc<32x16xf16, #A_SHARED_T, #triton_gpu.shared_memory>
+  %b = triton_gpu.memdesc_trans %a {order=array<i32: 1,0>} : !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory> -> !tt.memdesc<32x16xf16, #A_SHARED_T, #triton_gpu.shared_memory>
   tt.return
 }
 

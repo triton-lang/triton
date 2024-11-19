@@ -222,7 +222,10 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let hasVerifier = 1;
 }
 
-def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure, TransposeOpInterface]> {
+def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
+                                                  TransposeOpInterface,
+                                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                  SameOperandsAndResultElementType]> {
   let summary = "transpose the descriptor";
 
   let description = [{
@@ -239,7 +242,15 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure, TransposeOpInterface]> {
 
   let results = (outs TT_MemDescType:$result);
 
-  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+  let extraClassDeclaration = [{
+    int64_t getRank() {
+      return cast<MemDescType>(getSrc().getType()).getRank();
+    }
+  }];
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasFolder = 1;
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {

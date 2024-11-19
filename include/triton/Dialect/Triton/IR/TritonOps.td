@@ -8,14 +8,10 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td" // SymbolUserOpInterface
 include "mlir/IR/OpAsmInterface.td" // OpAsmOpInterface
-include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
-include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 include "mlir/Interfaces/FunctionInterfaces.td" // FunctionOpInterface
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
-include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
-include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
@@ -577,16 +573,21 @@ def TT_TransOp : TT_Op<"trans", [Pure,
     }];
 
     let arguments = (
-      ins TT_TensorOrMemDesc:$src,
+      ins TT_Tensor:$src,
       DenseI32ArrayAttr:$order
     );
 
-    let results = (outs TT_TensorOrMemDesc:$result);
+    let results = (outs TT_Tensor:$result);
+
+    let extraClassDeclaration = [{
+      int64_t getRank() {
+        return cast<RankedTensorType>(getSrc().getType()).getRank();
+      }
+    }];
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasFolder = 1;
-    let hasVerifier = 1;
 }
 
 //

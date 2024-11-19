@@ -136,7 +136,8 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
   // TODO: can we use an early_inc iterator?
   for (OpOperand &use : oldUse->getUses()) {
     // Non-subview/trans ops will be replaced by `val`.
-    if (!isa<triton::TransOp, triton::gpu::MemDescSubviewOp>(use.getOwner())) {
+    if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
+            use.getOwner())) {
       operandsToReplace.push_back(&use);
       continue;
     }
@@ -155,9 +156,9 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
       newVal = builder.create<triton::gpu::MemDescSubviewOp>(
           subview.getLoc(), newDstType, val, subview.getOffsets());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    } else if (auto trans = dyn_cast<triton::TransOp>(user)) {
-      newVal = builder.create<triton::TransOp>(trans.getLoc(), val,
-                                               trans.getOrderAttr());
+    } else if (auto trans = dyn_cast<triton::gpu::MemDescTransOp>(user)) {
+      newVal = builder.create<triton::gpu::MemDescTransOp>(trans.getLoc(), val,
+                                                           trans.getOrder());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
     }
     assert(newVal);

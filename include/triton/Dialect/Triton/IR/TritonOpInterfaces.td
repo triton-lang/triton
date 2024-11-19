@@ -10,7 +10,7 @@ def TransposeOpInterface : OpInterface<"TransposeOpInterface"> {
     It provides methods to access common properties such as the order attribute and the source operand.
   }];
 
-  let cppNamespace = "::mlir";
+  let cppNamespace = "::mlir::triton";
 
   let methods = [
     InterfaceMethod<
@@ -20,6 +20,13 @@ def TransposeOpInterface : OpInterface<"TransposeOpInterface"> {
 			/*retType=*/"::mlir::Value",
 			/*methodName=*/"getSrc",
 			/*args=*/(ins)>,
+		InterfaceMethod<
+			/*desc=*/[{
+				Get the rank of the source operand.
+			}],
+			/*retType=*/"int64_t",
+			/*methodName=*/"getRank",
+			/*args=*/(ins)>,
     InterfaceMethod<
 			/*desc=*/[{
 			  Get the order of the transposition.
@@ -28,6 +35,8 @@ def TransposeOpInterface : OpInterface<"TransposeOpInterface"> {
 			/*methodName=*/"getOrder",
 			/*args=*/(ins)>
   ];
+
+	let verify = [{ return ::mlir::triton::impl::verifyTransposeOpInterface($_op); }];
 }
 
 
