@@ -396,10 +396,11 @@ struct InstructionSchedHintsRewriter
 
     triton::amdgpu::SchedHint schedulingType =
         instructionSchedHint.getSchedVariant();
-    if ((this->numStages < 2) &&
-        (schedulingType != triton::amdgpu::SchedHint::guard)) {
-      LDBG("ignoring instruction scheduling due to a very low num. "
-           "stages value. Must be >= 2");
+    if (this->numStages < 2 &&
+        schedulingType != triton::amdgpu::SchedHint::guard) {
+      LDBG(
+          "rewriting advanced scheduling hint to 'none' given unpipelined loop "
+          "due to num_stages < 2");
       schedulingType = triton::amdgpu::SchedHint::none;
     }
 
@@ -460,7 +461,7 @@ struct TritonAMDGPULowerInstructionSchedHints
 
   explicit TritonAMDGPULowerInstructionSchedHints(StringRef arch,
                                                   int32_t numStages) {
-    this->arch = std::move(arch.str());
+    this->arch = arch.str();
     this->numStages = numStages;
   }
 
@@ -493,7 +494,7 @@ struct TritonAMDGPUInsertInstructionSchedHints
           TritonAMDGPUInsertInstructionSchedHints> {
 
   explicit TritonAMDGPUInsertInstructionSchedHints(StringRef variant) {
-    this->variant = std::move(variant.str());
+    this->variant = variant.str();
   }
 
   void guardFlashAttentionLikeProblems(triton::FuncOp funcOp) {
@@ -520,9 +521,18 @@ struct TritonAMDGPUInsertInstructionSchedHints
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
 
+    std::string allSchedVariants;
+    llvm::raw_string_ostream os(allSchedVariants);
+    constexpr auto maxNumVariants = triton::amdgpu::getMaxEnumValForSchedHint();
+    for (size_t i = 0; i < maxNumVariants; ++i)
+      os << triton::amdgpu::symbolizeSchedHint(i) << ", ";
+    os << triton::amdgpu::symbolizeSchedHint(maxNumVariants);
+
     auto maybeSchedHint = triton::amdgpu::symbolizeSchedHint(this->variant);
     if (!maybeSchedHint) {
-      LDBG("Skipping instruction scheduling: unknown scheduling hint.");
+      LDBG("skipping instruction scheduling: unknown scheduling hint. "
+           "supported hints: "
+           << os.str());
       return;
     }
 
