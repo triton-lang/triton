@@ -307,7 +307,7 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        # if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -479,7 +479,7 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        # if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -596,8 +596,6 @@ jobs:
           python3 -m pip install -v --no-build-isolation .
       - name: CCache Stats
         run: ccache --print-stats
-      - name: CCache Stats
-        run: ccache --print-stats
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -613,7 +611,7 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        # if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: |
