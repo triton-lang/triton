@@ -596,6 +596,53 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
                 {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, DotMMAv2_3D) {
+  // We implement one that exercises all the paths
+  auto parent = mma(2, 0, {1, 16, 8}, {2, 4, 2});
+  EXPECT_EQ(toLinearLayout({16, 128, 128}, dot(parent, 0, 8)),
+            LinearLayout(
+                {
+                    {S("register"),
+                     {{0, 0, 1},
+                      {0, 0, 2},
+                      {0, 0, 4},
+                      {0, 8, 0},
+                      {0, 0, 32},
+                      {0, 0, 64},
+                      {0, 64, 0},
+                      {2, 0, 0},
+                      {4, 0, 0},
+                      {8, 0, 0}}},
+                    {S("lane"),
+                     {{0, 0, 8}, {0, 0, 16}, {0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+                    {S("warp"), {{0, 0, 0}, {0, 16, 0}, {0, 32, 0}, {1, 0, 0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1"), S("dim2")}));
+  EXPECT_EQ(toLinearLayout({8, 128, 64}, dot(parent, 1, 8)),
+            LinearLayout(
+                {
+                    {S("register"),
+                     {{0, 1, 0},
+                      {0, 2, 0},
+                      {0, 4, 0},
+                      {0, 32, 0},
+                      {0, 64, 0},
+                      {0, 0, 16},
+                      {0, 0, 32},
+                      {2, 0, 0},
+                      {4, 0, 0}}},
+                    {S("lane"),
+                     {{0, 8, 0}, {0, 16, 0}, {0, 0, 1}, {0, 0, 2}, {0, 0, 4}}},
+                    {
+                        S("warp"),
+                        {{0, 0, 8}, {0, 0, 0}, {0, 0, 0}, {1, 0, 0}},
+                    },
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1"), S("dim2")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, DotMMAv3_warp4_kwidth2) {
   auto parent = mma(3, 0, {16, 16, 8}, {4, 1});
   auto dotOp = dot(parent, 0, 2);

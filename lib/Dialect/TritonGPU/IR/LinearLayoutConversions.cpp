@@ -779,76 +779,6 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
-std::optional<LinearLayout>
-SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  MLIRContext *ctx = getContext();
-
-  // First compute the linear layout for this layout's parent.
-  SmallVector<int64_t> parentShape(shape);
-  parentShape.insert(parentShape.begin() + getDim(), 1);
-  std::optional<LinearLayout> parentLL =
-      triton::gpu::toLinearLayout(parentShape, getParent());
-  if (!parentLL.has_value()) {
-    if (mlir::isa<DotOperandEncodingAttr>(getParent()))
-      return std::nullopt;
-    llvm::report_fatal_error(
-        "Failed to compute parent layout for slice layout.");
-  }
-
-  // Remove dimension getDim() from the parent layout.
-  //
-  //  1. Construct a layout `transform` from parent-out-dims to slice-out-dims
-  //     that removes the relevant out-dim.
-  //  2. Compute linearSlice = parent.compose(transform).  Now linearSlice maps
-  //     from parent in-dims to slice out-dims.
-  //  3. Fix up duplicate registers introduced by slicing.
-  auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
-  LinearLayout transform = LinearLayout::empty();
-  for (auto [idx, outDim] : llvm::enumerate(parentLL->getOutDimNames())) {
-    if (idx == getDim()) {
-      // Because we're multiplying by all zeros, we could replace outDimNames[0]
-      // with any other valid out-dim; the layout will be the same.
-      transform *= LinearLayout::zeros1D(parentLL->getOutDimSize(outDim),
-                                         outDim, outDimNames[0]);
-    } else {
-      transform *=
-          LinearLayout::identity1D(parentLL->getOutDimSize(outDim), outDim,
-                                   outDimNames[idx - (idx < getDim() ? 0 : 1)]);
-    }
-  }
-  LinearLayout sliceLL = parentLL->compose(transform);
-
-  // Step 3: Along the "register" dim, remove any all-zero bases.
-  auto bases = sliceLL.getBases();
-  std::vector<std::vector<int>> newRegBases;
-  for (const auto &basis : bases[S("register")]) {
-    if (llvm::any_of(basis, [](int b) { return b != 0; })) {
-      newRegBases.push_back(basis);
-    }
-  }
-  bases[S("register")] = newRegBases;
-
-  LinearLayout ret =
-      LinearLayout(std::move(bases), llvm::to_vector(sliceLL.getOutDimNames()));
-
-  // Match a hack in the legacy code that ensures that the number of registers
-  // matches getTotalElemsPerThread.  Yup: We just removed all the zeros, now
-  // we're (maybe) adding some back.  :)
-  //
-  // TODO(jlebar): Once getTotalElemsPerThread uses LLs instead of the existing
-  // legacy code, I think we can remove this.
-  int expectedNumRegisters =
-      triton::gpu::getTotalElemsPerThread(RankedTensorType::get(
-          shape, IntegerType::get(ctx, 32) /*dummy type*/, *this));
-  if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
-    int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
-    // Our use of "dim0" here is arbitrary; because we're adding zeros, any
-    // output dimension would work.
-    ret *= LinearLayout::zeros1D(extraZeros, S("register"), S("dim0"));
-  }
-  return ret;
-}
-
 LinearLayout warpsNvidiaDot(MLIRContext *ctx, ArrayRef<unsigned> mmaWarpShape,
                             ArrayRef<unsigned> mmaWarpOrder, bool isA) {
   // Let warpsPerCTAMma = {2, 2}, then
@@ -926,6 +856,76 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     return nvidiaDotToLinearLayout(shape, *this);
   }
   return std::nullopt;
+}
+
+std::optional<LinearLayout>
+SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  MLIRContext *ctx = getContext();
+
+  // First compute the linear layout for this layout's parent.
+  SmallVector<int64_t> parentShape(shape);
+  parentShape.insert(parentShape.begin() + getDim(), 1);
+  std::optional<LinearLayout> parentLL =
+      triton::gpu::toLinearLayout(parentShape, getParent());
+  if (!parentLL.has_value()) {
+    if (mlir::isa<DotOperandEncodingAttr>(getParent()))
+      return std::nullopt;
+    llvm::report_fatal_error(
+        "Failed to compute parent layout for slice layout.");
+  }
+
+  // Remove dimension getDim() from the parent layout.
+  //
+  //  1. Construct a layout `transform` from parent-out-dims to slice-out-dims
+  //     that removes the relevant out-dim.
+  //  2. Compute linearSlice = parent.compose(transform).  Now linearSlice maps
+  //     from parent in-dims to slice out-dims.
+  //  3. Fix up duplicate registers introduced by slicing.
+  auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
+  LinearLayout transform = LinearLayout::empty();
+  for (auto [idx, outDim] : llvm::enumerate(parentLL->getOutDimNames())) {
+    if (idx == getDim()) {
+      // Because we're multiplying by all zeros, we could replace outDimNames[0]
+      // with any other valid out-dim; the layout will be the same.
+      transform *= LinearLayout::zeros1D(parentLL->getOutDimSize(outDim),
+                                         outDim, outDimNames[0]);
+    } else {
+      transform *=
+          LinearLayout::identity1D(parentLL->getOutDimSize(outDim), outDim,
+                                   outDimNames[idx - (idx < getDim() ? 0 : 1)]);
+    }
+  }
+  LinearLayout sliceLL = parentLL->compose(transform);
+
+  // Step 3: Along the "register" dim, remove any all-zero bases.
+  auto bases = sliceLL.getBases();
+  std::vector<std::vector<int>> newRegBases;
+  for (const auto &basis : bases[S("register")]) {
+    if (llvm::any_of(basis, [](int b) { return b != 0; })) {
+      newRegBases.push_back(basis);
+    }
+  }
+  bases[S("register")] = newRegBases;
+
+  LinearLayout ret =
+      LinearLayout(std::move(bases), llvm::to_vector(sliceLL.getOutDimNames()));
+
+  // Match a hack in the legacy code that ensures that the number of registers
+  // matches getTotalElemsPerThread.  Yup: We just removed all the zeros, now
+  // we're (maybe) adding some back.  :)
+  //
+  // TODO(jlebar): Once getTotalElemsPerThread uses LLs instead of the existing
+  // legacy code, I think we can remove this.
+  int expectedNumRegisters =
+      triton::gpu::getTotalElemsPerThread(RankedTensorType::get(
+          shape, IntegerType::get(ctx, 32) /*dummy type*/, *this));
+  if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
+    int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
+    // Our use of "dim0" here is arbitrary; because we're adding zeros, any
+    // output dimension would work.
+    ret *= LinearLayout::zeros1D(extraZeros, S("register"), S("dim0"));
+  }
+  return ret;
 }
 
 std::optional<LinearLayout>
