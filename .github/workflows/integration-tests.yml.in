@@ -225,7 +225,6 @@ jobs:
       # files over time.
       - &restore-build-artifacts-step
         name: Restore cache of ccache and Triton compilation artifacts
-        if: github.event_name != 'push'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -382,6 +381,11 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install lit
 
+      - name: Install apt dependencies
+        run: |
+          apt update
+          apt install ccache
+
       - name: Install Triton
         id: amd-install-triton
         run: |
@@ -450,7 +454,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache llvm@19 lld
+          brew install ccache llvm@19 lld coreutils
 
       - *compute-cache-keys-step
       - *cache-build-dependencies-step

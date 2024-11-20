@@ -199,7 +199,6 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
-        if: github.event_name != 'push'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -357,7 +356,6 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
-        if: github.event_name != 'push'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -380,6 +378,10 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install lit
+      - name: Install apt dependencies
+        run: |
+          apt update
+          apt install ccache
       - name: Install Triton
         id: amd-install-triton
         run: |
@@ -474,7 +476,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache llvm@19 lld
+          brew install ccache llvm@19 lld coreutils
       - name: Compute cache keys
         id: cache-key
         run: |
@@ -515,7 +517,6 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
-        if: github.event_name != 'push'
         uses: actions/cache/restore@v4
         with:
           path: |
