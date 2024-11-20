@@ -667,8 +667,8 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / mmaBitwidth;
 
   int kWidth = encoding.getKWidth();
-  auto numRep =
-      mmaLayout.getRepForOperand(shapePerCTA, mmaBitwidth, encoding.getOpIdx());
+  auto numRep = mmaLayout.getRepForOperand(shapePerCTA, mmaBitwidth, kWidth,
+                                           encoding.getOpIdx());
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto warpOrder = mmaLayout.getWarpOrder();
