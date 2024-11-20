@@ -1,3 +1,4 @@
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LogicalResult.h"
 
@@ -10,7 +11,7 @@ namespace impl {
 
 LogicalResult verifyTransposeOpInterface(Operation *op) {
   TransposeOpInterface transposeOp = cast<TransposeOpInterface>(op);
-  auto rank = transposeOp.getRank();
+  auto rank = cast<ShapedType>(transposeOp.getSrc().getType()).getRank();
   auto order = transposeOp.getOrder();
   if (rank != order.size()) {
     return op->emitError(

@@ -242,12 +242,6 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
 
   let results = (outs TT_MemDescType:$result);
 
-  let extraClassDeclaration = [{
-    int64_t getRank() {
-      return cast<MemDescType>(getSrc().getType()).getRank();
-    }
-  }];
-
   let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
 
   let hasFolder = 1;

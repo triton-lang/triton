@@ -579,12 +579,6 @@ def TT_TransOp : TT_Op<"trans", [Pure,
 
     let results = (outs TT_Tensor:$result);
 
-    let extraClassDeclaration = [{
-      int64_t getRank() {
-        return cast<RankedTensorType>(getSrc().getType()).getRank();
-      }
-    }];
-
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasFolder = 1;
