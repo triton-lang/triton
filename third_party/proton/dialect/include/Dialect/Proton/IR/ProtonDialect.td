@@ -12,9 +12,7 @@ def Proton_Dialect : Dialect {
     performance profiling and analysis tools.
   }];
 
-  let dependentDialects = [
-    "mlir::LLVM::LLVMDialect"
-  ];
+  let dependentDialects = [];
 }
 
 #endif
