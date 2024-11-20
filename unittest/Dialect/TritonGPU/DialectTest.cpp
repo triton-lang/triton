@@ -683,8 +683,8 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
 
       // Create LinearEncodingAttr from the LinearLayout
       auto linearLayout = *distributedEncoding.toLinearLayout(shape);
-      auto linearEncoding = triton::gpu::LinearEncodingAttr::get(
-          &ctx, linearLayout, distributedEncoding.getRepOrder());
+      auto linearEncoding =
+          triton::gpu::LinearEncodingAttr::get(&ctx, linearLayout);
 
       // Test that the canonical form of the LinearLayout is indeed canonical
       // by expanding it to the original shape

@@ -469,9 +469,7 @@ public:
       warps.insert(warps.begin(), nBases, std::vector<int32_t>(rank, 0));
       auto outDims = llvm::to_vector(blockedLL.getOutDimNames());
       auto newLL = LinearLayout(scaleBases, outDims);
-      auto repOrder = blocked.getRepOrder();
-      newScaleEncoding =
-          LinearEncodingAttr::get(ctx, std::move(newLL), repOrder);
+      newScaleEncoding = LinearEncodingAttr::get(ctx, std::move(newLL));
     }
 
     a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding);

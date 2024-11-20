@@ -1278,28 +1278,14 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
 // FIXME Can we take the LinearLayout by const&?
 LogicalResult
 LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                           LinearLayout linearLayout,
-                           ArrayRef<unsigned> repOrder) {
+                           LinearLayout linearLayout) {
   // Example of LinearEncodingAttr
-  // <{bases = {register = [[0, 1], [8, 0], [0, 8], [64, 0]],
-  //            lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
-  //            warp = [[16, 0], [32, 0]],
-  //            block = []},
-  //   repOrder = [1, 0]}>
+  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+  //   warp = [[16, 0], [32, 0]],
+  //   block = []}>
   // The input dims must be {register, lane, warp, block}
   // The output dims of the linear layout should be dim0..dim[rank-1]
-  // and the order must be a permutation of 0..rank-1
-
-  if (!isPermutationOfIota(repOrder)) {
-    return emitError() << "repOrder must be a permutation of 0..(rank-1). Got "
-                       << repOrder;
-  }
-  if (linearLayout.getNumOutDims() != repOrder.size()) {
-    return emitError() << "repOrder must have the same length as the number of "
-                       << "dimensions in the layout. Got " << repOrder
-                       << " for a layout with " << linearLayout.getNumOutDims()
-                       << " dimensions";
-  }
 
   static const auto expectedInDims =
       SmallVector<std::string>({"register", "lane", "warp", "block"});
@@ -1339,41 +1325,21 @@ LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 void LinearEncodingAttr::print(mlir::AsmPrinter &printer) const {
   // We don't use the default implementation as it's a bit too verbose
   // This prints in the following format that is shape agnostic, in the sense
-  // that we don't print explicitly the outShape of the LL and instead
-  // we print the minimal LL that would be expanded to the original LL for
-  // that given size.
-  // See LinearencodingAttr::get for the canonicalisation process.
-  // <{bases = {register = [[0, 1], [8, 0], [0, 8], [64, 0]],
-  //            lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
-  //            warp = [[16, 0], [32, 0]],
-  //            block = []},
-  //   repOrder = [1, 0]}>
+  // that we don't print explicitly the outShape of the LL
+  // We always assume LLs to be surjective
+  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+  //   warp = [[16, 0], [32, 0]],
+  //   block = []}>
   auto ll = getLinearLayout();
-
-  // The size in MLIR is part of the RankedTensorType this layout is attached to
-  // This LinearLayout represents just a tile that is replicated following
-  // repOrder
-
-  // The dims in the outDims are ordered as [dim0, dim1, ... dim<rank-1>]
-  assert(llvm::all_of(
-      llvm::zip(ll.getOutDimNames(), llvm::seq(ll.getNumOutDims())),
-      [](auto pair) {
-        auto [outDim, i] = pair;
-        return outDim.str() == ("dim" + llvm::Twine(i)).str();
-      }));
-
-  printer << "<{bases = {"
-          << join(ll.getBases(), ", ",
-                  [](const auto &base) {
-                    return base.first.str() + " = " + "[" +
-                           join(base.second, ", ",
-                                [](const std::vector<int32_t> &vec) {
-                                  return "[" + join(vec, ", ") + "]";
-                                }) +
-                           "]";
-                  })
-          << "}, repOrder = [" << mlir::triton::join(getRepOrder(), ", ")
-          << "]}>";
+  printer << "<{" << join(ll.getBases(), ", ", [](const auto &base) {
+    return base.first.str() + " = " + "[" +
+           join(base.second, ", ",
+                [](const std::vector<int32_t> &vec) {
+                  return "[" + join(vec, ", ") + "]";
+                }) +
+           "]";
+  }) << "}>";
 }
 
 Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -1391,15 +1357,10 @@ Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
 
   // Parse the basis names in order (the order is relevant)
   std::vector<std::string> inDimNames = {"register", "lane", "warp", "block"};
-  auto dictBases = dict.getAs<DictionaryAttr>("bases");
-  if (!dictBases) {
-    parser.emitError(parser.getCurrentLocation(), "Expected bases");
-    return {};
-  }
 
   for (const auto &inDimNameStr : inDimNames) {
     auto inDimName = StringAttr::get(parser.getContext(), inDimNameStr);
-    Attribute value = dictBases.get(inDimName);
+    Attribute value = dict.get(inDimName);
 
     // Expecting an array of arrays
     auto arrayOfArraysAttr = mlir::dyn_cast<ArrayAttr>(value);
@@ -1434,32 +1395,34 @@ Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
     }
     bases[inDimName] = std::move(inDimBases);
   }
-
-  // Parse repOrder
-  auto dictRepOrder = dict.getAs<ArrayAttr>("repOrder");
-  if (!dictRepOrder) {
-    parser.emitError(parser.getCurrentLocation(), "Expected repOrder");
-    return {};
+  size_t rank = 0;
+  for (const auto &basesDim : llvm::make_second_range(bases)) {
+    if (!basesDim.empty()) {
+      rank = basesDim[0].size();
+      break;
+    }
   }
-  SmallVector<unsigned> repOrder;
-  for (Attribute intAttr : dictRepOrder) {
-    auto intValueAttr = mlir::dyn_cast<IntegerAttr>(intAttr);
-    repOrder.push_back(intValueAttr.getInt());
+
+  // To implement this we'd need to serialise the rank as well.
+  // We can do this if we ever need it
+  if (rank == 0) {
+    parser.emitError(parser.getCurrentLocation(), "Empty Layout not supported");
+    return {};
   }
 
   // Generate standared outDimNames (dim0, dim1, ...)
   SmallVector<StringAttr> outDimNames;
-  for (int i = 0; i < repOrder.size(); ++i) {
+  for (int i = 0; i < rank; ++i) {
     outDimNames.push_back(
         StringAttr::get(parser.getContext(), "dim" + llvm::Twine(i)));
   }
 
   // Create LinearLayout
-  LinearLayout linearLayout(std::move(bases), outDimNames);
+  LinearLayout linearLayout(std::move(bases), std::move(outDimNames));
 
   // Create and return the LinearEncodingAttr
   return parser.getChecked<LinearEncodingAttr>(parser.getContext(),
-                                               linearLayout, repOrder);
+                                               std::move(linearLayout));
 }
 
 SmallVector<unsigned> basesPerDim(const LinearLayout::BasesT &namedBases,
@@ -1521,42 +1484,6 @@ SmallVector<unsigned> orderPerDim(const LinearLayout &ll, StringAttr dimName,
   return SmallVector<unsigned>(order.begin(), order.end());
 }
 
-void removeRepsInPlace(MLIRContext *ctx, LinearLayout::BasesT &bases,
-                       ArrayRef<unsigned> repOrder, ArrayRef<unsigned> shape) {
-  // Canonicalize by computing the inverse of ensureLayoutNotSmallerThan
-  auto rank = repOrder.size();
-  assert(!repOrder.empty());
-  auto &registers = bases[StringAttr::get(ctx, "register")];
-
-  // Remove bases starting from the last that are equal to half the size of that
-  // dimension
-  for (auto dim : llvm::reverse(repOrder)) {
-    auto size = shape[dim];
-    auto isTiled = std::vector<int32_t>(rank, 0);
-    isTiled[dim] = size / 2;
-    while (!registers.empty() && isTiled[dim] > 0 &&
-           registers.back() == isTiled) {
-      registers.pop_back();
-      isTiled[dim] /= 2;
-    }
-  }
-}
-
-LinearEncodingAttr LinearEncodingAttr::get(MLIRContext *ctx,
-                                           const LinearLayout &linearLayout,
-                                           ArrayRef<unsigned> repOrder) {
-
-  LinearLayout::BasesT bases = linearLayout.getBases();
-  auto outDimSizesIter = linearLayout.getOutDimSizes();
-  llvm::SmallVector<unsigned> outDimSizes(outDimSizesIter.begin(),
-                                          outDimSizesIter.end());
-  // Canonicalize the layout
-  removeRepsInPlace(ctx, bases, repOrder, outDimSizes);
-  auto newLL =
-      LinearLayout(bases, llvm::to_vector(linearLayout.getOutDimNames()));
-  return Base::get(ctx, std::move(newLL), repOrder);
-}
-
 // [Note. Divergence of methods wrt. legacy layouts]
 // For smaller shapes where the CTATile is larger than the output
 // tensor, some methods return different values than the legacy layouts. I think
@@ -1565,7 +1492,11 @@ LinearEncodingAttr LinearEncodingAttr::get(MLIRContext *ctx,
 // have 4 warps. But perhaps for this we have to add some masking in some
 // places... We'll see
 SmallVector<unsigned> LinearEncodingAttr::getRepOrder() const {
-  return SmallVector<unsigned>(getRepOrder__());
+  // This is not correct, but:
+  // - It happens to agree in most places with the legacy layout
+  // - getRepOrder does not make sense for LinearEncodingAttr as it already has
+  //   the same shape as the tensor that uses it
+  return getOrder();
 }
 SmallVector<unsigned> LinearEncodingAttr::getCTAsPerCGA() const {
   // CTAs are split into an identity part (SplitNum) and a broadcast part
@@ -1574,7 +1505,7 @@ SmallVector<unsigned> LinearEncodingAttr::getCTAsPerCGA() const {
 }
 SmallVector<unsigned> LinearEncodingAttr::getCTAOrder() const {
   return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "block"),
-                     getRepOrder__());
+                     getOrder());
 }
 SmallVector<unsigned> LinearEncodingAttr::getCTASplitNum() const {
   return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "block"));
@@ -1584,39 +1515,63 @@ SmallVector<unsigned> LinearEncodingAttr::getWarpsPerCTA() const {
 }
 SmallVector<unsigned> LinearEncodingAttr::getWarpOrder() const {
   return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "warp"),
-                     getRepOrder__());
+                     getOrder());
 }
 SmallVector<unsigned> LinearEncodingAttr::getThreadsPerWarp() const {
   return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"));
 }
 SmallVector<unsigned> LinearEncodingAttr::getThreadOrder() const {
   return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"),
-                     getRepOrder__());
+                     getOrder());
 }
 SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
   auto rank = getRepOrder().size();
   auto ll = getLinearLayout();
-  auto kRegister = StringAttr::get(getContext(), "register");
-  if (getCTAsPerCGA() == SmallVector<unsigned>(rank, 1)) {
-    return basesPerDim(ll, kRegister);
-  } else {
-    // We canonicalize on the spot, as if we use CGAs the regs are not in
-    // canonical form The order is [reg, lane, warp, rep, block], so we first
-    // remove the blocks
-    llvm::SmallVector<unsigned> ctaShape;
-    for (auto [shape, cgaNum] :
-         llvm::zip(ll.getOutDimSizes(), getCTASplitNum())) {
-      ctaShape.push_back(shape / cgaNum);
-    }
-    LinearLayout::BasesT bases = ll.getBases();
-    removeRepsInPlace(getContext(), bases, getRepOrder(), ctaShape);
-    return basesPerDim(bases, kRegister, rank);
+  auto ctx = getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+
+  // We canonicalize on the spot, as if we use CGAs the regs are not in
+  // canonical form The order is [reg, lane, warp, rep, block], so we first
+  // remove the blocks
+  llvm::SmallVector<unsigned> ctaShape;
+  for (auto [shape, cgaNum] :
+       llvm::zip(ll.getOutDimSizes(), getCTASplitNum())) {
+    ctaShape.push_back(shape / cgaNum);
   }
+  LinearLayout::BasesT bases = ll.getBases();
+
+  llvm::SetVector<unsigned> reverseRepOrder;
+  auto nonZero = [](auto val) { return val != 0; };
+  auto &registers = bases[StringAttr::get(ctx, "register")];
+  while (!registers.empty()) {
+    auto &basis = registers.back();
+    auto it = std::find_if(basis.begin(), basis.end(), nonZero);
+    // If there's broadcasting (base == zeros) there are no more reps
+    if (it == basis.end()) {
+      break;
+    }
+    auto dim = it - basis.begin();
+    reverseRepOrder.insert(dim);
+    // As soon as we stop finding reps, we stop
+    if (dim != reverseRepOrder.back() || 2 * basis[dim] != ctaShape[dim]) {
+      break;
+    }
+    ctaShape[dim] /= 2;
+    registers.pop_back();
+  }
+  return basesPerDim(bases, kRegister, rank);
 }
+
 SmallVector<unsigned> LinearEncodingAttr::getOrder() const {
+  auto rank = getLinearLayout().getNumOutDims();
+  SmallVector<unsigned> order(rank);
+  // Choose [rank-1, rank-2, ... 0] as the default order in case
+  // there are dims that do not move in the register
+  // This order is as good as any really
+  std::iota(order.rbegin(), order.rend(), 0);
+
   return orderPerDim(getLinearLayout(),
-                     StringAttr::get(getContext(), "register"),
-                     getRepOrder__());
+                     StringAttr::get(getContext(), "register"), order);
 }
 
 std::optional<LinearLayout>

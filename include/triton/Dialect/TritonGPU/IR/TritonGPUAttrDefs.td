@@ -574,16 +574,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     See the docs in LinearLayout.h for the definition of linear layouts.
   }];
 
-  let parameters = (
-    ins
-    "LinearLayout":$linearLayout,
-    ArrayRefParameter<"unsigned">:$repOrder__
-  );
-
-  let builders = [
-    AttrBuilder<(ins "const LinearLayout&":$linearLayout, "ArrayRef<unsigned>":$repOrder)>
-  ];
-
+  let parameters = (ins "LinearLayout":$linearLayout);
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() const;
@@ -592,13 +583,11 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
 
   let genVerifyDecl = 1;
   // Example of assembly format:
-  // <{bases = {register = [[0, 1], [8, 0], [0, 8], [64, 0]],
-  //            lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
-  //            warp = [[16, 0], [32, 0]],
-  //            block = []},
-  //   repOrder = [1, 0]}>
+  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+  //   warp = [[16, 0], [32, 0]],
+  //   block = []}>
   let hasCustomAssemblyFormat = 1;
-  let skipDefaultBuilders = 1;
 }
 
 
