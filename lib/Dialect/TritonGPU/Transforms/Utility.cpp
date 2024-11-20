@@ -944,7 +944,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
-            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
+            dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());

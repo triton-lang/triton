@@ -258,7 +258,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   Value mask = loadOp.getMask();
   Value other = loadOp.getOther();
 
-  tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
+  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   Operation *copy = builder.clone(*loadOp);
 
@@ -271,7 +271,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   loadOffsets[0] = extractIdx;
   auto sharedMemorySpace =
       triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
-  auto subviewTy = tt::MemDescType::get(
+  auto subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   auto viewLoad =
@@ -330,7 +330,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
-            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
+            dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
@@ -669,9 +669,9 @@ Value StreamPipeliner::createAlloc(Operation *loadOp,
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), numBuffers);
-  Type memdescType = tt::MemDescType::get(bufferShape, ty.getElementType(),
-                                          sharedEnc, sharedMemorySpace,
-                                          /*mutableMemory=*/true);
+  Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
+                                           sharedEnc, sharedMemorySpace,
+                                           /*mutableMemory=*/true);
   auto alloc =
       builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType, Value());
   sharedMemAllocs.push_back(alloc);

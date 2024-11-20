@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -618,10 +619,10 @@ static void maybePrintCTALayout(mlir::MLIRContext *context,
 //===----------------------------------------------------------------------===//
 // Attribute methods
 //===----------------------------------------------------------------------===//
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/AttrInterfaces.cpp.inc"
 
 #define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/AttrDefs.cpp.inc"
 
 SliceEncodingAttr BlockedEncodingAttr::squeeze(int axis) {
   return SliceEncodingAttr::get(getContext(), axis, *this);
@@ -3304,12 +3305,53 @@ void mlir::triton::gpu::dumpHWLayout(RankedTensorType tensorType) {
   llvm::errs() << getLayoutStr(tensorType, /*useHWPointOfView=*/true);
 }
 
+namespace {
+struct TensorModel
+    : public TensorOrMemDesc::ExternalModel<TensorModel, RankedTensorType> {
+  Type getElementType(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getElementType();
+  }
+  Attribute getEncoding(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getEncoding();
+  }
+  ArrayRef<int64_t> getShape(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getShape();
+  }
+  int64_t getRank(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getRank();
+  }
+  int64_t getElementTypeBitWidth(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getElementTypeBitWidth();
+  }
+};
+
+struct MemDescModel
+    : public TensorOrMemDesc::ExternalModel<MemDescModel, MemDescType> {
+  Type getElementType(Type pointer) const {
+    return cast<MemDescType>(pointer).getElementType();
+  }
+  Attribute getEncoding(Type pointer) const {
+    return cast<MemDescType>(pointer).getEncoding();
+  }
+  ArrayRef<int64_t> getShape(Type pointer) const {
+    return cast<MemDescType>(pointer).getShape();
+  }
+  int64_t getRank(Type pointer) const {
+    return cast<MemDescType>(pointer).getShape().size();
+  }
+  int64_t getElementTypeBitWidth(Type pointer) const {
+    return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
+  }
+};
+
+} // namespace
+
 void TritonGPUDialect::initialize() {
   registerTypes();
 
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/AttrDefs.cpp.inc"
       >();
   addOperations<
 #define GET_OP_LIST
@@ -3318,6 +3360,9 @@ void TritonGPUDialect::initialize() {
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonGPUInferLayoutInterface>();
+
+  RankedTensorType::attachInterface<TensorModel>(*getContext());
+  MemDescType::attachInterface<MemDescModel>(*getContext());
 }
 
 // verify TritonGPU ops

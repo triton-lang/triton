@@ -1,10 +1,10 @@
-#ifndef TRITON_TYPE_INTERFACES
-#define TRITON_TYPE_INTERFACES
+#ifndef TRITON_GPU_TYPE_INTERFACES
+#define TRITON_GPU_TYPE_INTERFACES
 
 include "mlir/IR/OpBase.td"
 
 // Interface dynamically attached to RankedTensorType and MemDescType.
-def TT_TensorOrMemDesc : TypeInterface<"TensorOrMemDesc"> {
+def TTG_TensorOrMemDesc : TypeInterface<"TensorOrMemDesc"> {
   let cppNamespace = "::mlir";
   let methods = [
     InterfaceMethod<"Returns the encoding of the tensor or memory descriptor",
@@ -17,8 +17,7 @@ def TT_TensorOrMemDesc : TypeInterface<"TensorOrMemDesc"> {
       "int64_t", "getRank", (ins)>,
     InterfaceMethod<"Returns the element type bit width",
       "int64_t", "getElementTypeBitWidth", (ins)>,
-
   ];
 }
 
-#endif // TRITON_TYPE_INTERFACES
+#endif // TRITON_GPU_TYPE_INTERFACES

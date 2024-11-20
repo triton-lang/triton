@@ -62,10 +62,10 @@ void WarpGroupDotOp::getEffects(
         &effects) {
   auto &a = getAMutable();
   auto &b = getBMutable();
-  if (isa<MemDescType>(a.get().getType()))
+  if (isa<mlir::triton::gpu::MemDescType>(a.get().getType()))
     effects.emplace_back(MemoryEffects::Read::get(), &a,
                          mlir::triton::gpu::SharedMemory::get());
-  if (isa<MemDescType>(b.get().getType()))
+  if (isa<mlir::triton::gpu::MemDescType>(b.get().getType()))
     effects.emplace_back(MemoryEffects::Read::get(), &b,
                          mlir::triton::gpu::SharedMemory::get());
 }
@@ -93,7 +93,8 @@ LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
   return mlir::success();
 }
 
-static LogicalResult verifyBarrierType(Operation *op, MemDescType barrierType) {
+static LogicalResult
+verifyBarrierType(Operation *op, mlir::triton::gpu::MemDescType barrierType) {
   if (!barrierType.getElementType().isInteger(64) ||
       barrierType.getShape() != ArrayRef<int64_t>({1}))
     return op->emitOpError(
