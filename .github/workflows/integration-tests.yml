@@ -27,7 +27,6 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   PROTON_SKIP_PC_SAMPLING_TEST: 1
   CCACHE_COMPRESS: "true"
-  CCACHE_DIR: "~/.cache/ccache"
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
@@ -405,7 +404,6 @@ jobs:
           cd python
           ccache --zero-stats
           pip install -v -e '.[tests]'
-          ccache --print-stats
       - name: Clean up after an unsuccessful build
         if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
         run: |
@@ -577,8 +575,8 @@ jobs:
           echo "PATH is '$PATH'"
           cd python
           ccache --zero-stats
+          export CCACHE_PATH="~/.cache/ccache"
           python3 -m pip install -v --no-build-isolation .
-          ccache --print-stats
       - name: CCache Stats
         run: ccache --print-stats
       - name: Inspect cache directories
