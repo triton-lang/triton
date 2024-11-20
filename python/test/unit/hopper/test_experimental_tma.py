@@ -601,23 +601,25 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 
 @requires_tma
-def test_experimetal_descriptor_load_4d():
+@pytest.mark.parametrize("inner_size", [16, 64])
+def test_experimetal_descriptor_load_4d(inner_size):
     device = "cuda"
 
     @triton.jit
-    def kernel(Z, desc):
+    def kernel(Z, desc, inner_size: tl.constexpr):
         off0 = tl.arange(0, 2)
         off1 = tl.arange(0, 2)
         off2 = tl.arange(0, 32)
-        off3 = tl.arange(0, 16)
-        x = tl._experimental_descriptor_load(desc, [2, 2, 0, 0], [2, 2, 32, 16], tl.dtype("uint8"))
-        out_ptrs = Z + 2 * 32 * 16 * off0[:, None, None, None] + 32 * 16 * off1[None, :, None, None] + 16 * off2[None, None, :, None] + off3[None, None, None, :]
+        off3 = tl.arange(0, inner_size)
+        x = tl._experimental_descriptor_load(desc, [2, 2, 0, 0],
+                                             [2, 2, 32, inner_size], tl.dtype("uint8"))
+        out_ptrs = Z + 2 * 32 * inner_size * off0[:, None, None, None] + 32 * inner_size * off1[None, :, None, None] + inner_size * off2[None, None, :, None] + off3[None, None, None, :]
         tl.store(out_ptrs, x)
 
-    x = torch.randint(size=(4, 8, 32, 16), low=0, high=100, dtype=torch.uint8).to(device)
-    desc = TmaDescKernelParam(x.data_ptr(), [4, 8, 32, 16], [2, 2, 32, 16], 1)
+    x = torch.randint(size=(4, 8, 32, inner_size), low=0, high=100, dtype=torch.uint8).to(device)
+    desc = TmaDescKernelParam(x.data_ptr(), [4, 8, 32, inner_size], [2, 2, 32, inner_size], 1)
 
-    z_tri = torch.zeros(size=(2, 2, 32, 16), dtype=torch.uint8, device=device)
-    kernel[(1, )](z_tri, desc, num_warps=4)
+    z_tri = torch.zeros(size=(2, 2, 32, inner_size), dtype=torch.uint8, device=device)
+    kernel[(1, )](z_tri, desc, inner_size)
 
     assert torch.equal(x[2:4, 2:4, :, :], z_tri)
