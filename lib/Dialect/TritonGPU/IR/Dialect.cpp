@@ -940,7 +940,7 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (mma.isAmpere() || mma.isHopper()) {
       auto bitwidth = getPointeeType(eltTy).getIntOrFloatBitWidth();
-      auto rep = mma.getRepForOperand(shape, bitwidth, idx);
+      auto rep = mma.getRepForOperand(shape, bitwidth, kWidth, idx);
       auto sizePerThread = getSizePerThread();
       auto elemsPerKRep = mma.isHopper() ? (kWidth * 2) : (32 / bitwidth * 2);
       if (rank == 3)
@@ -1974,14 +1974,18 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
-                                        int opIdx) const {
+                                        int kWidth, int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
 
   // {batch, m, n, k}
   // Hopper path never uses the n value, since this method is only invoked
   // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
-  SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
+  // TODO: rep per operand is not accurate for Hopper. It is currently done that
+  // way to allow us to get the correct total number of elements. this will be
+  // fixed when moving to linear layout.
+  SmallVector<int> shapePerWarp = {
+      1, 16, 8, isHopper() ? 4 * 2 * kWidth : 4 * 64 / bitwidth};
   int numRepBatch =
       rank == 3
           ? std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]))

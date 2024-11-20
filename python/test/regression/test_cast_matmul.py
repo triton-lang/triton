@@ -11,7 +11,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip_mi300, is_cuda
+from triton._internal_testing import is_hip_mi300, is_cuda, is_hip
 
 input_dtypes = ["float16", "float32", "float64"]
 if is_cuda():
@@ -77,16 +77,19 @@ def matmul_kernel(A, B, C, M, N, K,  #
     tl.store(C, acc, mask=mask)
 
 
-@pytest.mark.parametrize("M, K, N, BLOCK_K, w_dtype, x_dtype, out_dtype",
-                         [(M, K, N, BLOCK_K, w, x, o)  #
+@pytest.mark.parametrize("M, K, N, BLOCK_K, BLOCK_M, w_dtype, x_dtype, out_dtype",
+                         [(M, K, N, BLOCK_K, BLOCK_M, w, x, o)  #
                           for BLOCK_K in [16, 32]  #
+                          for BLOCK_M in [16, 64]  #
                           for (M, K, N) in [(128, 128, 128), (768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
                           for o in out_dtypes])
-def test_cast_matmul(M, K, N, BLOCK_K, w_dtype, x_dtype, out_dtype):
+def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, w_dtype, x_dtype, out_dtype):
     if x_dtype == w_dtype:
         pytest.skip("skip the same input dtype")
+    if is_hip() and BLOCK_M == 64 and w_dtype in ["float8_e5m2", "float8_e4m3fnuz"]:
+        pytest.skip("skip due to bug on HIP path")
     device = torch.cuda.current_device()
     x_dtype: torch.dtype = getattr(torch, x_dtype)
     w_dtype: torch.dtype = getattr(torch, w_dtype)
@@ -109,7 +112,7 @@ def test_cast_matmul(M, K, N, BLOCK_K, w_dtype, x_dtype, out_dtype):
     out_triton = torch.empty((M, N), device=device, dtype=torch_dtype)
 
     # launch kernel
-    block_m, block_n, block_k = 16, 16, BLOCK_K
+    block_m, block_n, block_k = BLOCK_M, 16, BLOCK_K
     grid = ((triton.cdiv(M, block_m) * triton.cdiv(N, block_n)), 1)
 
     matmul_kernel[grid](

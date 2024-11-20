@@ -1129,7 +1129,8 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isHopper() const;
 
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
-                                          int bitwidth, int opIdx) const;
+                                          int bitwidth, int kWidth,
+                                          int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     bool supportReduction() const {
