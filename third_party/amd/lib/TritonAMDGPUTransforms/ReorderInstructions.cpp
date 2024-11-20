@@ -205,8 +205,8 @@ static void moveDownCoversion(triton::FuncOp funcOp) {
 
 // Move transpositions just after their definition.
 static void moveUpTranspose(triton::FuncOp funcOp) {
-  SmallVector<triton::TransOp> transOps;
-  funcOp.walk([&](triton::TransOp op) { transOps.push_back(op); });
+  SmallVector<triton::TransposeOpInterface> transOps;
+  funcOp.walk([&](triton::TransposeOpInterface op) { transOps.push_back(op); });
 
   for (auto op : transOps)
     if (Operation *argOp = op.getSrc().getDefiningOp())
