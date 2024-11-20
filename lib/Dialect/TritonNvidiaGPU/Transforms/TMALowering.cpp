@@ -37,11 +37,12 @@ public:
     Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
                                                  1, order, ctaLayout);
     if (tensorType.getRank() == 2) {
+      // The following SharedEncodingAttr constructor creates SMEM encoding with
+      // hasLeadingOffset = true, which is not currently supported for higher-rank TMA.
       encoding = SharedEncodingAttr::get(
           tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
           tensorType.getElementType());
     }
-
     MemDescType memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, sharedMemorySpace, /*mutableMemory=*/true);
@@ -89,6 +90,8 @@ public:
     Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
                                                  1, order, ctaLayout);
     if (tensorType.getRank() == 2) {
+      // The following SharedEncodingAttr constructor creates SMEM encoding with
+      // hasLeadingOffset = true, which is not currently supported for higher-rank TMA.
       encoding = SharedEncodingAttr::get(
           tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
           tensorType.getElementType());
