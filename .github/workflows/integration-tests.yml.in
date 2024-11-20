@@ -176,6 +176,9 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-CUDA)}}
 
+    env:
+        RUNNER_TYPE: ${{ matrix.runner[0] }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -227,6 +230,7 @@ jobs:
       # files over time.
       - &restore-build-artifacts-step
         name: Restore cache of ccache and Triton compilation artifacts
+        id: restore-build-cache
         if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v4
         with:
@@ -235,12 +239,12 @@ jobs:
             ~/.cache/ccache
           # Restore the most recent cache entry.
           restore-keys: |
-            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-llvm-${{ steps.cache-key.outputs.llvm }}-
-            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
 
       - &inspect-cache-directories-step
         name: Inspect cache directories
@@ -347,7 +351,7 @@ jobs:
           path: |
             ~/.triton/cache
             ~/.cache/ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key: ${{ steps.restore-build-cache.outputs.cache-primary-key }}
 
   Integration-Tests-AMD:
     needs: Runner-Preparation
@@ -355,6 +359,9 @@ jobs:
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+
+    env:
+        RUNNER_TYPE: ${{ matrix.runner[1] }}
 
     strategy:
       matrix:
@@ -451,6 +458,10 @@ jobs:
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
+
+    env:
+        RUNNER_TYPE: ${{ matrix.runner[0] }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -487,7 +498,7 @@ jobs:
           echo "PATH is '$PATH'"
           cd python
           ccache --zero-stats
-          export CCACHE_PATH="~/.cache/ccache"
+          export CCACHE_DIR="~/.cache/ccache"
           python3 -m pip install -v --no-build-isolation .
 
       - *print-ccache-stats
