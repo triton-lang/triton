@@ -303,7 +303,7 @@ static PyObject *fillTMADescriptior(unsigned long long global_address, uint64_t*
   CUtensorMapSwizzle swizzle = CU_TENSOR_MAP_SWIZZLE_NONE;
   CUtensorMapL2promotion l2Promotion = CU_TENSOR_MAP_L2_PROMOTION_NONE;
 
-  if (rank > 1) {
+  if (rank == 2) {
     l2Promotion = CU_TENSOR_MAP_L2_PROMOTION_L2_128B;
     uint32_t contigDimSizeInByte = elementSize * tensorDims[0];
 
