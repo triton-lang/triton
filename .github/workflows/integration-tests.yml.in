@@ -260,7 +260,9 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install '.[tests]'
+          ccache --zero-stats
+          python3 -m pip install -v '.[tests]'
+          ccache --print-stats
 
       - &run-lit-tests-step
         name: Run lit tests
@@ -386,7 +388,9 @@ jobs:
           echo "PATH is '$PATH'"
           pip uninstall -y triton
           cd python
+          ccache --zero-stats
           pip install -v -e '.[tests]'
+          ccache --print-stats
 
       - name: Clean up after an unsuccessful build
         if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
@@ -474,7 +478,9 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install --no-build-isolation .
+          ccache --zero-stats
+          python3 -m pip install -v --no-build-isolation .
+          ccache --print-stats
 
       - *save-build-artifacts-step
       - *inspect-cache-directories-step

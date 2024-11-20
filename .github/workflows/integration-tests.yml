@@ -229,7 +229,9 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install '.[tests]'
+          ccache --zero-stats
+          python3 -m pip install -v '.[tests]'
+          ccache --print-stats
       - name: Run lit tests
         run: |
           cd python
@@ -384,7 +386,9 @@ jobs:
           echo "PATH is '$PATH'"
           pip uninstall -y triton
           cd python
+          ccache --zero-stats
           pip install -v -e '.[tests]'
+          ccache --print-stats
       - name: Clean up after an unsuccessful build
         if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
         run: |
@@ -548,7 +552,9 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install --no-build-isolation .
+          ccache --zero-stats
+          python3 -m pip install -v --no-build-isolation .
+          ccache --print-stats
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
