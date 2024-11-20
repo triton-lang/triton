@@ -1017,7 +1017,8 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   assert(rank == 2 || rank == 3 && "Invalid dotLayout");
 
   // Do not split CTA in K dimension
-  getOpIdx() == 0 ? res[rank - 1] = 1 : res[rank - 2] = 1;
+  auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
+  res[kDim] = 1;
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
