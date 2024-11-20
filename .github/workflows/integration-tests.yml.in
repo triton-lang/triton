@@ -23,11 +23,13 @@ concurrency:
 permissions: read-all
 
 env:
+  TRITON_BUILD_WITH_CCACHE: "true"
   TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
   PROTON_SKIP_PC_SAMPLING_TEST: 1
   CCACHE_COMPRESS: "true"
+  CCACHE_DIR: "~/.cache/ccache"
 
 jobs:
   Runner-Preparation:
@@ -255,14 +257,16 @@ jobs:
 
       - name: Install Triton
         env:
-          TRITON_BUILD_WITH_CCACHE: "true"
           CUDA_HOME: "/usr/local/cuda"
         run: |
           echo "PATH is '$PATH'"
           cd python
           ccache --zero-stats
           python3 -m pip install -v '.[tests]'
-          ccache --print-stats
+
+      - &print-ccache-stats
+        name: CCache Stats
+        run: ccache --print-stats
 
       - &run-lit-tests-step
         name: Run lit tests
@@ -321,6 +325,17 @@ jobs:
           python3 -m pytest -s .
           cd ..
 
+      - &inspect-cache-directories-step
+        name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          ls -alh ~/.triton
+          du -sh ~/.triton/**
+
+          mkdir -p ~/.cache/ccache
+          ls -alh ~/.cache/ccache
+          du -sh ~/.cache/ccache
+
       # If we're on branch `main`, save the ccache Triton compilation artifacts
       # to the cache so they can be used by other (non-main) CI runs.
       #
@@ -335,17 +350,6 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-
-      - &inspect-cache-directories-step
-        name: Inspect cache directories
-        run: |
-          mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
-
-          mkdir -p ~/.cache/ccache
-          ls -alh ~/.cache/ccache
-          du -sh ~/.cache/ccache
 
   Integration-Tests-AMD:
     needs: Runner-Preparation
@@ -404,6 +408,7 @@ jobs:
         run: |
           rm -rf ~/.triton
 
+      - *print-ccache-stats
       - *run-lit-tests-step
 
       - name: Run python tests on HIP
@@ -434,8 +439,8 @@ jobs:
 
       - *run-proton-tests-step
       - *run-cpp-unittests-step
-      - *save-build-artifacts-step
       - *inspect-cache-directories-step
+      - *save-build-artifacts-step
 
       - name: Clean up caches
         run: |
@@ -476,7 +481,6 @@ jobs:
           python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit pybind11
       - name: Install Triton
         env:
-          TRITON_BUILD_WITH_CCACHE: "true"
           TRITON_BUILD_WITH_O1: "true"
           # macos-latest has 3 vcpus and 7GB DRAM, to save memory we limit the number of jobs to 3
           # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
@@ -489,5 +493,6 @@ jobs:
           python3 -m pip install -v --no-build-isolation .
           ccache --print-stats
 
-      - *save-build-artifacts-step
+      - *print-ccache-stats
       - *inspect-cache-directories-step
+      - *save-build-artifacts-step
