@@ -639,13 +639,15 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
   if (!mfmaLayout || !dotOperandLayout)
     return false;
 
-  // Currently supporting 32x32 FP8 MFMA -> dot operand case
+  // Currently supporting 32x32 and 16x16 FP8 MFMA -> dot operand case
   return dotOperandLayout.getParent() == mfmaLayout &&
          dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
          dotOperandLayout.getKWidth() == 8 &&
-         getContigPerThread(mfmaLayout)[1] == 4 && mfmaLayout.getMDim() == 32 &&
-         mfmaLayout.getNDim() == 32 &&
+         getContigPerThread(mfmaLayout)[1] == 4 &&
+         ((mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16) ||
+          (mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32)) &&
          triton::type::isFloat8(srcTy.getElementType()) &&
+         triton::type::isFloat8(dstTy.getElementType()) &&
          mfmaLayout.getWarpsPerCTA()[1] == 1;
 }
 

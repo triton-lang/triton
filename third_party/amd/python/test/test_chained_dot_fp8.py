@@ -42,6 +42,7 @@ def _chained_dot(
     stride_om,
     stride_od,
     Z,
+    M,
     N,
     BLOCK_D: tl.constexpr,
     BLOCK_M: tl.constexpr,
@@ -92,16 +93,21 @@ def _chained_dot(
 class chained_dot_fn(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, q, k, v, q_desc=1.0, k_desc=1.0, v_desc=1.0, s_sc=1.0, s_desc=1.0, o_sc=1.0):
+    def forward(ctx, q, k, v, msize=32, q_desc=1.0, k_desc=1.0, v_desc=1.0, s_sc=1.0, s_desc=1.0, o_sc=1.0):
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-2]
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
+        assert msize in {16, 32}
         o = torch.empty_like(q, dtype=v.dtype)
 
         BLOCK_M = 128 if q.dtype == float8 else 256
+        if BLOCK_M > q.shape[1]:
+            BLOCK_M = int(math.pow(2, math.floor(math.log2(q.shape[1]))))
         BLOCK_N = 32
+        if BLOCK_N > k.shape[1]:
+            BLOCK_N = int(math.pow(2, math.floor(math.log2(k.shape[1]))))
         waves_per_eu = 2
-        num_warps = BLOCK_M // 32
+        num_warps = 4 if q.dtype == float8 else 8
         num_stages = 1
 
         grid = (triton.cdiv(q.shape[1], BLOCK_M), q.shape[0], 1)
@@ -109,9 +115,9 @@ class chained_dot_fn(torch.autograd.Function):
         _chained_dot[grid](q, k, v, o, q_desc,
                            k_desc, v_desc, s_sc, s_desc, o_sc, q.stride(0), q.stride(1), q.stride(2), k.stride(0),
                            k.stride(1), k.stride(2), v.stride(0), v.stride(1), v.stride(2), o.stride(0), o.stride(1),
-                           o.stride(2), Z=q.shape[0], N=q.shape[1], BLOCK_D=Lk, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-                           USE_FP8=(q.dtype == float8), waves_per_eu=waves_per_eu, num_warps=num_warps,
-                           num_stages=num_stages)
+                           o.stride(2), Z=q.shape[0], M=q.shape[1], N=k.shape[1], BLOCK_D=Lk, BLOCK_M=BLOCK_M,
+                           BLOCK_N=BLOCK_N, USE_FP8=(q.dtype == float8), waves_per_eu=waves_per_eu, num_warps=num_warps,
+                           num_stages=num_stages, matrix_instr_nonkdim=msize)
 
         return o
 
@@ -127,13 +133,16 @@ def to_float8(x, dtype=float8, margin: float = 1.0):
     return x_scaled.to(dtype), scale, 1.0 / scale
 
 
-@pytest.mark.parametrize('N, D, dtype', [(*shape, dtype) for shape in [(128, 32), (256, 128)] for dtype in ['fp8']])
-def test_chained_dot(N, D, dtype):
+@pytest.mark.parametrize('M, N, D, dtype, msize', [(*shape, dtype, msize)
+                                                   for shape in [(128, 64, 32), (256, 128, 128)]
+                                                   for dtype in ['fp8']
+                                                   for msize in [16, 32]])
+def test_chained_dot(M, N, D, dtype, msize):
     if dtype == 'fp8':
         assert float8 is not None
 
     BATCH = 1
-    q = torch.empty((BATCH, N, D), dtype=torch.float16, device="cuda").normal_(mean=0., std=0.5)
+    q = torch.empty((BATCH, M, D), dtype=torch.float16, device="cuda").normal_(mean=0., std=0.5)
     k = torch.empty((BATCH, N, D), dtype=torch.float16, device="cuda").normal_(mean=0., std=0.5)
     v = torch.empty((BATCH, D, N), dtype=torch.float16, device="cuda").normal_(mean=0., std=0.5)
 
@@ -151,7 +160,7 @@ def test_chained_dot(N, D, dtype):
                                scale_b=torch.tensor(v_desc, dtype=torch.float32, device="cuda"))
         ref_f8, ref_sc, _ = to_float8(ref)
 
-        tri_out = chained_dot(q_f8, k_f8, v_f8, q_desc, k_desc, v_desc, s_sc, s_desc, ref_sc)
+        tri_out = chained_dot(q_f8, k_f8, v_f8, msize, q_desc, k_desc, v_desc, s_sc, s_desc, ref_sc)
 
         assert tri_out.isnan().sum() == 0
         torch.testing.assert_close(tri_out[0].float(), ref_f8.float(), atol=1e-2, rtol=0)
@@ -160,5 +169,5 @@ def test_chained_dot(N, D, dtype):
         s = torch.matmul(q, k.transpose(1, 2))
         ref = torch.matmul(s, v.transpose(1, 2))
 
-        tri_out = chained_dot(q, k, v)
+        tri_out = chained_dot(q, k, v, msize)
         torch.testing.assert_close(tri_out, ref, atol=1e-2, rtol=0)

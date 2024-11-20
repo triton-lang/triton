@@ -134,23 +134,6 @@ public:
     if (!matchMFMAAndDotOperandShuffleCase(srcType, dstType))
       return failure();
 
-    /*
-    Using wave shuffle to convert layouts:
-    1) Input MMA layout (32x32, fp8, 16 values):
-     _____________________________________________________________
-    |(t0  v0 v1 v2 v3) (t32 v0 v1 v2 v3) ... (t32 v12 v13 v14 v15)|
-    | ...                                ...                      |
-    |(t31 v0 v1 v2 v3) (t63 v0 v1 v2 v3) ... (t63 v12 v13 v14 v15)|
-    |_____________________________________________________________|
-
-    2) Output Dot operand layout (two 32x16 tiles, fp8, 8 values each):
-     ____________________________________________________________   ___
-    |(t0  v0 v1 v2 v3 v4 v5 v6 v7) (t32 v0 v1 v2 v3 v4 v5 v6 v7) | |
-    | ...                           ...                          | |...
-    |(t31 v0 v1 v2 v3 v4 v5 v6 v7) (t63 v0 v1 v2 v3 v4 v5 v6 v7) | |
-    |____________________________________________________________| |___
-    */
-
     auto loc = op.getLoc();
 
     SmallVector<Value> inVals =
@@ -160,16 +143,24 @@ public:
 
     Value threadId = tid_val();
     auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
-    Value warpSize = i32_val(triton::gpu::getWarpSize(mfmaLayout));
+    assert((mfmaLayout.getMDim() == 16 || mfmaLayout.getMDim() == 32) &&
+           "Expected MFMA size 16 or 32");
+    assert(triton::gpu::getWarpSize(mfmaLayout) == 64 &&
+           "Expected warp size 64 for MFMA");
+    Value warpSize = i32_val(64);
     Value laneId = urem(threadId, warpSize);
-    Value laneOffset = i32_val(32);
-    Value mask = icmp_slt(laneId, laneOffset);
-    Value addr0 = select(mask, add(laneId, laneOffset), laneId);
-    Value addr1 = select(mask, laneId, sub(laneId, laneOffset));
 
-    SmallVector<Value> outVals;
     auto elemTy = int_ty(8);
     auto vecTy = vec_ty(elemTy, 4);
+
+    Value mask0 = icmp_slt(laneId, i32_val(32));
+    Value mask1 = icmp_slt(urem(laneId, i32_val(32)), i32_val(16));
+
+    Value addrShift16 = urem(add(laneId, i32_val(16)), warpSize);
+    Value addrShift32 = urem(add(laneId, i32_val(32)), warpSize);
+    Value addrShift48 = urem(add(laneId, i32_val(48)), warpSize);
+
+    SmallVector<Value> outVals;
     for (size_t startIdx = 0; startIdx < inVals.size(); startIdx += 8) {
       Value vec0 = undef(vecTy);
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
@@ -182,23 +173,82 @@ public:
                               i32_val(vIdx));
       }
 
-      Value shflVec0 =
-          bitcast(targetInfo.shuffleIdx(rewriter, loc,
-                                        bitcast(vec0, int_ty(32)), addr0),
-                  vecTy);
-      Value shflVec1 =
-          bitcast(targetInfo.shuffleIdx(rewriter, loc,
-                                        bitcast(vec1, int_ty(32)), addr1),
-                  vecTy);
+      Value resVec0, resVec1;
+      if (mfmaLayout.getMDim() == 32) {
+        /*
+        Using wave shuffle to convert layouts (32x32x16 case):
+        1) Input MMA layout (32x32, fp8, 16 values):
+         _____________________________________________________________
+        |(t0  v0 v1 v2 v3) (t32 v0 v1 v2 v3) ... (t32 v12 v13 v14 v15)|
+        | ...                                ...                      |
+        |(t31 v0 v1 v2 v3) (t63 v0 v1 v2 v3) ... (t63 v12 v13 v14 v15)|
+        |_____________________________________________________________|
 
-      Value firstVec = select(mask, vec0, shflVec1);
-      Value secondVec = select(mask, shflVec0, vec1);
+        2) Output Dot operand layout (two 32x16 tiles, fp8, 8 values each):
+         ____________________________________________________________   ___
+        |(t0  v0 v1 v2 v3 v4 v5 v6 v7) (t32 v0 v1 v2 v3 v4 v5 v6 v7) | |
+        | ...                           ...                          | |...
+        |(t31 v0 v1 v2 v3 v4 v5 v6 v7) (t63 v0 v1 v2 v3 v4 v5 v6 v7) | |
+        |____________________________________________________________| |___
+        */
+
+        Value shflVec0 =
+            bitcast(targetInfo.shuffleIdx(
+                        rewriter, loc, bitcast(vec0, int_ty(32)), addrShift32),
+                    vecTy);
+        Value shflVec1 =
+            bitcast(targetInfo.shuffleIdx(
+                        rewriter, loc, bitcast(vec1, int_ty(32)), addrShift32),
+                    vecTy);
+
+        resVec0 = select(mask0, vec0, shflVec1);
+        resVec1 = select(mask0, shflVec0, vec1);
+      } else if (mfmaLayout.getMDim() == 16) {
+        /*
+        16x16x32 case:
+        1) Input MMA layout (two 16x16, fp8, 4 values each):
+         _________________________________________________________  ___________
+        |(t0  v0 v1 v2 v3) (t16 v0 v1 v2 v3) ... (t48 v0 v1 v2 v3)||(t0  v4 ...
+        | ...                                ...                  || ...
+        |(t15 v0 v1 v2 v3) (t31 v0 v1 v2 v3) ... (t63 v0 v1 v2 v3)||(t15 v4 ...
+        |_________________________________________________________||___________
+
+        2) Output Dot operand layout (16x32 tile, fp8, 8 values):
+         ________________________________________________________________
+        |(t0  v0 v1 v2 v3 v4 v5 v6 v7) ... (t48 v0 v1 v2 v3 v4 v5 v6 v7) |
+        | ...                          ...                               |
+        |(t15 v0 v1 v2 v3 v4 v5 v6 v7) ... (t63 v0 v1 v2 v3 v4 v5 v6 v7) |
+        |________________________________________________________________|
+        */
+
+        Value shflVec0_16 =
+            bitcast(targetInfo.shuffleIdx(
+                        rewriter, loc, bitcast(vec0, int_ty(32)), addrShift16),
+                    vecTy);
+        Value shflVec0_32 =
+            bitcast(targetInfo.shuffleIdx(
+                        rewriter, loc, bitcast(vec0, int_ty(32)), addrShift32),
+                    vecTy);
+        Value shflVec1_32 =
+            bitcast(targetInfo.shuffleIdx(
+                        rewriter, loc, bitcast(vec1, int_ty(32)), addrShift32),
+                    vecTy);
+        Value shflVec1_48 =
+            bitcast(targetInfo.shuffleIdx(
+                        rewriter, loc, bitcast(vec1, int_ty(32)), addrShift48),
+                    vecTy);
+
+        resVec0 = select(mask0, select(mask1, vec0, shflVec0_16),
+                         select(mask1, shflVec1_32, shflVec1_48));
+        resVec1 = select(mask0, select(mask1, shflVec0_16, shflVec0_32),
+                         select(mask1, shflVec1_48, vec1));
+      }
 
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
-        outVals.push_back(extract_element(elemTy, firstVec, i32_val(vIdx)));
+        outVals.push_back(extract_element(elemTy, resVec0, i32_val(vIdx)));
       }
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
-        outVals.push_back(extract_element(elemTy, secondVec, i32_val(vIdx)));
+        outVals.push_back(extract_element(elemTy, resVec1, i32_val(vIdx)));
       }
     }
 
