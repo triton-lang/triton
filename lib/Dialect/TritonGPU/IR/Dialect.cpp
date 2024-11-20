@@ -3058,10 +3058,6 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
   if (!layout)
     return "";
 
-  unsigned threadsPerWarp = getWarpSize(layout);
-  unsigned numWarpsPerCTA = getNumWarpsPerCTA(layout);
-  unsigned numBlocks = getNumCTAs(layout);
-  int numElementsPerThreads = getTotalElemsPerThread(tensorType);
   StringAttr kRegister = StringAttr::get(tensorType.getContext(), "register");
   StringAttr kLane = StringAttr::get(tensorType.getContext(), "lane");
   StringAttr kWarp = StringAttr::get(tensorType.getContext(), "warp");
@@ -3074,6 +3070,10 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
   int64_t tensorSize = product(tensorType.getShape());
   std::vector<std::string> elementMapping(tensorSize);
   std::vector<std::string> threadMapping;
+  unsigned threadsPerWarp = ll->getInDimSize(kLane);
+  unsigned numWarpsPerCTA = ll->getInDimSize(kWarp);
+  unsigned numBlocks = ll->getInDimSize(kBlock);
+  int numElementsPerThreads = ll->getInDimSize(kRegister);
   for (int blockId = 0; blockId < numBlocks; ++blockId) {
     for (int warpId = 0; warpId < numWarpsPerCTA; warpId++) {
       for (int tid = 0; tid < threadsPerWarp; ++tid) {
