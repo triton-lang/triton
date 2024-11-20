@@ -206,6 +206,11 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
           mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
     auto sizePerThread = distributedLayout.getSizePerThread();
     auto threadsPerWarp = distributedLayout.getThreadsPerWarp();
+    // ThreadsPerWarp does not align with this function for slice layout
+    if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
+      threadsPerWarp = getThreadsPerWarp(sliceLayout.getParent());
+      threadsPerWarp.erase(threadsPerWarp.begin() + sliceLayout.getDim());
+    }
     auto warpsPerCTA = distributedLayout.getWarpsPerCTA();
     assert(sizePerThread.size() == threadsPerWarp.size() &&
            sizePerThread.size() == warpsPerCTA.size());
