@@ -3,8 +3,6 @@
 
 #include "mlir/IR/OpDefinition.h"
 
-#include "triton/Dialect/Triton/IR/Utility.h"
-
 namespace mlir {
 
 namespace triton {

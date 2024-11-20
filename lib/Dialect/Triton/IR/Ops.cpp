@@ -207,7 +207,7 @@ LogicalResult TransOp::inferReturnTypes(
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
-  auto argTy = cast<TensorOrMemDesc>(operands[0].getType());
+  auto argTy = cast<RankedTensorType>(operands[0].getType());
   auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
