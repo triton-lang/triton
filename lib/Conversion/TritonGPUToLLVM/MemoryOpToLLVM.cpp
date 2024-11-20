@@ -204,11 +204,6 @@ private:
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto dstShape = dstTy.getShape();
-    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    auto dstLayout = dstTy.getEncoding();
-    // assert((dstShape.size() <= 2 || isSupportedDotOpLayout(dstTy)) &&
-    //        "Unexpected rank of ConvertLayout(shared->distributed)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
