@@ -3471,15 +3471,15 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
             # e2m1
             em0 = x & 0x7
             em1 = x & 0x70
-            x0 = (em0.to(tl.uint16) << 2) | ((x & 0x80).to(tl.uint16) << 8)
-            x1 = (em1.to(tl.uint16) << (2 + 4)) | ((x & 0x8).to(tl.uint16) << (8 + 4))
+            x0 = (em0.to(tl.uint16) << 2) | ((x & 0x8).to(tl.uint16) << 8)
+            x1 = (em1.to(tl.uint16) << (2 + 4)) | ((x & 0x80).to(tl.uint16) << (8 + 4))
             # Three cases:
             # 1) x is normal and non-zero: Correct bias
-            x0 = tl.where((em0 & 0x60) != 0, x0 + ((127 - 1) << 7), x0)
-            x1 = tl.where((em1 & 0x6) != 0, x1 + ((127 - 1) << 7), x1)
+            x0 = tl.where((em0 & 0x6) != 0, x0 + ((127 - 1) << 7), x0)
+            x1 = tl.where((em1 & 0x60) != 0, x1 + ((127 - 1) << 7), x1)
             # 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in bf16
-            x0 = tl.where(em0 == 0x10, 16128 | (x0 & 0x8000), x0)
-            x1 = tl.where(em1 == 0x1, 16128 | (x1 & 0x8000), x1)
+            x0 = tl.where(em0 == 0x1, 16128 | (x0 & 0x8000), x0)
+            x1 = tl.where(em1 == 0x10, 16128 | (x1 & 0x8000), x1)
             # 3) x is zero, do nothing
             x_bf16 = tl.interleave(x0, x1).to(tl.bfloat16, bitcast=True)
         # Multiplication preserves infs and NaNs in x_bf16
