@@ -9,12 +9,13 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::nvidia_gpu;
 
 namespace {
-constexpr int64_t TMA_SIZE_BYTES = 128;
 
 void tensormap_cp_fenceproxy(Location loc, MLIRContext *ctx,
                              ConversionPatternRewriter &rewriter, Value outPtr,

@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/Support/Casting.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -177,15 +178,23 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
     op->erase();
 }
 
-std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
-  auto stage = cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopStageAttrName))
-                   .getValue()
-                   .getSExtValue();
+std::optional<std::pair<int, int>>
+mlir::triton::maybeGetStageCluster(Operation *op) {
+  auto stage =
+      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopStageAttrName));
   auto clusterId =
-      cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopClusterAttrName))
-          .getValue()
-          .getSExtValue();
-  return std::make_pair(stage, clusterId);
+      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopClusterAttrName));
+  if (!stage || !clusterId) {
+    return std::nullopt;
+  }
+
+  return {
+      {stage.getValue().getSExtValue(), clusterId.getValue().getSExtValue()}};
+}
+std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
+  auto res = maybeGetStageCluster(op);
+  assert(res.has_value() || "Operation is missing stage & cluster attribute");
+  return *res;
 }
 
 void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {

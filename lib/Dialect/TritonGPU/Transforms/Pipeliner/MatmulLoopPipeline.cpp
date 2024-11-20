@@ -1,27 +1,24 @@
 #include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/IRMapping.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
-
-#include <list>
 
 #define DEBUG_TYPE "triton-matmul-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -68,6 +65,30 @@ public:
     return op;
   }
   using OpBuilder::create;
+};
+
+class OpBuilderForStage : public OpBuilder {
+  std::optional<int> stage_, cluster_;
+
+public:
+  explicit OpBuilderForStage(Operation *op, int stage, int cluster)
+      : OpBuilder(op, nullptr), stage_(stage), cluster_(cluster) {}
+  explicit OpBuilderForStage(Operation *op) : OpBuilder(op, nullptr) {
+    auto sc = tt::maybeGetStageCluster(op);
+    if (sc) {
+      stage_ = sc->first;
+      cluster_ = sc->second;
+    }
+  }
+
+  template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
+    OpTy op = OpBuilder::create<OpTy>(std::forward<Args>(args)...);
+
+    if (stage_ && cluster_) {
+      tt::setStageCluster(op, *stage_, *cluster_);
+    }
+    return op;
+  }
 };
 
 static bool sameStageCluster(Operation *op1, Operation *op2) {
@@ -704,7 +725,126 @@ getFinalSchedule(scf::ForOp &forOp, int numStages) {
   return fSchedule;
 }
 
-// Convert load ops into their asyn version and apply multi-buffering based on
+LogicalResult
+allocTMABuffers(scf::ForOp forOp,
+                llvm::MapVector<Operation *, Value> &tmaBufferMapping,
+                int numBuffers) {
+  IRRewriter rewriter(forOp);
+
+  // Create a multi-buffered allocation for each MakeTensorDescOp call in the
+  // loop
+  forOp.walk([&](tt::MakeTensorDescOp op) {
+    // TODO peter: walk to loop yield to find the init value if this is a
+    // loop-carried value. That would save us from allocating another buffer
+    // just for the init value
+    auto loc = op.getLoc();
+    Value alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
+        loc, triton::getPointerType(rewriter.getI8Type()),
+        numBuffers * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
+    tmaBufferMapping[op.getOperation()] = alloc;
+  });
+  return success();
+}
+
+template <typename BuilderT>
+Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
+                            Value modulus, Value zero, Value one) {
+  Value addOne = builder.template create<arith::AddIOp>(loc, counter, one);
+  Value inRangeCond = builder.template create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::slt, addOne, modulus);
+  return builder.template create<arith::SelectOp>(loc, inRangeCond, addOne,
+                                                  zero);
+}
+
+template <typename BuilderT>
+Value subviewTMADescriptor(BuilderT &builder, Location loc, Value alloc,
+                           Value counter) {
+  Value tmaSizeVal = builder.template create<arith::ConstantIntOp>(
+      loc, ttng::TMA_SIZE_BYTES, 32);
+  Value offset =
+      builder.template create<arith::MulIOp>(loc, tmaSizeVal, counter);
+  return builder.template create<triton::AddPtrOp>(loc, alloc.getType(), alloc,
+                                                   offset);
+}
+
+LogicalResult rewriteTMABufferUpdates(
+    scf::ForOp forOp,
+    const llvm::MapVector<Operation *, Value> &tmaBufferMapping,
+    ArrayRef<BlockArgument> tmaCounters, Value numBuffers, Value one,
+    Value zero) {
+  assert(tmaBufferMapping.size() == tmaCounters.size());
+
+  for (auto [iOp, pair] : llvm::enumerate(tmaBufferMapping)) {
+    auto &[op, alloc] = pair;
+
+    // Rewriter MakeTensorDescOp as writing a TMA descriptor
+    auto makeDescOp = cast<tt::MakeTensorDescOp>(op);
+
+    OpBuilderForStage stageBuilder(makeDescOp);
+    auto loc = makeDescOp.getLoc();
+
+    BlockArgument counter = tmaCounters[iOp];
+    Value nextBuf = subviewTMADescriptor(stageBuilder, loc, alloc, counter);
+    if (failed(ttng::createTMADesc(nextBuf, makeDescOp, stageBuilder))) {
+      return failure();
+    }
+    stageBuilder.create<triton::ExperimentalTensormapFenceproxyAcquireOp>(
+        loc, nextBuf);
+    Value nextDesc = stageBuilder.create<triton::ReinterpretTensorDescOp>(
+        loc, makeDescOp.getType(), nextBuf);
+
+    makeDescOp.getResult().replaceAllUsesWith(nextDesc);
+
+    // Increment the buffer index counter
+    Value nextCounter = createIncrementModulo(stageBuilder, loc, counter,
+                                              numBuffers, zero, one);
+
+    // If we are in a (potentially nested) if region, propagate the counter
+    // up to the main for op body scope
+    Operation *curOp = op;
+    Operation *parent = op->getParentOp();
+    while (parent != forOp.getOperation()) {
+      auto ifOp = dyn_cast<scf::IfOp>(parent);
+      if (!ifOp) {
+        std::string msg;
+        llvm::raw_string_ostream ss(msg);
+        ss << "Cannot pipeline MakeTensorDescOp inside:\n";
+        parent->print(ss);
+        ss << "\nOnly scf.if regions are supported";
+        return makeDescOp->emitOpError(std::move(msg));
+      }
+
+      IRRewriter rewriter(parent);
+      auto newIfOp =
+          replaceIfOpWithNewSignature(rewriter, ifOp, {nextCounter.getType()});
+
+      auto yieldNewBlock = newIfOp.thenBlock();
+      auto yieldOldBlock = newIfOp.elseBlock();
+
+      if (yieldNewBlock != curOp->getBlock()) {
+        std::swap(yieldNewBlock, yieldOldBlock);
+      }
+      cast<scf::YieldOp>(yieldNewBlock->getTerminator())
+          .getResultsMutable()
+          .append(nextCounter);
+      cast<scf::YieldOp>(yieldOldBlock->getTerminator())
+          .getResultsMutable()
+          .append(counter);
+
+      ifOp.erase();
+      nextCounter = newIfOp.getResults().back();
+      curOp = newIfOp;
+      parent = newIfOp->getParentOp();
+    }
+
+    // Finally, rewrite the loop level yield
+    auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    forYield.setOperand(counter.getArgNumber() - 1, nextCounter);
+  }
+  return success();
+}
+
+// Convert load ops into their async version and apply multi-buffering based on
 // the required number of buffers.
 static SmallVector<Value>
 createAsyncOps(scf::ForOp &forOp,
@@ -727,6 +867,11 @@ createAsyncOps(scf::ForOp &forOp,
     // pipelining post-processing.
     numBuffers++;
   };
+
+  llvm::MapVector<Operation *, Value> tmaBufferMapping;
+  if (failed(allocTMABuffers(forOp, tmaBufferMapping, numBuffers))) {
+    llvm_unreachable("TMA pipelining failed");
+  }
 
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
@@ -751,7 +896,10 @@ createAsyncOps(scf::ForOp &forOp,
   builder.setInsertionPoint(forOp);
 
   Location loc = forOp.getLoc();
-  // Create two new counters to index into the allocs.
+  // Create a counter to index into the allocations per loop iteration.
+  // NOTE: We create two duplicates values, insertIdx and extractIdx so that the
+  // pipeliner will re-materialize the value in later stages of the pipeline
+  // instead of carrying it as a dependency across multiple iterations.
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
   Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
@@ -764,9 +912,19 @@ createAsyncOps(scf::ForOp &forOp,
   newOperands.push_back(insertIdx);
   newOperands.push_back(extractIdx);
   if (hasTMALoad) {
+    // A single barrier arrival sequence is a "phase" and two phases can
+    // overlap, provided the phases are differentiated with an alternating
+    // boolean value.
     phase = builder.create<arith::ConstantIntOp>(loc, 0, 32);
     newOperands.push_back(phase);
   }
+  // Also create one counter per TMA buffer. This allows the descriptors to be
+  // updated independently without needing to write duplicate of existing tma
+  // descriptors.
+  for (int i = 0; i < tmaBufferMapping.size(); ++i) {
+    newOperands.push_back(zero);
+  }
+
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
   scf::ForOp newForOp =
@@ -778,23 +936,37 @@ createAsyncOps(scf::ForOp &forOp,
   if (phase) {
     phase = newForOp.getBody()->getArgument(newOperandIndex + 2);
   }
+  auto tmaCounters = ArrayRef<BlockArgument>(newForOp.getBody()->getArguments())
+                         .slice(newOperandIndex + (phase ? 3 : 2));
+
+  // Update yield op with temporary yield values
+  auto forYield = cast<scf::YieldOp>(newForOp.getBody()->getTerminator());
+  for (unsigned i = 0; i < newOperands.size(); ++i) {
+    forYield.getResultsMutable().append(newOperands[i]);
+  }
+
+  if (failed(rewriteTMABufferUpdates(newForOp, tmaBufferMapping, tmaCounters,
+                                     numBuffersVal, one, zero))) {
+    llvm_unreachable("Failed to rewrite TMA ops");
+  }
+  tmaBufferMapping.clear();
 
   // FIXME: loads can be in different (stage, cluster)
   // Create two counters for the insert and extract indices to avoid creating
   // long liverange.
   builder.setInsertionPoint(newForOp.getBody(), newForOp.getBody()->begin());
-  insertIdx = builder.create<arith::AddIOp>(loc, insertIdx, one);
-  Value cndIns = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                               insertIdx, numBuffersVal);
-  insertIdx = builder.create<arith::SelectOp>(loc, cndIns, insertIdx, zero);
-
-  extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
+  insertIdx =
+      createIncrementModulo(builder, loc, insertIdx, numBuffersVal, zero, one);
   Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                extractIdx, numBuffersVal);
-  extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
+  extractIdx =
+      createIncrementModulo(builder, loc, extractIdx, numBuffersVal, zero, one);
+
   if (phase) {
     Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, one);
     phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
+  } else {
+    cndExt.getDefiningOp()->erase();
   }
   createTMABarrierAndWait(forOp, asyncLoads, insertIdx, extractIdx, phase,
                           numBuffers, barriers, loadToInfo);
@@ -811,11 +983,12 @@ createAsyncOps(scf::ForOp &forOp,
                          loadToInfo, numStages);
     }
   }
-  SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
-  if (phase)
-    newYieldOperands.push_back(phase);
   // Patch the yield with the updated counters.
-  appendToForOpYield(forOp, newYieldOperands);
+  forYield.setOperand(newOperandIndex + -1, insertIdx);
+  forYield.setOperand(newOperandIndex + 0, extractIdx);
+  if (phase) {
+    forYield.setOperand(newOperandIndex + 1, phase);
+  }
 
   tt::CoarseSchedule coarseSchedule(numStages);
   coarseSchedule.deSerialize(forOp);
@@ -953,12 +1126,11 @@ static int minNumInterleavedCommitOps(Operation *waitOp) {
       if (thisHistorySum >= minCommitNumber)
         return minCommitNumber;
 
-      // get the value value assigned to the argument coming from outside the
-      // loop
+      // get the value assigned to the argument coming from outside the loop
       Value incomingVal = forOp.getInitArgs()[arg.getArgNumber() - 1];
       int min1 = minOverHistories(incomingVal, forOp, thisHistorySum);
 
-      // get the value value assigned to the argument coming from the previous
+      // get the value assigned to the argument coming from the previous
       // iteration
       Operation *yieldOp = block->getTerminator();
       Value prevVal = yieldOp->getOperand(arg.getArgNumber() - 1);
