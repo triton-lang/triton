@@ -754,10 +754,10 @@ SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
   for (auto v : values) {
     auto em0 = and_(v, i8_val(0x7));
     auto em1 = and_(v, i8_val(0x70));
-    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(2)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(8)));
-    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(6)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(12)));
+    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(6)),
+                   shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
+    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(2)),
+                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
 
     // Three cases:
     // 1) x is normal and non-zero: Correct bias

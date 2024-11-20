@@ -162,8 +162,8 @@ def mxfp_to_bf16_kernel(
         # e2m1
         em0 = x & 0x7
         em1 = x & 0x70
-        x0 = (em0.to(tl.uint16) << 2) | ((x & 0x8).to(tl.uint16) << 8)
-        x1 = (em1.to(tl.uint16) << (2 + 4)) | ((x & 0x80).to(tl.uint16) << (8 + 4))
+        x0 = (em0.to(tl.uint16) << 2 + 4) | ((x & 0x8).to(tl.uint16) << 8 + 4)
+        x1 = (em1.to(tl.uint16) << (2)) | ((x & 0x80).to(tl.uint16) << (8))
         # Three cases:
         # 1) x is normal and non-zero: Correct bias
         x0 = tl.where((em0 & 0x6) != 0, x0 + ((127 - 1) << 7), x0)
