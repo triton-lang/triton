@@ -116,9 +116,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  * (3) In the implementation of emitIndices, ShapePerCTATile will
  *     be replicated or wrapped to fit ShapePerCTA.
  */
-SmallVector<unsigned>
-getShapePerCTATile(Attribute layout,
-                   ArrayRef<int64_t> tensorShape = ArrayRef<int64_t>());
+SmallVector<unsigned> getShapePerCTATile(Attribute layout);
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
