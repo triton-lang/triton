@@ -208,11 +208,13 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          restore-keys: |
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -373,11 +375,13 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          restore-keys: |
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -543,11 +547,13 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          restore-keys: |
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner[0] }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
