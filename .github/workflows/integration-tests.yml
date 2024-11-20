@@ -25,6 +25,7 @@ env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
   PROTON_SKIP_PC_SAMPLING_TEST: 1
+  CCACHE_COMPRESS: "true"
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
@@ -285,10 +286,12 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
+        # if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
-          path: ~/.triton/cache ~/.cache/ccache
+          path: |
+            ~/.triton/cache
+            ~/.cache/ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directories
         run: |
@@ -443,10 +446,12 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
+        # if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
-          path: ~/.triton/cache ~/.cache/ccache
+          path: |
+            ~/.triton/cache
+            ~/.cache/ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directories
         run: |
@@ -562,10 +567,12 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
+        # if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
-          path: ~/.triton/cache ~/.cache/ccache
+          path: |
+            ~/.triton/cache
+            ~/.cache/ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Inspect cache directories
         run: |

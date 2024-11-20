@@ -27,6 +27,7 @@ env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
   PROTON_SKIP_PC_SAMPLING_TEST: 1
+  CCACHE_COMPRESS: "true"
 
 jobs:
   Runner-Preparation:
@@ -327,10 +328,12 @@ jobs:
       # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
       - &save-build-artifacts-step
         name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
+        # if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
-          path: ~/.triton/cache ~/.cache/ccache
+          path: |
+            ~/.triton/cache
+            ~/.cache/ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
 
       - &inspect-cache-directories-step
