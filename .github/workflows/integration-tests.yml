@@ -201,6 +201,7 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
+        if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -301,7 +302,7 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        # if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -365,6 +366,7 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
+        if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -467,7 +469,7 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        # if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -534,6 +536,7 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
+        if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -594,7 +597,7 @@ jobs:
         # (It wouldn't be a problem to save the cache on every run, because github
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
-        # if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: |

@@ -227,6 +227,7 @@ jobs:
       # files over time.
       - &restore-build-artifacts-step
         name: Restore cache of ccache and Triton compilation artifacts
+        if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -338,7 +339,7 @@ jobs:
       # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
       - &save-build-artifacts-step
         name: Save ccache and Triton compilation artifacts to cache
-        # if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: |
