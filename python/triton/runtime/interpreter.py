@@ -65,7 +65,7 @@ class BlockPointerHandle:
             off = (self.offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
             ptrs = ptrs + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
             if dim in boundary_check:
-                masks = np.logical_and(masks, off < self.shape[dim].data)
+                masks = masks & (off < self.shape[dim].data) & (off >= 0)
         ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
         return ptrs, masks
 
