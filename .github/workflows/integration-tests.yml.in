@@ -234,11 +234,11 @@ jobs:
             ~/.triton/cache
             ~/.cache/ccache
           # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
 
       - &inspect-cache-directories-step
         name: Inspect cache directories
@@ -339,13 +339,13 @@ jobs:
       # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
       - &save-build-artifacts-step
         name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
+        # if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
           path: |
             ~/.triton/cache
             ~/.cache/ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runner }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
 
   Integration-Tests-AMD:
     needs: Runner-Preparation
