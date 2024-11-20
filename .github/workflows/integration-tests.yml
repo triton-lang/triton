@@ -213,10 +213,15 @@ jobs:
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directory
+      - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -sh ~/.triton/**
+
+          mkdir -p ~/.cache/ccache
+          ls -alh ~/.cache/ccache
+          du -sh ~/.cache/ccache
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -372,10 +377,15 @@ jobs:
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directory
+      - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -sh ~/.triton/**
+
+          mkdir -p ~/.cache/ccache
+          ls -alh ~/.cache/ccache
+          du -sh ~/.cache/ccache
       - name: Update PATH
         run: |
           echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
@@ -537,10 +547,15 @@ jobs:
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directory
+      - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -sh ~/.triton/**
+
+          mkdir -p ~/.cache/ccache
+          ls -alh ~/.cache/ccache
+          du -sh ~/.cache/ccache
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH

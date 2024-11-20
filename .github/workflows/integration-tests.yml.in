@@ -240,11 +240,16 @@ jobs:
           # what we put here (so long as it doesn't hit an existing key).
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
 
-      - &inspect-cache-directory-step
-        name: Inspect cache directory
+      - &inspect-cache-directories-step
+        name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
           ls -alh ~/.triton
+          du -sh ~/.triton/**
+
+          mkdir -p ~/.cache/ccache
+          ls -alh ~/.cache/ccache
+          du -sh ~/.cache/ccache
 
       - name: Update PATH
         run: |
@@ -325,16 +330,7 @@ jobs:
           python3 -m pytest -s .
           cd ..
 
-      - &inspect-cache-directories-step
-        name: Inspect cache directories
-        run: |
-          mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
-
-          mkdir -p ~/.cache/ccache
-          ls -alh ~/.cache/ccache
-          du -sh ~/.cache/ccache
+      - *inspect-cache-directories-step
 
       # If we're on branch `main`, save the ccache Triton compilation artifacts
       # to the cache so they can be used by other (non-main) CI runs.
@@ -377,7 +373,7 @@ jobs:
       - *compute-cache-keys-step
       - *cache-build-dependencies-step
       - *restore-build-artifacts-step
-      - *inspect-cache-directory-step
+      - *inspect-cache-directories-step
 
       - name: Update PATH
         run: |
@@ -467,7 +463,7 @@ jobs:
       - *compute-cache-keys-step
       - *cache-build-dependencies-step
       - *restore-build-artifacts-step
-      - *inspect-cache-directory-step
+      - *inspect-cache-directories-step
 
       - name: Update PATH
         run: |
