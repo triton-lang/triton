@@ -73,6 +73,76 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `offsets` | tensor of 32-bit signless integer values
 | `mask` | ranked tensor of 1-bit signless integer values
 
+### `amdgpu.extract_slice` (triton::amdgpu::ExtractSliceOp)
+
+_Extract slice operation_
+
+
+Syntax:
+
+```
+operation ::= `amdgpu.extract_slice` $source $static_offsets attr-dict `:` type($source) `to` type($result)
+```
+
+The "extract_slice" operation enables extracting a slice of a tensor in
+registers.
+
+The "extract_slice" operation supports the following arguments:
+
+* source: the base tensor on which to create a view tensor
+* offsets: offsets into the base tensor at which to create the view
+
+Example 1:
+
+```mlir
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 8],
+    threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 8],
+    threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [0, 1]}>
+%1 = triton_gpu.convert_layout %0 : tensor<128x128xf16, #blocked>
+    -> tensor<128x128xf16, #blocked1>
+// create a slice of base tensor %1 with static offsets
+%2 = amdgpu.extract_slice %0 [0, 0] :
+  tensor<128x128xf16, #blocked1> to tensor<128x32xf16, #blocked1>
+```
+
+Example 1 shows how "extract_slice" operation may be used. In this example a
+new slice of 128x32 is created. "extract_slice" works on tensors with layout
+where the desired slice has the same layout as the source tensor.
+"%0" cannot be sliced directly as the resulting slice cannot have the same
+layout as "%0". Therefore it needs to be converted to a layout suitable
+for slicing. "#blocked1" layout is appropriate for this as it keeps the
+sizePerThread the same thus keeping coalescing properties the same.
+In order to utilize all threads in a warp, "threadsPerWarp" is set to
+[16,4] for this new layout. This layout conversion carried out before
+using "extract_slice" ensures slicing still uses all threads efficiently. The
+size of the slice is determined by the result type.
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>static_offsets</code></td><td>::mlir::DenseI64ArrayAttr</td><td>i64 dense array attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `source` | ranked tensor of any type values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of any type values
+
 ### `amdgpu.instruction_sched_hint` (triton::amdgpu::InstructionSchedHint)
 
 _A placeholder op for instruction scheduling hints within a basic block_

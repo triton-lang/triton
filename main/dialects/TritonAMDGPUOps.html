@@ -76,8 +76,14 @@
 <li class="toctree-l4"><a class="reference internal" href="#id1">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#amdgpu-instruction-sched-hint-triton-amdgpu-instructionschedhint"><code class="docutils literal notranslate"><span class="pre">amdgpu.instruction_sched_hint</span></code> (triton::amdgpu::InstructionSchedHint)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-extract-slice-triton-amdgpu-extractsliceop"><code class="docutils literal notranslate"><span class="pre">amdgpu.extract_slice</span></code> (triton::amdgpu::ExtractSliceOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#attributes">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id2">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id3">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-instruction-sched-hint-triton-amdgpu-instructionschedhint"><code class="docutils literal notranslate"><span class="pre">amdgpu.instruction_sched_hint</span></code> (triton::amdgpu::InstructionSchedHint)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id4">Attributes:</a></li>
 </ul>
 </li>
 </ul>
@@ -222,6 +228,84 @@ tensor of elements that should be written on lane <code class="docutils literal 
 </table>
 </section>
 </section>
+<section id="amdgpu-extract-slice-triton-amdgpu-extractsliceop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdgpu.extract_slice</span></code> (triton::amdgpu::ExtractSliceOp)<a class="headerlink" href="#amdgpu-extract-slice-triton-amdgpu-extractsliceop" title="Link to this heading">¶</a></h2>
+<p><em>Extract slice operation</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdgpu.extract_slice` $source $static_offsets attr-dict `:` type($source) `to` type($result)
+</pre></div>
+</div>
+<p>The “extract_slice” operation enables extracting a slice of a tensor in
+registers.</p>
+<p>The “extract_slice” operation supports the following arguments:</p>
+<ul class="simple">
+<li><p>source: the base tensor on which to create a view tensor</p></li>
+<li><p>offsets: offsets into the base tensor at which to create the view</p></li>
+</ul>
+<p>Example 1:</p>
+<div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>#blocked = #triton_gpu.blocked&lt;{sizePerThread = [1, 8],
+    threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [0, 1]}&gt;
+#blocked1 = #triton_gpu.blocked&lt;{sizePerThread = [1, 8],
+    threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [0, 1]}&gt;
+%1 = triton_gpu.convert_layout %0 : tensor&lt;128x128xf16, #blocked&gt;
+    -&gt; tensor&lt;128x128xf16, #blocked1&gt;
+// create a slice of base tensor %1 with static offsets
+%2 = amdgpu.extract_slice %0 [0, 0] :
+  tensor&lt;128x128xf16, #blocked1&gt; to tensor&lt;128x32xf16, #blocked1&gt;
+</pre></div>
+</div>
+<p>Example 1 shows how “extract_slice” operation may be used. In this example a
+new slice of 128x32 is created. “extract_slice” works on tensors with layout
+where the desired slice has the same layout as the source tensor.
+“%0” cannot be sliced directly as the resulting slice cannot have the same
+layout as “%0”. Therefore it needs to be converted to a layout suitable
+for slicing. “#blocked1” layout is appropriate for this as it keeps the
+sizePerThread the same thus keeping coalescing properties the same.
+In order to utilize all threads in a warp, “threadsPerWarp” is set to
+[16,4] for this new layout. This layout conversion carried out before
+using “extract_slice” ensures slicing still uses all threads efficiently. The
+size of the slice is determined by the result type.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
+<section id="attributes">
+<h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>static_offsets</code></td><td>::mlir::DenseI64ArrayAttr</td><td>i64 dense array attribute</td></tr>
+</table>
+</section>
+<section id="id2">
+<h3>Operands:<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">source</span></code></p></td>
+<td><p>ranked tensor of any type values</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id3">
+<h3>Results:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>ranked tensor of any type values</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="amdgpu-instruction-sched-hint-triton-amdgpu-instructionschedhint">
 <h2><code class="docutils literal notranslate"><span class="pre">amdgpu.instruction_sched_hint</span></code> (triton::amdgpu::InstructionSchedHint)<a class="headerlink" href="#amdgpu-instruction-sched-hint-triton-amdgpu-instructionschedhint" title="Link to this heading">¶</a></h2>
 <p><em>A placeholder op for instruction scheduling hints within a basic block</em></p>
@@ -237,8 +321,8 @@ to mark intended scheduling regions. The hint ops are eventually lowered
 into LLVM AMDGPU instruction scheduling primitives, which are meant to control
 how different kinds of instructions (valu/mfma, global/shared memory, etc.) should
 interleave for better instruction level parallelism.</p>
-<section id="attributes">
-<h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
+<section id="id4">
+<h3>Attributes:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>numDsReadsA</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
