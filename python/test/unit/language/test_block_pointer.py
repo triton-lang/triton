@@ -80,6 +80,9 @@ def matmul_no_scf_with_advance_kernel(  #
                                     block_shape=(BLOCK_M, BLOCK_K), order=(1, 0))
     b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn), offsets=(0, 0),
                                     block_shape=(BLOCK_K, BLOCK_N), order=(1, 0))
+    # Below two lines are just for testing negative offsets for the `advance` API, which could be removed
+    a_block_ptr = tl.advance(a_block_ptr, (BLOCK_M, -BLOCK_K))
+    a_block_ptr = tl.advance(a_block_ptr, (-BLOCK_M, BLOCK_K))
     a = tl.load(a_block_ptr, boundary_check=(1, ), padding_option="zero")
     b = tl.load(b_block_ptr, boundary_check=(0, ), padding_option="zero")
 
