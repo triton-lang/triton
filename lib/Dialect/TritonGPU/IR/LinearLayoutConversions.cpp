@@ -868,10 +868,10 @@ LinearLayout warpsNvidiaDot(MLIRContext *ctx, ArrayRef<unsigned> mmaWarpShape,
   auto rank = mmaWarpOrder.size();
   auto inner = isA ? rank - 1 : rank - 2;
   auto outer = isA ? rank - 2 : rank - 1;
-
   auto dimNames = standardOutDimNames(ctx, rank);
-  LinearLayout ctaLayout =
-      identityND(S("register"), {1, 1}, mmaWarpOrder, dimNames);
+  auto trivialShape = SmallVector<unsigned>(rank, 1);
+  LinearLayout warpLayout =
+      identityND(S("warp"), trivialShape, mmaWarpOrder, dimNames);
 
   // We have to broadcast along the inner dimension
   // For A, when moving along M we go from 0 to 2.
@@ -880,14 +880,14 @@ LinearLayout warpsNvidiaDot(MLIRContext *ctx, ArrayRef<unsigned> mmaWarpShape,
   // Same happens if the mmaWarpOrder is {0, 1}, like in Hopper
   for (auto d : mmaWarpOrder) {
     if (d == inner) {
-      ctaLayout *=
+      warpLayout *=
           LinearLayout::zeros1D(mmaWarpShape[d], S("warp"), dimNames[d]);
     } else {
-      ctaLayout *=
+      warpLayout *=
           LinearLayout::identity1D(mmaWarpShape[d], S("warp"), dimNames[d]);
     }
   }
-  return ctaLayout;
+  return warpLayout;
 }
 
 LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
