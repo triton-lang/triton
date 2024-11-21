@@ -384,6 +384,10 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install lit
 
+      - name: Install ASAN libraries
+        run: |
+          apt-get install rocm-ml-sdk-asan          
+
       - name: Install Triton
         id: amd-install-triton
         run: |
