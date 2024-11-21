@@ -304,7 +304,7 @@ tt.func @scratch() {
 tt.func @trans(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 1024
   %tensor = triton_gpu.local_alloc : () -> !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
-  %b = tt.trans %tensor {order=array<i32: 1,0>} : !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<32x16xf16, #A_SHARED_T, #triton_gpu.shared_memory, mutable>
+  %b = triton_gpu.memdesc_trans %tensor {order=array<i32: 1,0>} : !tt.memdesc<16x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<32x16xf16, #A_SHARED_T, #triton_gpu.shared_memory, mutable>
   tt.return
 }
 
@@ -450,7 +450,7 @@ tt.func @for_use_ancestor(%lb : index, %ub : index, %step : index, %A : !tt.ptr<
   // CHECK-NEXT: offset = 16384, size = 8192
   %c_shared_init = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
   %a_shared, %b_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init) -> (!tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>) {
-    %c0 = tt.trans %c_shared_init {order=array<i32: 1,0>} : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<32x128xf16, #A_SHARED_T, #triton_gpu.shared_memory, mutable>
+    %c0 = triton_gpu.memdesc_trans %c_shared_init {order=array<i32: 1,0>} : !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<32x128xf16, #A_SHARED_T, #triton_gpu.shared_memory, mutable>
     // CHECK-NEXT: offset = 24576, size = 8192
     %c1 = triton_gpu.local_alloc : () -> !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
     scf.yield %b_shared, %a_shared: !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>, !tt.memdesc<128x32xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>

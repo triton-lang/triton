@@ -3469,17 +3469,17 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
                 x_bf16 = x_f8.to(tl.bfloat16)
         else:
             # e2m1
-            em0 = x & 0x70
-            em1 = x & 0x7
-            x0 = (em0.to(tl.uint16) << 2) | ((x & 0x80).to(tl.uint16) << 8)
-            x1 = (em1.to(tl.uint16) << (2 + 4)) | ((x & 0x8).to(tl.uint16) << (8 + 4))
+            em0 = x & 0x7
+            em1 = x & 0x70
+            x0 = (em0.to(tl.uint16) << 2 + 4) | ((x & 0x8).to(tl.uint16) << 8 + 4)
+            x1 = (em1.to(tl.uint16) << 2) | ((x & 0x80).to(tl.uint16) << (8))
             # Three cases:
             # 1) x is normal and non-zero: Correct bias
-            x0 = tl.where((em0 & 0x60) != 0, x0 + ((127 - 1) << 7), x0)
-            x1 = tl.where((em1 & 0x6) != 0, x1 + ((127 - 1) << 7), x1)
+            x0 = tl.where((em0 & 0x6) != 0, x0 + ((127 - 1) << 7), x0)
+            x1 = tl.where((em1 & 0x60) != 0, x1 + ((127 - 1) << 7), x1)
             # 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in bf16
-            x0 = tl.where(em0 == 0x10, 16128 | (x0 & 0x8000), x0)
-            x1 = tl.where(em1 == 0x1, 16128 | (x1 & 0x8000), x1)
+            x0 = tl.where(em0 == 0x1, 16128 | (x0 & 0x8000), x0)
+            x1 = tl.where(em1 == 0x10, 16128 | (x1 & 0x8000), x1)
             # 3) x is zero, do nothing
             x_bf16 = tl.interleave(x0, x1).to(tl.bfloat16, bitcast=True)
         # Multiplication preserves infs and NaNs in x_bf16
@@ -5581,7 +5581,7 @@ def matmul_kernel(  #
         stride_cm, stride_cn,  #
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
         low_precision_acc: tl.constexpr,  #
-        num_pipeline_stages: tl.constexpr = 3  #
+        num_stages: tl.constexpr = 3  #
 ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -5593,7 +5593,7 @@ def matmul_kernel(  #
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=num_pipeline_stages):
+    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=num_stages):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         accumulator = tl.dot(a, b, acc=accumulator, max_num_imprecise_acc=low_precision_acc)
@@ -5632,7 +5632,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
                             C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps,
-                            num_pipeline_stages=num_stages)
+                            num_stages=num_stages)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
@@ -5824,7 +5824,7 @@ def test_tl_range(device):
     pgm = matmul_kernel[
         1,
     ](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_M, BLOCK_N,
-      BLOCK_K, 0, num_pipeline_stages=5)
+      BLOCK_K, 0, num_stages=5)
     ref_out = torch.matmul(a, b).to(torch.float32)
     if is_interpreter():
         # GPU invokes tensor core for float16 matmul, which is not supported in interpreter.
@@ -5850,8 +5850,8 @@ def maxnreg_noinline2(X):
     tl.store(X, 0)
 
 
+@pytest.mark.interpreter
 def test_maxnreg(device):
-    assert not is_interpreter(), "this test won't work with the interpreter"
     if not is_cuda():
         pytest.skip('maxnreg only works on CUDA')
 
@@ -5865,14 +5865,15 @@ def test_maxnreg(device):
     X = torch.empty(1, dtype=torch.int32, device=device)
     k = kernel[(1, )](X, maxnreg=42)
 
-    # Ensure that .maxnreg is set on the kernel function (marked with .entry)
-    # and not on either of the noinline functions (marked with .func).
-    try:
-        assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
-        assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
-    except AssertionError:
-        print("Failing ptx:\n", k.asm["ptx"])
-        raise
+    if not is_interpreter():
+        # Ensure that .maxnreg is set on the kernel function (marked with .entry)
+        # and not on either of the noinline functions (marked with .func).
+        try:
+            assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
+            assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
+        except AssertionError:
+            print("Failing ptx:\n", k.asm["ptx"])
+            raise
 
 
 @pytest.mark.interpreter

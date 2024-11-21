@@ -165,8 +165,8 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (isa<SharedEncodingAttr>(srcLayout) &&
-        (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-             dstLayout) ||
+        (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
+             LinearEncodingAttr>(dstLayout) ||
          isSupportedDotOpLayout(dstTy))) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
