@@ -194,7 +194,7 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
 
   let arguments = (ins TTG_MemDescType:$src);
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!triton_gpu.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
 
@@ -215,7 +215,7 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let arguments = (
     ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!triton_gpu.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
 
   let results = (outs TTG_MemDescType:$result);
@@ -262,7 +262,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffe
       build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
       }]>];
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!triton_gpu.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
 
   let results = (outs TT_Tensor:$result);
@@ -277,7 +277,7 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   let arguments = (ins TT_Tensor:$src, TTG_MemDescType:$dst);
 
   let hasVerifier = 1;
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!triton_gpu.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{
     $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
   }];
