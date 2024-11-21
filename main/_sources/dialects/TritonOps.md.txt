@@ -1737,7 +1737,7 @@ transpose+reshape+concat) without going to shared memory after each one.
 
 Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`, `TransposeOpInterface`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -1752,11 +1752,11 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | TensorOrMemDesc instance
+| `src` | ranked tensor of floating-point or integer or ptr values
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | TensorOrMemDesc instance
+| `result` | ranked tensor of floating-point or integer or ptr values
 

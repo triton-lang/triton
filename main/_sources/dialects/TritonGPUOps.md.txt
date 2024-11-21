@@ -349,6 +349,45 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
 
+### `triton_gpu.memdesc_trans` (triton::gpu::MemDescTransOp)
+
+_Transpose the descriptor_
+
+
+Syntax:
+
+```
+operation ::= `triton_gpu.memdesc_trans` $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+```
+
+This operation returns a new descriptor
+representing a transposed view of the buffer.
+
+Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`, `TransposeOpInterface`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>order</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+
 ### `triton_gpu.upcast_mxfp` (triton::gpu::UpcastMXFPOp)
 
 _Convert an mxfp tensor to bf16_

@@ -119,10 +119,16 @@
 <li class="toctree-l4"><a class="reference internal" href="#id18">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#triton-gpu-upcast-mxfp-triton-gpu-upcastmxfpop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.upcast_mxfp</span></code> (triton::gpu::UpcastMXFPOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#triton-gpu-memdesc-trans-triton-gpu-memdesctransop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.memdesc_trans</span></code> (triton::gpu::MemDescTransOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id19">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id20">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id21">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#triton-gpu-upcast-mxfp-triton-gpu-upcastmxfpop"><code class="docutils literal notranslate"><span class="pre">triton_gpu.upcast_mxfp</span></code> (triton::gpu::UpcastMXFPOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id22">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id23">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id24">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -615,6 +621,56 @@ It doesn’t affect the underlying memory. The subview can be rank-reduced.</p>
 </table>
 </section>
 </section>
+<section id="triton-gpu-memdesc-trans-triton-gpu-memdesctransop">
+<h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.memdesc_trans</span></code> (triton::gpu::MemDescTransOp)<a class="headerlink" href="#triton-gpu-memdesc-trans-triton-gpu-memdesctransop" title="Link to this heading">¶</a></h2>
+<p><em>Transpose the descriptor</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `triton_gpu.memdesc_trans` $src attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($result))
+</pre></div>
+</div>
+<p>This operation returns a new descriptor
+representing a transposed view of the buffer.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultElementType</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">TransposeOpInterface</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
+<section id="id19">
+<h3>Attributes:<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>order</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+</table>
+</section>
+<section id="id20">
+<h3>Operands:<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id21">
+<h3>Results:<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="triton-gpu-upcast-mxfp-triton-gpu-upcastmxfpop">
 <h2><code class="docutils literal notranslate"><span class="pre">triton_gpu.upcast_mxfp</span></code> (triton::gpu::UpcastMXFPOp)<a class="headerlink" href="#triton-gpu-upcast-mxfp-triton-gpu-upcastmxfpop" title="Link to this heading">¶</a></h2>
 <p><em>Convert an mxfp tensor to bf16</em></p>
@@ -627,8 +683,8 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id19">
-<h3>Attributes:<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
+<section id="id22">
+<h3>Attributes:<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5</summary>{{% markdown %}}Enum cases:
@@ -640,8 +696,8 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 * bf16 (`BF16`){{% /markdown %}}</details></td></tr>
 </table>
 </section>
-<section id="id20">
-<h3>Operands:<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
+<section id="id23">
+<h3>Operands:<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -658,8 +714,8 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 </tbody>
 </table>
 </section>
-<section id="id21">
-<h3>Results:<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
+<section id="id24">
+<h3>Results:<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
