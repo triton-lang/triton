@@ -5,7 +5,8 @@ import torch
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor, TmaDescKernelParam)
+from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor,
+                                                  TmaDescKernelParam)
 from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma
 
 from typing import Optional
@@ -615,19 +616,14 @@ def test_experimetal_descriptor_load_4d(inner_size):
         off2 = tl.arange(0, 32)
         off3 = tl.arange(0, inner_size)
         x = tl._experimental_descriptor_load(desc, [2, 2, 0, 0], [2, 2, 32, inner_size], tl.dtype("uint8"))
-        out_ptrs = (
-            Z
-            + 2 * 32 * inner_size * off0[:, None, None, None]
-            + 32 * inner_size * off1[None, :, None, None]
-            + inner_size * off2[None, None, :, None]
-            + off3[None, None, None, :]
-        )
+        out_ptrs = (Z + 2 * 32 * inner_size * off0[:, None, None, None] + 32 * inner_size * off1[None, :, None, None] +
+                    inner_size * off2[None, None, :, None] + off3[None, None, None, :])
         tl.store(out_ptrs, x)
 
     x = torch.randint(size=(4, 8, 32, inner_size), low=0, high=100, dtype=torch.uint8).to(device)
     desc = TmaDescKernelParam(x.data_ptr(), [4, 8, 32, inner_size], [2, 2, 32, inner_size], 1)
 
     z_tri = torch.zeros(size=(2, 2, 32, inner_size), dtype=torch.uint8, device=device)
-    kernel[(1,)](z_tri, desc, inner_size)
+    kernel[(1, )](z_tri, desc, inner_size)
 
     assert torch.equal(x[2:4, 2:4, :, :], z_tri)

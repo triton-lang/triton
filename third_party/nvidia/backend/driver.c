@@ -279,10 +279,12 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
 
 // Simple helper to experiment creating TMA descriptors on the host.
 // This is a useful to test TMA operations independently.
-static PyObject *fillTMADescriptior(unsigned long long global_address, uint64_t* dims,
-				    uint32_t* tensorDims, int elementSize,
-				    unsigned long long desc_address, uint64_t* globalStrides,
-				    uint32_t* elementStrides, int rank) {
+static PyObject *fillTMADescriptior(unsigned long long global_address,
+                                    uint64_t *dims, uint32_t *tensorDims,
+                                    int elementSize,
+                                    unsigned long long desc_address,
+                                    uint64_t *globalStrides,
+                                    uint32_t *elementStrides, int rank) {
   CUtensorMapDataType type;
   switch (elementSize) {
   case 1:
@@ -304,9 +306,10 @@ static PyObject *fillTMADescriptior(unsigned long long global_address, uint64_t*
   CUtensorMapL2promotion l2Promotion = CU_TENSOR_MAP_L2_PROMOTION_NONE;
 
   if (rank == 2) {
-    // For now, we do not swizzle for higher ranks. Enabling swizzling in TMA implies hasLeadingOffset = true
-    // in SMEM encoding, which is currently not supported for higher rank TMA copies. This convention needs to be
-    // in sync with the TMA lowering pass in codegen.
+    // For now, we do not swizzle for higher ranks. Enabling swizzling in TMA
+    // implies hasLeadingOffset = true in SMEM encoding, which is currently not
+    // supported for higher rank TMA copies. This convention needs to be in sync
+    // with the TMA lowering pass in codegen.
     l2Promotion = CU_TENSOR_MAP_L2_PROMOTION_L2_128B;
     uint32_t contigDimSizeInByte = elementSize * tensorDims[0];
 
@@ -353,8 +356,8 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t elementStrides[1] = {1};
   int rank = 1;
 
-  return fillTMADescriptior(global_address, &dim, &tensorDim, elementSize, desc_address,
-			    globalStrides, elementStrides, rank);
+  return fillTMADescriptior(global_address, &dim, &tensorDim, elementSize,
+                            desc_address, globalStrides, elementStrides, rank);
 }
 
 static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
@@ -372,8 +375,8 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t elementStrides[2] = {1, 1};
   int rank = 2;
 
-  return fillTMADescriptior(global_address, dims, tensorDims, elementSize, desc_address,
-			    globalStrides, elementStrides, rank);
+  return fillTMADescriptior(global_address, dims, tensorDims, elementSize,
+                            desc_address, globalStrides, elementStrides, rank);
 }
 
 static PyObject *fill3DTMADescriptor(PyObject *self, PyObject *args) {
@@ -382,9 +385,9 @@ static PyObject *fill3DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t tensorDims[3];
   int elementSize;
   unsigned long long desc_address;
-  if (!PyArg_ParseTuple(args, "KKKKiiiiK", &global_address,  &dims[2], &dims[1], &dims[0],
-                        &tensorDims[2], &tensorDims[1], &tensorDims[0], &elementSize,
-                        &desc_address)) {
+  if (!PyArg_ParseTuple(args, "KKKKiiiiK", &global_address, &dims[2], &dims[1],
+                        &dims[0], &tensorDims[2], &tensorDims[1],
+                        &tensorDims[0], &elementSize, &desc_address)) {
     return NULL;
   }
   uint64_t globalStrides[2] = {dims[0] * elementSize,
@@ -392,8 +395,8 @@ static PyObject *fill3DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t elementStrides[3] = {1, 1, 1};
   int rank = 3;
 
-  return fillTMADescriptior(global_address, dims, tensorDims, elementSize, desc_address,
-			    globalStrides, elementStrides, rank);
+  return fillTMADescriptior(global_address, dims, tensorDims, elementSize,
+                            desc_address, globalStrides, elementStrides, rank);
 }
 
 static PyObject *fill4DTMADescriptor(PyObject *self, PyObject *args) {
@@ -402,9 +405,10 @@ static PyObject *fill4DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t tensorDims[4];
   int elementSize;
   unsigned long long desc_address;
-  if (!PyArg_ParseTuple(args, "KKKKKiiiiiK", &global_address, &dims[3], &dims[2], &dims[1], &dims[0],
-                        &tensorDims[3], &tensorDims[2], &tensorDims[1], &tensorDims[0], &elementSize,
-                        &desc_address)) {
+  if (!PyArg_ParseTuple(args, "KKKKKiiiiiK", &global_address, &dims[3],
+                        &dims[2], &dims[1], &dims[0], &tensorDims[3],
+                        &tensorDims[2], &tensorDims[1], &tensorDims[0],
+                        &elementSize, &desc_address)) {
     return NULL;
   }
   uint64_t globalStrides[3] = {dims[0] * elementSize,
@@ -413,8 +417,8 @@ static PyObject *fill4DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t elementStrides[4] = {1, 1, 1, 1};
   int rank = 4;
 
-  return fillTMADescriptior(global_address, dims, tensorDims, elementSize, desc_address,
-			    globalStrides, elementStrides, rank);
+  return fillTMADescriptior(global_address, dims, tensorDims, elementSize,
+                            desc_address, globalStrides, elementStrides, rank);
 }
 
 static PyObject *fill5DTMADescriptor(PyObject *self, PyObject *args) {
@@ -423,21 +427,21 @@ static PyObject *fill5DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t tensorDims[5];
   int elementSize;
   unsigned long long desc_address;
-  if (!PyArg_ParseTuple(args, "KKKKKKiiiiiiK", &global_address,
-			&dims[4], &dims[3], &dims[2], &dims[1], &dims[0],
-                        &tensorDims[4], &tensorDims[3], &tensorDims[2], &tensorDims[1], &tensorDims[0],
-			&elementSize, &desc_address)) {
+  if (!PyArg_ParseTuple(args, "KKKKKKiiiiiiK", &global_address, &dims[4],
+                        &dims[3], &dims[2], &dims[1], &dims[0], &tensorDims[4],
+                        &tensorDims[3], &tensorDims[2], &tensorDims[1],
+                        &tensorDims[0], &elementSize, &desc_address)) {
     return NULL;
   }
-  uint64_t globalStrides[4] = {dims[0] * elementSize,
-                               dims[0] * dims[1] * elementSize,
-                               dims[0] * dims[1] * dims[2] * elementSize,
-                               dims[0] * dims[1] * dims[2] * dims[3] * elementSize};
+  uint64_t globalStrides[4] = {
+      dims[0] * elementSize, dims[0] * dims[1] * elementSize,
+      dims[0] * dims[1] * dims[2] * elementSize,
+      dims[0] * dims[1] * dims[2] * dims[3] * elementSize};
   uint32_t elementStrides[5] = {1, 1, 1, 1, 1};
   int rank = 5;
 
-  return fillTMADescriptior(global_address, dims, tensorDims, elementSize, desc_address,
-			    globalStrides, elementStrides, rank);
+  return fillTMADescriptior(global_address, dims, tensorDims, elementSize,
+                            desc_address, globalStrides, elementStrides, rank);
 }
 
 static PyMethodDef ModuleMethods[] = {

@@ -38,7 +38,8 @@ public:
                                                  1, order, ctaLayout);
     if (tensorType.getRank() == 2) {
       // The following SharedEncodingAttr constructor creates SMEM encoding with
-      // hasLeadingOffset = true, which is not currently supported for higher-rank TMA.
+      // hasLeadingOffset = true, which is not currently supported for
+      // higher-rank TMA.
       encoding = SharedEncodingAttr::get(
           tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
           tensorType.getElementType());
@@ -91,7 +92,8 @@ public:
                                                  1, order, ctaLayout);
     if (tensorType.getRank() == 2) {
       // The following SharedEncodingAttr constructor creates SMEM encoding with
-      // hasLeadingOffset = true, which is not currently supported for higher-rank TMA.
+      // hasLeadingOffset = true, which is not currently supported for
+      // higher-rank TMA.
       encoding = SharedEncodingAttr::get(
           tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
           tensorType.getElementType());
