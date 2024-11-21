@@ -485,7 +485,7 @@ jobs:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
