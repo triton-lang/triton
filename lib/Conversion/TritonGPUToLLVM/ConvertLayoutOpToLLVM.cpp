@@ -384,11 +384,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         return true;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
+        if (useLegacyMMAConversion) {
+          return false;
+        }
         if (auto nvidiaMma =
                 dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
-          if (useLegacyMMAConversion) {
-            return false;
-          }
           if (nvidiaMma.isAmpere()) {
             return true;
           }
