@@ -349,7 +349,7 @@ jobs:
           path: |
             ~/.triton/cache
             ~/.ccache
-          key: ${{ steps.restore-build-cache.outputs.cache-primary-key }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
 
   Integration-Tests-AMD:
     needs: Runner-Preparation
