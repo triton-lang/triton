@@ -47,7 +47,7 @@ struct ClipAsyncCopySizePerThread
     Value other = copyOp.getOther();
     auto srcTy = cast<RankedTensorType>(src.getType());
     auto blockEnc = cast<BlockedEncodingAttr>(srcTy.getEncoding());
-    auto dstTy = cast<tt::MemDescType>(copyOp.getResult().getType());
+    auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
     auto sharedEnc = cast<SharedEncodingAttr>(dstTy.getEncoding());
     auto sharedVec = sharedEnc.getVec();
 
