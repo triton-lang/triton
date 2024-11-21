@@ -7,6 +7,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -221,6 +222,31 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let hasVerifier = 1;
 }
 
+def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
+                                                  TransposeOpInterface,
+                                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                  SameOperandsAndResultElementType]> {
+  let summary = "transpose the descriptor";
+
+  let description = [{
+    This operation returns a new descriptor
+    representing a transposed view of the buffer.
+  }];
+
+  let arguments = (ins TT_MemDescType:$src, Variadic<I32>:$order);
+
+  let arguments = (
+    ins TT_MemDescType:$src,
+    DenseI32ArrayAttr:$order
+  );
+
+  let results = (outs TT_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasFolder = 1;
+}
+
 def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
@@ -295,7 +321,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
                        $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
   ];
 
-  let assemblyFormat = [{attr-dict `:` type($result)}];
+  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
 #endif

@@ -26,9 +26,15 @@ void initProton(pybind11::module &&m) {
     SessionManager::instance().activateSession(sessionId);
   });
 
+  m.def("activate_all",
+        []() { SessionManager::instance().activateAllSessions(); });
+
   m.def("deactivate", [](size_t sessionId) {
     SessionManager::instance().deactivateSession(sessionId);
   });
+
+  m.def("deactivate_all",
+        []() { SessionManager::instance().deactivateAllSessions(); });
 
   m.def("finalize", [](size_t sessionId, const std::string &outputFormat) {
     auto outputFormatEnum = parseOutputFormat(outputFormat);
@@ -57,6 +63,13 @@ void initProton(pybind11::module &&m) {
   m.def("exit_op", [](size_t scopeId, const std::string &name) {
     SessionManager::instance().exitOp(Scope(scopeId, name));
   });
+
+  m.def("enter_state", [](const std::string &state) {
+    SessionManager::instance().setState(state);
+  });
+
+  m.def("exit_state",
+        []() { SessionManager::instance().setState(std::nullopt); });
 
   m.def("add_metrics",
         [](size_t scopeId,

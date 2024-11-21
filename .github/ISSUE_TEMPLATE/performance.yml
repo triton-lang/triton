@@ -1,0 +1,44 @@
+name: Report a performance issue
+description: Report cases where triton is generating sub-optimal (but functionally correct) PTX/LLVM IR
+labels: ["performance"]
+
+body:
+- type: markdown
+  attributes:
+    value: |
+      #### Disclaimer
+      The core triton team is small and has very limited capacity. We may not have time to look into your report.
+      For the best results, please:
+        - Avoid submitting duplicates. Search through [the existing and past issues](https://github.com/triton-lang/triton/issues?q=is%3Aissue+sort%3Acreated-desc+) first to see if it's been reported previously.
+        - Check if the issue persists with a build from the latest source.
+        - Provide all relevant information in the initial report, to prevent unnecessary back and forth discussion.
+        - If you can, try to diagnose and/or fix the issue yourself. We welcome high quality contributions.
+- type: textarea
+  attributes:
+    label: Describe the issue
+    description: |
+      Please provide a clear and concise description of the issue.
+
+      Include a [minimal complete example](https://stackoverflow.com/help/minimal-reproducible-example) that reproduces the issue. It is very important for the snippet to be as simple as possible, so please take time to trim down any irrelevant code to help us debug efficiently. We are going to copy-paste your code and we expect to get the same result as you did.
+
+      A reproducer could be a python program that runs a triton kernel and prints out the relevant suboptimal IR, or an IR file with an accompanying triton-opt command.
+
+      If the code is too long (hopefully, it isn't), feel free to put it in a public gist and link it in the issue: https://gist.github.com.
+    placeholder: |
+      A clear and concise description of the issue.
+
+      ```python
+      # Sample code to reproduce the problem
+      ```
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Environment details
+    description: |
+      Please include any relevant context about how you're running the reproducer e.g. which version of triton, and what GPU you are using.
+    placeholder: |
+        Triton: ...
+        GPU: ...
+  validations:
+    required: true

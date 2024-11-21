@@ -7,7 +7,6 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
@@ -18,35 +17,7 @@ namespace mlir::triton {
 namespace {
 
 bool isZero(Value val) {
-  if (matchPattern(val, m_Zero()) || matchPattern(val, m_AnyZeroFloat()))
-    return true;
-  // broadcast(constant_0)
-  if (auto bc = val.getDefiningOp<BroadcastOp>()) {
-    if (matchPattern(bc.getSrc(), m_Zero()) ||
-        matchPattern(bc.getSrc(), m_AnyZeroFloat()))
-      return true;
-  }
-  return false;
-}
-
-bool isBroadcastConstantCombinable(Attribute value) {
-  if (auto denseValue = dyn_cast<DenseElementsAttr>(value)) {
-    return denseValue.isSplat();
-  }
-  return isa<FloatAttr, IntegerAttr>(value);
-}
-
-DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
-                                   Value bcast_res) {
-  auto resType = cast<ShapedType>(bcast_res.getType());
-  DenseElementsAttr res;
-  if (auto denseValue = dyn_cast<DenseElementsAttr>(value)) {
-    res =
-        DenseElementsAttr::get(resType, denseValue.getSplatValue<Attribute>());
-  } else {
-    res = DenseElementsAttr::get(resType, value);
-  }
-  return res;
+  return (matchPattern(val, m_Zero()) || matchPattern(val, m_AnyZeroFloat()));
 }
 
 bool isAddPtrOffsetCombinable(Value first, Value second) {
@@ -231,7 +202,6 @@ public:
     // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
-    patterns.add<CombineBroadcastConstantPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())

@@ -77,7 +77,11 @@ public:
 
   void activateSession(size_t sessionId);
 
+  void activateAllSessions();
+
   void deactivateSession(size_t sessionId);
+
+  void deactivateAllSessions();
 
   void enterScope(const Scope &scope);
 
@@ -90,6 +94,8 @@ public:
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &metrics,
                   bool aggregable);
+
+  void setState(std::optional<Context> context);
 
 private:
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
@@ -142,6 +148,8 @@ private:
   std::map<ScopeInterface *, size_t> scopeInterfaceCounts;
   // op -> active count
   std::map<OpInterface *, size_t> opInterfaceCounts;
+  // context source -> active count
+  std::map<ContextSource *, size_t> contextSourceCounts;
 };
 
 } // namespace proton
