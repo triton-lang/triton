@@ -1194,7 +1194,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     // come from an MemDescSubview op.  Only ConvertLayout and Trans ops are
     // allowed in between.
     Value transitiveOperand = operand;
-    while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp>(
+    while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp>(
                transitiveOperand.getDefiningOp()) ||
            isa<BlockArgument>(transitiveOperand)) {
       auto blockArg = dyn_cast<BlockArgument>(transitiveOperand);

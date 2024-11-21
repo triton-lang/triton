@@ -1,5 +1,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -128,6 +129,50 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
     inferredReturnTypes.push_back(xTy);
   }
 
+  return success();
+}
+
+OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
+  // transpose(x, order=[0, 1, ...]) -> x
+  if (isIota(getOrder())) {
+    return getSrc();
+  }
+
+  // transpose(transpose(x)) -> transpose(x)
+  if (auto innerTrans = getSrc().getDefiningOp<MemDescTransOp>()) {
+    setOrder(applyPermutation(innerTrans.getOrder(), getOrder()));
+    setOperand(innerTrans.getSrc());
+    return getResult();
+  }
+
+  return {};
+}
+
+LogicalResult MemDescTransOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // type is the same as the input
+  auto argTy = cast<MemDescType>(operands[0].getType());
+  auto order = properties.as<Properties *>()->order.asArrayRef();
+  SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
+
+  auto retEltTy = argTy.getElementType();
+  Attribute argEncoding = argTy.getEncoding();
+  Attribute retEncoding;
+  if (argEncoding) {
+    Dialect &dialect = argEncoding.getDialect();
+    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (inferLayoutInterface
+            ->inferTransOpEncoding(argEncoding, order, retEncoding)
+            .failed()) {
+      return failure();
+    }
+  }
+  auto memDescTy = cast<MemDescType>(argTy);
+  inferredReturnTypes.push_back(MemDescType::get(
+      retShape, retEltTy, retEncoding, memDescTy.getMemorySpace(),
+      memDescTy.getMutableMemory()));
   return success();
 }
 

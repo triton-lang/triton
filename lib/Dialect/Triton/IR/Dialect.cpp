@@ -3,7 +3,6 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
-#include "triton/Dialect/Triton/IR/AttrInterfaces.h.inc"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/raw_ostream.h"
@@ -12,8 +11,10 @@
 #include "mlir/IR/DialectImplementation.h"
 
 #include "mlir/Transforms/InliningUtils.h"
+#include "triton/Dialect/Triton/IR/AttrInterfaces.cpp.inc"
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
-#include "triton/Dialect/Triton/IR/TritonTypeInterfaces.cpp.inc"
+#include "triton/Dialect/Triton/IR/OpInterfaces.cpp.inc"
+#include "triton/Dialect/Triton/IR/TypeInterfaces.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
