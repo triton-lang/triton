@@ -406,6 +406,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return failure();
     }
 
+    // The following check can be removed when generalized warp shuffle
+    // conversions are ready:
+    if (matchMFMAAndDotOperandShuffleCase(srcTy, dstTy)) {
+      return failure();
+    }
+
     assert(cvtNeedsSharedMemory(srcTy, dstTy));
 
     SmallVector<Value> inVals =
