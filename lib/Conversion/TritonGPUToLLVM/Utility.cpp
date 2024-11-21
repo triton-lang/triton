@@ -297,6 +297,10 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
       store(vec, vecAddr)
           .setAlignment(vecTy.getNumElements() *
                         elemLlvmTy.getIntOrFloatBitWidth() / 8);
+      if (llvmOpCount) {
+        ++(llvmOpCount->first);
+        llvmOpCount->second = vecTy;
+      }
     };
   } else {
     // This section is only for inThreadTranspose for AMD path, where we want to
@@ -330,6 +334,10 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
       store(vec, vecAddr)
           .setAlignment(vecTy.getNumElements() *
                         elemLlvmTy.getIntOrFloatBitWidth() / 8);
+      if (llvmOpCount) {
+        ++(llvmOpCount->first);
+        llvmOpCount->second = vecTy;
+      }
     };
   }
   success = emitTransferBetweenRegistersAndShared(
