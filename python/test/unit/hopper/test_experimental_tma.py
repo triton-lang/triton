@@ -33,7 +33,7 @@ tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 def test_experimetal_descriptor_load(byval_tma):
     if not supports_tma(byval_tma):
         pytest.skip(tma_skip_msg(byval_tma))
-        return
+
     device = "cuda"
     SIZE = 128
 
@@ -90,7 +90,7 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tma):
     if not supports_tma(byval_tma):
         pytest.skip(tma_skip_msg(byval_tma))
-        return
+
     device = "cuda"
     M, N, K = 8192, 8192, 1024
     torch.manual_seed(42)

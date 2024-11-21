@@ -143,8 +143,10 @@ def to_numpy(x):
 
 def supports_tma(byval_only=False):
     _, cuda_version = _path_to_binary("ptxas")
-    min_cuda_version = 12.0 if byval_only else 12.3
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9 and float(cuda_version) >= min_cuda_version
+    min_cuda_version = (12, 0) if byval_only else (12, 3)
+    cuda_version_tuple = tuple(map(int, cuda_version.split(".")))
+    assert len(cuda_version_tuple) == 2, cuda_version_tuple
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9 and cuda_version_tuple >= min_cuda_version
 
 
 def tma_skip_msg(byval_only=False):
