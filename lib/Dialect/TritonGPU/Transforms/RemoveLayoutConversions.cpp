@@ -970,7 +970,9 @@ void LayoutRematerialization::backwardRematerialization(
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristic to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  // We stop the rematerialization of linear layouts as we have to be a bit more
+  // careful with the heuristics for both correctness and perf
+  if (isa<DotOperandEncodingAttr, LinearEncodingAttr>(targetType.getEncoding()))
     return;
   Value oldV = convertOp->getOperand(0);
   LDBG("check backward remat with source " << oldV << " encoding "
@@ -1012,8 +1014,11 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
+  // We stop the rematerialization of linear layouts as we have to be a bit more
+  // careful with the heuristics for both correctness and perf
   RankedTensorType targetType = convertOp.getType();
-  if (mlir::isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  if (mlir::isa<DotOperandEncodingAttr, LinearEncodingAttr>(
+          targetType.getEncoding()))
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {

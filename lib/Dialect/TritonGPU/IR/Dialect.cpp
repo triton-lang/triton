@@ -320,6 +320,9 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
     return llvm::to_vector(sharedLayout.getOrder());
   }
+  if (auto linearLayout = mlir::dyn_cast<LinearEncodingAttr>(layout)) {
+    return linearLayout.getOrder();
+  }
 
   llvm::report_fatal_error("Unimplemented usage of getOrder");
   return {};
@@ -541,6 +544,102 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
                                             order, numWarps, threadsPerWarp,
                                             numCTAs);
   return encoding;
+}
+
+LinearLayout
+ensureLayoutNotLargerThan(const LinearLayout &layout,
+                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
+                          bool broadcastRegisters) {
+  assert(shape.size() == layout.getNumOutDims());
+  if (shape.empty()) {
+    return layout;
+  }
+  MLIRContext *ctx = shape.begin()->first.getContext();
+
+  auto bases = layout.getBases();
+
+  auto kRegister = StringAttr::get(ctx, "register");
+  std::set<int32_t> broadcastedDims;
+
+  for (auto outDim : llvm::enumerate(layout.getOutDimNames())) {
+    auto outDimName = outDim.value();
+    int32_t actualSize = layout.getOutDimSize(outDimName);
+    int32_t desiredSize = shape.lookup(outDimName);
+    if (actualSize <= desiredSize) {
+      continue;
+    }
+    assert(actualSize % desiredSize == 0);
+    // <inDimName, basisIdx, outValue>
+    std::vector<std::tuple<StringAttr, int, int>> sortedBases;
+    for (auto [inDimName, basis] : bases) {
+      for (size_t basisIdx = 0; basisIdx < basis.size(); basisIdx++) {
+        auto outValue = basis[basisIdx][outDim.index()];
+        if (outValue == 0) {
+          continue;
+        }
+        assert(llvm::isPowerOf2_32(outValue));
+        sortedBases.emplace_back(inDimName, basisIdx, outValue);
+      }
+    }
+    // From the largest basis to the smallest.
+    llvm::sort(sortedBases,
+               [](auto a, auto b) { return std::get<2>(a) > std::get<2>(b); });
+    for (auto [inDimName, basisIdx, outValue] : sortedBases) {
+      if (actualSize <= desiredSize) {
+        break;
+      }
+      if (!broadcastRegisters && inDimName == kRegister) {
+        broadcastedDims.insert(basisIdx);
+      } else {
+        bases[inDimName][basisIdx][outDim.index()] = 0;
+      }
+      actualSize >>= 1;
+    }
+  }
+  if (!broadcastRegisters) {
+    // Remove broadcasted registers
+    std::vector<std::vector<int32_t>> newBasesRegister;
+    for (auto [idx, basis] : llvm::enumerate(bases[kRegister])) {
+      // Remove if it's broadcasted
+      if (broadcastedDims.find(idx) == broadcastedDims.end()) {
+        newBasesRegister.push_back(std::move(basis));
+      }
+    }
+    bases[kRegister] = std::move(newBasesRegister);
+  }
+
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(layout.getOutDimNames()));
+}
+
+// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
+// smaller than shape[d].  Do this by increasing the size of the layout's inputs
+// along its most-minor dimension ("register" for register layouts, "offset" for
+// shared layouts).
+//
+// This function is invariant to the order of the layout's input dimensions, but
+// it cares about the order of the output dims, which should be minor-to-major.
+LinearLayout ensureLayoutNotSmallerThan(
+    const LinearLayout &layout,
+    const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
+  assert(shape.size() == layout.getNumOutDims());
+  if (shape.empty()) {
+    return layout;
+  }
+
+  MLIRContext *ctx = shape.begin()->first.getContext();
+  StringAttr kDim = *layout.getInDimNames().begin();
+  assert(kDim == "register" || kDim == "offset");
+
+  LinearLayout ret = layout;
+  for (StringAttr outDimName : layout.getOutDimNames()) {
+    int32_t actualSize = layout.getOutDimSize(outDimName);
+    int32_t desiredSize = shape.lookup(outDimName);
+    assert(actualSize > desiredSize || desiredSize % actualSize == 0);
+    ret *= LinearLayout::identity1D(desiredSize / actualSize, kDim, outDimName);
+    assert(ret.getOutDimSize(outDimName) >= desiredSize);
+  }
+  return ret;
 }
 
 } // namespace gpu
@@ -1197,6 +1296,360 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
                       /*rank=*/getSizePerThread().size());
 
   printer << "}>";
+}
+
+// FIXME Can we take the LinearLayout by const&?
+LogicalResult
+LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                           LinearLayout linearLayout) {
+  // Example of LinearEncodingAttr
+  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+  //   warp = [[16, 0], [32, 0]],
+  //   block = []}>
+  // The input dims must be {register, lane, warp, block}
+  // The output dims of the linear layout should be dim0..dim[rank-1]
+
+  static const auto expectedInDims =
+      SmallVector<std::string>({"register", "lane", "warp", "block"});
+  for (const auto &[i, dims] : llvm::enumerate(
+           llvm::zip(linearLayout.getInDimNames(), expectedInDims))) {
+    const auto &[dim, expectedDimStr] = dims;
+    if (dim.str() != expectedDimStr) {
+      return emitError() << "Expected input dimension " << i << " to be '"
+                         << expectedDimStr << "'. Got " << dim;
+    }
+  }
+
+  // outDims are ['dim0', 'dim1', ...]
+  for (auto [i, dim] : llvm::enumerate(linearLayout.getOutDimNames())) {
+    if (dim.str() != ("dim" + llvm::Twine(i)).str()) {
+      return emitError()
+             << "Expected output dimensions to be ['dim0', 'dim1', ...]. Got "
+             << dim << " at position " << i;
+    }
+  }
+
+  const auto &bases = linearLayout.getBases();
+  auto nonZero = [](auto val) { return val != 0; };
+  for (const auto &dimBases : llvm::make_second_range(bases)) {
+    if (!llvm::all_of(dimBases, [&](const auto &basis) {
+          return std::count_if(basis.begin(), basis.end(), nonZero) <= 1;
+        })) {
+      return emitError()
+             << "In a distributed layout, each base must move in at most one "
+                "dimension.";
+    }
+  }
+
+  return success();
+}
+
+void LinearEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  // We don't use the default implementation as it's a bit too verbose
+  // This prints in the following format that is shape agnostic, in the sense
+  // that we don't print explicitly the outShape of the LL
+  // We always assume LLs to be surjective
+  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+  //   warp = [[16, 0], [32, 0]],
+  //   block = []}>
+  auto ll = getLinearLayout();
+  printer << "<{" << join(ll.getBases(), ", ", [](const auto &base) {
+    return base.first.str() + " = " + "[" +
+           join(base.second, ", ",
+                [](const std::vector<int32_t> &vec) {
+                  return "[" + join(vec, ", ") + "]";
+                }) +
+           "]";
+  }) << "}>";
+}
+
+Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+
+  if (parser.parseGreater().failed())
+    return {};
+
+  LinearLayout::BasesT bases;
+
+  // Parse the basis names in order (the order is relevant)
+  std::vector<std::string> inDimNames = {"register", "lane", "warp", "block"};
+
+  for (const auto &inDimNameStr : inDimNames) {
+    auto inDimName = StringAttr::get(parser.getContext(), inDimNameStr);
+    Attribute value = dict.get(inDimName);
+
+    // Expecting an array of arrays
+    auto arrayOfArraysAttr = mlir::dyn_cast<ArrayAttr>(value);
+    if (!arrayOfArraysAttr) {
+      parser.emitError(parser.getCurrentLocation(),
+                       "Expected array of arrays for basis of '")
+          << inDimName.getValue() << "'";
+      return {};
+    }
+
+    std::vector<std::vector<int32_t>> inDimBases;
+    for (Attribute arrayAttr : arrayOfArraysAttr) {
+      auto intArrayAttr = mlir::dyn_cast<ArrayAttr>(arrayAttr);
+      if (!intArrayAttr) {
+        parser.emitError(parser.getCurrentLocation(),
+                         "Expected array of integers in basis for '")
+            << inDimName.getValue() << "'";
+        return {};
+      }
+      std::vector<int32_t> basis;
+      for (Attribute intAttr : intArrayAttr) {
+        auto intValueAttr = mlir::dyn_cast<IntegerAttr>(intAttr);
+        if (!intValueAttr) {
+          parser.emitError(parser.getCurrentLocation(),
+                           "Expected integer in basis for '")
+              << inDimName.getValue() << "'";
+          return {};
+        }
+        basis.push_back(intValueAttr.getInt());
+      }
+      inDimBases.push_back(std::move(basis));
+    }
+    bases[inDimName] = std::move(inDimBases);
+  }
+  size_t rank = 0;
+  for (const auto &basesDim : llvm::make_second_range(bases)) {
+    if (!basesDim.empty()) {
+      rank = basesDim[0].size();
+      break;
+    }
+  }
+
+  // To implement this we'd need to serialise the rank as well.
+  // We can do this if we ever need it
+  if (rank == 0) {
+    parser.emitError(parser.getCurrentLocation(), "Empty Layout not supported");
+    return {};
+  }
+
+  // Generate standared outDimNames (dim0, dim1, ...)
+  SmallVector<StringAttr> outDimNames;
+  for (int i = 0; i < rank; ++i) {
+    outDimNames.push_back(
+        StringAttr::get(parser.getContext(), "dim" + llvm::Twine(i)));
+  }
+
+  // Create LinearLayout
+  LinearLayout linearLayout(std::move(bases), std::move(outDimNames));
+
+  // Create and return the LinearEncodingAttr
+  return parser.getChecked<LinearEncodingAttr>(parser.getContext(),
+                                               std::move(linearLayout));
+}
+
+SmallVector<unsigned> basesPerDim(const LinearLayout::BasesT &namedBases,
+                                  StringAttr dimName, size_t rank,
+                                  bool skipBroadcast = true) {
+  const auto &bases = namedBases.find(dimName)->second;
+
+  if (bases.empty()) {
+    return SmallVector<unsigned>(rank, 1);
+  }
+
+  SmallVector<unsigned> ret(rank, 1);
+  auto nonZero = [](auto val) { return val != 0; };
+  int nonZeroIdx = -1;
+  for (const auto &basis : bases) {
+    auto it = std::find_if(basis.begin(), basis.end(), nonZero);
+    // Bases can have one or zero non-zero elements
+    // Skip a basis if it's broadcasting (all zeros)
+    // e.g. warps for DotOperandEncodingAttr (see ampereDotToLinearLayout)
+    if (it != basis.end()) {
+      nonZeroIdx = it - basis.begin();
+      ret[nonZeroIdx] *= 2;
+    } else if (!skipBroadcast) {
+      // If we've seen a non-zero basis, we double the size of the previous dim
+      // This is just needed to count the CTAsPerCGA
+      assert(nonZeroIdx != -1);
+      ret[nonZeroIdx] *= 2;
+    }
+  }
+  return ret;
+}
+
+SmallVector<unsigned> basesPerDim(const LinearLayout &ll, StringAttr dimName,
+                                  bool skipBroadcast = true) {
+  auto shapeIter = ll.getOutDimSizes();
+  auto rank = std::distance(shapeIter.begin(), shapeIter.end());
+  return basesPerDim(ll.getBases(), dimName, rank, skipBroadcast);
+}
+
+SmallVector<unsigned> orderPerDim(const LinearLayout &ll, StringAttr dimName,
+                                  ArrayRef<unsigned> defaultOrder) {
+  const auto &bases = ll.getBases().find(dimName)->second;
+  llvm::SetVector<unsigned> order;
+  auto nonZero = [](auto val) { return val != 0; };
+  for (const auto &basis : bases) {
+    // Bases can have one or zero non-zero elements
+    // Skip a basis if it's broadcasting (all zeros)
+    // e.g. warps for DotOperandEncodingAttr (see ampereDotToLinearLayout)
+    auto it = std::find_if(basis.begin(), basis.end(), nonZero);
+    if (it != basis.end()) {
+      auto i = it - basis.begin();
+      order.insert(i);
+    }
+  }
+  // If any dim is missing, we add them in the defaultOrder
+  for (auto i : defaultOrder) {
+    order.insert(i);
+  }
+  return SmallVector<unsigned>(order.begin(), order.end());
+}
+
+// [Note. Divergence of methods wrt. legacy layouts]
+// For smaller shapes where the CTATile is larger than the output
+// tensor, some methods return different values than the legacy layouts. I think
+// this is benign tho. An example: what is the the vector of `warpsPerCTA` if
+// all the warps hold the same data? I think it should be [1, 1], even if we
+// have 4 warps. But perhaps for this we have to add some masking in some
+// places... We'll see
+SmallVector<unsigned> LinearEncodingAttr::getRepOrder() const {
+  // This is not correct, but:
+  // - It happens to agree in most places with the legacy layout
+  // - getRepOrder does not make sense for LinearEncodingAttr as it already has
+  //   the same shape as the tensor that uses it
+  return getOrder();
+}
+SmallVector<unsigned> LinearEncodingAttr::getCTAsPerCGA() const {
+  // CTAs are split into an identity part (SplitNum) and a broadcast part
+  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "block"),
+                     /*skipBroadcast=*/false);
+}
+SmallVector<unsigned> LinearEncodingAttr::getCTAOrder() const {
+  return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "block"),
+                     getOrder());
+}
+SmallVector<unsigned> LinearEncodingAttr::getCTASplitNum() const {
+  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "block"));
+}
+SmallVector<unsigned> LinearEncodingAttr::getWarpsPerCTA() const {
+  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "warp"));
+}
+SmallVector<unsigned> LinearEncodingAttr::getWarpOrder() const {
+  return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "warp"),
+                     getOrder());
+}
+SmallVector<unsigned> LinearEncodingAttr::getThreadsPerWarp() const {
+  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"));
+}
+SmallVector<unsigned> LinearEncodingAttr::getThreadOrder() const {
+  return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"),
+                     getOrder());
+}
+SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
+  auto rank = getRepOrder().size();
+  auto ll = getLinearLayout();
+  auto ctx = getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+
+  // We canonicalize on the spot, as if we use CGAs the regs are not in
+  // canonical form The order is [reg, lane, warp, rep, block], so we first
+  // remove the blocks
+  llvm::SmallVector<unsigned> ctaShape;
+  for (auto [shape, cgaNum] :
+       llvm::zip(ll.getOutDimSizes(), getCTASplitNum())) {
+    ctaShape.push_back(shape / cgaNum);
+  }
+  LinearLayout::BasesT bases = ll.getBases();
+
+  llvm::SetVector<unsigned> reverseRepOrder;
+  auto nonZero = [](auto val) { return val != 0; };
+  auto &registers = bases[StringAttr::get(ctx, "register")];
+  while (!registers.empty()) {
+    auto &basis = registers.back();
+    auto it = std::find_if(basis.begin(), basis.end(), nonZero);
+    // If there's broadcasting (base == zeros) there are no more reps
+    if (it == basis.end()) {
+      break;
+    }
+    auto dim = it - basis.begin();
+    reverseRepOrder.insert(dim);
+    // As soon as we stop finding reps, we stop
+    if (dim != reverseRepOrder.back() || 2 * basis[dim] != ctaShape[dim]) {
+      break;
+    }
+    ctaShape[dim] /= 2;
+    registers.pop_back();
+  }
+  return basesPerDim(bases, kRegister, rank);
+}
+
+SmallVector<unsigned> LinearEncodingAttr::getOrder() const {
+  auto rank = getLinearLayout().getNumOutDims();
+  SmallVector<unsigned> order(rank);
+  // Choose [rank-1, rank-2, ... 0] as the default order in case
+  // there are dims that do not move in the register
+  // This order is as good as any really
+  std::iota(order.rbegin(), order.rend(), 0);
+
+  return orderPerDim(getLinearLayout(),
+                     StringAttr::get(getContext(), "register"), order);
+}
+
+std::optional<LinearLayout>
+LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto ll = getLinearLayout();
+  auto canonicalDims = llvm::to_vector(ll.getOutDimNames());
+  llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
+  llvm::SmallVector<StringAttr> permutedDims;
+  for (auto dim : getRepOrder()) {
+    permutedDims.push_back(canonicalDims[dim]);
+    namedShape[canonicalDims[dim]] = shape[dim];
+  }
+  ll = ll.transposeOuts(permutedDims);
+  ll = ensureLayoutNotSmallerThan(ll, namedShape);
+  ll = ensureLayoutNotLargerThan(ll, namedShape, /*broadcastRegisters=*/false);
+  ll = ll.transposeOuts(canonicalDims);
+  return ll;
+}
+
+SmallVector<unsigned>
+LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type) const {
+  // We can relax this assert by calling toLinearLayout rather than
+  // getLinearLayout
+  SmallVector<int32_t> shapeVec(shape.begin(), shape.end());
+  assert(shapeVec == llvm::to_vector(getLinearLayout().getOutDimSizes()));
+  auto ll = getLinearLayout();
+  return basesPerDim(ll, StringAttr::get(getContext(), "register"));
+}
+
+// Start of Selection
+SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
+  auto ll = getLinearLayout();
+  const auto &regs =
+      ll.getBases().find(StringAttr::get(getContext(), "register"))->second;
+  auto order = getOrder();
+  auto rank = order.size();
+
+  SmallVector<unsigned> contig(rank, 1);
+  auto regIt = regs.begin();
+  for (unsigned dim : order) {
+    std::vector<int32_t> basis(rank, 0);
+    basis[dim] = 1;
+
+    while (regIt != regs.end() && *regIt == basis) {
+      contig[dim] *= 2;
+      basis[dim] *= 2;
+      ++regIt;
+    }
+  }
+  return contig;
+}
+
+unsigned LinearEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
+                                                    Type eltTy) const {
+  return product(getElemsPerThread(shape, eltTy));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1988,6 +2441,9 @@ public:
       return AliasResult::FinalAlias;
     } else if (auto blockedAttr = mlir::dyn_cast<BlockedEncodingAttr>(attr)) {
       os << "blocked";
+      return AliasResult::FinalAlias;
+    } else if (auto linearAttr = mlir::dyn_cast<LinearEncodingAttr>(attr)) {
+      os << "linear";
       return AliasResult::FinalAlias;
     } /* else if (auto sliceAttr = dyn_cast<SliceEncodingAttr>(attr)) {
       os << "slice";
