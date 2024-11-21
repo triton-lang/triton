@@ -45,6 +45,12 @@ jobs:
         run: |
           echo "enable_integration=true" >> $GITHUB_ENV
 
+      - name: Decide manual trigger integration test enablement
+        # Always enable integration tests when manually triggered
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+
       - name: Checkout post-submit commits
         if: github.event_name == 'push'
         uses: actions/checkout@v4
