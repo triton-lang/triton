@@ -1177,11 +1177,14 @@ class tuple:
 
     def __init__(self, args: list):
         self.values = [i for i in args]
+    
+    @property
+    def type(self):
         def get_type(x):
             if isinstance(x, dtype):
                 return dtype
             return x.type
-        self.type = tuple_type([get_type(x) for x in args])
+        return tuple_type([get_type(x) for x in self.values])
 
     def serialize(self):
         return list(_flatten_list([x.serialize() for x in self.values]))
@@ -1194,6 +1197,7 @@ class tuple:
         else:
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
+    # TODO: remove
     def __setitem__(self, idx: constexpr, value):
         if isinstance(idx, int):
             idx = constexpr(idx)
@@ -2138,14 +2142,12 @@ def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=N
         return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
-        in_scalar_tys = [t.type.scalar for t in input]
-        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
-
+        param_types = [t.type.scalar for t in input] * 2
         region = reduce_op.get_region(0)
         with _insertion_guard(_builder):
-            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
-            block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
+            to_ir = lambda T: T.to_ir(_builder)
+            block = _builder.create_block_with_parent(region, list(map(to_ir, param_types)))
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]
@@ -2239,14 +2241,12 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
         return associative_scan((input, ), axis, combine_fn, reverse, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(scan_op):
-        in_scalar_tys = [t.type.scalar for t in input]
-        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
-
+        param_types = [t.type.scalar for t in input] * 2
         region = scan_op.get_region(0)
         with _insertion_guard(_builder):
-            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
-            block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
+            to_ir = lambda T: T.to_ir(_builder)
+            block = _builder.create_block_with_parent(region, list(map(to_ir, param_types)))
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]

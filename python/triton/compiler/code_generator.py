@@ -466,10 +466,10 @@ class CodeGenerator(ast.NodeVisitor):
             # update return type
             if isinstance(self.ret_type, language.tuple_type):
                 self.prototype.ret_types = self.ret_type.types
-                self.fn.reset_type(self.prototype.to_ir(self.builder))
+                self.fn.reset_type(self.prototype.serialize(self.builder))
             else:
                 self.prototype.ret_types = [self.ret_type]
-                self.fn.reset_type(self.prototype.to_ir(self.builder))
+                self.fn.reset_type(self.prototype.serialize(self.builder))
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
         # Remove dead code
@@ -1085,9 +1085,8 @@ class CodeGenerator(ast.NodeVisitor):
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
-        args_flat = [x for x in language.core._flatten_list(args)]
-        args_cst = {i: arg for i, arg in enumerate(args_flat) if _is_constexpr(arg)}
-        args_val = [arg for i, arg in enumerate(args_flat) if not _is_constexpr(arg)]
+        args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
+        args_val = find_paths_if(args, lambda _, x: not _is_constexpr(x)).values()
         # mangle
         fn_name = mangle_fn(fn.__name__, [arg.type for arg in args_val], args_cst)
         # generate function def if necessary
@@ -1095,8 +1094,9 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            prototype = language.function_type([], [language.core.dtype if arg is None or isinstance(arg, (bool, int, language.core.dtype)) else arg.type for arg in args])
-            generator = CodeGenerator(self.context, prototype, gscope, {}, args_cst, module=self.module,
+            arg_types = [language.core.constexpr if arg is None or isinstance(arg, (bool, int, language.core.dtype)) else arg.type for arg in args]
+            prototype = ASTFunction([], arg_types, args_cst, dict(), dict())
+            generator = CodeGenerator(self.context, prototype, gscope, module=self.module,
                                       jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
@@ -1308,8 +1308,8 @@ def kernel_suffix(signature, specialization):
 
 
 def find_paths_if(iterable, pred):
-    is_iterable = lambda x: isinstance(x, (list, tuple, language.tuple_type))
-    ret = []
+    is_iterable = lambda x: isinstance(x, (list, tuple, language.tuple, language.tuple_type))
+    ret = dict()
     def _impl(current, path):
         path = (path[0], ) if len(path) == 1 else tuple(path)
         if is_iterable(current):
@@ -1317,13 +1317,13 @@ def find_paths_if(iterable, pred):
                 _impl(item, path + (idx,))
         elif pred(path, current):
             if len(path) == 1:
-                ret.append((path[0],))
+                ret[(path[0],)] = current
             else:
-                ret.append(tuple(path))
+                ret[tuple(path)] = current
     if is_iterable(iterable):
         _impl(iterable, [])
     else:
-        ret = [tuple()] if pred(iterable) else []
+        ret = dict()
     return ret
 
 
@@ -1347,7 +1347,7 @@ class ASTFunction:
         # fill up IR values in template
         # > build function
         is_val = lambda path, _: path not in self.constexprs
-        val_paths = find_paths_if(self.arg_types, is_val)
+        val_paths = list(find_paths_if(self.arg_types, is_val).keys())
         arg_types = [self.get_path(self.arg_types, path).to_ir(builder) for path in val_paths]
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
         return builder.get_function_ty(arg_types, ret_types)
@@ -1360,11 +1360,12 @@ class ASTFunction:
             return language.constexpr(None)
         vals = make_template(self.arg_types)
         is_val = lambda path, _: path not in self.constexprs
-        val_paths = find_paths_if(self.arg_types, is_val)
+        val_paths = list(find_paths_if(self.arg_types, is_val).keys())
         # > set attributes
         for attr_path, attr_specs in self.attrs.items():
             for attr_name, attr_val in attr_specs:
-                fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
+                if attr_path in val_paths:
+                    fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
         # > add IR values to the template
         for i, path in enumerate(val_paths):
             ty = self.get_path(self.arg_types, path)
@@ -1372,7 +1373,7 @@ class ASTFunction:
         # > add constexpr values to the template
         constants = self.constants | self.constexprs
         for path, val in constants.items():
-            self.set_path(vals, path, val)
+            self.set_path(vals, path, language.constexpr(val))
         return vals
         
         
