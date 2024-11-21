@@ -374,7 +374,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
     // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
     // completed before we can remove the layoutIsOK check:
-    // 1. Support for AMD's MFMA and WMMA
+    // 1. Support for AMD's WMMA
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma =
               isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(layout)) {
