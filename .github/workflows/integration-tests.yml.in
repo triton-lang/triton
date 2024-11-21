@@ -250,12 +250,10 @@ jobs:
         name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
+          du -h -d 1 ~/.triton
 
           mkdir -p ~/.ccache
-          ls -alh ~/.ccache
-          du -sh ~/.ccache
+          du -h -d 1 ~/.ccache
 
       - name: Update PATH
         run: |
