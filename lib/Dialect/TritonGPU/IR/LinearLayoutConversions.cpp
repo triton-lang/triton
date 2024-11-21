@@ -52,25 +52,6 @@ SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
   return ret;
 }
 
-void assertIsRegisterLayout(const LinearLayout &layout) {
-  assert(layout.getNumInDims() > 0);
-  MLIRContext *ctx = layout.getInDimNames().begin()->getContext();
-  StringAttr kRegister = S("register");
-  StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
-  StringAttr kBlock = S("block");
-
-  const auto &ins = layout.getInDimNames();
-  assert(llvm::SmallVector<StringAttr>(ins.begin(), ins.end()) ==
-         llvm::SmallVector<StringAttr>({kRegister, kLane, kWarp, kBlock}));
-
-  const auto &outs = layout.getOutDimNames();
-  const auto &expectedOuts = standardOutDimNames(ctx, layout.getNumOutDims());
-  assert(llvm::SmallDenseSet<StringAttr>(outs.begin(), outs.end()) ==
-         llvm::SmallDenseSet<StringAttr>(expectedOuts.begin(),
-                                         expectedOuts.end()));
-}
-
 // Returns a 1D -> ND layout into [dim0, dim1, ...] that's equivalent to
 // creating a 1D -> 1D mapping of size product(shape) and then reshaping to
 // permute(shape, order).
@@ -119,124 +100,6 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
 
   // Transpose to standard order (dim0, dim1, ...).
   return ret.transposeOuts(outDimNames);
-}
-
-// For each output dimension d, ensure that the layout's output size (i.e., its
-// codomain) does not exceed shape[d]. Do this without changing the size of the
-// layout's inputs (i.e., leave its domain unchanged).
-//
-// This function is invariant to the order of the layout's input and output
-// dimensions.
-//
-// We achieve this by setting the largest value in each output dimension d to 0
-// because bases that map to a location larger than shape[d]
-// effectively duplicate along that dimension.  For example, consider a layout
-// with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
-// shrink the output dimension size to 8:
-//
-//   L(register=1) = 8
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 16
-//
-// In the first step, we shrink the output dimension size to 16 by setting
-// L(lane=2) to 0:
-//
-//   L(register=1) = 8
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 0
-//
-// This means that lane=2 has the same data as lane=0.
-//
-// Now the output dimension of this layout has a size of 16, which is still
-// larger than 8.  We find the current largest value in the output dimension,
-// which is L(register=1) = 8, and we set L(register=1) to 0:
-//
-//   L(register=1) = 0
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 0
-//
-// Now the output dimension of this layout has a size of 8, which is the desired
-// size.  Note that this method works only because the bases are powers of two.
-// It is unclear what to do when they are not.
-LinearLayout ensureLayoutNotLargerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
-  assert(shape.size() == layout.getNumOutDims());
-  if (shape.empty()) {
-    return layout;
-  }
-  MLIRContext *ctx = shape.begin()->first.getContext();
-
-  auto bases = layout.getBases();
-  for (auto outDim : llvm::enumerate(layout.getOutDimNames())) {
-    auto outDimName = outDim.value();
-    int32_t actualSize = layout.getOutDimSize(outDimName);
-    int32_t desiredSize = shape.lookup(outDimName);
-    if (actualSize <= desiredSize) {
-      continue;
-    }
-    assert(actualSize % desiredSize == 0);
-    // <inDimName, basisIdx, outValue>
-    std::vector<std::tuple<StringAttr, int, int>> sortedBases;
-    for (auto [inDimName, basis] : bases) {
-      for (size_t basisIdx = 0; basisIdx < basis.size(); basisIdx++) {
-        auto outValue = basis[basisIdx][outDim.index()];
-        if (outValue == 0) {
-          continue;
-        }
-        assert(llvm::isPowerOf2_32(outValue));
-        sortedBases.emplace_back(inDimName, basisIdx, outValue);
-      }
-    }
-    // From the largest basis to the smallest.
-    llvm::sort(sortedBases,
-               [](auto a, auto b) { return std::get<2>(a) > std::get<2>(b); });
-    for (auto [inDimName, basisIdx, outValue] : sortedBases) {
-      if (actualSize <= desiredSize) {
-        break;
-      }
-      bases[inDimName][basisIdx][outDim.index()] = 0;
-      actualSize >>= 1;
-    }
-  }
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(layout.getOutDimNames()));
-}
-
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// smaller than shape[d].  Do this by increasing the size of the layout's inputs
-// along its most-minor dimension ("register" for register layouts, "offset" for
-// shared layouts).
-//
-// This function is invariant to the order of the layout's input dimensions, but
-// it cares about the order of the output dims, which should be minor-to-major.
-LinearLayout ensureLayoutNotSmallerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
-  assert(shape.size() == layout.getNumOutDims());
-  if (shape.empty()) {
-    return layout;
-  }
-
-  MLIRContext *ctx = shape.begin()->first.getContext();
-  StringAttr kDim = *layout.getInDimNames().begin();
-  assert(kDim == "register" || kDim == "offset");
-
-  LinearLayout ret = layout;
-  for (StringAttr outDimName : layout.getOutDimNames()) {
-    int32_t actualSize = layout.getOutDimSize(outDimName);
-    int32_t desiredSize = shape.lookup(outDimName);
-    assert(actualSize > desiredSize || desiredSize % actualSize == 0);
-    ret *= LinearLayout::identity1D(desiredSize / actualSize, kDim, outDimName);
-    assert(ret.getOutDimSize(outDimName) >= desiredSize);
-  }
-  return ret;
 }
 
 // Combines the layout of a CTA (input dims [register, lane, warp]) with the
@@ -928,10 +791,10 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+  // Layouts are distributed or shared
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
     return distributed.toLinearLayout(shape);
-  }
-  if (auto shared = dyn_cast<SharedEncodingAttr>(layout)) {
+  } else if (auto shared = dyn_cast<SharedEncodingAttr>(layout)) {
     if (shared.getHasLeadingOffset()) {
       assert(elemBitWidth.has_value());
       return sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
@@ -940,7 +803,7 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     }
   }
 
-  // TODO(jlebar): Other layouts
+  // Third party layouts
   return std::nullopt;
 }
 
