@@ -158,6 +158,42 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return ret;
 }
 
+std::optional<LinearLayout> getRegToSharedLayout(MLIRContext* ctx,
+    ArrayRef<int64_t> shape, Attribute srcEnc, Attribute dstEnc, int elemBitWidth) {
+  StringAttr kBlock = str_attr("block");
+  int rank = shape.size();
+
+  std::optional<LinearLayout> regLayout =
+      triton::gpu::toLinearLayout(shape, srcEnc);
+  std::optional<LinearLayout> sharedLayout = triton::gpu::toLinearLayout(
+      shape, dstEnc, elemBitWidth);
+  if (!regLayout.has_value() || !sharedLayout.has_value()) {
+    return std::nullopt;
+  }
+  auto sharedOrder = triton::gpu::getOrder(dstEnc);
+
+  // sharedLayout's in-dims are currently (offset, block).  Reshape to
+  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
+  // shmem strides.  (The offsetX's appear in minor-to-major order.)
+  auto sharedLegacy =
+      cast<triton::gpu::SharedEncodingAttr>(dstEnc);
+  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
+  for (int i = 0; i < rank; i++) {
+    int dim = sharedOrder[i];
+    int64_t size = std::max(
+        int64_t{1},
+        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
+    multiDimSharedSize.push_back(
+        {str_attr("offset" + std::to_string(dim)), size});
+  }
+  multiDimSharedSize.push_back({kBlock, sharedLayout->getInDimSize(kBlock)});
+  sharedLayout = sharedLayout->reshapeIns(multiDimSharedSize);
+
+  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
+  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
+  return regLayout->invertAndCompose(*sharedLayout);
+}
+
 bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
     Type elemLlvmTy, std::optional<int32_t> maxVecElems, Value shmemBase,
@@ -174,41 +210,16 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
 
-  std::optional<LinearLayout> regLayout =
-      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
-  std::optional<LinearLayout> sharedLayout = triton::gpu::toLinearLayout(
-      shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
-  if (!regLayout.has_value() || !sharedLayout.has_value()) {
+  auto regToSharedLayout = getRegToSharedLayout(ctx, shape, registerTy.getEncoding(),
+      sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
+  if (!regToSharedLayout.has_value())
     return false;
-  }
-  auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
-
-  // sharedLayout's in-dims are currently (offset, block).  Reshape to
-  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
-  // shmem strides.  (The offsetX's appear in minor-to-major order.)
-  auto sharedLegacy =
-      cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
-  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
-  for (int i = 0; i < rank; i++) {
-    int dim = sharedOrder[i];
-    int64_t size = std::max(
-        int64_t{1},
-        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
-    multiDimSharedSize.push_back(
-        {str_attr("offset" + std::to_string(dim)), size});
-  }
-  multiDimSharedSize.push_back({kBlock, sharedLayout->getInDimSize(kBlock)});
-  sharedLayout = sharedLayout->reshapeIns(multiDimSharedSize);
-
-  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
-  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
-  LinearLayout regToSharedLayout = regLayout->invertAndCompose(*sharedLayout);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
-  for (int inBlock = 1; inBlock < regToSharedLayout.getInDimSize(kBlock);
+  for (int inBlock = 1; inBlock < regToSharedLayout->getInDimSize(kBlock);
        inBlock *= 2) {
-    auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
+    auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout->apply(
         {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}})));
     // offsetX1, ..., offsetXN must all be 0.
     if (!llvm::all_of(ArrayRef(idx).drop_back(1),
@@ -234,15 +245,15 @@ bool emitTransferBetweenRegistersAndShared(
   // which have known strides.  This would allow us to vectorize across multiple
   // shmem out dimensions where possible.
   const int vecElems =
-      std::min(regToSharedLayout.getNumConsecutiveInOut(),
+      std::min(regToSharedLayout->getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
   Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(regToSharedLayout.getInDimSize(kLane));
+  Value threadsPerWarp = i32_val(regToSharedLayout->getInDimSize(kLane));
   Value laneId = urem(threadId, threadsPerWarp);
   Value warpId = udiv(threadId, threadsPerWarp);
 
-  int numElems = regToSharedLayout.getInDimSize(kRegister);
+  int numElems = regToSharedLayout->getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
   auto ptrTy = shmemBase.getType();
   Value zero = i32_val(0);
@@ -253,7 +264,7 @@ bool emitTransferBetweenRegistersAndShared(
     // we drop_end to drop block, which we know from above will be 0.
     auto multiDimShmemOffset =
         llvm::to_vector(llvm::drop_end(llvm::make_second_range(
-            applyLinearLayout(loc, rewriter, regToSharedLayout,
+            applyLinearLayout(loc, rewriter, *regToSharedLayout,
                               {{kRegister, i32_val(i * vecElems)},
                                {kLane, laneId},
                                {kWarp, warpId},
@@ -261,6 +272,7 @@ bool emitTransferBetweenRegistersAndShared(
 
     // Reorder strides according to `order`.  This way they match the
     // multi-dimensional offsets in regToSharedLayout.
+    auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
     Value shmemOffset = dot(rewriter, loc, multiDimShmemOffset,
                             applyPermutation(shmemStrides, sharedOrder));
     auto vecAddr = gep(ptrTy, elemLlvmTy, shmemBase, shmemOffset);

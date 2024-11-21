@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include <memory>
 
@@ -44,29 +45,38 @@ struct ClipAsyncCopySizePerThread
     Value src = copyOp.getSrc();
     Value mask = copyOp.getMask();
     Value other = copyOp.getOther();
-
-    auto inputTy = cast<RankedTensorType>(src.getType());
-    auto blockEnc = cast<BlockedEncodingAttr>(inputTy.getEncoding());
-    auto resultTy = cast<tt::MemDescType>(copyOp.getResult().getType());
-    auto sharedEnc = cast<SharedEncodingAttr>(resultTy.getEncoding());
+    auto srcTy = cast<RankedTensorType>(src.getType());
+    auto blockEnc = cast<BlockedEncodingAttr>(srcTy.getEncoding());
+    auto dstTy = cast<tt::MemDescType>(copyOp.getResult().getType());
+    auto sharedEnc = cast<SharedEncodingAttr>(dstTy.getEncoding());
     auto sharedVec = sharedEnc.getVec();
 
-    // clip each dim of sizePerThread by its respective dim in vec
-    SmallVector<unsigned> newSizePerThread;
-    llvm::transform(blockEnc.getSizePerThread(),
-                    std::back_inserter(newSizePerThread),
-                    [&](auto size) { return std::min(size, sharedVec); });
+    // obtain max contiguous copy size
+    // Note this can be further optimized, as copyContigSize can be even
+    // smaller when lowering, depending on contiguity and mask alignment
+    // (see AsyncCopyGlobalToLocalOpConversion)
+    auto elemBitWidth = dstTy.getElementTypeBitWidth();
+    auto regToSharedLayout = getRegToSharedLayout(rewriter.getContext(),
+        srcTy.getShape(), blockEnc, sharedEnc, elemBitWidth);
+    auto copyContigSize = regToSharedLayout->getNumConsecutiveInOut();
 
-    if (newSizePerThread == blockEnc.getSizePerThread())
+    // obtain block sizePerThread along contig dim
+    auto sizePerThread = blockEnc.getSizePerThread();
+    auto blockContigSize = sizePerThread[blockEnc.getOrder()[0]];
+
+    if (blockContigSize <= copyContigSize)
       return rewriter.notifyMatchFailure(copyOp,
-          "at least one dimension of blocked sizePerThread must be greater than shared vec");
+          "blocked sizePerThread along contiguous dim must be greater than the "
+          "max contiguous copy size ");
+
+    sizePerThread[blockEnc.getOrder()[0]] = copyContigSize;
 
     // obtain new blockedEnc based on clipped sizePerThread
     auto mod = copyOp->getParentOfType<ModuleOp>();
     int numWarps = TritonGPUDialect::getNumWarps(mod);
     int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     auto newBlockEnc = BlockedEncodingAttr::get(
-        copyOp.getContext(), inputTy.getShape(), newSizePerThread,
+        copyOp.getContext(), srcTy.getShape(), sizePerThread,
         blockEnc.getOrder(), numWarps, threadsPerWarp,
         blockEnc.getCTALayout());
 
