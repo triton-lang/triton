@@ -377,18 +377,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // 1. Support for AMD's WMMA
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(layout)) {
-        if (useLegacyMMAConversion) {
-          return false;
-        }
-        return true;
+        return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
         auto parent = dotOperand.getParent();
-        if (isa<MmaEncodingTrait>(parent)) {
-          if (useLegacyMMAConversion) {
-            return false;
-          }
-          return true;
+        if (isa<MmaEncodingTrait>(parent) && useLegacyMMAConversion) {
+          return false;
         }
         if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
           if (nvidiaMma.isAmpere()) {
