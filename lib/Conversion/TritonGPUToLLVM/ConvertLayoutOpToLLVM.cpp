@@ -376,7 +376,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // completed before we can remove the layoutIsOK check:
     // 1. Support for AMD's MFMA and WMMA
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
-      if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
+      if (auto nvidiaMma =
+              isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(layout)) {
         if (useLegacyMMAConversion) {
           return false;
         }
@@ -391,6 +392,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           if (nvidiaMma.isAmpere()) {
             return true;
           }
+        }
+        if (isa<AMDMfmaEncodingAttr>(dotOperand.getParent())) {
+          return true;
         }
         return false;
       }
