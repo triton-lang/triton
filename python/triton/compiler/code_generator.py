@@ -1236,8 +1236,6 @@ class CodeGenerator(ast.NodeVisitor):
                 ret = super().visit(node)
             except CompilationError:
                 raise
-            except AssertionError:
-                raise
             except Exception as e:
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.
