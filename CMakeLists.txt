@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-project(triton CXX)
+project(triton CXX C)
 include(CTest)
 
 if(NOT WIN32)
