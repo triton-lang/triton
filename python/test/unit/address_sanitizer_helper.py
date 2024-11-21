@@ -30,5 +30,3 @@ def add_kernel(
 pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
 amdgcn = pgm.asm['amdgcn']
 print(amdgcn)
-#assert "Begin function __asan_report_store4" in amdgcn
-#print("Begin function __asan_report_store4" in amdgcn)
