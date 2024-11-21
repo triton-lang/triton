@@ -65,7 +65,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c48]]
     // CHECK: [[addr48:%.*]] = llvm.urem [[shflLaneId]], [[warpSize]]
 
-    // CHECK: [[vec0:%.*]] = llvm.insertelement [[val3]], {{.*}} : vector<4xi8> 
+    // CHECK: [[vec0:%.*]] = llvm.insertelement [[val3]], {{.*}} : vector<4xi8>
     // CHECK: [[vec1:%.*]] = llvm.insertelement [[val7]], {{.*}} : vector<4xi8>
 
     // CHECK: [[bvec0:%.*]] = llvm.bitcast [[vec0]]
@@ -94,7 +94,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[c3:%.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK: [[resVal7:%.*]] = llvm.extractelement [[resVec1]][[[c3]] : i32] : vector<4xi8>
 
-    // CHECK: llvm.insertvalue [[resVal3]], {{.*}}[3] 
+    // CHECK: llvm.insertvalue [[resVal3]], {{.*}}[3]
     // CHECK: llvm.insertvalue [[resVal7]], {{.*}}[7]
 
     // CHECK: llvm.return
@@ -157,7 +157,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c48]]
     // CHECK: [[addr48:%.*]] = llvm.urem [[shflLaneId]], [[warpSize]]
 
-    // CHECK: [[vec0:%.*]] = llvm.insertelement [[val3]], {{.*}} : vector<4xi8> 
+    // CHECK: [[vec0:%.*]] = llvm.insertelement [[val3]], {{.*}} : vector<4xi8>
     // CHECK: [[vec1:%.*]] = llvm.insertelement [[val7]], {{.*}} : vector<4xi8>
 
     // CHECK: [[bvec0:%.*]] = llvm.bitcast [[vec0]]
@@ -205,7 +205,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[c3:%.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK: [[resVal7:%.*]] = llvm.extractelement [[resVec1]][[[c3]] : i32] : vector<4xi8>
 
-    // CHECK: llvm.insertvalue [[resVal3]], {{.*}}[3] 
+    // CHECK: llvm.insertvalue [[resVal3]], {{.*}}[3]
     // CHECK: llvm.insertvalue [[resVal7]], {{.*}}[7]
 
     // CHECK: llvm.return
