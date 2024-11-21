@@ -48,7 +48,7 @@ triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
 }
 
 triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
-  auto aTy = cast<TensorOrMemDesc>(a.getType()).getElementType();
+  auto aTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
   if (aTy.isF16()) {
     return triton::nvgpu::WGMMAEltType::f16;
   } else if (aTy.isBF16()) {
@@ -198,7 +198,7 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
-  auto aTy = cast<TensorOrMemDesc>(tensor.getType());
+  auto aTy = cast<triton::gpu::TensorOrMemDesc>(tensor.getType());
   auto aSharedLayout = dyn_cast<SharedEncodingAttr>(aTy.getEncoding());
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
@@ -379,8 +379,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value loadedC, bool allowTF32,
                          bool needsPartialAccumulator,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
-  auto aTensorTy = cast<TensorOrMemDesc>(a.getType());
-  auto bTensorTy = cast<TensorOrMemDesc>(b.getType());
+  auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
+  auto bTensorTy = cast<triton::gpu::TensorOrMemDesc>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
   auto aSharedLayout = dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());

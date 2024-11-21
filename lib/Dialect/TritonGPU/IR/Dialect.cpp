@@ -20,6 +20,7 @@
 
 // Include TableGen'erated code
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/TypeInterfaces.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -3305,9 +3306,9 @@ void mlir::triton::gpu::dumpHWLayout(RankedTensorType tensorType) {
   llvm::errs() << getLayoutStr(tensorType, /*useHWPointOfView=*/true);
 }
 
-namespace {
 struct TensorModel
-    : public TensorOrMemDesc::ExternalModel<TensorModel, RankedTensorType> {
+    : public triton::gpu::TensorOrMemDesc::ExternalModel<TensorModel,
+                                                         RankedTensorType> {
   Type getElementType(Type pointer) const {
     return cast<RankedTensorType>(pointer).getElementType();
   }
@@ -3326,7 +3327,8 @@ struct TensorModel
 };
 
 struct MemDescModel
-    : public TensorOrMemDesc::ExternalModel<MemDescModel, MemDescType> {
+    : public triton::gpu::TensorOrMemDesc::ExternalModel<MemDescModel,
+                                                         MemDescType> {
   Type getElementType(Type pointer) const {
     return cast<MemDescType>(pointer).getElementType();
   }
@@ -3343,8 +3345,6 @@ struct MemDescModel
     return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
   }
 };
-
-} // namespace
 
 void TritonGPUDialect::initialize() {
   registerTypes();

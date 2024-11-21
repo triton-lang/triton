@@ -5,7 +5,7 @@ include "mlir/IR/OpBase.td"
 
 // Interface dynamically attached to RankedTensorType and MemDescType.
 def TTG_TensorOrMemDesc : TypeInterface<"TensorOrMemDesc"> {
-  let cppNamespace = "::mlir";
+  let cppNamespace = "::mlir::triton::gpu";
   let methods = [
     InterfaceMethod<"Returns the encoding of the tensor or memory descriptor",
       "mlir::Attribute", "getEncoding", (ins)>,
