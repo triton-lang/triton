@@ -12,8 +12,6 @@ using namespace mlir;
 
 using mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
 namespace {
 // declare vprintf(i8*, i8*) as external function
 LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {

@@ -41,10 +41,8 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
 
   auto srcShapePerCTA = gpu::getShapePerCTA(srcTy);
   auto dstShapePerCTA = gpu::getShapePerCTA(dstTy);
-  auto srcShapePerCTATile =
-      gpu::getShapePerCTATile(srcLayout, srcTy.getShape());
-  auto dstShapePerCTATile =
-      gpu::getShapePerCTATile(dstLayout, dstTy.getShape());
+  auto srcShapePerCTATile = gpu::getShapePerCTATile(srcLayout);
+  auto dstShapePerCTATile = gpu::getShapePerCTATile(dstLayout);
 
   assert(srcTy.getRank() == dstTy.getRank() &&
          "src and dst must have the same rank");
