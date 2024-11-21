@@ -10,7 +10,7 @@
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
 tt.func @async_copy_i8(%input: tensor<64x16x!tt.ptr<i8>, #blocked>,
-    %view: !tt.memdesc<64x16xi8, #shared, #triton_gpu.shared_memory, mutable>,
+    %view: !triton_gpu.memdesc<64x16xi8, #shared, #triton_gpu.shared_memory, mutable>,
     %mask: tensor<64x16xi1, #blocked>,
     %other: tensor<64x16xi8, #blocked>) {
   %token = triton_gpu.async_copy_global_to_local %input, %view mask %mask other %other: tensor<64x16x!tt.ptr<i8>, #blocked> -> <64x16xi8, #shared, #triton_gpu.shared_memory, mutable>
