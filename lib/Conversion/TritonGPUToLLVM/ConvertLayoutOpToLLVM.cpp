@@ -174,8 +174,8 @@ private:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
-    auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
-    auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
+    auto srcShapePerCTATile = getShapePerCTATile(srcLayout);
+    auto dstShapePerCTATile = getShapePerCTATile(dstLayout);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
     for (unsigned d = 0; d < rank; ++d) {
