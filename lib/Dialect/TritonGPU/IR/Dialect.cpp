@@ -544,9 +544,10 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
-LinearLayout ensureLayoutNotLargerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
+LinearLayout
+ensureLayoutNotLargerThan(const LinearLayout &layout,
+                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
+                          bool broadcastRegisters) {
   assert(shape.size() == layout.getNumOutDims());
   if (shape.empty()) {
     return layout;
@@ -554,6 +555,10 @@ LinearLayout ensureLayoutNotLargerThan(
   MLIRContext *ctx = shape.begin()->first.getContext();
 
   auto bases = layout.getBases();
+
+  auto kRegister = StringAttr::get(ctx, "register");
+  std::set<int32_t> broadcastedDims;
+
   for (auto outDim : llvm::enumerate(layout.getOutDimNames())) {
     auto outDimName = outDim.value();
     int32_t actualSize = layout.getOutDimSize(outDimName);
@@ -581,10 +586,26 @@ LinearLayout ensureLayoutNotLargerThan(
       if (actualSize <= desiredSize) {
         break;
       }
-      bases[inDimName][basisIdx][outDim.index()] = 0;
+      if (!broadcastRegisters && inDimName == kRegister) {
+        broadcastedDims.insert(basisIdx);
+      } else {
+        bases[inDimName][basisIdx][outDim.index()] = 0;
+      }
       actualSize >>= 1;
     }
   }
+  if (!broadcastRegisters) {
+    // Remove broadcasted registers
+    std::vector<std::vector<int32_t>> newBasesRegister;
+    for (auto [idx, basis] : llvm::enumerate(bases[kRegister])) {
+      // Remove if it's broadcasted
+      if (broadcastedDims.find(idx) == broadcastedDims.end()) {
+        newBasesRegister.push_back(std::move(basis));
+      }
+    }
+    bases[kRegister] = std::move(newBasesRegister);
+  }
+
   return LinearLayout(std::move(bases),
                       llvm::to_vector(layout.getOutDimNames()));
 }
@@ -1586,15 +1607,18 @@ LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   }
   ll = ll.transposeOuts(permutedDims);
   ll = ensureLayoutNotSmallerThan(ll, namedShape);
-  ll = ensureLayoutNotLargerThan(ll, namedShape);
+  ll = ensureLayoutNotLargerThan(ll, namedShape, /*broadcastRegisters=*/false);
   ll = ll.transposeOuts(canonicalDims);
   return ll;
 }
 
 SmallVector<unsigned>
 LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type) const {
-  // Broadcast to the shape and then count registers
-  auto ll = *toLinearLayout(shape);
+  // We can relax this assert by calling toLinearLayout rather than
+  // getLinearLayout
+  SmallVector<int32_t> shapeVec(shape.begin(), shape.end());
+  assert(shapeVec == llvm::to_vector(getLinearLayout().getOutDimSizes()));
+  auto ll = getLinearLayout();
   return basesPerDim(ll, StringAttr::get(getContext(), "register"));
 }
 
