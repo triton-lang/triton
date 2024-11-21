@@ -481,6 +481,7 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
 inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
@@ -492,6 +493,52 @@ inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
   }
   return ret;
 }
+
+template <typename T>
+SmallVector<T> insertValue(ArrayRef<T> vec, unsigned index, T value) {
+  SmallVector<T> res(vec.begin(), vec.end());
+  res.insert(res.begin() + index, value);
+  return res;
+}
+template <typename T>
+SmallVector<T> insertValue(const SmallVector<T> &vec, unsigned index, T value) {
+  SmallVector<T> res(vec.begin(), vec.end());
+  res.insert(res.begin() + index, value);
+  return res;
+}
+
+/// Extend 2d shared object to 3d.
+///
+/// If tensor has 3 dimensions, returns original shared object.
+/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
+///
+/// This Function is used to simplify processing of 2d and 3d dot operands,
+/// particularly in the conversion of local_load operation.
+///
+/// \param rewriter
+/// \param loc
+/// \param smemObj
+/// \param shape shape of a tensor represented by smemObj
+/// \returns shared object describing 3d tensor
+SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape);
+
+CTALayoutAttr getExpandedCTALayout(MLIRContext *ctx,
+                                   CTALayoutAttr ctaLayoutAttr);
+
+/// Expand layout of dot operands and dot results to 3d variant.
+///
+/// If given layout describes 3d tensor, return it without change.
+/// If given layout describes 2d tensor, create new layout
+/// describing 3d tensor by adding batch = 1.
+Attribute getExpandedEncoding(Attribute encoding);
+
+/// Expand type of dot operands to 3d variant. If the given type is a 3d tensor,
+/// return it without change. If it is a 2d tensor, create a new type that
+/// describes 3d tensor with expanded shape and layout.
+MemDescType getExpandedDesc(MemDescType descTy);
 
 // -----------------------------------------------------------------------
 // Blocked layout indices
