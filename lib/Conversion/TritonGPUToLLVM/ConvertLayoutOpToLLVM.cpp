@@ -16,7 +16,6 @@
 
 namespace {
 
-using ::mlir::isLayoutMmaV1;
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -56,8 +55,7 @@ private:
     return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
                srcLayout) &&
            isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-               dstLayout) &&
-           !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
+               dstLayout);
   }
 
   // shared memory rd/st for blocked or mma layout with data padding
@@ -176,8 +174,8 @@ private:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
-    auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
-    auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
+    auto srcShapePerCTATile = getShapePerCTATile(srcLayout);
+    auto dstShapePerCTATile = getShapePerCTATile(dstLayout);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
     for (unsigned d = 0; d < rank; ++d) {
@@ -373,31 +371,33 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    // TODO (Keren): Currently, we handle general mma/blocked/slice ->
-    // mma/blocked/slice conversions.
-    // The following tasks must be completed before we can remove the layoutIsOK
-    // check:
-    // 1. Support for AMD's MFMA and WMMA
+    // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
+    // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
+    // completed before we can remove the layoutIsOK check:
+    // 1. Support for AMD's WMMA
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
-      if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-        if (useLegacyMMAConversion) {
-          return false;
-        }
-        return true;
+      if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(layout)) {
+        return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        if (auto nvidiaMma =
-                dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
-          if (useLegacyMMAConversion) {
-            return false;
-          }
+        auto parent = dotOperand.getParent();
+        if (isa<MmaEncodingTrait>(parent) && useLegacyMMAConversion) {
+          return false;
+        }
+        if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
           if (nvidiaMma.isAmpere()) {
             return true;
           }
         }
+        if (isa<AMDMfmaEncodingAttr>(parent)) {
+          return true;
+        }
         return false;
       }
       if (isa<BlockedEncodingAttr>(layout)) {
+        return true;
+      }
+      if (isa<LinearEncodingAttr>(layout)) {
         return true;
       }
       if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {

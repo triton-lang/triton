@@ -168,17 +168,54 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+// CHECK: #[[LINEAR:.+]] = #triton_gpu.linear<{{.*}}>
 module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: dot_scaled
+  // CHECK: dot_scaled
   tt.func @dot_scaled(
     %a: tensor<128x32xi8, #blocked2>,
     %scale: tensor<128x2xi8, #blocked1>,
     %b: tensor<64x128xbf16, #blocked>)
     -> tensor<128x128xf32, #blocked> {
-    // CHECK: triton_gpu.upcast_mxfp
+    // CHECK: triton_gpu.convert_layout {{.*}} : tensor<128x2xi8, #blocked1> -> tensor<128x2xi8, #[[LINEAR]]>
+    // CHECK: triton_gpu.upcast_mxfp {{.*}}, {{.*}} fp_type = e2m1 : tensor<128x32xi8, #triton_gpu.dot_op<{{.*}}>>, tensor<128x2xi8, #[[LINEAR]]> -> tensor<128x64xbf16, #triton_gpu.dot_op<{{.*}}>>
     // CHECK: tt.dot
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %result = tt.dot_scaled %a, %scale, %b, %cst lhs = e2m1 rhs = bf16 : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xbf16, #blocked> -> tensor<128x128xf32, #blocked>
+    %result = tt.dot_scaled %a scale %scale, %b, %cst lhs = e2m1 rhs = bf16 : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xbf16, #blocked> -> tensor<128x128xf32, #blocked>
     tt.return %result : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: dot_scale_transpose
+  tt.func public @dot_scale_transpose(%arg0: tensor<128x64xf8E4M3FN, #blocked>, %arg1: tensor<32x32xi8, #blocked1>, %arg2: tensor<32x2xi8, #blocked2>, %arg3: tensor<128x32x!tt.ptr<bf16>, #blocked3>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #blocked1>
+    %c1_i32 = arith.constant 1 : i32
+    %c100_i32 = arith.constant 100 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %cst_0 = arith.constant dense<32> : tensor<32x1xi32, #blocked3>
+    %cst_1 = arith.constant dense<2> : tensor<32x1xi32, #blocked2>
+    // CHECK: scf.for
+    %0 = scf.for %arg4 = %c0_i32 to %c100_i32 step %c1_i32 iter_args(%arg5 = %cst) -> (tensor<128x32xf32, #blocked1>)  : i32 {
+      // CHECK-DAG: tt.trans %{{.*}} {order = array<i32: 1, 0>} : tensor<128x64xf8E4M3FN, #{{.*}}> -> tensor<64x128xf8E4M3FN, #{{.*}}>
+      // CHECK-DAG: tt.trans %a{{.*}} {order = array<i32: 1, 0>} : tensor<32x32xi8, #{{.*}}> -> tensor<32x32xi8, #{{.*}}>
+      %3 = tt.dot_scaled %arg0, %arg1 scale %arg2, %arg5 lhs = e4m3 rhs = e2m1 : tensor<128x64xf8E4M3FN, #blocked> * tensor<32x32xi8, #blocked1>, tensor<32x2xi8, #blocked2> -> tensor<128x32xf32, #blocked1>
+      // CHECK: tt.dot
+      // CHECK-NOT: tt.trans
+      // CHECK: scf.yield
+      scf.yield %3 : tensor<128x32xf32, #blocked1>
+    }
+    // CHECK: arith.truncf
+    // CHECK: triton_gpu.convert_layout
+    // CHECK: tt.trans
+    %1 = arith.truncf %0 : tensor<128x32xf32, #blocked1> to tensor<128x32xbf16, #blocked1>
+    %2 = triton_gpu.convert_layout %1 : tensor<128x32xbf16, #blocked1> -> tensor<128x32xbf16, #blocked3>
+    tt.store %arg3, %2 : tensor<128x32x!tt.ptr<bf16>, #blocked3>
+    tt.return
   }
 }

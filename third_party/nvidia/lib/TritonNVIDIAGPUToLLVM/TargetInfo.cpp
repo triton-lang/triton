@@ -12,8 +12,6 @@ using namespace mlir;
 
 using mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
 namespace {
 // declare vprintf(i8*, i8*) as external function
 LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
@@ -93,19 +91,11 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
                                                      int computeCapability) {
   if (computeCapability < 80)
     return std::nullopt;
-  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
-    return std::nullopt;
-  Block *block = &(*op.getCombineOp().begin());
-  Operation *yield = block->getTerminator();
-  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
-  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-      reduceOp->getNumResults() != 1)
+  Operation *reduceOp = op.getSingleCombiner();
+  if (!reduceOp)
     return std::nullopt;
   auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);
   if (!intType || intType.getWidth() > 32)
-    return std::nullopt;
-  if (reduceOp->getOperand(0) != block->getArgument(0) ||
-      reduceOp->getOperand(1) != block->getArgument(1))
     return std::nullopt;
   if (isa<arith::AddIOp>(reduceOp))
     return NVVM::ReduxKind::ADD;

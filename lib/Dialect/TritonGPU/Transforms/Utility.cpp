@@ -19,6 +19,7 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+namespace ttg = mlir::triton::gpu;
 namespace mlir {
 
 using namespace triton;
@@ -378,13 +379,13 @@ inferTransOpDstEncoding(Attribute srcEnc, ArrayRef<int32_t> order) {
   return std::nullopt;
 }
 
-static std::optional<Attribute> inferDstEncoding(triton::TransOp op,
-                                                 Attribute encoding) {
+static std::optional<Attribute>
+inferDstEncoding(triton::TransposeOpInterface op, Attribute encoding) {
   return inferTransOpDstEncoding(encoding, op.getOrder());
 }
 
-static std::optional<Attribute> inferSrcEncoding(triton::TransOp op,
-                                                 Attribute encoding) {
+static std::optional<Attribute>
+inferSrcEncoding(triton::TransposeOpInterface op, Attribute encoding) {
   // We want to solve for srcEnc in
   //   transpose(srcEnc, order) -> dstEnc.
   // Given the identity
@@ -467,7 +468,7 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(join, encoding);
   if (auto split = dyn_cast<triton::SplitOp>(op))
     return inferSrcEncoding(split, encoding);
-  if (auto trans = dyn_cast<triton::TransOp>(op))
+  if (auto trans = dyn_cast<triton::TransposeOpInterface>(op))
     return inferSrcEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferSrcEncoding(reshape, encoding);
@@ -494,7 +495,7 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(join, encoding);
   if (auto split = dyn_cast<triton::SplitOp>(op))
     return inferDstEncoding(split, encoding);
-  if (auto trans = dyn_cast<triton::TransOp>(op))
+  if (auto trans = dyn_cast<triton::TransposeOpInterface>(op))
     return inferDstEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferDstEncoding(reshape, encoding);
@@ -928,6 +929,90 @@ int getNVIDIAComputeCapability(Operation *module) {
          "invalid compute capability string in target attribute");
 
   return computeCapability;
+}
+
+// If all the transitive uses of the given value have are used by a convert to
+// the same dot operand encoding, return the shared encoding that needs to be
+// used to be compatible with users' layouts. If there are imcompatible shared
+// encodings, set incompatible to true.
+std::optional<ttg::SharedEncodingAttr>
+getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
+  ttg::SharedEncodingAttr attr;
+  incompatible = false;
+  for (Operation *user : val.getUsers()) {
+    ttg::SharedEncodingAttr tempAttr;
+    if (user->getNumResults() != 1)
+      return std::nullopt;
+    if (auto memDesc =
+            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
+      // First time we find a shared encoding in the chain, save it and try to
+      // use it if it is compatible with the other users.
+      tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
+      if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0), incompatible)
+               .has_value())
+        return std::nullopt;
+    } else {
+      if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
+        return std::nullopt;
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
+          cast<TensorOrMemDesc>(user->getResult(0).getType()).getEncoding());
+      if (!dotOpEnc)
+        return std::nullopt;
+      auto srcTy = cast<TensorOrMemDesc>(val.getType());
+      auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
+      auto order = ttg::getOrder(srcTy.getEncoding());
+      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+      tempAttr = ttg::SharedEncodingAttr::get(
+          val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
+          bitWidth, /*needTrans=*/false);
+    }
+    // Check that the shared encodings needed by the users are compatible.
+    if (attr != nullptr && attr != tempAttr) {
+      incompatible = true;
+      return std::nullopt;
+    }
+    attr = tempAttr;
+  }
+  return attr;
+}
+
+MMALoadType getMMALoadType(Operation *loadOp) {
+  if (!loadOp->hasOneUse())
+    return MMALoadType::DoNotPipeline;
+
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin())) {
+    auto sharedEnc =
+        cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
+
+    if (!sharedEnc.getHasLeadingOffset())
+      return MMALoadType::DoNotPipeline;
+
+    // MMA V3 case.
+    auto newOrder = sharedEnc.getOrder();
+    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+    auto oldOrder = ttg::getOrder(ty.getEncoding());
+
+    // The operand of MMAv3 is in SharedEncoding and its order should not
+    // be changed after FuseTranspositions Pass. So we only pipeline the
+    // load if the order of the loaded BlockedEncoding is the same as the
+    // order of the SharedEncoding it is converted to.
+    return oldOrder == newOrder ? MMALoadType::SharedV3
+                                : MMALoadType::DoNotPipeline;
+  } else if (auto cvt =
+                 dyn_cast<ttg::ConvertLayoutOp>(*loadOp->getUsers().begin())) {
+    auto resTy = dyn_cast<RankedTensorType>(cvt->getResultTypes()[0]);
+    if (!resTy) {
+      return MMALoadType::DoNotPipeline;
+    }
+
+    if (isa<ttg::DotOperandEncodingAttr>(resTy.getEncoding())) {
+      return MMALoadType::Registers;
+    }
+
+    return MMALoadType::DoNotPipeline;
+  } else {
+    return MMALoadType::DoNotPipeline;
+  }
 }
 
 namespace {

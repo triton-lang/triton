@@ -53,8 +53,6 @@ public:
 
     auto dotEncoding =
         cast<DotOperandEncodingAttr>(op.getSrc().getType().getEncoding());
-    if (dotEncoding.getOpIdx() == 1)
-      return rewriter.notifyMatchFailure(op, "NYI: dot RHS");
     auto mfmaEncoding = dyn_cast<AMDMfmaEncodingAttr>(dotEncoding.getParent());
     if (!mfmaEncoding)
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma dot operand");

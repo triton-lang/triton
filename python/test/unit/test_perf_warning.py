@@ -174,4 +174,4 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
 
     _, err = capfd.readouterr()
 
-    assert "operation scheduled before its operands" in err, "expect swp op remark"
+    assert "operation scheduled before its operands" not in err, "expect swp op remark"

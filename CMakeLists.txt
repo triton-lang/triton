@@ -44,6 +44,13 @@ if(TRITON_BUILD_WITH_CCACHE)
   endif()
 endif()
 
+set(TRITON_PARALLEL_LINK_JOBS "" CACHE STRING
+  "Define the maximum number of concurrent link jobs (Ninja only).")
+if (TRITON_PARALLEL_LINK_JOBS)
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS link_job_pool=${TRITON_PARALLEL_LINK_JOBS})
+    set(CMAKE_JOB_POOL_LINK link_job_pool)
+endif()
+
 
 # Ensure Python3 vars are set correctly
 # used conditionally in this file and by lit tests

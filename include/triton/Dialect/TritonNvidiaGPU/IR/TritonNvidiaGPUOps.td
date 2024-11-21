@@ -185,6 +185,26 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<Memo
     let assemblyFormat = "$alloc `,` $phase attr-dict `:` type($alloc)";
 }
 
+def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
+  let summary = "Convert tensor descriptor to pointer to tma descriptor";
+
+  let arguments = (ins TT_TensorDescType:$desc);
+  let results = (outs TT_Ptr:$ptr);
+
+  let assemblyFormat = [{
+    $desc attr-dict `:` qualified(type($desc)) `to` qualified(type($ptr))
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$desc), [{
+      auto ptrTy = triton::PointerType::get($_builder.getI8Type(), 1);
+      build($_builder, $_state, ptrTy, desc);
+    }]>
+  ];
+
+  let hasCanonicalizeMethod = 1;
+}
+
 
 def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";

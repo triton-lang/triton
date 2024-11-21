@@ -81,7 +81,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #shared0 = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
-  tt.func public @tma_load(%arg0: !tt.ptr<i8>, %arg1: i32) -> tensor<128x64xf16, #blocked0> {
+  tt.func public @tma_load(%arg0: !tt.tensordesc<tensor<128x64xf16>>, %arg1: i32) -> tensor<128x64xf16, #blocked0> {
 		// CHECK-LABEL: tma_load
 		// CHECK: local_dealloc
 		// CHECK-NEXT: local_alloc
@@ -91,7 +91,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   	%cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>
   	%alloc = triton_gpu.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !tt.memdesc<128x64xi64, #shared0, #triton_gpu.shared_memory, mutable>
   	triton_gpu.local_dealloc %alloc : !tt.memdesc<128x64xi64, #shared0, #triton_gpu.shared_memory, mutable>
-    %l = tt.experimental_descriptor_load %arg0[%arg1, %arg1] : !tt.ptr<i8> -> tensor<128x64xf16, #blocked0>
+    %l = tt.experimental_descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<128x64xf16>> -> tensor<128x64xf16, #blocked0>
     tt.return %l : tensor<128x64xf16, #blocked0>
   }
 }
@@ -106,11 +106,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 //       CHECK-NEXT: triton_gpu.local_dealloc
 //       CHECK-NEXT: gpu.barrier
 //       CHECK-NEXT: triton_gpu.local_alloc
-  tt.func public @tma_store(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked0>) {
+  tt.func public @tma_store(%arg0: !tt.tensordesc<tensor<128x256xf32>>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked0>) {
   	%cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>
   	%alloc = triton_gpu.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !tt.memdesc<128x64xi64, #shared0, #triton_gpu.shared_memory, mutable>
   	triton_gpu.local_dealloc %alloc : !tt.memdesc<128x64xi64, #shared0, #triton_gpu.shared_memory, mutable>
-    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.ptr<i8>, tensor<128x256xf32, #blocked0>
+    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<tensor<128x256xf32>>, tensor<128x256xf32, #blocked0>
     tt.return
   }
 }

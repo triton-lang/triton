@@ -59,15 +59,10 @@ public:
     Type retType = getTypeConverter()->convertType(op.getType());
     auto retShapedType = cast<ShapedType>(retType);
     auto value = dyn_cast<DenseElementsAttr>(adaptor.getValue());
-    if (dyn_cast<RankedTensorType>(retShapedType)) {
-      assert(value);
-      if (value.getElementType().isInteger(1) && value.isSplat())
-        // Workaround until https://reviews.llvm.org/D133743 is included.
-        value =
-            DenseElementsAttr::get(retShapedType, value.getSplatValue<bool>());
-      else
-        // This is a hack. We just want to add encoding
-        value = value.reshape(retShapedType);
+    if (isa<RankedTensorType>(retShapedType)) {
+      assert(value && "expected a dense elements attribute");
+      // This is a hack. We just want to add encoding.
+      value = value.reshape(retShapedType);
     }
     addNamedAttrs(rewriter.replaceOpWithNewOp<arith::ConstantOp>(
                       op, retShapedType, value),
