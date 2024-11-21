@@ -533,7 +533,8 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy = cast<TensorOrMemDesc>(value.getType()).getElementType();
+  auto elemTy =
+      cast<triton::gpu::TensorOrMemDesc>(value.getType()).getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
