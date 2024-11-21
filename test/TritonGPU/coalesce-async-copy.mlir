@@ -17,4 +17,3 @@ tt.func @async_copy_i8(%input: tensor<64x16x!tt.ptr<i8>, #blocked>,
   tt.return
 }
 }
-

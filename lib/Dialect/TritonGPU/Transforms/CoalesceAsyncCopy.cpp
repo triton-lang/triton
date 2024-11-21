@@ -1,10 +1,10 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include <memory>
 
@@ -56,8 +56,9 @@ struct ClipAsyncCopySizePerThread
     // smaller when lowering, depending on contiguity and mask alignment
     // (see AsyncCopyGlobalToLocalOpConversion)
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
-    auto regToSharedLayout = getRegToSharedLayout(rewriter.getContext(),
-        srcTy.getShape(), blockEnc, sharedEnc, elemBitWidth);
+    auto regToSharedLayout =
+        getRegToSharedLayout(rewriter.getContext(), srcTy.getShape(), blockEnc,
+                             sharedEnc, elemBitWidth);
     auto copyContigSize = regToSharedLayout->getNumConsecutiveInOut();
 
     // obtain block sizePerThread along contig dim
@@ -65,7 +66,8 @@ struct ClipAsyncCopySizePerThread
     auto blockContigSize = sizePerThread[blockEnc.getOrder()[0]];
 
     if (blockContigSize <= copyContigSize)
-      return rewriter.notifyMatchFailure(copyOp,
+      return rewriter.notifyMatchFailure(
+          copyOp,
           "blocked sizePerThread along contiguous dim must be greater than the "
           "max contiguous copy size ");
 
@@ -77,8 +79,7 @@ struct ClipAsyncCopySizePerThread
     int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     auto newBlockEnc = BlockedEncodingAttr::get(
         copyOp.getContext(), srcTy.getShape(), sizePerThread,
-        blockEnc.getOrder(), numWarps, threadsPerWarp,
-        blockEnc.getCTALayout());
+        blockEnc.getOrder(), numWarps, threadsPerWarp, blockEnc.getCTALayout());
 
     // insert cvt's after src, mask, and other
     auto convertBlockLayout = [&](Value src, BlockedEncodingAttr enc) {
@@ -105,8 +106,7 @@ struct ClipAsyncCopySizePerThread
 };
 
 class CoalesceAsyncCopyPass
-    : public impl::TritonGPUCoalesceAsyncCopyBase<
-          CoalesceAsyncCopyPass> {
+    : public impl::TritonGPUCoalesceAsyncCopyBase<CoalesceAsyncCopyPass> {
 public:
   void runOnOperation() override {
     ModuleOp m = getOperation();

@@ -158,15 +158,16 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return ret;
 }
 
-std::optional<LinearLayout> getRegToSharedLayout(MLIRContext* ctx,
-    ArrayRef<int64_t> shape, Attribute srcEnc, Attribute dstEnc, int elemBitWidth) {
+std::optional<LinearLayout>
+getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
+                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth) {
   StringAttr kBlock = str_attr("block");
   int rank = shape.size();
 
   std::optional<LinearLayout> regLayout =
       triton::gpu::toLinearLayout(shape, srcEnc);
-  std::optional<LinearLayout> sharedLayout = triton::gpu::toLinearLayout(
-      shape, dstEnc, elemBitWidth);
+  std::optional<LinearLayout> sharedLayout =
+      triton::gpu::toLinearLayout(shape, dstEnc, elemBitWidth);
   if (!regLayout.has_value() || !sharedLayout.has_value()) {
     return std::nullopt;
   }
@@ -175,8 +176,7 @@ std::optional<LinearLayout> getRegToSharedLayout(MLIRContext* ctx,
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
   // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
   // shmem strides.  (The offsetX's appear in minor-to-major order.)
-  auto sharedLegacy =
-      cast<triton::gpu::SharedEncodingAttr>(dstEnc);
+  auto sharedLegacy = cast<triton::gpu::SharedEncodingAttr>(dstEnc);
   SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
   for (int i = 0; i < rank; i++) {
     int dim = sharedOrder[i];
@@ -210,8 +210,9 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
 
-  auto regToSharedLayout = getRegToSharedLayout(ctx, shape, registerTy.getEncoding(),
-      sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
+  auto regToSharedLayout = getRegToSharedLayout(
+      ctx, shape, registerTy.getEncoding(), sharedTy.getEncoding(),
+      elemLlvmTy.getIntOrFloatBitWidth());
   if (!regToSharedLayout.has_value())
     return false;
 
