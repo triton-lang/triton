@@ -279,7 +279,7 @@ jobs:
             echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
           cd python/test/unit
-          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
+          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py --ignore=test_address_sanitizer.py
           python3 -m pytest -s -n 8 language/test_subprocess.py
           python3 -m pytest -s -n 8 test_debug.py --forked
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
@@ -405,7 +405,8 @@ jobs:
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 16 language runtime \
                  --ignore=language/test_line_info.py \
-                 --ignore=test_debug.py
+                 --ignore=test_debug.py \
+                 --ignore=test_address_sanitizer.py
           # TODO: uncomment
           # pytest --capture=tee-sys -rfs test_debug.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \

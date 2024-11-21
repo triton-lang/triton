@@ -26,7 +26,6 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
-#include <iostream>
 #include <memory>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
