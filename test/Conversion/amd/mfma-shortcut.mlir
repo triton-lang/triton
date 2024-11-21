@@ -42,28 +42,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[val3:%.*]] = llvm.extractvalue %arg0[3]
     // CHECK: [[val7:%.*]] = llvm.extractvalue %arg0[7]
 
-    // CHECK-DAG: [[threadId:%.*]] = rocdl.workitem.id.x
-    // CHECK-DAG: [[warpSize:%.*]] = llvm.mlir.constant(64 : i32)
-    // CHECK: [[laneId:%.*]] = llvm.urem [[threadId]], [[warpSize]]
-    // CHECK: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
+    // CHECK-DAG: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
+    // CHECK-DAG: [[c64:%.*]] = llvm.mlir.constant(64 : i32)
+
+    // CHECK: [[threadId:%.*]] = rocdl.workitem.id.x
+    // CHECK: [[laneId:%.*]] = llvm.urem [[threadId]], [[c64]]
     // CHECK: [[mask0:%.*]] = llvm.icmp "slt" [[laneId]], [[c32]]
 
-    // CHECK-DAG: [[c16:%.*]] = llvm.mlir.constant(16 : i32)
-    // CHECK-DAG: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
-    // CHECK-DAG: [[laneIdRem:%.*]] = llvm.urem [[laneId]], [[c32]]
-    // CHECK: [[mask1:%.*]] = llvm.icmp "slt" [[laneIdRem]], [[c16]]
-
-    // CHECK: [[c16:%.*]] = llvm.mlir.constant(16 : i32)
-    // CHECK: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c16]]
-    // CHECK: [[addr16:%.*]] = llvm.urem [[shflLaneId]], [[warpSize]]
-
-    // CHECK: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
     // CHECK: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c32]]
-    // CHECK: [[addr32:%.*]] = llvm.urem [[shflLaneId]], [[warpSize]]
-
-    // CHECK: [[c48:%.*]] = llvm.mlir.constant(48 : i32)
-    // CHECK: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c48]]
-    // CHECK: [[addr48:%.*]] = llvm.urem [[shflLaneId]], [[warpSize]]
+    // CHECK: [[addr32:%.*]] = llvm.urem [[shflLaneId]], [[c64]]
 
     // CHECK: [[vec0:%.*]] = llvm.insertelement [[val3]], {{.*}} : vector<4xi8>
     // CHECK: [[vec1:%.*]] = llvm.insertelement [[val7]], {{.*}} : vector<4xi8>
@@ -134,28 +121,26 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[val3:%.*]] = llvm.extractvalue %arg0[3]
     // CHECK: [[val7:%.*]] = llvm.extractvalue %arg0[7]
 
-    // CHECK-DAG: [[threadId:%.*]] = rocdl.workitem.id.x
-    // CHECK-DAG: [[warpSize:%.*]] = llvm.mlir.constant(64 : i32)
-    // CHECK: [[laneId:%.*]] = llvm.urem [[threadId]], [[warpSize]]
-    // CHECK: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
-    // CHECK: [[mask0:%.*]] = llvm.icmp "slt" [[laneId]], [[c32]]
-
     // CHECK-DAG: [[c16:%.*]] = llvm.mlir.constant(16 : i32)
     // CHECK-DAG: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
-    // CHECK-DAG: [[laneIdRem:%.*]] = llvm.urem [[laneId]], [[c32]]
+    // CHECK-DAG: [[c48:%.*]] = llvm.mlir.constant(48 : i32)
+    // CHECK-DAG: [[c64:%.*]] = llvm.mlir.constant(64 : i32)
+
+    // CHECK: [[threadId:%.*]] = rocdl.workitem.id.x
+    // CHECK: [[laneId:%.*]] = llvm.urem [[threadId]], [[c64]]
+    // CHECK: [[mask0:%.*]] = llvm.icmp "slt" [[laneId]], [[c32]]
+
+    // CHECK: [[laneIdRem:%.*]] = llvm.urem [[laneId]], [[c32]]
     // CHECK: [[mask1:%.*]] = llvm.icmp "slt" [[laneIdRem]], [[c16]]
 
-    // CHECK: [[c16:%.*]] = llvm.mlir.constant(16 : i32)
     // CHECK: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c16]]
-    // CHECK: [[addr16:%.*]] = llvm.urem [[shflLaneId]], [[warpSize]]
+    // CHECK: [[addr16:%.*]] = llvm.urem [[shflLaneId]], [[c64]]
 
-    // CHECK: [[c32:%.*]] = llvm.mlir.constant(32 : i32)
     // CHECK: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c32]]
-    // CHECK: [[addr32:%.*]] = llvm.urem [[shflLaneId]], [[warpSize]]
+    // CHECK: [[addr32:%.*]] = llvm.urem [[shflLaneId]], [[c64]]
 
-    // CHECK: [[c48:%.*]] = llvm.mlir.constant(48 : i32)
     // CHECK: [[shflLaneId:%.*]] = llvm.add [[laneId]], [[c48]]
-    // CHECK: [[addr48:%.*]] = llvm.urem [[shflLaneId]], [[warpSize]]
+    // CHECK: [[addr48:%.*]] = llvm.urem [[shflLaneId]], [[c64]]
 
     // CHECK: [[vec0:%.*]] = llvm.insertelement [[val3]], {{.*}} : vector<4xi8>
     // CHECK: [[vec1:%.*]] = llvm.insertelement [[val7]], {{.*}} : vector<4xi8>

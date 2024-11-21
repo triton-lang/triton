@@ -141,24 +141,29 @@ public:
     if (inVals.empty() || inVals.size() % 8 != 0)
       return failure();
 
-    Value threadId = tid_val();
     auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcType.getEncoding());
     assert((mfmaLayout.getMDim() == 16 || mfmaLayout.getMDim() == 32) &&
            "Expected MFMA size 16 or 32");
     assert(triton::gpu::getWarpSize(mfmaLayout) == 64 &&
            "Expected warp size 64 for MFMA");
-    Value warpSize = i32_val(64);
-    Value laneId = urem(threadId, warpSize);
 
     auto elemTy = int_ty(8);
     auto vecTy = vec_ty(elemTy, 4);
 
-    Value mask0 = icmp_slt(laneId, i32_val(32));
-    Value mask1 = icmp_slt(urem(laneId, i32_val(32)), i32_val(16));
+    Value c16 = i32_val(16);
+    Value c32 = i32_val(32);
+    Value c48 = i32_val(48);
+    Value c64 = i32_val(64);
 
-    Value addrShift16 = urem(add(laneId, i32_val(16)), warpSize);
-    Value addrShift32 = urem(add(laneId, i32_val(32)), warpSize);
-    Value addrShift48 = urem(add(laneId, i32_val(48)), warpSize);
+    Value threadId = tid_val();
+    Value laneId = urem(threadId, c64);
+
+    Value mask0 = icmp_slt(laneId, c32);
+    Value mask1 = icmp_slt(urem(laneId, c32), c16);
+
+    Value addrShift16 = urem(add(laneId, c16), c64);
+    Value addrShift32 = urem(add(laneId, c32), c64);
+    Value addrShift48 = urem(add(laneId, c48), c64);
 
     SmallVector<Value> outVals;
     for (size_t startIdx = 0; startIdx < inVals.size(); startIdx += 8) {
