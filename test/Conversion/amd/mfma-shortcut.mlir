@@ -7,6 +7,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   tt.func public @shortcut_mfma16(%arg0: tensor<16x16xf16, #mfma>) {
     // CHECK-NOT: store
     // CHECK-NOT: load
+    // CHECK: llvm.return
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf16, #mfma> -> tensor<16x16xf16, #dotop>
     tt.return
   }
@@ -21,6 +22,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   tt.func public @no_shortcut_mfma16(%arg0: tensor<16x16xf16, #mfma>) {
     // CHECK: store
     // CHECK: load
+    // CHECK: llvm.return
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf16, #mfma> -> tensor<16x16xf16, #dotop>
     tt.return
   }

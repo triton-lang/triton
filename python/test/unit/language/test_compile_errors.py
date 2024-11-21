@@ -7,22 +7,7 @@ import triton
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
-
-
-def is_interpreter():
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
-def is_cuda():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "hip"
-
-
-def is_on_mi300():
-    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942')
+from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300
 
 
 def test_err_undefined_variable():
@@ -150,7 +135,8 @@ def test_err_in_builtin():
     try:
         inner = e.value.__cause__
         outer = e.value
-        assert "/core.py" in '\n'.join(traceback.format_tb(inner.__traceback__)), "error should point inside core.py"
+        assert f"{os.sep}core.py" in '\n'.join(traceback.format_tb(
+            inner.__traceback__)), "error should point inside core.py"
 
         assert "at 2:4:" in str(outer), "error should point to expand_dims call"
         assert "<source unavailable>" not in str(outer)
@@ -366,8 +352,8 @@ def test_fp8_support(dtype):
         if cc >= (8, 9):
             supported_dtypes.append(tl.float8e4nv)
     elif is_hip():
-        if is_on_mi300():
-            supported_dtypes += [tl.float8e4b8, tl.float8e5b16]
+        if is_hip_mi300():
+            supported_dtypes += [tl.float8e4nv, tl.float8e4b8, tl.float8e5b16]
     elif is_interpreter():
         supported_dtypes = [tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15]
 

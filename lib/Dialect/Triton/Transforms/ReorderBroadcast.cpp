@@ -206,18 +206,6 @@ struct MoveBroadcastAfterElementwisePattern
   }
 };
 
-template <typename OpType>
-class CanonicalizePattern : public OpRewritePattern<OpType> {
-public:
-  explicit CanonicalizePattern(MLIRContext *context)
-      : OpRewritePattern<OpType>(context) {}
-
-  LogicalResult matchAndRewrite(OpType op,
-                                PatternRewriter &rewriter) const override {
-    return OpType::canonicalize(op, rewriter);
-  }
-};
-
 class ReorderBroadcastPass
     : public ::impl::TritonReorderBroadcastBase<ReorderBroadcastPass> {
 public:
@@ -226,8 +214,8 @@ public:
     RewritePatternSet patterns(context);
     ModuleOp m = getOperation();
 
-    patterns.add<CanonicalizePattern<BroadcastOp>>(context);
-    patterns.add<CanonicalizePattern<ExpandDimsOp>>(context);
+    BroadcastOp::getCanonicalizationPatterns(patterns, context);
+    ExpandDimsOp::getCanonicalizationPatterns(patterns, context);
     // elementwise(broadcast(a)) => broadcast(elementwise(a))
     patterns.add<MoveBroadcastAfterElementwisePattern>(context);
     // elementwise(splat(a), splat(b), ...) => splat(elementwise(a, b, ...))

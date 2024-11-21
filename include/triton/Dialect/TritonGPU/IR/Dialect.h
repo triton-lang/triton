@@ -76,9 +76,8 @@ SmallVector<unsigned>
 getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 
 // Returns the dimensions of the tensor from minor (fast-varying) to
-// major (slow-varying). For blocked, mma, and dotOperand layouts,
-// though the elements are in registers, the order refers to memory
-// layout of the original tensor in global memory.
+// major (slow-varying). For distributed layouts, this represents
+// the order of the elements within a thread.
 // For shared Layout, the order refers to which dimension of the original tensor
 // is contiguous in shared memory.
 SmallVector<unsigned> getOrder(Attribute layout);
@@ -117,9 +116,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  * (3) In the implementation of emitIndices, ShapePerCTATile will
  *     be replicated or wrapped to fit ShapePerCTA.
  */
-SmallVector<unsigned>
-getShapePerCTATile(Attribute layout,
-                   ArrayRef<int64_t> tensorShape = ArrayRef<int64_t>());
+SmallVector<unsigned> getShapePerCTATile(Attribute layout);
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
@@ -129,6 +126,17 @@ SmallVector<int64_t> getShapePerCTA(Type type);
 unsigned getNumWarpsPerCTA(Attribute layout);
 
 unsigned getNumCTAs(Attribute layout);
+
+// Return the order that represents that the batch is in row-major or
+// column-major order for a batch of matrices of shape [*, m, n] with
+// len(shape) == rank.
+SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
+
+// Return the order that represents that the dot operand is in kMajor
+// (contiguous in the inner dimension) or it's contiguous on the outer
+// dimension.
+SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
+                                            bool kMajor);
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
@@ -140,6 +148,71 @@ bool isExpensiveView(Type srcType, Type dstType);
 triton::gpu::BlockedEncodingAttr
 getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
                           int numWarps, int threadsPerWarp, int numCTAs);
+
+// For each output dimension d, ensure that the layout's output size (i.e., its
+// codomain) does not exceed shape[d]. Do this without changing the size of the
+// layout's inputs (i.e., leave its domain unchanged).
+//
+// This function is invariant to the order of the layout's input and output
+// dimensions.
+//
+// We achieve this by setting the largest value in each output dimension d to 0
+// because bases that map to a location larger than shape[d]
+// effectively duplicate along that dimension.  For example, consider a layout
+// with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
+// shrink the output dimension size to 8:
+//
+//   L(register=1) = 8
+//   L(register=2) = 4
+//   L(register=4) = 1
+//   L(lane=1) = 2
+//   L(lane=2) = 16
+//
+// In the first step, we shrink the output dimension size to 16 by setting
+// L(lane=2) to 0:
+//
+//   L(register=1) = 8
+//   L(register=2) = 4
+//   L(register=4) = 1
+//   L(lane=1) = 2
+//   L(lane=2) = 0
+//
+// This means that lane=2 has the same data as lane=0.
+//
+// Now the output dimension of this layout has a size of 16, which is still
+// larger than 8.  We find the current largest value in the output dimension,
+// which is L(register=1) = 8, and we set L(register=1) to 0:
+//
+//   L(register=1) = 0
+//   L(register=2) = 4
+//   L(register=4) = 1
+//   L(lane=1) = 2
+//   L(lane=2) = 0
+//
+// Now the output dimension of this layout has a size of 8, which is the desired
+// size.  Note that this method works only because the bases are powers of two,
+// which is the case for DistributedLayouts If broadcastRegisters is false, we
+// remove any register that's larger than the desired shape. In the example
+// above we would have
+//   L(register=1) = 4
+//   L(register=2) = 1
+//   L(lane=1) = 2
+//   L(lane=2) = 0
+LinearLayout
+ensureLayoutNotLargerThan(const LinearLayout &layout,
+                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
+                          bool broadcastRegisters = true);
+
+// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
+// smaller than shape[d].  Do this by increasing the size of the layout's inputs
+// along its most-minor dimension ("register" for register layouts, "offset" for
+// shared layouts).
+//
+// This function is invariant to the order of the layout's input dimensions, but
+// it cares about the order of the output dims, which should be minor-to-major.
+LinearLayout ensureLayoutNotSmallerThan(
+    const LinearLayout &layout,
+    const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
 
 // Dump information about which threads/registers contain each of the tensor
 // elements.

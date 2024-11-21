@@ -225,8 +225,14 @@ tt.func @inline_asm_scalar(%0: i32) {
 
 // CHECK-LABEL: reshape
 tt.func @reshape(%0: tensor<512xi32>) {
-  // CHECK: tt.reshape %{{.+}} {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
-  %1 = tt.reshape %0 {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} : tensor<512xi32> -> tensor<16x32xi32>
+  %1 = tt.reshape %0 : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} allow_reorder : tensor<512xi32> -> tensor<16x32xi32>
+  %2 = tt.reshape %0 allow_reorder : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} allow_reorder efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  %3 = tt.reshape %0 allow_reorder efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  %4 = tt.reshape %0 efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
   tt.return
 }
 
@@ -238,9 +244,9 @@ tt.func @histogram(%0: tensor<512xi32>) {
 }
 
 // CHECK-LABEL: experimental_descriptor_load
-tt.func @experimental_descriptor_load(%0: !tt.ptr<i8>) {
-  // CHECK: tt.experimental_descriptor_load %{{.+}}[%{{.+}}] : !tt.ptr<i8> -> tensor<128xf32>
+tt.func @experimental_descriptor_load(%0: !tt.tensordesc<tensor<128xf32>>) {
+  // CHECK: tt.experimental_descriptor_load %{{.+}}[%{{.+}}] : !tt.tensordesc<tensor<128xf32>> -> tensor<128xf32>
   %c0_i32 = arith.constant 0 : i32
-  %1 = tt.experimental_descriptor_load %0[%c0_i32] : !tt.ptr<i8> -> tensor<128xf32>
+  %1 = tt.experimental_descriptor_load %0[%c0_i32] : !tt.tensordesc<tensor<128xf32>> -> tensor<128xf32>
   tt.return
 }

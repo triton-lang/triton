@@ -28,8 +28,37 @@ def match_available_metrics(metrics, raw_metrics):
     return ret
 
 
+def remove_metadata(database: json):
+    # Find all frames with the name COMPUTE_METADATA_SCOPE_NAME, remove them and their children
+    # Then go up from the metadata node and remove the parent if all its children were
+    # metadata nodes
+    def remove_metadata_helper(node):
+        if "frame" not in node:
+            return node
+        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME:
+            return None
+        children = node.get("children", [])
+        new_children = []
+        for child in children:
+            new_child = remove_metadata_helper(child)
+            if new_child is not None:
+                new_children.append(new_child)
+        if len(new_children) > 0 or len(children) == 0:
+            node["children"] = new_children
+            return node
+        return None
+
+    new_database = []
+    for node in database:
+        new_node = remove_metadata_helper(node)
+        if new_node is not None:
+            new_database.append(new_node)
+    return new_database
+
+
 def get_raw_metrics(file):
     database = json.load(file)
+    database = remove_metadata(database)
     device_info = database.pop(1)
     gf = ht.GraphFrame.from_literal(database)
     return gf, gf.show_metric_columns(), device_info
@@ -92,7 +121,7 @@ derivable_metrics = {
 }
 
 # FLOPS have a specific width to their metric
-default_flop_factor_dict = {f"flop/s": 1, f"gflop/s": 1e9, f"tflop/s": 1e12}
+default_flop_factor_dict = {"flop/s": 1, "gflop/s": 1e9, "tflop/s": 1e12}
 derivable_metrics.update(
     {key: FactorDict("flops", default_flop_factor_dict)
      for key in default_flop_factor_dict.keys()})
@@ -104,8 +133,6 @@ for width in TritonHook.flops_width:
 
 def derive_metrics(gf, metrics, raw_metrics, device_info):
     derived_metrics = []
-    original_metrics = []
-    exclusive_metrics = ["util"] + list(derivable_metrics.keys()) + list(avg_time_factor_dict.factor.keys())
     internal_frame_indices = gf.dataframe["device_id"].isna()
 
     def get_time_seconds(df):
@@ -121,10 +148,10 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe["util (inc)"] = min_time_flops["min_time"].combine(min_time_bytes["min_time"], max) / time_sec
             gf.dataframe.loc[internal_frame_indices, "util (inc)"] = np.nan
             derived_metrics.append("util (inc)")
-        elif metric in derivable_metrics:
-            deriveable_metric = derivable_metrics[metric]
-            metric_name = deriveable_metric.name
-            metric_factor_dict = deriveable_metric.factor
+        elif metric in derivable_metrics:  # flop<width>/s, <t/g>byte/s
+            derivable_metric = derivable_metrics[metric]
+            metric_name = derivable_metric.name
+            metric_factor_dict = derivable_metric.factor
             matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
             gf.dataframe[f"{metric} (inc)"] = (gf.dataframe[matched_metric_name] / (get_time_seconds(gf.dataframe)) /
                                                metric_factor_dict[metric])
@@ -134,7 +161,6 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) /
                                                time_factor_dict.factor[metric_time_unit])
             derived_metrics.append(f"{metric} (inc)")
-            metric_name = match_available_metrics([time_factor_dict.name], raw_metrics)[0]
         elif metric in avg_time_factor_dict.factor:
             metric_time_unit = avg_time_factor_dict.name + "/" + metric.split("/")[1]
             gf.dataframe[f"{metric} (inc)"] = (get_time_seconds(gf.dataframe) / gf.dataframe['count'] /
@@ -142,16 +168,21 @@ def derive_metrics(gf, metrics, raw_metrics, device_info):
             gf.dataframe.loc[internal_frame_indices, f"{metric} (inc)"] = np.nan
             derived_metrics.append(f"{metric} (inc)")
         else:
-            original_metrics.append(metric)
-        if metric not in exclusive_metrics:
-            single_frame = gf.dataframe[metric_name]
-            total = gf.dataframe[metric_name].iloc[0]
-            metric = metric.split("/")[0]
-            gf.dataframe[f"{metric}/% (inc)"] = (single_frame / total) * 100.0
-            derived_metrics.append(f"{metric}/% (inc)")
-    if original_metrics:
-        original_metrics = match_available_metrics(original_metrics, raw_metrics)
-    return derived_metrics + original_metrics
+            metric_name_and_unit = metric.split("/")
+            metric_name = metric_name_and_unit[0]
+            if len(metric_name_and_unit) > 1:
+                metric_unit = metric_name_and_unit[1]
+                if metric_unit != "%":
+                    raise ValueError(f"Unsupported unit {metric_unit}")
+                matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
+                single_frame = gf.dataframe[matched_metric_name]
+                total = gf.dataframe[matched_metric_name].iloc[0]
+                gf.dataframe[f"{metric_name}/% (inc)"] = (single_frame / total) * 100.0
+                derived_metrics.append(f"{metric_name}/% (inc)")
+            else:
+                matched_metric_name = match_available_metrics([metric_name], raw_metrics)[0]
+                derived_metrics.append(matched_metric_name)
+    return derived_metrics
 
 
 def format_frames(gf, format):
@@ -178,16 +209,13 @@ WHERE p."name" =~ "{exclude}"
 """
         query = NegationQuery(inclusion_query)
         gf = gf.filter(query, squash=True)
-    # filter out metadata computation
-    query = [{"name": f"^(?!{COMPUTE_METADATA_SCOPE_NAME}).*"}]
-    gf = gf.filter(query, squash=True)
     if threshold:
         query = ["*", {metric: f">= {threshold}"}]
         gf = gf.filter(query, squash=True)
     return gf
 
 
-def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None):
+def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None, print_sorted=False):
     with open(filename, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
         gf = format_frames(gf, format)
@@ -197,6 +225,15 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
         # TODO: generalize to support multiple metrics, not just the first one
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
+        if print_sorted:
+            print("Sorted kernels by metric " + metrics[0].strip("(inc)"))
+            sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
+            for row in range(1, len(sorted_df)):
+                if len(sorted_df.iloc[row]['name']) > 100:
+                    kernel_name = sorted_df.iloc[row]['name'][:100] + "..."
+                else:
+                    kernel_name = sorted_df.iloc[row]['name']
+                print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row][metrics[0]]))
         emit_warnings(gf, metrics)
 
 
@@ -234,10 +271,7 @@ Derived metrics can be created when source metrics are available.
 - flop[<8/16/32/64>]/s, gflop[<8/16/32/64>]/s, tflop[<8/16/32/64>]/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
-
-For inclusive metrics (e.g. time) an additional column is printed showing the percentage
-each frame is of the full model.
-
+- <metric>/%%: frame(metric) / sum(metric). Only availble for inclusive metrics (e.g. time)
 """,
     )
     argparser.add_argument(
@@ -270,7 +304,7 @@ proton-viewer -i ".*test.*" path/to/file.json
         type=str,
         default=None,
         help="""Exclude frames that match the given regular expression and their children.
-For example, the following command will exclude all paths that contain frames that contains "test":
+For example, the following command will exclude all paths starting from frames that contains "test":
 ```
 proton-viewer -e ".*test.*" path/to/file.json
 ```
@@ -299,6 +333,12 @@ proton-viewer -e ".*test.*" path/to/file.json
 - function_line: include the function name and line number.
 - file_function: include the file name and function name.
 """)
+    argparser.add_argument(
+        "--print-sorted",
+        action='store_true',
+        default=False,
+        help="Sort output by metric value instead of chronologically",
+    )
 
     args, target_args = argparser.parse_known_args()
     assert len(target_args) == 1, "Must specify a file to read"
@@ -310,12 +350,13 @@ proton-viewer -e ".*test.*" path/to/file.json
     threshold = args.threshold
     depth = args.depth
     format = args.format
+    print_sorted = args.print_sorted
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        parse(metrics, file_name, include, exclude, threshold, depth, format)
+        parse(metrics, file_name, include, exclude, threshold, depth, format, print_sorted)
 
 
 if __name__ == "__main__":

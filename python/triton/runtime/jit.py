@@ -564,7 +564,7 @@ class JITFunction(KernelInterface[T]):
         ]
 
     def run(self, *args, grid, warmup, **kwargs):
-        kwargs["debug"] = kwargs.get("debug", False) or os.environ.get("TRITON_DEBUG", "0") == "1"
+        kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
 
         # parse options
         from ..compiler import make_backend
@@ -692,6 +692,7 @@ class JITFunction(KernelInterface[T]):
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel = None
+        self.debug = debug
         self.noinline = noinline
 
         # TODO(jlebar): Remove uses of these fields outside this file, then
@@ -873,6 +874,10 @@ class MockTensor:
     def data_ptr():
         return 0  # optimistically assumes multiple of 16
 
+    @staticmethod
+    def ptr_range():
+        return 0  # optimistically assumes 32 bit pointer range
+
 
 class TensorWrapper:
 
@@ -906,6 +911,9 @@ class TensorWrapper:
 
     def to(self, device):
         return TensorWrapper(self.base.to(device), self.dtype)
+
+    def new_empty(self, sizes):
+        return TensorWrapper(self.base.new_empty(sizes), self.dtype)
 
 
 def reinterpret(tensor, dtype):

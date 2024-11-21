@@ -599,9 +599,13 @@ typedef enum {
    */
   HSA_EXTENSION_AMD_AQLPROFILE = 0x202,
   /**
+   * PC Sampling extension.
+   */
+  HSA_EXTENSION_AMD_PC_SAMPLING = 0x203,
+  /**
    * Last AMD extension.
    */
-  HSA_AMD_LAST_EXTENSION = 0x202
+  HSA_AMD_LAST_EXTENSION = 0x203
 } hsa_extension_t;
 
 /**
@@ -5656,7 +5660,12 @@ typedef enum {
    * undefined if the symbol is not an indirect function. The type of this
    * attribute is uint32_t.
    */
-  HSA_CODE_SYMBOL_INFO_INDIRECT_FUNCTION_CALL_CONVENTION = 16
+  HSA_CODE_SYMBOL_INFO_INDIRECT_FUNCTION_CALL_CONVENTION = 16,
+  /**
+   * Wavefront size used by the kernel. The value of this attribute is either
+   * 32 or 64. The type of this attribute is uint32_t.
+   */
+  HSA_CODE_SYMBOL_INFO_KERNEL_WAVEFRONT_SIZE = 19
 } hsa_code_symbol_info_t;
 
 /**

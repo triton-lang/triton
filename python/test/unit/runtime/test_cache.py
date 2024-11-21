@@ -1,7 +1,7 @@
 import importlib.util
 import itertools
 import shutil
-import tempfile
+import pathlib
 
 import pytest
 import torch
@@ -9,6 +9,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction
+from triton._internal_testing import is_hip
 
 
 @triton.jit
@@ -128,17 +129,15 @@ def test_combine_fn_change():
         seen_keys.add(key)
 
 
-def write_and_load_module(code, num_extra_lines):
-    with tempfile.NamedTemporaryFile(mode='w+', suffix='.py') as f:
-        f.write(('# extra line\n' * num_extra_lines) + code)
-        f.flush()
-        spec = importlib.util.spec_from_file_location("module.name", f.name)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
+    temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
+    spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     return module
 
 
-def test_changed_line_numbers_invalidate_cache():
+def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
     from textwrap import dedent
     code = dedent("""
         import triton
@@ -146,10 +145,12 @@ def test_changed_line_numbers_invalidate_cache():
         def test_kernel(i):
             i = i + 1
     """)
-    orig_mod = write_and_load_module(code, 0)
+    temp_file0 = tmp_path / "test_changed_line_numbers_invalidate_cache0.py"
+    orig_mod = write_and_load_module(temp_file0, code, 0)
     orig_cache_key = orig_mod.test_kernel.cache_key
 
-    updated_mod = write_and_load_module(code, 1)
+    temp_file1 = tmp_path / "test_changed_line_numbers_invalidate_cache1.py"
+    updated_mod = write_and_load_module(temp_file1, code, 1)
     updated_cache_key = updated_mod.test_kernel.cache_key
     assert orig_cache_key != updated_cache_key
 
@@ -431,7 +432,7 @@ def test_jit_debug(device) -> None:
         tl.device_assert(tl.load(tmp) == 1, "tmp == 1")
 
     device = getattr(torch, device).current_device()
-    tmp = torch.tensor([1], dtype=torch.int32, device="cuda")
+    tmp = torch.tensor([1], dtype=torch.int32, device=device)
     assert len(kernel.cache[device]) == 0
     kernel[(1, )](tmp, debug=False)
     assert len(kernel.cache[device]) == 1
@@ -572,3 +573,29 @@ def test_hooks(device, fresh_triton_cache) -> None:
     assert specialization_data is not None and specialization_data_compiled == specialization_data
     assert is_warmup is True
     assert key in kernel_add.cache[getattr(torch, device).current_device()]
+
+
+@pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
+def test_within_2gb(device, fresh_triton_cache) -> None:
+
+    @triton.jit
+    def kernel_add(a):
+        tl.load(a)
+
+    # This is the attribute we want to test
+    pointer_range_32 = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal pointer_range_32
+        pointer_range_32 = kwargs["compile"]["configs"][0].pointer_range_32
+
+    JITFunction.cache_hook = cache_hook
+    # In warmup we assume that the pointer range is 32 bits
+    kernel_add.warmup(torch.float32, grid=(1, ))
+    assert pointer_range_32 == [0]
+    # Torch tensor > 2GB
+    kernel_add[(1, 0)](torch.empty(2**31, dtype=torch.int8, device=device))
+    assert len(pointer_range_32) == 0
+    # Torch tensor <= 2GB
+    kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
+    assert pointer_range_32 == [0]

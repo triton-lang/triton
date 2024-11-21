@@ -6,6 +6,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
 
 namespace mlir {
 
@@ -189,6 +190,14 @@ bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
+// Conversion from `srcTy` to `dstTy` involving the minimum amount of data
+// transfer provided that both types can be converted to LL (if it can't it'll
+// return nullopt). The output will be such that layout.getInDimNames() ==
+// layout.getOutDimNames() and the conversion will not include kBlock (resp.
+// kWarp or kLane) if it can be avoided
+std::optional<mlir::triton::LinearLayout>
+minimalCvtLayout(RankedTensorType srcTy, RankedTensorType dstTy);
+
 // Conversion from `srcTy` to `dstTy` only involves reordering of registers.
 // There is no need for data exchange across threads, warps, or blocks.
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
@@ -203,11 +212,7 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool atomicNeedsSharedMemory(Value result);
 
-bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstT);
-
-bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
-
-bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
+bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 // Return true if the src and dst layout match.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,

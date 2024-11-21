@@ -76,7 +76,7 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
         acc[j] = select(mask, tempAcc[j], acc[j]);
       }
     }
-    srcValues[srcIndex] = acc;
+    srcValues[srcIndex] = std::move(acc);
   }
 }
 
@@ -128,8 +128,8 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo,
                              ScanLoweringHelper &helper,
-                             SmallVector<Value> smemBases,
-                             SmallVector<Type> smemTypes, Value warpId,
+                             ArrayRef<Value> smemBases,
+                             ArrayRef<Type> smemTypes, Value warpId,
                              Value laneIdAxis, Value parallelLaneId) {
   Location loc = helper.getLoc();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
@@ -187,7 +187,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
       }
       Value mask = icmp_sge(warpId, i32_val(i + 1));
       accumulator.acc =
-          accumulate(helper, rewriter, accumulator.acc, partialReduce, mask);
+          accumulate(helper, rewriter, accumulator.acc, partialReduce);
       for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
         accumulator.maskedAcc[j] =
             select(mask, accumulator.acc[j], accumulator.maskedAcc[j]);
@@ -224,7 +224,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
                                 srcValues[srcIndex - i * elementStride][j]);
         }
       }
-      srcValues[srcIndex - i * elementStride] = laneValue;
+      srcValues[srcIndex - i * elementStride] = std::move(laneValue);
     }
     // For the next chunk start back from the value containing the
     // accumulated value of all the warps.
@@ -303,7 +303,7 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
                      srcValues[srcIndex - i * elementStride][j], laneValue[j]);
         }
       }
-      srcValues[srcIndex - i * elementStride] = laneValue;
+      srcValues[srcIndex - i * elementStride] = std::move(laneValue);
     }
     // For the next chunk start back from the value containing the
     // accumulated value of all the warps.
@@ -389,10 +389,10 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
 
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
-  auto order = triton::gpu::getOrder(srcEncoding);
+  auto threadOrder = triton::gpu::getThreadOrder(srcEncoding);
   auto warpOrder = triton::gpu::getWarpOrder(srcEncoding);
   SmallVector<Value> multiDimLaneId =
-      delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+      delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
 
@@ -402,7 +402,7 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   multiDimLaneId[axis] = i32_val(0);
   threadsPerWarp[axis] = 1;
   Value laneIdParallel =
-      linearize(rewriter, loc, multiDimLaneId, threadsPerWarp, order);
+      linearize(rewriter, loc, multiDimLaneId, threadsPerWarp, threadOrder);
   multiDimWarpId[axis] = i32_val(0);
   warpsPerCTA[axis] = 1;
   Value warpIdParallel =

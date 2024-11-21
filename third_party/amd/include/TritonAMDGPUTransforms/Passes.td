@@ -3,19 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::ModuleOp"> {
-  let summary = "pipeline";
-
-  let description = [{
-    Pipeline global loads through registers to shared memory while computing on previous
-    tile
-  }];
-
-  let constructor = "mlir::createTritonAMDGPUStreamPipelinePass()";
-
-  let dependentDialects = [];
-}
-
 def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
@@ -26,12 +13,15 @@ def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir
 
   let constructor = "mlir::createTritonAMDGPUStreamPipelineV2Pass()";
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
-           "Number of Pipeline stages">
+           "Number of Pipeline stages">,
+    Option<"prefetch", "prefetch",
+           "int32_t", /*default*/"0",
+           "Enable prefetch from shared memory">
   ];
 }
 
@@ -122,6 +112,16 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
   let constructor = "mlir::createTritonAMDGPUReorderInstructionsPass()";
 
   let dependentDialects = [];
+}
+
+def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "mlir::ModuleOp"> {
+  let summary = "Convert memory operations to buffer operations";
+
+  let description = "This pass converts memory operations (e.g., tt.load/tt.store) to  amdgpu buffer operations, if possible";
+
+  let constructor = "mlir::createTritonAMDGPUConvertToBufferOpsPass()";
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 #endif

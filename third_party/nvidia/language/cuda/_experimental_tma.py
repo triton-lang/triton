@@ -29,7 +29,7 @@ def experimental_device_tensormap_create1d(
     load_size: core.tensor,
     global_size: core.tensor,
     element_ty: core.dtype,
-    _builder: ir.builder,
+    _builder: ir.builder = None,
 ):
     load_size = core._constexpr_to_value(load_size)
     global_size = semantic.to_tensor(global_size, _builder)
@@ -58,7 +58,7 @@ def experimental_device_tensormap_create2d(
     load_size: Sequence[core.constexpr],
     global_size: Sequence[core.tensor],
     element_ty: core.dtype,
-    _builder: ir.builder,
+    _builder: ir.builder = None,
 ):
     assert len(load_size) == 2
     assert len(global_size) == 2
@@ -104,5 +104,5 @@ def _determine_swizzle_mode_2d(contig_dim_size_in_bytes, load_size):
 
 
 @core.builtin
-def experimental_tensormap_fenceproxy_acquire(desc_ptr: core.tensor, _builder: ir.builder):
+def experimental_tensormap_fenceproxy_acquire(desc_ptr: core.tensor, _builder: ir.builder = None):
     semantic.tensormap_fenceproxy_acquire(desc_ptr, _builder)

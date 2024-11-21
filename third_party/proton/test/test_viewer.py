@@ -1,18 +1,36 @@
 import pytest
 import subprocess
 from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames
+from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
 
 file_path = __file__
-cuda_example_file = file_path.replace("test_viewer.py", "example_cuda.json")
-hip_example_file = file_path.replace("test_viewer.py", "example_hip.json")
-frame_example_file = file_path.replace("test_viewer.py", "example_frame.json")
+triton_example_file = file_path.replace("test_viewer.py", "examples/triton.json")
+cuda_example_file = file_path.replace("test_viewer.py", "examples/cuda.json")
+hip_example_file = file_path.replace("test_viewer.py", "examples/hip.json")
+frame_example_file = file_path.replace("test_viewer.py", "examples/frame.json")
+leaf_example_file = file_path.replace("test_viewer.py", "examples/leaf_nodes.json")
 
 
 def test_help():
     # Only check if the viewer can be invoked
     ret = subprocess.check_call(["proton-viewer", "-h"], stdout=subprocess.DEVNULL)
     assert ret == 0
+
+
+def test_sort():
+    with open(leaf_example_file, "r") as f:
+        gf, raw_metrics, device_info = get_raw_metrics(f)
+        gf = format_frames(gf, None)
+        gf.update_inclusive_columns()
+        metrics = ["time/s", "time/ms", "time/us", "time/ns"]
+        metrics = derive_metrics(gf, metrics, raw_metrics, device_info)
+        gf = filter_frames(gf, None, None, None, metrics[0])
+        sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
+        actual = sorted_df.iloc[0:5]['name'].values
+        expected = ['ROOT', 'kernel_1_1_1', 'kernel_3_1_1', 'kernel_3_2_2', 'kernel_1_2_2']
+        assert len(actual) == len(expected)
+        assert all(a == b for a, b in zip(actual, expected))
 
 
 @pytest.mark.parametrize("option", ["full", "file_function_line", "function_line", "file_function"])
@@ -46,6 +64,15 @@ def test_filter_frames(option):
         assert idx.sum() == 0
         idx = gf.dataframe["name"] == "test0"
         assert idx.sum() == 1
+
+
+def test_filter_metadata():
+    with open(triton_example_file, "r") as f:
+        gf, _, _ = get_raw_metrics(f)
+        assert COMPUTE_METADATA_SCOPE_NAME not in gf.dataframe["name"].tolist()
+        assert "cuda_kernel" not in gf.dataframe["name"].tolist()
+        assert "scope" in gf.dataframe["name"].tolist()
+        assert "triton_kernel" in gf.dataframe["name"].tolist()
 
 
 def test_min_time_flops():

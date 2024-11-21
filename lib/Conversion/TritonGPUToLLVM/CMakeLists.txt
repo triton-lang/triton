@@ -1,6 +1,7 @@
 add_triton_library(TritonGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     DotOpToLLVM/FMA.cpp
+    GlobalScratchMemoryAllocation.cpp
     TypeConverter.cpp
     Utility.cpp
     ElementwiseOpToLLVM.cpp
@@ -34,5 +35,4 @@ add_triton_library(TritonGPUToLLVM
     TritonGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
-    NVGPUIR
 )

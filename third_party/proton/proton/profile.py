@@ -1,5 +1,6 @@
 import functools
 import triton
+import os
 
 from triton._C.libproton import proton as libproton
 from .hook import register_triton_hook, unregister_triton_hook
@@ -17,6 +18,16 @@ def _select_backend() -> str:
         return "roctracer"
     else:
         raise ValueError("No backend is available for the current target.")
+
+
+def _check_env(backend: str) -> None:
+    if backend == "roctracer":
+        hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
+        for env in hip_device_envs:
+            if os.getenv(env, None) is not None:
+                raise ValueError(
+                    f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
+                )
 
 
 def start(
@@ -66,42 +77,50 @@ def start(
     if backend is None:
         backend = _select_backend()
 
+    _check_env(backend)
+
     set_profiling_on()
     if hook and hook == "triton":
         register_triton_hook()
     return libproton.start(name, context, data, backend)
 
 
-def activate(session: Optional[int] = 0) -> None:
+def activate(session: Optional[int] = None) -> None:
     """
     Activate the specified session.
     The profiling session will be active and data will be recorded.
 
     Args:
-        session (int): The session ID of the profiling session. Defaults to 0 (the first session started.)
+        session (int): The session ID of the profiling session. Defaults to None (all sessions)
 
     Returns:
         None
     """
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be activated when running from the command line.")
-    libproton.activate(session)
+    if session is None:
+        libproton.activate_all()
+    else:
+        libproton.activate(session)
 
 
-def deactivate(session: Optional[int] = 0) -> None:
+def deactivate(session: Optional[int] = None) -> None:
     """
     Stop the specified session.
     The profiling session's data will still be in the memory, but no more data will be recorded.
 
     Args:
-        session (int): The session ID of the profiling session. Defaults to 0 (the first session started.)
+        session (int): The session ID of the profiling session. Defaults to None (all sessions)
 
     Returns:
         None
     """
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
-    libproton.deactivate(session)
+    if session is None:
+        libproton.deactivate_all()
+    else:
+        libproton.deactivate(session)
 
 
 def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> None:

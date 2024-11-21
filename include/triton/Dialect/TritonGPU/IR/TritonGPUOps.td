@@ -7,6 +7,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -221,6 +222,31 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let hasVerifier = 1;
 }
 
+def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
+                                                  TransposeOpInterface,
+                                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                  SameOperandsAndResultElementType]> {
+  let summary = "transpose the descriptor";
+
+  let description = [{
+    This operation returns a new descriptor
+    representing a transposed view of the buffer.
+  }];
+
+  let arguments = (ins TT_MemDescType:$src, Variadic<I32>:$order);
+
+  let arguments = (
+    ins TT_MemDescType:$src,
+    DenseI32ArrayAttr:$order
+  );
+
+  let results = (outs TT_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasFolder = 1;
+}
+
 def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
@@ -254,6 +280,48 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   let assemblyFormat = [{
     $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
   }];
+}
+
+def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+  let summary = "Convert an mxfp tensor to bf16";
+
+  let hasVerifier = 1;
+
+  let description = [{
+    Compute the bf16 encoded in the given mxfp number as per
+    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+  }];
+  let arguments = (ins
+                   TT_Tensor:$src,
+                   TT_Tensor:$scale,
+                   TT_ScaleDotElemTypeAttr:$fp_type);
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
+  }];
+}
+
+// Allocate global memory
+def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+  let summary = "allocate a global memory buffer";
+  let description = [{
+    This operation allocates a buffer in global memory that is private to the current program.
+  }];
+  let arguments = (
+    ins
+    I32Attr:$nbytes,
+    I32Attr:$alignment
+  );
+  let results = (outs TT_Ptr:$result);
+
+  let builders = [
+    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
+              [{ build($_builder, $_state, result,
+                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
+  ];
+
+  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
 #endif

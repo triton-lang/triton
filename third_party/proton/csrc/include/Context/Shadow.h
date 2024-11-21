@@ -12,13 +12,12 @@ class ShadowContextSource : public ContextSource, public ScopeInterface {
 public:
   ShadowContextSource() = default;
 
-  std::vector<Context> getContexts() override { return contextStack; }
-
   void enterScope(const Scope &scope) override;
 
   void exitScope(const Scope &scope) override;
 
 private:
+  std::vector<Context> getContextsImpl() override { return contextStack; }
   std::vector<Context> contextStack;
 };
 

@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor, register_descriptor
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
@@ -29,7 +29,7 @@ def min_dot_size(target: GPUTarget):
 class HIPOptions:
     num_warps: int = 4
     waves_per_eu: int = 1
-    num_stages: int = 0
+    num_stages: int = 2
     num_ctas: int = 1
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
@@ -48,17 +48,29 @@ class HIPOptions:
     backend_name: str = 'hip'
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. The "default" variant preserves the default
+    # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
     # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
     # The option is experimental and may change at any time regarding its semantics and/or may
     # be gone entirely anytime.
-    instruction_sched_variant: str = 'default'
+    #
+    # Current experimental scheduling variants:
+    #
+    # llvm-iglp-0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
+    #              k-loop; i.e., "interleave DS and MFMA instructions for small GEMM kernels".
+    # llvm-iglp-1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
+    #              k-loop; i.e., "interleave DS and MFMA instructions for single wave small
+    #              GEMM kernels.".
+    # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
+    #                 Kernel library. Note, this variant requires the use of buffer load/store ops
+    #                 and a special software pipelining style - i.e., 1x LDS and 1x register
+    #                 prefetch buffers for each GEMM tile.
+    instruction_sched_variant: str = 'none'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         # Ignore user-defined warp size for gfx9
-        warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
+        warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
         libs = ["ocml", "ockl"]
         for lib in libs:
@@ -70,6 +82,44 @@ class HIPOptions:
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+@register_descriptor
+class HIPAttrsDescriptor(AttrsDescriptor):
+    # This property asserts if the underlying storage area of a given pointer
+    # can be resepresented as a 32 bit integer. When this is true, we can be
+    # sure that all indices into the tensor behind that pointer can use 32-bit
+    # indexing. That opens the door for the AMD backend to use buffer load/store
+    # instrinsics, which requires this property. Buffer load/store intrinsics
+    # gives direct out-of-bound support and simplifies index calculation for
+    # lower register pressure.
+    __slots__ = ("pointer_range_32")
+
+    def _add_backend_properties(self, params=None, values=None):
+        self.property_values["tt.pointer_range"] = 32
+        if params is None or values is None:
+            return
+
+        self.arg_properties["tt.pointer_range"] = [
+            param.num for param, arg in zip(params, values) if HIPAttrsDescriptor.is_within2gb(arg)
+            and not param.do_not_specialize and not param.do_not_specialize_on_alignment
+        ]
+
+    @staticmethod
+    def is_within2gb(arg):
+        if hasattr(arg, "ptr_range"):
+            return arg.ptr_range() <= 2**31 - 1
+        if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
+            # Please note that 2**31-1 is the max int32 positive limit
+            return arg.untyped_storage().size() <= 2**31 - 1
+        return False
+
+    @staticmethod
+    def get_property_key(val, align):
+        generic_key = AttrsDescriptor.get_property_key(val, align)
+        hip_key = "S" if HIPAttrsDescriptor.is_within2gb(val) else "N"
+        key = (generic_key + hip_key).replace("N", "")
+        return key if key else "N"
 
 
 class HIPBackend(BaseBackend):
@@ -89,7 +139,7 @@ class HIPBackend(BaseBackend):
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
             if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
-                supported_fp8_dtypes.update({'fp8e4b8', 'fp8e5b16'})
+                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
@@ -118,6 +168,13 @@ class HIPBackend(BaseBackend):
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
 
+    def get_attrs_descriptor(self, params, args):
+        return HIPAttrsDescriptor(params, args)
+
+    @staticmethod
+    def compute_spec_key(arg, align):
+        return HIPAttrsDescriptor.get_property_key(arg, align)
+
     @staticmethod
     def path_to_rocm_lld():
         # Check env path for ld.lld
@@ -144,8 +201,8 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
-        passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
+        passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
@@ -170,25 +227,33 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "1") == "1"
+
+        stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
+        use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+
+        # The `local-prefetch` scheduling variant requires turning on buffer ops.
+        if options.instruction_sched_variant == "local-prefetch":
+            stream_prefetch = use_buffer_ops = True
+
         if amd.has_matrix_core_feature(options.arch):
-            if use_new_pipeliner:
-                # In the old pipeliner we only support num_stages = 0/1, which means something
-                # different than the NVIDIA side. In the new pipeliner we unify the num_stages
-                # interpretation. Default to use 2 stages if not explicitly set.
-                num_stages = options.num_stages if options.num_stages != 0 else 2
-                amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages)
-            else:
-                if options.num_stages == 0:
-                    amd.passes.ttgpuir.add_stream_pipeline(pm)
+            assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
+                                             "We used to trigger software pipelining with "
+                                             "num_stages == 0. Now it will not happen anymore; "
+                                             "please update to use num_stages == 2 for "
+                                             "equivalent behavior in the past.")
+            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        if use_new_pipeliner or options.num_stages != 0:
+        if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-        amd.passes.ttgpuir.add_canonicalize_pointers(pm)
+
+        if use_buffer_ops:
+            amd.passes.ttgpuir.add_canonicalize_pointers(pm)
+            passes.common.add_canonicalizer(pm)
+            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -230,15 +295,11 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.instruction_sched_variant)
+        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages,
+                                                         options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
-        # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
-        # count caused by predicated loads/stores. In certain kernels, the addition of these blocks can cause the MLIR
-        # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
-        # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
-        # for conditional branching around memory accesses.
-        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm)
+        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)

@@ -20,13 +20,13 @@ Note that currently this tutorial will fail on devices with a small shared memor
 """
 
 import argparse
-import time
 
 import torch
 import triton
 import triton.language as tl
 import triton.tools.experimental_descriptor
 import triton.profiler as proton
+from contextlib import contextmanager
 
 if torch.cuda.is_available():
     from triton._C.libtriton import nvidia
@@ -48,6 +48,8 @@ def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
     M, N, K = args["M"], args["N"], args["K"]
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
+    if "tiles_per_update" in args:
+        ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}, tiles_per_update={args['tiles_per_update']:02}]"
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
     else:
@@ -541,7 +543,24 @@ def torch_matmul(a, b):
     return c
 
 
-def bench(K, dtype, tiles_per_update, reps=10):
+@contextmanager
+def proton_context():
+    proton.activate(0)
+    try:
+        yield
+    finally:
+        proton.deactivate(0)
+
+
+def bench_fn(reps, warmup_reps, fn, *args):
+    for _ in range(warmup_reps):
+        fn(*args)
+    with proton_context():
+        for _ in range(reps):
+            fn(*args)
+
+
+def bench(K, dtype, tiles_per_update, reps=1000, warmup_reps=10000):
     M = 8192
     N = 8192
     a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
@@ -549,33 +568,15 @@ def bench(K, dtype, tiles_per_update, reps=10):
 
     b = b.T.contiguous()
 
-    proton.activate(0)
-
     if cublas is not None:
-        for _ in range(reps):
-            cublas_matmul(a, b)
-            time.sleep(0.01)
+        bench_fn(reps, warmup_reps, cublas_matmul, a, b)
     if dtype == torch.float16:
-        for _ in range(reps):
-            torch_matmul(a, b)
-            time.sleep(0.01)
-    for _ in range(reps):
-        matmul(a, b.T)
-        time.sleep(0.01)
-    for _ in range(reps):
-        matmul_persistent(a, b.T)
-        time.sleep(0.01)
+        bench_fn(reps, warmup_reps, torch_matmul, a, b)
+    bench_fn(reps, warmup_reps, matmul, a, b.T)
+    bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
     if supports_tma():
-        for _ in range(reps):
-            matmul_tma_persistent(a, b)
-            time.sleep(0.01)
-        with proton.scope(
-                f"matmul_kernel_device_tma_persistent [M={M}, N={N}, K={K}, tiles_per_update={tiles_per_update:02}]"):
-            for _ in range(reps):
-                matmul_device_tma_persistent(a, b, tiles_per_update)
-                time.sleep(0.01)
-
-    proton.deactivate(0)
+        bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
+        bench_fn(reps, warmup_reps, matmul_device_tma_persistent, a, b, tiles_per_update)
 
 
 def validate(M, N, K, dtype, tiles_per_update):

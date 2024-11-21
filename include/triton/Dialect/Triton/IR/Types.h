@@ -8,7 +8,7 @@
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/Triton/IR/Types.h.inc"
 
-#include "triton/Dialect/Triton/IR/TritonTypeInterfaces.h.inc"
+#include "triton/Dialect/Triton/IR/TypeInterfaces.h.inc"
 
 namespace mlir {
 
@@ -33,6 +33,8 @@ Type getI1SameShape(Type type);
 Type getI32SameShape(Type type);
 
 Type getPointerTypeSameShape(Type type);
+
+Type getPointerTypeToElement(Type type);
 
 } // namespace triton
 
