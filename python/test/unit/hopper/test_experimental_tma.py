@@ -540,6 +540,9 @@ def test_experimental_make_tensor_descriptor_loop_carried():
 
 @requires_tma
 def test_experimetal_descriptor_load_3d_no_jit():
+    """In addition to testing 3D TMA, we also test parsing of TTGIR when TMA descriptors are in arguments.
+    See https://github.com/triton-lang/triton/pull/4875
+    """
     device = "cuda"
 
     ir = """
