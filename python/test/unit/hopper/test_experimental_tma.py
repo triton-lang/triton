@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
-from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma
+from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
 
 from typing import Optional
 
@@ -29,9 +29,11 @@ def unwrap_tensor(t: torch.Tensor | triton.runtime.jit.TensorWrapper):
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 
 
-@requires_tma
 @pytest.mark.parametrize("byval_tma", [True, False])
 def test_experimetal_descriptor_load(byval_tma):
+    if not supports_tma(byval_tma):
+        pytest.skip(tma_skip_msg(byval_tma))
+        return
     device = "cuda"
     SIZE = 128
 
@@ -82,11 +84,13 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
 
 
-@requires_tma
 @pytest.mark.parametrize("num_stages", [1, 4])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
 @pytest.mark.parametrize("byval_tma", [True, False])
 def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tma):
+    if not supports_tma(byval_tma):
+        pytest.skip(tma_skip_msg(byval_tma))
+        return
     device = "cuda"
     M, N, K = 8192, 8192, 1024
     torch.manual_seed(42)
