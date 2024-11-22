@@ -1358,6 +1358,10 @@ class ASTFunction:
             for attr_name, attr_val in attr_specs:
                 if attr_path in val_paths:
                     fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
+        for i, path in enumerate(val_paths):
+            ty = self.get_path(self.arg_types, path)
+            if isinstance(ty, nv_tma_desc_type):
+                fn.set_arg_attr(i, "tt.nv_tma_desc", 1)
         # > add IR values to the template
         for i, path in enumerate(val_paths):
             ty = self.get_path(self.arg_types, path)
