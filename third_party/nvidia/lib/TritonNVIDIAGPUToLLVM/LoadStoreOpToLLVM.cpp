@@ -985,11 +985,11 @@ struct AsyncCopyGlobalToLocalOpConversion
         // When 'other != 0' is supported, we will need to fold the op.getMask()
         // and redundantDataMask() into the same predicate, the way it is done
         // for LoadOp.
-        bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
-        if (!skipMaskForMultiCTA) {
+        bool multiCTAs = triton::gpu::getNumCTAs(srcLayout) > 1;
+        if (multiCTAs) {
           // TODO: Masking does not work for CTA multicast with cp.async. This
           // is a quick and dirty workaround to avoid the issue.
-          Value mask = getRedundantDataMask(moduleOp, dstTy, rewriter, loc,
+          Value mask = getRedundantDataMask(moduleOp, srcTy, rewriter, loc,
                                             elemIdx, targetInfo);
           copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
               .predicate(mask);
