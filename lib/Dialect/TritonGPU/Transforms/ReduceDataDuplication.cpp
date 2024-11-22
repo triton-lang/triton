@@ -58,7 +58,7 @@ public:
       }
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
-      auto tmpType = triton::MemDescType::get(
+      auto tmpType = triton::gpu::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
