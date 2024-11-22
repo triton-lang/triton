@@ -10,6 +10,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -533,7 +534,8 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy = cast<TensorOrMemDesc>(value.getType()).getElementType();
+  auto elemTy =
+      cast<triton::gpu::TensorOrMemDesc>(value.getType()).getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
@@ -629,6 +631,25 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
              !cvtNeedsSharedMemory(parentTy, srcTy) &&
              (elementTypeSize == 16 || elementTypeSize == 8);
   return ans;
+}
+
+bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
+                                       RankedTensorType dstTy) {
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!mfmaLayout || !dotOperandLayout)
+    return false;
+
+  // Currently supporting 32x32 and 16x16 FP8 MFMA -> dot operand case
+  return dotOperandLayout.getParent() == mfmaLayout &&
+         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
+         dotOperandLayout.getKWidth() == 8 &&
+         getContigPerThread(mfmaLayout)[1] == 4 &&
+         ((mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16) ||
+          (mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32)) &&
+         triton::type::isFloat8(srcTy.getElementType()) &&
+         triton::type::isFloat8(dstTy.getElementType()) &&
+         mfmaLayout.getWarpsPerCTA()[1] == 1;
 }
 
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
@@ -729,7 +750,10 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
-         !matchMmaV3AndDotOperandLayout(srcTy, dstTy);
+         !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
+         // to be removed when generalized warp shuffle conversions
+         // are ready:
+         !matchMFMAAndDotOperandShuffleCase(srcTy, dstTy);
 }
 
 bool atomicNeedsSharedMemory(Value value) {

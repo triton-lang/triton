@@ -2563,8 +2563,6 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("add_overflow_check", [False, True])
 def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_path: pathlib.Path):
-    if add_overflow_check is True and is_hip():
-        pytest.skip("overflow check disabled on HIP while fixing issues")
 
     overflow_check = """
         %17 = arith.extsi %arg2 : i32 to i64
@@ -2668,8 +2666,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
     if is_hip() and isinstance(src_layout, MfmaLayout) and ((M, N) == (128, 128)):
         pytest.skip("Skipping test because it runs out of shared memory")
-    if add_overflow_check is True and is_hip():
-        pytest.skip("overflow check disabled on HIP while fixing issues")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
 
@@ -5333,10 +5329,10 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
     %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
     """ if interm_layout is None else f"""
-    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !tt.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory>
-    %16 = triton_gpu.local_load %15 : !tt.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xi32, #src>
-    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !tt.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory>
-    %18 = triton_gpu.local_load %17 : !tt.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xf16, #src>
+    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !triton_gpu.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory>
+    %16 = triton_gpu.local_load %15 : !triton_gpu.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xi32, #src>
+    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !triton_gpu.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory>
+    %18 = triton_gpu.local_load %17 : !triton_gpu.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xf16, #src>
 
     %12 = triton_gpu.convert_layout %16 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %18 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
@@ -5436,21 +5432,11 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
             pytest.skip("Skip testing MMAv3 on devices with CC < 9")
 
     num_warps = np.cumprod(src_layout.warps_per_cta)[-1]
-    # TODO(Keren): Remove the intermediate layout once we have resolved the redundantDataMask issue for WGMMA
-    warps_per_cta = src_layout.warps_per_cta
-    interm = BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [warps_per_cta[0], warps_per_cta[1]], [0, 1], [1, 1],
-                           [1, 1], [0, 1])
 
     def do_test(src_layout, dst_layout):
         layouts = f"""
         #src = {src_layout}
         #dst = {dst_layout}
-        #interm = {interm}
-        """
-
-        conversion = f"""
-        %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
-        %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
         """
 
         ir = layouts + f"""
@@ -5460,6 +5446,7 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
         %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
         %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #src>
+        %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #dst>
         %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>> -> tensor<{M}x1xi32, #src>
         %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #src>
         %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>> -> tensor<1x{N}xi32, #src>
@@ -5468,12 +5455,10 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
         %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #src>
         %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #src>, tensor<{M}x{N}xi32, #src>
         %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<f16>, #src>
-        %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #interm>
-        """ + conversion + f"""
-        %15 = triton_gpu.convert_layout %12 : tensor<{M}x{N}xi32, #dst> -> tensor<{M}x{N}xi32, #interm>
-        %16 = triton_gpu.convert_layout %13 : tensor<{M}x{N}xf16, #dst> -> tensor<{M}x{N}xf16, #interm>
-        %17 = tt.addptr %3, %15 : tensor<{M}x{N}x!tt.ptr<f16>, #interm>, tensor<{M}x{N}xi32, #interm>
-        tt.store %17, %16 : tensor<{M}x{N}x!tt.ptr<f16>, #interm>
+        %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
+        %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
+        %14 = tt.addptr %3, %12 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>, tensor<{M}x{N}xi32, #dst>
+        tt.store %14, %13 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>
         tt.return
         }}
         }}

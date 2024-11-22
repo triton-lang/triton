@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-project(triton CXX)
+project(triton CXX C)
 include(CTest)
 
 if(NOT WIN32)
@@ -206,6 +206,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   if (TRITON_BUILD_PROTON)
     add_subdirectory(third_party/proton)
   endif()
+  # We always build proton dialect
+  list(APPEND TRITON_PLUGIN_NAMES "proton")
+  add_subdirectory(third_party/proton/dialect)
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
@@ -311,6 +314,7 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
+  add_subdirectory(third_party/proton/dialect)
 endif()
 
 add_subdirectory(third_party/f2reduce)
