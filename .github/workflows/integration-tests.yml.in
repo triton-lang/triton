@@ -406,7 +406,7 @@ jobs:
         id: amd-install-triton
         run: |
           echo "PATH is '$PATH'"
-          pip uninstall -y triton
+          pip uninstall -y triton pytorch-triton-rocm
           cd python
           ccache --zero-stats
           pip install -v -e '.[tests]'
