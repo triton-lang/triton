@@ -20,10 +20,6 @@ set(LLVM_TARGET_DEFINITIONS TritonInterfaces.td)
 mlir_tablegen(AttrInterfaces.h.inc -gen-attr-interface-decls)
 mlir_tablegen(AttrInterfaces.cpp.inc -gen-attr-interface-defs)
 
-set(LLVM_TARGET_DEFINITIONS TritonTypeInterfaces.td)
-mlir_tablegen(TypeInterfaces.h.inc -gen-type-interface-decls)
-mlir_tablegen(TypeInterfaces.cpp.inc -gen-type-interface-defs)
-
 set(LLVM_TARGET_DEFINITIONS TritonOpInterfaces.td)
 mlir_tablegen(OpInterfaces.h.inc -gen-op-interface-decls)
 mlir_tablegen(OpInterfaces.cpp.inc -gen-op-interface-defs)

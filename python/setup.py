@@ -465,6 +465,7 @@ class CMakeBuild(build_ext):
             "TRITON_BUILD_PROTON",
             "TRITON_BUILD_TUTORIALS",
             "TRITON_BUILD_WITH_CCACHE",
+            "TRITON_PARALLEL_LINK_JOBS",
         ]
         cmake_args += [f"-D{option}={os.getenv(option)}" for option in passthrough_args if option in os.environ]
 

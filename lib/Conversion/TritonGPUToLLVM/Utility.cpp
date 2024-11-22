@@ -159,8 +159,8 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 }
 
 bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, Value shmemBase,
+    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
+    Type elemLlvmTy, std::optional<int32_t> maxVecElems, Value shmemBase,
     ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
@@ -272,7 +272,8 @@ bool emitTransferBetweenRegistersAndShared(
 }
 
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           MemDescType srcTy, Type elemLlvmTy,
+                                           triton::gpu::MemDescType srcTy,
+                                           Type elemLlvmTy,
                                            SharedMemoryObject smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target) {
@@ -295,10 +296,11 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
   return ret;
 }
 
-void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
-                              Type elemLlvmTy, ArrayRef<Value> srcVals,
-                              Value smemBase, ArrayRef<Value> dstStrides,
-                              Location loc, RewriterBase &rewriter,
+void storeDistributedToShared(triton::gpu::MemDescType dstTy,
+                              RankedTensorType srcTy, Type elemLlvmTy,
+                              ArrayRef<Value> srcVals, Value smemBase,
+                              ArrayRef<Value> dstStrides, Location loc,
+                              RewriterBase &rewriter,
                               const TargetInfoBase &target,
                               std::pair<size_t, Type> *const llvmOpCount) {
   bool success = emitTransferBetweenRegistersAndShared(

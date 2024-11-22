@@ -41,6 +41,11 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           echo "enable_integration=true" >> $GITHUB_ENV
+      - name: Decide manual trigger integration test enablement
+        # Always enable integration tests when manually triggered
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
       - name: Checkout post-submit commits
         if: github.event_name == 'push'
         uses: actions/checkout@v4
@@ -221,12 +226,10 @@ jobs:
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
+          du -h -d 1 ~/.triton
 
           mkdir -p ~/.ccache
-          ls -alh ~/.ccache
-          du -sh ~/.ccache
+          du -h -d 1 ~/.ccache
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -295,12 +298,10 @@ jobs:
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
+          du -h -d 1 ~/.triton
 
           mkdir -p ~/.ccache
-          ls -alh ~/.ccache
-          du -sh ~/.ccache
+          du -h -d 1 ~/.ccache
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
@@ -313,7 +314,7 @@ jobs:
           path: |
             ~/.triton/cache
             ~/.ccache
-          key: ${{ steps.restore-build-cache.outputs.cache-primary-key }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
   Integration-Tests-AMD:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-HIP != ''
@@ -391,12 +392,10 @@ jobs:
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
+          du -h -d 1 ~/.triton
 
           mkdir -p ~/.ccache
-          ls -alh ~/.ccache
-          du -sh ~/.ccache
+          du -h -d 1 ~/.ccache
       - name: Update PATH
         run: |
           echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
@@ -467,12 +466,10 @@ jobs:
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
+          du -h -d 1 ~/.triton
 
           mkdir -p ~/.ccache
-          ls -alh ~/.ccache
-          du -sh ~/.ccache
+          du -h -d 1 ~/.ccache
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
@@ -485,7 +482,7 @@ jobs:
           path: |
             ~/.triton/cache
             ~/.ccache
-          key: ${{ steps.restore-build-cache.outputs.cache-primary-key }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Clean up caches
         run: |
           rm -rf ~/.triton/cache
@@ -493,7 +490,7 @@ jobs:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
@@ -566,12 +563,10 @@ jobs:
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
+          du -h -d 1 ~/.triton
 
           mkdir -p ~/.ccache
-          ls -alh ~/.ccache
-          du -sh ~/.ccache
+          du -h -d 1 ~/.ccache
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -599,12 +594,10 @@ jobs:
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
+          du -h -d 1 ~/.triton
 
           mkdir -p ~/.ccache
-          ls -alh ~/.ccache
-          du -sh ~/.ccache
+          du -h -d 1 ~/.ccache
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
@@ -617,4 +610,4 @@ jobs:
           path: |
             ~/.triton/cache
             ~/.ccache
-          key: ${{ steps.restore-build-cache.outputs.cache-primary-key }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
