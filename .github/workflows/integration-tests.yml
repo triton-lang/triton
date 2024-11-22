@@ -400,14 +400,6 @@ jobs:
         run: |
           export CC=/usr/bin/clang
           export CXX=/usr/bin/clang++
-      - name: Install pip dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install lit
-      - name: Install apt dependencies
-        run: |
-          apt update
-          apt install ccache
       - name: Install Triton
         id: amd-install-triton
         run: |
