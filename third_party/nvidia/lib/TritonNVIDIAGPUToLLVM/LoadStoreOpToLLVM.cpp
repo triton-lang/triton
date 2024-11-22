@@ -57,12 +57,12 @@ Value getRedundantDataMask(ModuleOp moduleOp, Type valueTy,
       // Step 2: check lane, warp, and block redundancy
       auto laneMasks = freeVariableMasks[kLane];
       auto warpMasks = freeVariableMasks[kWarp];
-      mask = and_(mask, icmp_ne(and_(i32_val(laneMasks), laneId), i32_val(0)));
-      mask = and_(mask, icmp_ne(and_(i32_val(warpMasks), warpId), i32_val(0)));
+      mask = and_(mask, icmp_eq(and_(i32_val(laneMasks), laneId), i32_val(0)));
+      mask = and_(mask, icmp_eq(and_(i32_val(warpMasks), warpId), i32_val(0)));
       if (numCTAs > 1) {
         auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
         auto ctaMasks = freeVariableMasks[kBlock];
-        mask = and_(mask, icmp_ne(and_(i32_val(ctaMasks), ctaId), i32_val(0)));
+        mask = and_(mask, icmp_eq(and_(i32_val(ctaMasks), ctaId), i32_val(0)));
       }
     }
   } else {
