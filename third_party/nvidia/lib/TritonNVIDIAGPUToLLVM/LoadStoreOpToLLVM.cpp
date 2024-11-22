@@ -977,24 +977,25 @@ struct AsyncCopyGlobalToLocalOpConversion
           // if there's any mask. cp.async will automatically fill the
           // remaining slots with 0 if cp-size > src-size.
           // XXX(Keren): Always assume other = 0 for now.
+          // When 'other != 0' is supported, we will need to fold the
+          // op.getMask() and redundantDataMask() into the same predicate, the
+          // way it is done for LoadOp.
           auto selectOp =
               select(maskElems[elemIdx], i32_val(wordBytes), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
 
-        // When 'other != 0' is supported, we will need to fold the op.getMask()
-        // and redundantDataMask() into the same predicate, the way it is done
-        // for LoadOp.
-        bool isMultiCTAs = triton::gpu::getNumCTAs(srcLayout) > 1;
-        if (isMultiCTAs) {
-          // TODO: Masking does not work for CTA multicast with cp.async. This
-          // is a quick and dirty workaround to avoid the issue.
+        bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
+        if (skipMaskForMultiCTA) {
+          // XXX(@peterbell10): In the multi-CTA mode, the redundant data might
+          // be on different CTAs which don't share the same smem address space,
+          // so we might need to load the same data multiple times.
+          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        } else {
           Value mask = getRedundantDataMask(moduleOp, srcTy, rewriter, loc,
                                             elemIdx, targetInfo);
           copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
               .predicate(mask);
-        } else {
-          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
         }
         ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }
