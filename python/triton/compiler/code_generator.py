@@ -60,7 +60,7 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return o is None or isinstance(o, (constexpr, language.core.dtype, int, bool))
+    return o is None or isinstance(o, (constexpr, language.core.dtype))
 
 def _is_triton_scalar(o: Any) -> bool:
     return _is_triton_tensor(o) and (not o.type.is_block() or o.type.numel == 1)
@@ -487,14 +487,15 @@ class CodeGenerator(ast.NodeVisitor):
             native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
             if value is not None and \
-                not _is_triton_tensor(value) and \
+                not _is_triton_value(value) and \
                 not isinstance(value, native_nontensor_types):
                 value = language.semantic.to_tensor(value, self.builder)
             return value
 
         values = _sanitize_value(self.visit(node.value))
-        assert len(node.targets) == 1
-        self.assignTarget(node.targets[0], values)
+        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
+        assert len(targets) == 1
+        self.assignTarget(targets[0], values)
 
     def visit_AugAssign(self, node):
         name = node.target.id

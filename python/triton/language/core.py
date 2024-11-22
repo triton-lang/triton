@@ -627,7 +627,7 @@ class block_type(dtype):
         assert (isinstance(shape, (list, tuple)))
 
         # shape can be empty ([]) when an input is a 0D tensor.
-        self.shape = _unwrap_shape(shape)
+        self.shape = tuple(_unwrap_shape(shape))
         if not self.shape:
             raise TypeError('0d block_type is forbidden')
 

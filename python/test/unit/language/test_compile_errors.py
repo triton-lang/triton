@@ -186,14 +186,14 @@ def test_returns_branched_on_constexpr():
         a = returns_branched_on_constexpr(N)
         a + tl.arange(0, 4)
 
-    triton.compile(triton.compiler.ASTSource(fn=kernel1, signature={}, constants={"N": 0}))
+    triton.compile(triton.compiler.ASTSource(fn=kernel1, signature={"N": "constexpr"}, constants={"N": 0}))
 
     @triton.jit
     def kernel2(N: tl.constexpr):
         a = returns_branched_on_constexpr(N)
         a + tl.arange(0, 8)
 
-    triton.compile(triton.compiler.ASTSource(fn=kernel2, signature={}, constants={"N": 1}))
+    triton.compile(triton.compiler.ASTSource(fn=kernel2, signature={"N": "constexpr"}, constants={"N": 1}))
 
 
 @triton.jit
@@ -324,7 +324,7 @@ def test_defaults_assign_no_err():
     def kernel(a=1, B: tl.constexpr = ""):
         pass
 
-    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32', 'B': 'constexpr'}, constants={'B': ""}))
 
 
 def test_where_warning(fresh_triton_cache):
@@ -369,7 +369,7 @@ def test_fp8_support(dtype):
         ctx = pytest.raises(CompilationError, match="")
 
     with ctx as e:
-        triton.compile(triton.compiler.ASTSource(fn=dtype_kernel, signature={}, constants={"dtype": dtype}))
+        triton.compile(triton.compiler.ASTSource(fn=dtype_kernel, signature={"dtype": "constexpr"}, constants={"dtype": dtype}))
 
     if dtype not in supported_dtypes:
         try:
