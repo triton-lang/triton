@@ -46,8 +46,11 @@ struct ClipAsyncCopySizePerThread
     Value mask = copyOp.getMask();
     Value other = copyOp.getOther();
     auto srcTy = cast<RankedTensorType>(src.getType());
-    auto blockEnc = cast<BlockedEncodingAttr>(srcTy.getEncoding());
     auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
+    auto blockEnc = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+    if (!blockEnc)
+      return rewriter.notifyMatchFailure(copyOp,
+                                         "src must be of blocked encoding");
     auto sharedEnc = cast<SharedEncodingAttr>(dstTy.getEncoding());
     auto sharedVec = sharedEnc.getVec();
 
@@ -95,11 +98,11 @@ struct ClipAsyncCopySizePerThread
     if (other)
       other = convertBlockLayout(other, newBlockEnc);
 
-    // replace the asyncCopy
-    auto newCopyOp = rewriter.create<AsyncCopyGlobalToLocalOp>(
-        copyOp.getLoc(), src, copyOp.getResult(), mask, other,
-        copyOp.getCache(), copyOp.getEvict(), copyOp.getIsVolatile());
-    rewriter.replaceOp(copyOp, newCopyOp);
+    rewriter.modifyOpInPlace(copyOp, [&]() {
+      copyOp.getSrcMutable().assign(src);
+      copyOp.getMaskMutable().assign(mask);
+      copyOp.getOtherMutable().assign(other);
+    });
 
     return success();
   }

@@ -1129,11 +1129,6 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
-// Returns composed LinearLayout for register to shared copy
-std::optional<LinearLayout>
-getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
-
 // Emits IR to load data from shared memory into registers, or to store data
 // from registers into shared memory.
 //
