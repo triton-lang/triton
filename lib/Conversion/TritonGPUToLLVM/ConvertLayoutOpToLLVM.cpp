@@ -384,10 +384,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         if (isa<MmaEncodingTrait>(parent) && useLegacyMMAConversion) {
           return false;
         }
-        if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
-          if (nvidiaMma.isAmpere()) {
-            return true;
-          }
+        if (isa<NvidiaMmaEncodingAttr>(parent)) {
+          return true;
         }
         if (isa<AMDMfmaEncodingAttr>(parent)) {
           return true;
@@ -406,6 +404,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return false;
     };
     if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
+      return failure();
+    }
+    // FIXME [Dot LL] Remove this once we implement this trick in LLs
+    if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
       return failure();
     }
 

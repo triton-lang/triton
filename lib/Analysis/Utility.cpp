@@ -629,7 +629,8 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&
              !cvtNeedsSharedMemory(parentTy, srcTy) &&
-             (elementTypeSize == 16 || elementTypeSize == 8);
+             (elementTypeSize == 16 || elementTypeSize == 8) &&
+             dotOperandLayout.getKWidth() == 32 / elementTypeSize;
   return ans;
 }
 

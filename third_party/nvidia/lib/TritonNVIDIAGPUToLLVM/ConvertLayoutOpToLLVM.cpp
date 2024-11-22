@@ -459,9 +459,6 @@ void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // For now give ConvertLayoutOpConversion higher benefit, I can split before
   // merging
-  //
-  // TODO(jlebar): lowerDistributedToDistributed does not get hit in any
-  // testcases.  Is this dead code?  Does the benefit need to be increased?
   patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
   // Same default benefit
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
