@@ -25,8 +25,10 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 namespace {
 
 // Return the mask for the unique data accessed by given tensor type.
-// mask = true: thread can read/write
-// mask = false: thread should not read/write
+// NOTE: Redundant memory load is allowed in triton, but redundant memory store
+// is not allowed.
+// mask = true: thread can write
+// mask = false: thread should not write
 Value getRedundantDataMask(ModuleOp moduleOp, Type valueTy,
                            ConversionPatternRewriter &rewriter, Location loc,
                            int regIdx, const NVIDIA::TargetInfo &targetInfo) {
@@ -54,20 +56,19 @@ Value getRedundantDataMask(ModuleOp moduleOp, Type valueTy,
           i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp));
       Value laneId = urem(tid, warpSize);
       Value warpId = udiv(tid, warpSize);
-      // Step 2: check lane, warp, and block redundancy
+      // Step 2: check lane and warp redundancy
       auto laneMasks = freeVariableMasks[kLane];
       auto warpMasks = freeVariableMasks[kWarp];
       mask = and_(mask, icmp_eq(and_(i32_val(laneMasks), laneId), i32_val(0)));
       mask = and_(mask, icmp_eq(and_(i32_val(warpMasks), warpId), i32_val(0)));
       if (numCTAs > 1) {
+        // Step 3: check block redundancy
         auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
         auto ctaMasks = freeVariableMasks[kBlock];
         mask = and_(mask, icmp_eq(and_(i32_val(ctaMasks), ctaId), i32_val(0)));
       }
     }
   } else {
-    // If the tensor is not ranked, then it is a scalar and only thread 0 of
-    // CTA0 can write
     mask = and_(mask, icmp_eq(tid, i32_val(0)));
     if (numCTAs > 1) {
       auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
