@@ -47,8 +47,8 @@ Interfaces: `MemoryEffectOpInterface`
 | :-----: | ----------- |
 | `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
 | `coord` | variadic of 32-bit signless integer
-| `barrier` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
-| `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 | `pred` | 1-bit signless integer
 
 ### `triton_nvidia_gpu.async_tma_copy_local_to_global` (triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp)
@@ -79,7 +79,7 @@ Interfaces: `MemoryEffectOpInterface`
 | :-----: | ----------- |
 | `desc_ptr` | Pointer type (`::mlir::triton::PointerType`) in Triton IR type system
 | `coord` | variadic of 32-bit signless integer
-| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 ### `triton_nvidia_gpu.barrier_expect` (triton::nvidia_gpu::BarrierExpectOp)
 
@@ -110,7 +110,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `alloc` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 | `pred` | 1-bit signless integer
 
 ### `triton_nvidia_gpu.cluster_arrive` (triton::nvidia_gpu::ClusterArriveOp)
@@ -195,7 +195,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `alloc` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 ### `triton_nvidia_gpu.inval_barrier` (triton::nvidia_gpu::InvalBarrierOp)
 
@@ -221,7 +221,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `alloc` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 ### `triton_nvidia_gpu.async_tma_store_wait` (triton::nvidia_gpu::TMAStoreWait)
 
@@ -304,7 +304,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `alloc` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 | `phase` | 32-bit signless integer
 
 ### `triton_nvidia_gpu.warp_group_dot` (triton::nvidia_gpu::WarpGroupDotOp)

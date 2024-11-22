@@ -31,25 +31,6 @@ Dependent Dialects:
 
 ## Types
 
-### MemDescType
-
-memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
-
-Memory descriptor contains a base pointer (scalar) and a descriptor of the memory.
-If mutable memory is false that means the memory is constant and can only be allocated and stored once.
-A constant memory allocation is different than a tensor as it can have multiple views and the descriptor
-can be changed without changing the underlying memory.
-
-#### Parameters:
-
-| Parameter | C++ type | Description |
-| :-------: | :-------: | ----------- |
-| shape | `::llvm::ArrayRef<int64_t>` |  |
-| elementType | `Type` |  |
-| encoding | `Attribute` |  |
-| memorySpace | `Attribute` |  |
-| mutable_memory | `bool` |  |
-
 ### PointerType
 
 Pointer type (`::mlir::triton::PointerType`) in Triton IR type system

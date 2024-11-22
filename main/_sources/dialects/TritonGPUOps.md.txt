@@ -73,7 +73,7 @@ Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `src` | ranked tensor of ptr values
-| `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 | `mask` | tensor of 1-bit signless integer values
 | `other` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or ptr
 
@@ -218,7 +218,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 ### `triton_gpu.local_dealloc` (triton::gpu::LocalDeallocOp)
 
@@ -253,7 +253,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Free on ::mlir::triton::gpu::Shar
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 ### `triton_gpu.local_load` (triton::gpu::LocalLoadOp)
 
@@ -276,7 +276,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 | `token` | async token type
 
 #### Results:
@@ -307,7 +307,7 @@ Interfaces: `MemoryEffectOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `src` | ranked tensor of floating-point or integer or ptr values
-| `dst` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 ### `triton_gpu.memdesc_subview` (triton::gpu::MemDescSubviewOp)
 
@@ -340,14 +340,14 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 | `offsets` | variadic of 32-bit signless integer
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 ### `triton_gpu.memdesc_trans` (triton::gpu::MemDescTransOp)
 
@@ -380,13 +380,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
 ### `triton_gpu.upcast_mxfp` (triton::gpu::UpcastMXFPOp)
 
