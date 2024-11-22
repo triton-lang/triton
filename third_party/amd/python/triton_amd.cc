@@ -162,15 +162,21 @@ void init_triton_amd(py::module &&m) {
   });
 
   m.def("disable_print_inline", [](llvm::Module *module) {
-    std::set<llvm::StringRef> noinlineFunctions = {
-        "__ockl_fprintf_stdout_begin",  "__ockl_fprintf_stderr_begin",
-        "__ockl_fprintf_append_args",   "__ockl_fprintf_append_string_n",
-        "__ockl_printf_begin",          "__ockl_printf_append_args",
-        "__ockl_printf_append_string_n"};
+    // List of functions name prefixes we want to forbid inline
+    std::vector<llvm::StringRef> prefixes = {"__ockl_fprintf", "__ockl_printf"};
 
-    for (llvm::Function &f : module->functions())
-      if (f.hasName() && noinlineFunctions.count(f.getName()) != 0)
+    for (llvm::Function &f : module->functions()) {
+      if (!f.hasName())
+        continue;
+      llvm::StringRef name = f.getName();
+
+      auto isNamePrefixed = [&name](llvm::StringRef prefix) {
+        return name.starts_with(prefix);
+      };
+
+      if (std::any_of(prefixes.begin(), prefixes.end(), isNamePrefixed))
         f.addFnAttr(llvm::Attribute::NoInline);
+    }
   });
 
   m.def(
