@@ -1376,6 +1376,8 @@ class ASTFunction:
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     constexprs = specialization.constants
+    arg_idx = lambda x: (fn.arg_names.index(x),) if isinstance(x, str) else x
+    constexprs = {arg_idx(k): v for k, v in constexprs.items()}
     constants = specialization.attrs.get_constants()
     arg_types = [str_to_ty(ty) for ty in specialization.signature.values()]
     # find index of constants in serialized order

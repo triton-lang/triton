@@ -1200,6 +1200,7 @@ class tuple:
         if isinstance(idx, constexpr):
             return self.values[idx]
         else:
+            assert isinstance(idx, slice)
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
     # TODO: remove
