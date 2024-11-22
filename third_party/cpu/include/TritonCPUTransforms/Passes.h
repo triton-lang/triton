@@ -36,6 +36,7 @@ createConvertDotProduct(bool useHorizontalSum);
 std::unique_ptr<OperationPass<ModuleOp>> createConvertDotToAMX();
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertDotToAMX(bool convertInt8, bool convertFp16, bool convertBf16);
+std::unique_ptr<OperationPass<ModuleOp>> createConvertDotGeneric();
 
 #define GEN_PASS_REGISTRATION
 #include "cpu/include/TritonCPUTransforms/Passes.h.inc"

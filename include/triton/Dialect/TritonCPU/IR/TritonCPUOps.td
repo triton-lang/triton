@@ -166,5 +166,29 @@ def TTC_AssertOp : TTC_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
 }
 
+def TTC_DotOp : TTC_Op<"dot", [Pure,
+                               DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                               TypesMatchWith<"result's type matches accumulator's type",
+                                              "d", "c", "$_self">]> {
+    let summary = "dot";
+
+    let description = [{Same as tt.dot but on vectors.}];
+
+    let arguments = (
+      ins
+      TTC_Vector:$a,
+      TTC_Vector:$b,
+      TTC_Vector:$c,
+      DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
+      DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc
+    );
+
+    let results = (outs TTC_Vector:$d);
+
+    let assemblyFormat = [{
+      $a`,` $b`,` $c (`,` `inputPrecision` `=` $inputPrecision^)? attr-dict `:`
+      type($a) `*` type($b) `->` type($d)
+    }];
+}
 
 #endif

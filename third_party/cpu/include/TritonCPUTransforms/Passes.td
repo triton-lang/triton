@@ -125,4 +125,16 @@ def ConvertDotToAMX : Pass<"triton-cpu-convert-dot-to-amx", "mlir::ModuleOp"> {
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def ConvertDotGeneric : Pass<"triton-cpu-convert-dot-generic", "mlir::ModuleOp"> {
+    let summary = "Generic convertion of dot product op.";
+    let description = [{
+        This pass is used to lower matmul operations to generic vector code.
+    }];
+
+    let constructor = "mlir::triton::cpu::createConvertDotGeneric()";
+
+    let dependentDialects = ["mlir::vector::VectorDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 #endif

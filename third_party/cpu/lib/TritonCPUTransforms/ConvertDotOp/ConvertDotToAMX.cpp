@@ -46,7 +46,7 @@ struct AmxBuffer {
 // Mul[F|I]Op operations.
 struct AmxDotOpCandidate {
   // Operation to convert.
-  vector::ContractionOp op;
+  cpu::DotOp op;
   // Available LHS, RHS, and accumulator types are limited in AMX and we might
   // require additional casts. Here we keep actual element types used by LHS,
   // RHS, and accumulator in AMX tiles.
@@ -79,53 +79,6 @@ struct AmxDotOpCandidate {
   // If output buffer is used then keep the original vector store here.
   Operation *origStore = nullptr;
 };
-
-bool checkIdxMap(Attribute attr, unsigned int v1, unsigned int v2) {
-  auto map = cast<AffineMapAttr>(attr).getAffineMap();
-  return map ==
-         AffineMap::getMultiDimMapWithTargets(3, {v1, v2}, attr.getContext());
-}
-
-// Return true if specified contraction op is actually a converted DotOp.
-bool isDotOp(vector::ContractionOp op) {
-  // First, check ranks of inputs.
-  if (cast<VectorType>(op.getLhs().getType()).getRank() != 2 ||
-      cast<VectorType>(op.getRhs().getType()).getRank() != 2 ||
-      cast<VectorType>(op.getAcc().getType()).getRank() != 2) {
-    LDBG("Drop candidate with rank != 2");
-    return false;
-  }
-
-  // Matmul uses add as a combining function.
-  if (op.getKind() != vector::CombiningKind::ADD) {
-    LDBG("Drop candidate with combining function " << op.getKind());
-    return false;
-  }
-
-  // Expect two parallel and one reduction iterators.
-  auto iterTypes = op.getIteratorTypes();
-  if (iterTypes.size() != 3 ||
-      cast<vector::IteratorTypeAttr>(iterTypes[0]).getValue() !=
-          vector::IteratorType::parallel ||
-      cast<vector::IteratorTypeAttr>(iterTypes[1]).getValue() !=
-          vector::IteratorType::parallel ||
-      cast<vector::IteratorTypeAttr>(iterTypes[2]).getValue() !=
-          vector::IteratorType::reduction) {
-    LDBG("Drop candidate with mismatched iterator types.");
-    return false;
-  }
-
-  // Check affine maps.
-  // TODO: be less restrictive on maps to allow transposed inputs?
-  auto idxMaps = op.getIndexingMaps();
-  if (!checkIdxMap(idxMaps[0], 0, 2) || !checkIdxMap(idxMaps[1], 2, 1) ||
-      !checkIdxMap(idxMaps[2], 0, 1)) {
-    LDBG("Drop candidate with mismatched affine maps.");
-    return false;
-  }
-
-  return true;
-}
 
 // Check if input and output types can be handled by AMX (possibly, using
 // additional casts for input/output). Returns true if AMX usage is possible.
@@ -216,6 +169,19 @@ bool checkElemTypes(Type lhsElemTy, Type rhsElemTy, Type accElemTy,
   return true;
 }
 
+// Check input shapes. Currently, support only 2D cases and ignore small
+// inputs.
+bool checkInputShapes(VectorType lhsTy, VectorType resTy) {
+  if (lhsTy.getRank() != 2)
+    return false;
+
+  if (lhsTy.getDimSize(0) < 8 || lhsTy.getDimSize(1) < 8 ||
+      resTy.getDimSize(1) < 8)
+    return false;
+
+  return true;
+}
+
 // Check if accumulator value is updated in a loop and has no other
 // usages than a dot op, that updates it. Tile loads/stores and casts
 // for such accumulators can be done outside of the loop.
@@ -262,7 +228,7 @@ bool isLoopCarriedAcc(Value acc) {
 
 // Return a value that holds the resulting loop carried accumulator value.
 // It's one of ForOp's results.
-Value getResValueForLoopCarriedAcc(vector::ContractionOp op) {
+Value getResValueForLoopCarriedAcc(cpu::DotOp op) {
   Value updAcc = op.getResult();
   auto forOp = dyn_cast<scf::ForOp>(op->getParentOp());
   auto &use = *updAcc.getUses().begin();
@@ -330,21 +296,15 @@ void findOutputBuffer(Value val, AmxDotOpCandidate &candidate) {
 // Check if specified ContractionOp can be lowered to AMX operations.
 // If conversion is possible, then true is returned and candidate
 // structure is filled with detailed transformation info.
-bool isAmxCandidate(vector::ContractionOp op, bool supportInt8,
-                    bool supportFp16, bool supportBf16,
-                    AmxDotOpCandidate &candidate) {
+bool isAmxCandidate(cpu::DotOp op, bool supportInt8, bool supportFp16,
+                    bool supportBf16, AmxDotOpCandidate &candidate) {
   MLIRContext *ctx = op.getContext();
-  VectorType lhsTy = cast<VectorType>(op.getLhs().getType());
-  VectorType rhsTy = cast<VectorType>(op.getRhs().getType());
-  VectorType accTy = cast<VectorType>(op.getAcc().getType());
+  VectorType lhsTy = cast<VectorType>(op.getA().getType());
+  VectorType rhsTy = cast<VectorType>(op.getB().getType());
+  VectorType accTy = cast<VectorType>(op.getC().getType());
   VectorType resTy = cast<VectorType>(op.getType());
 
   LDBG("Considering candidate op: " << op);
-
-  // Contraction op is very generic. For now, we generate it only as a
-  // result of DotOp conversion. But still check it's what we expect.
-  if (!isDotOp(op))
-    return false;
 
   // Check if input and output types match available hardware capabilities.
   // If check is successful then tile element types are filled with types
@@ -354,9 +314,13 @@ bool isAmxCandidate(vector::ContractionOp op, bool supportInt8,
                       supportInt8, supportFp16, supportBf16, candidate))
     return false;
 
+  // Check input shapes.
+  if (!checkInputShapes(lhsTy, resTy))
+    return false;
+
   candidate.op = op;
   setupBlockAndTileSizes(lhsTy.getShape(), rhsTy.getShape(), candidate);
-  candidate.keepAccOnTiles = isLoopCarriedAcc(op.getAcc());
+  candidate.keepAccOnTiles = isLoopCarriedAcc(op.getC());
 
   // Can't keep acc in a tile the whole loop right now:
   // https://github.com/llvm/llvm-project/issues/109481
@@ -697,12 +661,12 @@ void multiplyBlocksPreloadRhs(Location loc, VectorType lhsTileTy,
 
 LogicalResult convertCandidate(AmxDotOpCandidate &candidate,
                                PatternRewriter &rewriter) {
-  vector::ContractionOp op = candidate.op;
+  cpu::DotOp op = candidate.op;
   Location loc = op.getLoc();
-  VectorType lhsTy = cast<VectorType>(op.getLhs().getType());
-  VectorType rhsTy = cast<VectorType>(op.getRhs().getType());
-  VectorType accTy = cast<VectorType>(op.getAcc().getType());
-  VectorType resTy = cast<VectorType>(op.getResultType());
+  VectorType lhsTy = cast<VectorType>(op.getA().getType());
+  VectorType rhsTy = cast<VectorType>(op.getB().getType());
+  VectorType accTy = cast<VectorType>(op.getC().getType());
+  VectorType resTy = cast<VectorType>(op.getResult().getType());
   VectorType lhsTileTy =
       lhsTy.cloneWith(SmallVector<int64_t>({candidate.tileM, candidate.tileK}),
                       candidate.lhsTileElemTy);
@@ -726,15 +690,15 @@ LogicalResult convertCandidate(AmxDotOpCandidate &candidate,
 
   // Cast input data if required and prepare input buffer. It might be temporary
   // buffers with stored vectors or the original input memory.
-  Value lhs = maybeCast(loc, op.getLhs(), candidate.lhsTileElemTy, rewriter);
+  Value lhs = maybeCast(loc, op.getA(), candidate.lhsTileElemTy, rewriter);
   AmxBuffer lhsBuf =
       prepareTensorBuffer(loc, lhs, false, false, true, allocaPoint, rewriter);
 
-  Value rhs = maybeCast(loc, op.getRhs(), candidate.rhsTileElemTy, rewriter);
+  Value rhs = maybeCast(loc, op.getB(), candidate.rhsTileElemTy, rewriter);
   AmxBuffer rhsBuf =
       prepareTensorBuffer(loc, rhs, true, false, true, allocaPoint, rewriter);
 
-  Value acc = maybeCast(loc, op.getAcc(), candidate.accTileElemTy, rewriter);
+  Value acc = maybeCast(loc, op.getC(), candidate.accTileElemTy, rewriter);
   Value accToStore = acc;
   scf::ForOp forOp;
   if (candidate.keepAccInBuf || candidate.keepAccOnTiles) {
@@ -818,7 +782,7 @@ LogicalResult convertCandidate(AmxDotOpCandidate &candidate,
     rewriter.replaceAllUsesWith(loopRes, newVal);
     // For now, just use init value for unused ForOp result instead of
     // its removal.
-    rewriter.replaceOp(op, op.getAcc());
+    rewriter.replaceOp(op, op.getC());
   } else if (candidate.outBuf.empty()) {
     LDBG("Loading the result to a vector to replace orig op result.");
     Value newVal = rewriter.create<vector::TransferReadOp>(
@@ -852,7 +816,7 @@ struct ConvertDotToAMX
     ModuleOp mod = getOperation();
 
     SmallVector<AmxDotOpCandidate> candidates;
-    mod->walk([this, &candidates](vector::ContractionOp op) {
+    mod->walk([this, &candidates](cpu::DotOp op) {
       AmxDotOpCandidate candidate;
       if (isAmxCandidate(op, convertInt8, convertFp16, convertBf16,
                          candidate)) {

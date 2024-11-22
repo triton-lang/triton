@@ -60,39 +60,12 @@ struct DotOpConversion : public OpConversionPattern<triton::DotOp> {
     auto cType = cast<ShapedType>(c.getType());
     assert(aType.getRank() == bType.getRank() &&
            bType.getRank() == cType.getRank() &&
+           (aType.getRank() == 2 || aType.getRank() == 3) &&
            "Mixed ranks, not 2d or 3d matmul, unknown type of op");
 
-    uint32_t rank = aType.getRank();
-    if (rank == 2) {
-      auto aMap = AffineMap::getMultiDimMapWithTargets(3, {0, 2}, ctx);
-      auto bMap = AffineMap::getMultiDimMapWithTargets(3, {2, 1}, ctx);
-      auto cMap = AffineMap::getMultiDimMapWithTargets(3, {0, 1}, ctx);
-      auto iteratorTypes = rewriter.getArrayAttr(
-          {vector::IteratorTypeAttr::get(ctx, vector::IteratorType::parallel),
-           vector::IteratorTypeAttr::get(ctx, vector::IteratorType::parallel),
-           vector::IteratorTypeAttr::get(ctx,
-                                         vector::IteratorType::reduction)});
-      rewriter.replaceOpWithNewOp<vector::ContractionOp>(
-          op, a, b, c, rewriter.getAffineMapArrayAttr({aMap, bMap, cMap}),
-          iteratorTypes);
-      return success();
-    } else if (rank == 3) {
-      auto aMap = AffineMap::getMultiDimMapWithTargets(4, {0, 1, 3}, ctx);
-      auto bMap = AffineMap::getMultiDimMapWithTargets(4, {0, 3, 2}, ctx);
-      auto cMap = AffineMap::getMultiDimMapWithTargets(4, {0, 1, 2}, ctx);
-      auto iteratorTypes = rewriter.getArrayAttr(
-          {vector::IteratorTypeAttr::get(ctx, vector::IteratorType::parallel),
-           vector::IteratorTypeAttr::get(ctx, vector::IteratorType::parallel),
-           vector::IteratorTypeAttr::get(ctx, vector::IteratorType::parallel),
-           vector::IteratorTypeAttr::get(ctx,
-                                         vector::IteratorType::reduction)});
-      rewriter.replaceOpWithNewOp<vector::ContractionOp>(
-          op, a, b, c, rewriter.getAffineMapArrayAttr({aMap, bMap, cMap}),
-          iteratorTypes);
-      return success();
-    }
-
-    return failure();
+    rewriter.replaceOpWithNewOp<cpu::DotOp>(op, a, b, c, op.getInputPrecision(),
+                                            op.getMaxNumImpreciseAcc());
+    return success();
   }
 };
 
