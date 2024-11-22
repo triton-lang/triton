@@ -148,7 +148,7 @@ public:
   LogicalResult matchAndRewrite(ConvertLayoutOp cvtOp,
                                 PatternRewriter &rewriter) const override {
     // Match outerCvt(trans(innerCvt(x))).
-    auto trans = cvtOp.getSrc().getDefiningOp<TransOp>();
+    auto trans = cvtOp.getSrc().getDefiningOp<MemDescTransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
       return failure();
 
@@ -170,9 +170,9 @@ public:
     // Set needTrans to true here. newInnerCvtEnc is computed based on
     // argEncoding which is before the transpose. Without needTrans we will
     // compute vec and maxPhase based on incorrect m, n and k size of mma. The
-    // type inference of TransOp simply swap the order but doesn't fix the vec
-    // and maxPhase for the YType, hence it would causing incorrect swizzling
-    // code.
+    // type inference of MemDescTransOp simply swap the order but doesn't fix
+    // the vec and maxPhase for the YType, hence it would causing incorrect
+    // swizzling code.
     auto newInnerCvtEnc =
         SharedEncodingAttr::get(getContext(), cvtEncoding, srcTy.getShape(),
                                 /*order=*/getOrder(srcTy.getEncoding()),
@@ -187,8 +187,8 @@ public:
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
                          newInnerCvtEnc, sharedMemorySpace),
         trans.getSrc());
-    auto newTrans = rewriter.create<TransOp>(trans.getLoc(), alloc,
-                                             ArrayRef<int32_t>({1, 0}));
+    auto newTrans = rewriter.create<MemDescTransOp>(trans.getLoc(), alloc,
+                                                    ArrayRef<int32_t>({1, 0}));
     rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans);
     return success();
   }
@@ -332,7 +332,7 @@ public:
 
     MemDescType allocType = allocOp.getType();
     auto allocEncoding = cast<SharedEncodingAttr>(allocType.getEncoding());
-    TensorOrMemDesc srcTy = trans.getSrc().getType();
+    RankedTensorType srcTy = trans.getSrc().getType();
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
     // without transpose for other data types.)
@@ -361,8 +361,8 @@ public:
                          allocType.getMemorySpace());
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
                                                   trans.getSrc());
-    rewriter.replaceOpWithNewOp<TransOp>(allocOp, newAlloc,
-                                         ArrayRef<int32_t>({1, 0}));
+    rewriter.replaceOpWithNewOp<MemDescTransOp>(allocOp, newAlloc,
+                                                ArrayRef<int32_t>({1, 0}));
     return success();
   }
 };

@@ -136,7 +136,8 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
   // TODO: can we use an early_inc iterator?
   for (OpOperand &use : oldUse->getUses()) {
     // Non-subview/trans ops will be replaced by `val`.
-    if (!isa<triton::TransOp, triton::gpu::MemDescSubviewOp>(use.getOwner())) {
+    if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
+            use.getOwner())) {
       operandsToReplace.push_back(&use);
       continue;
     }
@@ -146,18 +147,18 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
     builder.setInsertionPoint(user);
     Value newVal;
     if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(user)) {
-      triton::MemDescType oldType = subview.getType();
+      triton::gpu::MemDescType oldType = subview.getType();
       bool isMutable =
-          cast<triton::MemDescType>(val.getType()).getMutableMemory();
-      Type newDstType = triton::MemDescType::get(
+          cast<triton::gpu::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = triton::gpu::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
           oldType.getMemorySpace(), isMutable);
       newVal = builder.create<triton::gpu::MemDescSubviewOp>(
           subview.getLoc(), newDstType, val, subview.getOffsets());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    } else if (auto trans = dyn_cast<triton::TransOp>(user)) {
-      newVal = builder.create<triton::TransOp>(trans.getLoc(), val,
-                                               trans.getOrderAttr());
+    } else if (auto trans = dyn_cast<triton::gpu::MemDescTransOp>(user)) {
+      newVal = builder.create<triton::gpu::MemDescTransOp>(trans.getLoc(), val,
+                                                           trans.getOrder());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
     }
     assert(newVal);

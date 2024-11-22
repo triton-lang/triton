@@ -1085,8 +1085,10 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
   ProgramPoint *programPoint = getProgramPointAfter(op);
-  auto lb = getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
-  auto step = getLatticeElementFor(programPoint, op.getStep())->getValue();
+  const auto &lb =
+      getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
+  const auto &step =
+      getLatticeElementFor(programPoint, op.getStep())->getValue();
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);

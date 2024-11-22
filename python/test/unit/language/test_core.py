@@ -3467,17 +3467,17 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
                 x_bf16 = x_f8.to(tl.bfloat16)
         else:
             # e2m1
-            em0 = x & 0x70
-            em1 = x & 0x7
-            x0 = (em0.to(tl.uint16) << 2) | ((x & 0x80).to(tl.uint16) << 8)
-            x1 = (em1.to(tl.uint16) << (2 + 4)) | ((x & 0x8).to(tl.uint16) << (8 + 4))
+            em0 = x & 0x7
+            em1 = x & 0x70
+            x0 = (em0.to(tl.uint16) << 2 + 4) | ((x & 0x8).to(tl.uint16) << 8 + 4)
+            x1 = (em1.to(tl.uint16) << 2) | ((x & 0x80).to(tl.uint16) << (8))
             # Three cases:
             # 1) x is normal and non-zero: Correct bias
-            x0 = tl.where((em0 & 0x60) != 0, x0 + ((127 - 1) << 7), x0)
-            x1 = tl.where((em1 & 0x6) != 0, x1 + ((127 - 1) << 7), x1)
+            x0 = tl.where((em0 & 0x6) != 0, x0 + ((127 - 1) << 7), x0)
+            x1 = tl.where((em1 & 0x60) != 0, x1 + ((127 - 1) << 7), x1)
             # 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in bf16
-            x0 = tl.where(em0 == 0x10, 16128 | (x0 & 0x8000), x0)
-            x1 = tl.where(em1 == 0x1, 16128 | (x1 & 0x8000), x1)
+            x0 = tl.where(em0 == 0x1, 16128 | (x0 & 0x8000), x0)
+            x1 = tl.where(em1 == 0x10, 16128 | (x1 & 0x8000), x1)
             # 3) x is zero, do nothing
             x_bf16 = tl.interleave(x0, x1).to(tl.bfloat16, bitcast=True)
         # Multiplication preserves infs and NaNs in x_bf16
@@ -5331,10 +5331,10 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
     %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
     """ if interm_layout is None else f"""
-    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !tt.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory>
-    %16 = triton_gpu.local_load %15 : !tt.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xi32, #src>
-    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !tt.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory>
-    %18 = triton_gpu.local_load %17 : !tt.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xf16, #src>
+    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !triton_gpu.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory>
+    %16 = triton_gpu.local_load %15 : !triton_gpu.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xi32, #src>
+    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !triton_gpu.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory>
+    %18 = triton_gpu.local_load %17 : !triton_gpu.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xf16, #src>
 
     %12 = triton_gpu.convert_layout %16 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %18 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
@@ -5434,21 +5434,11 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
             pytest.skip("Skip testing MMAv3 on devices with CC < 9")
 
     num_warps = np.cumprod(src_layout.warps_per_cta)[-1]
-    # TODO(Keren): Remove the intermediate layout once we have resolved the redundantDataMask issue for WGMMA
-    warps_per_cta = src_layout.warps_per_cta
-    interm = BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [warps_per_cta[0], warps_per_cta[1]], [0, 1], [1, 1],
-                           [1, 1], [0, 1])
 
     def do_test(src_layout, dst_layout):
         layouts = f"""
         #src = {src_layout}
         #dst = {dst_layout}
-        #interm = {interm}
-        """
-
-        conversion = f"""
-        %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
-        %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
         """
 
         ir = layouts + f"""
@@ -5458,6 +5448,7 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
         %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
         %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #src>
+        %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #dst>
         %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>> -> tensor<{M}x1xi32, #src>
         %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #src>
         %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>> -> tensor<1x{N}xi32, #src>
@@ -5466,12 +5457,10 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
         %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #src>
         %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #src>, tensor<{M}x{N}xi32, #src>
         %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<f16>, #src>
-        %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #interm>
-        """ + conversion + f"""
-        %15 = triton_gpu.convert_layout %12 : tensor<{M}x{N}xi32, #dst> -> tensor<{M}x{N}xi32, #interm>
-        %16 = triton_gpu.convert_layout %13 : tensor<{M}x{N}xf16, #dst> -> tensor<{M}x{N}xf16, #interm>
-        %17 = tt.addptr %3, %15 : tensor<{M}x{N}x!tt.ptr<f16>, #interm>, tensor<{M}x{N}xi32, #interm>
-        tt.store %17, %16 : tensor<{M}x{N}x!tt.ptr<f16>, #interm>
+        %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
+        %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
+        %14 = tt.addptr %3, %12 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>, tensor<{M}x{N}xi32, #dst>
+        tt.store %14, %13 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>
         tt.return
         }}
         }}
@@ -5579,7 +5568,7 @@ def matmul_kernel(  #
         stride_cm, stride_cn,  #
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
         low_precision_acc: tl.constexpr,  #
-        num_pipeline_stages: tl.constexpr = 3  #
+        num_stages: tl.constexpr = 3  #
 ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -5591,7 +5580,7 @@ def matmul_kernel(  #
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=num_pipeline_stages):
+    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=num_stages):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         accumulator = tl.dot(a, b, acc=accumulator, max_num_imprecise_acc=low_precision_acc)
@@ -5630,7 +5619,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
                             C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps,
-                            num_pipeline_stages=num_stages)
+                            num_stages=num_stages)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
@@ -5822,7 +5811,7 @@ def test_tl_range(device):
     pgm = matmul_kernel[
         1,
     ](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_M, BLOCK_N,
-      BLOCK_K, 0, num_pipeline_stages=5)
+      BLOCK_K, 0, num_stages=5)
     ref_out = torch.matmul(a, b).to(torch.float32)
     if is_interpreter():
         # GPU invokes tensor core for float16 matmul, which is not supported in interpreter.
@@ -5848,8 +5837,8 @@ def maxnreg_noinline2(X):
     tl.store(X, 0)
 
 
+@pytest.mark.interpreter
 def test_maxnreg(device):
-    assert not is_interpreter(), "this test won't work with the interpreter"
     if not is_cuda():
         pytest.skip('maxnreg only works on CUDA')
 
@@ -5863,14 +5852,15 @@ def test_maxnreg(device):
     X = torch.empty(1, dtype=torch.int32, device=device)
     k = kernel[(1, )](X, maxnreg=42)
 
-    # Ensure that .maxnreg is set on the kernel function (marked with .entry)
-    # and not on either of the noinline functions (marked with .func).
-    try:
-        assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
-        assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
-    except AssertionError:
-        print("Failing ptx:\n", k.asm["ptx"])
-        raise
+    if not is_interpreter():
+        # Ensure that .maxnreg is set on the kernel function (marked with .entry)
+        # and not on either of the noinline functions (marked with .func).
+        try:
+            assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
+            assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
+        except AssertionError:
+            print("Failing ptx:\n", k.asm["ptx"])
+            raise
 
 
 @pytest.mark.interpreter

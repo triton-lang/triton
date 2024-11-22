@@ -5,7 +5,7 @@
 #shared1 = #triton_gpu.shared<{vec = 16, perPhase = 4, maxPhase = 2, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32} {
   // CHECK-LABEL: @dot_high_precision_acc
-  tt.func @dot_high_precision_acc(%a: !tt.memdesc<128x128xf8E5M2, #shared>, %b: !tt.memdesc<128x256xf8E5M2, #shared1>, %c: tensor<128x256xf32, #mma>) {
+  tt.func @dot_high_precision_acc(%a: !triton_gpu.memdesc<128x128xf8E5M2, #shared>, %b: !triton_gpu.memdesc<128x256xf8E5M2, #shared1>, %c: tensor<128x256xf32, #mma>) {
     // CHECK: nvgpu.wgmma
     // CHECK-COUNT-128: llvm.fadd
     // CHECK: nvgpu.wgmma
@@ -16,7 +16,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK-COUNT-128: llvm.fadd
     %m = triton_nvidia_gpu.warp_group_dot %a, %b, %c
       {maxNumImpreciseAcc = 32 : i32, inputPrecision = 0 : i32} :
-      !tt.memdesc<128x128xf8E5M2, #shared> * !tt.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
+      !triton_gpu.memdesc<128x128xf8E5M2, #shared> * !triton_gpu.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
   }
 }
@@ -28,7 +28,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 #shared1 = #triton_gpu.shared<{vec = 16, perPhase = 4, maxPhase = 2, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32} {
   // CHECK-LABEL: @dot_low_precision_acc
-  tt.func @dot_low_precision_acc(%a: !tt.memdesc<128x128xf8E5M2, #shared>, %b: !tt.memdesc<128x256xf8E5M2, #shared1>, %c: tensor<128x256xf32, #mma>) {
+  tt.func @dot_low_precision_acc(%a: !triton_gpu.memdesc<128x128xf8E5M2, #shared>, %b: !triton_gpu.memdesc<128x256xf8E5M2, #shared1>, %c: tensor<128x256xf32, #mma>) {
     // CHECK: nvgpu.wgmma
     // CHECK-NOT: llvm.fadd
     // CHECK: nvgpu.wgmma
@@ -40,7 +40,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: llvm.return
     %m = triton_nvidia_gpu.warp_group_dot %a, %b, %c
       {maxNumImpreciseAcc = 129 : i32, inputPrecision = 0 : i32} :
-      !tt.memdesc<128x128xf8E5M2, #shared> * !tt.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
+      !triton_gpu.memdesc<128x128xf8E5M2, #shared> * !triton_gpu.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
   }
 }
@@ -52,7 +52,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 #shared1 = #triton_gpu.shared<{vec = 16, perPhase = 4, maxPhase = 2, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32} {
   // CHECK-LABEL: @dot_mix_precision_acc
-  tt.func @dot_mix_precision_acc(%a: !tt.memdesc<128x128xf8E5M2, #shared>, %b: !tt.memdesc<128x256xf8E5M2, #shared1>, %c: tensor<128x256xf32, #mma>) {
+  tt.func @dot_mix_precision_acc(%a: !triton_gpu.memdesc<128x128xf8E5M2, #shared>, %b: !triton_gpu.memdesc<128x256xf8E5M2, #shared1>, %c: tensor<128x256xf32, #mma>) {
     // CHECK: nvgpu.wgmma
     // CHECK-NOT: llvm.fadd
     // CHECK: nvgpu.wgmma
@@ -64,7 +64,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: llvm.return
     %m = triton_nvidia_gpu.warp_group_dot %a, %b, %c
       {maxNumImpreciseAcc = 64 : i32, inputPrecision = 0 : i32} :
-      !tt.memdesc<128x128xf8E5M2, #shared> * !tt.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
+      !triton_gpu.memdesc<128x128xf8E5M2, #shared> * !triton_gpu.memdesc<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
   }
 }
@@ -78,10 +78,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK-LABEL: @dot_zero_acc
   // Generate a wgmma with 2 sources.
   // CHECK: nvgpu.wgmma %{{.*}}, %{{.*}} {
-  tt.func @dot_zero_acc(%a: !tt.memdesc<128x64xf16, #shared>, %b: !tt.memdesc<64x64xf16, #shared1>) {
+  tt.func @dot_zero_acc(%a: !triton_gpu.memdesc<128x64xf16, #shared>, %b: !triton_gpu.memdesc<64x64xf16, #shared1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
     %m = triton_nvidia_gpu.warp_group_dot %a, %b, %cst {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
-      !tt.memdesc<128x64xf16, #shared> * !tt.memdesc<64x64xf16, #shared1> -> tensor<128x64xf32, #mma>
+      !triton_gpu.memdesc<128x64xf16, #shared> * !triton_gpu.memdesc<64x64xf16, #shared1> -> tensor<128x64xf32, #mma>
     tt.return
   }
 }
@@ -95,11 +95,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // Generate a wgmma where the first operand is a struct.
   // CHECK: nvgpu.wgmma {{.*}} : (!llvm.struct<(i32, i32, i32, i32)>, i64, i1) -> !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>
   // CHECK: nvgpu.wgmma_wait_group %{{.*}} {pendings = 0 : i32} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>
-  tt.func @dot_reg_operand_A(%a: tensor<128x64xf16, #mma>, %b: !tt.memdesc<64x64xf16, #shared>) {
+  tt.func @dot_reg_operand_A(%a: tensor<128x64xf16, #mma>, %b: !triton_gpu.memdesc<64x64xf16, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
     %opA = triton_gpu.convert_layout %a : tensor<128x64xf16, #mma> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
     %m = triton_nvidia_gpu.warp_group_dot %opA, %b, %cst { inputPrecision = 0 : i32 }:
-      tensor<128x64xf16,  #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !tt.memdesc<64x64xf16, #shared> -> tensor<128x64xf32, #mma>
+      tensor<128x64xf16,  #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !triton_gpu.memdesc<64x64xf16, #shared> -> tensor<128x64xf32, #mma>
     tt.return
   }
 }
@@ -114,10 +114,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // Generate a wgmma where the first operand is a struct.
   // CHECK: nvgpu.wgmma {{.*}} : (!llvm.struct<(i32, i32, i32, i32)>, i64, i1) -> !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>
   // CHECK: nvgpu.wgmma_wait_group %{{.*}} {pendings = 0 : i32}
-  tt.func @dot_reg_operand_A_fp8(%a: tensor<128x128xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %b: !tt.memdesc<128x256xf8E5M2, #shared>) {
+  tt.func @dot_reg_operand_A_fp8(%a: tensor<128x128xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %b: !triton_gpu.memdesc<128x256xf8E5M2, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma1>
     %m = triton_nvidia_gpu.warp_group_dot %a, %b, %cst { maxNumImpreciseAcc = 1073741824 : i32, inputPrecision = 0 : i32 } :
-      tensor<128x128xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * !tt.memdesc<128x256xf8E5M2, #shared> -> tensor<128x256xf32, #mma1>
+      tensor<128x128xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * !triton_gpu.memdesc<128x256xf8E5M2, #shared> -> tensor<128x256xf32, #mma1>
     tt.return
   }
 }
@@ -128,10 +128,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #mma = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 64, 16]}>
 #shared = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  tt.func @dot_reg_operand_upcast(%a_desc: !tt.memdesc<128x64xi8, #shared>, %b: !tt.memdesc<64x64xf16, #shared>, %acc: tensor<128x64xf32, #mma>) {
-    %a_dotop = triton_gpu.local_load %a_desc : !tt.memdesc<128x64xi8, #shared> -> tensor<128x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+  tt.func @dot_reg_operand_upcast(%a_desc: !triton_gpu.memdesc<128x64xi8, #shared>, %b: !triton_gpu.memdesc<64x64xf16, #shared>, %acc: tensor<128x64xf32, #mma>) {
+    %a_dotop = triton_gpu.local_load %a_desc : !triton_gpu.memdesc<128x64xi8, #shared> -> tensor<128x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
     %a_casted = arith.sitofp %a_dotop : tensor<128x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> to tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-    %res = triton_nvidia_gpu.warp_group_dot %a_casted, %b, %acc : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !tt.memdesc<64x64xf16, #shared> -> tensor<128x64xf32, #mma>
+    %res = triton_nvidia_gpu.warp_group_dot %a_casted, %b, %acc : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !triton_gpu.memdesc<64x64xf16, #shared> -> tensor<128x64xf32, #mma>
     tt.return
   }
 }
@@ -220,10 +220,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
 // CHECK-LABEL: dot_zero_acc_operand
 // CHECK-COUNT-128: llvm.fadd
-  tt.func @dot_zero_acc_operand(%a: !tt.memdesc<128x128xf8E5M2, #shared>, %b: !tt.memdesc<128x128xf8E5M2, #shared1>) {
+  tt.func @dot_zero_acc_operand(%a: !triton_gpu.memdesc<128x128xf8E5M2, #shared>, %b: !triton_gpu.memdesc<128x128xf8E5M2, #shared1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     %m = triton_nvidia_gpu.warp_group_dot %a, %b, %cst {maxNumImpreciseAcc = 64 : i32, inputPrecision = 0 : i32} :
-      !tt.memdesc<128x128xf8E5M2, #shared> * !tt.memdesc<128x128xf8E5M2, #shared1> -> tensor<128x128xf32, #mma>
+      !triton_gpu.memdesc<128x128xf8E5M2, #shared> * !triton_gpu.memdesc<128x128xf8E5M2, #shared1> -> tensor<128x128xf32, #mma>
     tt.return
   }
 }
@@ -238,7 +238,7 @@ module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : 
   tt.func @distribute_to_shared_st_matrix(%a: tensor<128x128xf16, #mma>) {
     // CHECK-COUNT-16: nvgpu.stmatrix
     //          CHECK: llvm.return
-    %b = triton_gpu.local_alloc %a {allocation.offset = 0 : i32} : (tensor<128x128xf16, #mma>) -> !tt.memdesc<128x128xf16, #shared, mutable>
+    %b = triton_gpu.local_alloc %a {allocation.offset = 0 : i32} : (tensor<128x128xf16, #mma>) -> !triton_gpu.memdesc<128x128xf16, #shared, mutable>
     tt.return
   }
 }
@@ -290,6 +290,18 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK: atom.global.gpu.acq_rel.add.noftz.v4.f16
     // CHECK: atom.global.gpu.acq_rel.add.noftz.v4.f16
     %0 = tt.atomic_rmw fadd, acq_rel, gpu, %dest_ptrs, %data, %mask : (tensor<256x!tt.ptr<f16>, #blocked>, tensor<256xf16, #blocked>, tensor<256xi1, #blocked>) -> tensor<256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
+module attributes {"triton_gpu.target" = "cuda:90", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: test_fp8_to_fp16_dot_operand
+  // CHECK-COUNT-16: cvt.rn.f16x2.e5m2x2
+  tt.func @test_fp8_to_fp16_dot_operand(%arg: tensor<128x32xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>) {
+    %r = tt.fp_to_fp %arg : tensor<128x32xf8E5M2, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> -> tensor<128x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
     tt.return
   }
 }

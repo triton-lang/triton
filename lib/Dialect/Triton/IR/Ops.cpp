@@ -207,7 +207,7 @@ LogicalResult TransOp::inferReturnTypes(
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
-  auto argTy = cast<TensorOrMemDesc>(operands[0].getType());
+  auto argTy = cast<RankedTensorType>(operands[0].getType());
   auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
@@ -223,35 +223,8 @@ LogicalResult TransOp::inferReturnTypes(
       return failure();
     }
   }
-  if (auto memDescTy = dyn_cast<MemDescType>(argTy)) {
-    inferredReturnTypes.push_back(MemDescType::get(
-        retShape, retEltTy, retEncoding, memDescTy.getMemorySpace(),
-        memDescTy.getMutableMemory()));
-  } else {
-    inferredReturnTypes.push_back(
-        RankedTensorType::get(retShape, retEltTy, retEncoding));
-  }
-  return success();
-}
-
-LogicalResult TransOp::verify() {
-  // Check that the op's `order` attribute is a permutation of the right length.
-  auto srcTy = getSrc().getType();
-
-  ArrayRef<int32_t> order = getOrder();
-  if (order.size() != srcTy.getRank()) {
-    return emitError("order must have the same size as the rank of the "
-                     "operand and result");
-  }
-
-  SmallVector<int32_t, 8> sortedOrder(order);
-  llvm::sort(sortedOrder);
-  for (int32_t i = 0; i < sortedOrder.size(); i++) {
-    if (sortedOrder[i] != i) {
-      return emitError("order must be a permutation of [0, ..., rank - 1]");
-    }
-  }
-
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(retShape, retEltTy, retEncoding));
   return success();
 }
 
@@ -266,8 +239,8 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto aEnc = cast<RankedTensorType>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<RankedTensorType>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc && retEnc);

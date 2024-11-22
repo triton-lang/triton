@@ -277,9 +277,9 @@ tt.func public @fn(%arg0: tensor<2x4x8x16xf32, #blocked>, %arg1: tensor<16x32x64
 #shared2 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 2], CTASplitNum = [2, 4], CTAOrder = [0, 1], hasLeadingOffset = true}>
 #shared3 = #triton_gpu.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], CTAsPerCGA = [2, 1], CTASplitNum = [4, 2], CTAOrder = [1, 0], hasLeadingOffset = true}>
 module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 8 : i32, "triton_gpu.num-warps" = 64 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-tt.func public @fn(%arg0: !tt.memdesc<2x4x8x16xf32, #shared>, %arg1: !tt.memdesc<16x32xf32, #shared2>) {
-    %a = tt.trans %arg0 {order = array<i32: 1, 3, 2, 0>} : !tt.memdesc<2x4x8x16xf32, #shared> -> !tt.memdesc<4x16x8x2xf32, #shared1>
-    %b = tt.trans %arg1 {order = array<i32: 1, 0>} : !tt.memdesc<16x32xf32, #shared2> -> !tt.memdesc<32x16xf32, #shared3>
+tt.func public @fn(%arg0: !triton_gpu.memdesc<2x4x8x16xf32, #shared>, %arg1: !triton_gpu.memdesc<16x32xf32, #shared2>) {
+    %a = triton_gpu.memdesc_trans %arg0 {order = array<i32: 1, 3, 2, 0>} : !triton_gpu.memdesc<2x4x8x16xf32, #shared> -> !triton_gpu.memdesc<4x16x8x2xf32, #shared1>
+    %b = triton_gpu.memdesc_trans %arg1 {order = array<i32: 1, 0>} : !triton_gpu.memdesc<16x32xf32, #shared2> -> !triton_gpu.memdesc<32x16xf32, #shared3>
     tt.return
 }
 }  // end module

@@ -28,7 +28,8 @@ include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
-include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -80,8 +81,8 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<I
         $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
     }];
 
-    let arguments = (ins TT_TensorOrMemDesc:$a,
-                         TT_TensorOrMemDesc:$b,
+    let arguments = (ins TTG_TensorOrMemDesc:$a,
+                         TTG_TensorOrMemDesc:$b,
                          TT_FpIntTensor:$c,
                          Optional<I1>:$useC,
                          DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
@@ -100,8 +101,8 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<I
 def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                               AllTypesMatch<["inputs", "outputs"]>]> {
   let summary = "warp group dot wait";
-  let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
-  let results = (outs Variadic<TT_TensorOrMemDesc>:$outputs);
+  let arguments = (ins Variadic<TTG_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
+  let results = (outs Variadic<TTG_TensorOrMemDesc>:$outputs);
   let description = [{
     Waits until there are $pendings or fewer outstanding async dot operations.
 
@@ -125,7 +126,7 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [DeclareOpInterfaceMethods<Memo
     }];
 
     let hasVerifier = 1;
-    let arguments = (ins TT_MemDescType:$alloc,
+    let arguments = (ins TTG_MemDescType:$alloc,
                          I32Attr:$count);
     let assemblyFormat = "$alloc `,` $count attr-dict `:` type($alloc)";
 }
@@ -141,7 +142,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [DeclareOpInterfaceMethods<Me
     }];
 
     let hasVerifier = 1;
-    let arguments = (ins TT_MemDescType:$alloc);
+    let arguments = (ins TTG_MemDescType:$alloc);
     let assemblyFormat = "$alloc attr-dict `:` type($alloc)";
 }
 
@@ -155,7 +156,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<
 
   let hasVerifier = 1;
   let arguments = (
-    ins TT_MemDescType:$alloc,
+    ins TTG_MemDescType:$alloc,
     I32Attr:$size,
     I1:$pred
   );
@@ -180,7 +181,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<Memo
     }];
 
     let hasVerifier = 1;
-    let arguments = (ins TT_MemDescType:$alloc,
+    let arguments = (ins TTG_MemDescType:$alloc,
                          I32:$phase);
     let assemblyFormat = "$alloc `,` $phase attr-dict `:` type($alloc)";
 }
@@ -221,8 +222,8 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   let arguments = (
     ins TT_PtrType:$desc_ptr,
     Variadic<I32>:$coord,
-    TT_MemDescType:$barrier,
-    TT_MemDescType:$result,
+    TTG_MemDescType:$barrier,
+    TTG_MemDescType:$result,
     I1:$pred,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
@@ -250,7 +251,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let arguments = (
     ins TT_PtrType:$desc_ptr,
     Variadic<I32>:$coord,
-    TT_MemDescType:$src);
+    TTG_MemDescType:$src);
 
   let assemblyFormat = [{
     $desc_ptr `[` $coord `]` $src
