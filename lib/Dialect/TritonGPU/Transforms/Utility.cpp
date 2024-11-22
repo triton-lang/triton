@@ -563,7 +563,8 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
              triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp,
-             triton::gpu::LocalAllocOp, triton::gpu::LocalStoreOp>(op);
+             triton::gpu::LocalAllocOp, triton::gpu::LocalLoadOp,
+             triton::gpu::LocalStoreOp>(op);
 }
 
 scf::ForOp replaceForOpWithNewSignature(
@@ -944,7 +945,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
-            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
+            dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
@@ -955,10 +956,11 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return std::nullopt;
       auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
-          cast<TensorOrMemDesc>(user->getResult(0).getType()).getEncoding());
+          cast<triton::gpu::TensorOrMemDesc>(user->getResult(0).getType())
+              .getEncoding());
       if (!dotOpEnc)
         return std::nullopt;
-      auto srcTy = cast<TensorOrMemDesc>(val.getType());
+      auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();

@@ -14,7 +14,6 @@
 #include "triton/Dialect/Triton/IR/AttrInterfaces.cpp.inc"
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
 #include "triton/Dialect/Triton/IR/OpInterfaces.cpp.inc"
-#include "triton/Dialect/Triton/IR/TypeInterfaces.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -78,44 +77,6 @@ struct TritonInlinerInterface : public DialectInlinerInterface {
   }
 };
 
-struct TensorModel
-    : public TensorOrMemDesc::ExternalModel<TensorModel, RankedTensorType> {
-  Type getElementType(Type pointer) const {
-    return cast<RankedTensorType>(pointer).getElementType();
-  }
-  Attribute getEncoding(Type pointer) const {
-    return cast<RankedTensorType>(pointer).getEncoding();
-  }
-  ArrayRef<int64_t> getShape(Type pointer) const {
-    return cast<RankedTensorType>(pointer).getShape();
-  }
-  int64_t getRank(Type pointer) const {
-    return cast<RankedTensorType>(pointer).getRank();
-  }
-  int64_t getElementTypeBitWidth(Type pointer) const {
-    return cast<RankedTensorType>(pointer).getElementTypeBitWidth();
-  }
-};
-
-struct MemDescModel
-    : public TensorOrMemDesc::ExternalModel<MemDescModel, MemDescType> {
-  Type getElementType(Type pointer) const {
-    return cast<MemDescType>(pointer).getElementType();
-  }
-  Attribute getEncoding(Type pointer) const {
-    return cast<MemDescType>(pointer).getEncoding();
-  }
-  ArrayRef<int64_t> getShape(Type pointer) const {
-    return cast<MemDescType>(pointer).getShape();
-  }
-  int64_t getRank(Type pointer) const {
-    return cast<MemDescType>(pointer).getShape().size();
-  }
-  int64_t getElementTypeBitWidth(Type pointer) const {
-    return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
-  }
-};
-
 } // namespace
 
 void TritonDialect::initialize() {
@@ -128,9 +89,6 @@ void TritonDialect::initialize() {
 
   // We can also add interface here.
   addInterfaces<TritonInlinerInterface>();
-
-  RankedTensorType::attachInterface<TensorModel>(*getContext());
-  MemDescType::attachInterface<MemDescModel>(*getContext());
 }
 
 Operation *TritonDialect::materializeConstant(OpBuilder &builder,
