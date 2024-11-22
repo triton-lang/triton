@@ -388,9 +388,10 @@ jobs:
       - *restore-build-artifacts-step
       - *inspect-cache-directories-step
 
-      - name: Update PATH
+      - name: Update compiler to clang
         run: |
-          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
 
       - name: Install pip dependencies
         run: |

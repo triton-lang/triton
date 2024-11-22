@@ -396,9 +396,10 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
-      - name: Update PATH
+      - name: Update compiler to clang
         run: |
-          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
       - name: Install pip dependencies
         run: |
           python3 -m pip install --upgrade pip
