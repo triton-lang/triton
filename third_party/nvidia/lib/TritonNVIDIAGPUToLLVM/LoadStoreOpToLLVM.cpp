@@ -987,6 +987,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
         bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
         if (skipMaskForMultiCTA) {
+          // TODO: Masking does not work for CTA multicast with cp.async.
           // XXX(@peterbell10): In the multi-CTA mode, the redundant data might
           // be on different CTAs which don't share the same smem address space,
           // so we might need to load the same data multiple times.
