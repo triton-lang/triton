@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_UTILITY_H
-#define TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_UTILITY_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
 
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
@@ -37,16 +37,16 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                int axis);
 
-// Loads from shared or global memory with predication.
-// `otherElems` is used to mask out the elements that are not loaded
+/// Loads from shared or global memory with predication.
+/// `otherElems` is used to mask out the elements that are not loaded
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, int64_t alignmentBytes = 0,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 
-// Stores to shared or global memory with predication.
+/// Stores to shared or global memory with predication.
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, int64_t alignmentBytes = 0,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 } // namespace mlir::LLVM::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

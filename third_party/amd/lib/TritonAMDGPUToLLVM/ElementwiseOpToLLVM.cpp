@@ -21,14 +21,16 @@ typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
     ConverterT;
 
 namespace {
-// ROCM utility functions for data type conversion
-/* ----- FP8E5M2 ------ */
-// This data-type is the standard FP8E5M2 format
-// NVIDIA GPU supports it natively but we don't have hardware native
-// support on MI300.
-// The SW based downcast with RTNE is not fully functional for the
-// denorm values. We need rewrite it if we need to emulate this data type
-// on AMDGPU.
+/// ROCM utility functions for data type conversion
+
+/// FP8E5M2
+///
+/// This data-type is the standard FP8E5M2 format
+/// NVIDIA GPU supports it natively but we don't have hardware native
+/// support on MI300.
+/// The SW based downcast with RTNE is not fully functional for the
+/// denorm values. We need rewrite it if we need to emulate this data type
+/// on AMDGPU.
 static SmallVector<Value>
 Fp16_to_Fp8E5M2_RTNE(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
@@ -112,7 +114,7 @@ static Value cvtFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
   return builder.launch(rewriter, loc, f16_ty, false);
 }
 
-// convert fp8 to fp32
+/// convert fp8 to fp32
 static SmallVector<Value> cvtFp8ToFp32(Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        Value v0, Value v1,
@@ -142,7 +144,7 @@ static SmallVector<Value> cvtFp8ToFp32(Location loc,
   return ret;
 }
 
-// convert fp32 to fp8
+/// convert fp32 to fp8
 static SmallVector<Value> cvtFp32ToFp8(Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        Value v0, Value v1,
@@ -221,8 +223,9 @@ Fp8E4M3FNUZ_to_Fp32(Location loc, ConversionPatternRewriter &rewriter,
   assert(v.size() == 2);
   return cvtFp8ToFp32(loc, rewriter, v[0], v[1], "fp8");
 }
-// Depend on whether we focus more on performance, we may skip
-// the processing of submornal values
+
+/// Depend on whether we focus more on performance, we may skip
+/// the processing of submornal values
 static Value Fp16_to_Fp8E5M2FNUZ_oneValue(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           Value v) {
@@ -537,9 +540,9 @@ static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
           extract_element(i8_ty, fp8x4Vec, i32_val(3))};
 }
 
-// ROCM type conversion between fp8 and bf16
+/// ROCM type conversion between fp8 and bf16
 
-// fp8e4m3fn to bf16
+/// fp8e4m3fn to bf16
 static SmallVector<Value> Fp8E4M3FN_to_Bf16(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
@@ -576,7 +579,7 @@ static SmallVector<Value> Fp8E4M3FN_to_Bf16(Location loc,
 
 /****************************************************************************/
 
-// fp8e4m3fnuz to bf16
+/// fp8e4m3fnuz to bf16
 static SmallVector<Value>
 Fp8E4M3FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
@@ -587,7 +590,7 @@ Fp8E4M3FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
   return ret;
 }
 
-// bf16 to fp8e4m3fnuz
+/// bf16 to fp8e4m3fnuz
 static SmallVector<Value>
 Bf16_to_Fp8E4M3FNUZ(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
@@ -597,7 +600,7 @@ Bf16_to_Fp8E4M3FNUZ(Location loc, ConversionPatternRewriter &rewriter,
   return cvtFp32ToFp8(loc, rewriter, v0, v1, "fp8");
 }
 
-// fp8e5m2fnuz to bf16
+/// fp8e5m2fnuz to bf16
 static SmallVector<Value>
 Fp8E5M2FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
@@ -608,7 +611,7 @@ Fp8E5M2FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
   return ret;
 }
 
-// bf16 to fp8e5m2fnuz
+/// bf16 to fp8e5m2fnuz
 static SmallVector<Value>
 Bf16_to_Fp8E5M2FNUZ(Location loc, ConversionPatternRewriter &rewriter,
                     const SmallVector<Value> &v) {
@@ -670,7 +673,7 @@ static ConverterT Fp8E4M3FNUZ_to_Fp16(AMD::ISAFamily isaFamily) {
                                             : Fp8E4M3FNUZ_to_Fp16_SW;
 }
 
-// Fp16 -> Fp8E4M3 (packed)
+/// Fp16 -> Fp8E4M3 (packed)
 static Value Fp16_to_Fp8E4M3FNUZ_oneValue(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           Value v) {
@@ -856,7 +859,7 @@ struct ElementwiseOpConversion
   using Base::Base;
   using OpAdaptor = typename Base::OpAdaptor;
 
-  // An interface to support variant DestOp builder.
+  /// An interface to support variant DestOp builder.
   SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
@@ -866,7 +869,7 @@ struct ElementwiseOpConversion
   }
 };
 
-// Attempts to use vectorized conversions via inline PTX when possible.
+/// Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<triton::FpToFpOp, FpToFpOpConversion> {
   using ElementwiseOpConversionBase<
@@ -1160,7 +1163,7 @@ static SmallVector<Value> S8_to_Bf16(Location loc,
   return outValues;
 }
 
-// Uses inline ptx to convert s8/u8 to bf16, since the
+/// Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<mlir::arith::SIToFPOp, SIToFPOpConversion> {
   using Base =

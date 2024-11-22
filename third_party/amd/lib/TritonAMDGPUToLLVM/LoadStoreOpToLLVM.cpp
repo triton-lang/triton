@@ -25,8 +25,8 @@ using ::mlir::LLVM::AMD::llStore;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
-// Return the mask for the unique data accessed by given tensor type.
-// Used to mask out the redundant data accessed by threads.
+/// Return the mask for the unique data accessed by given tensor type.
+/// Used to mask out the redundant data accessed by threads.
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                         Location loc, const AMD::TargetInfo &targetInfo) {
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -111,13 +111,13 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   return mask;
 }
 
-// Contains some helper functions for both Load and Store conversions.
+/// Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const AMD::TargetInfo &targetInfo,
                                    ModuleAxisInfoAnalysis &axisAnalysisPass)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
-  // Createa a LLVM vector of type `vecTy` containing all zeros
+  /// Createa a LLVM vector of type `vecTy` containing all zeros
   Value createZeroVector(OpBuilder &builder, Location loc,
                          VectorType vecTy) const {
     mlir::Attribute zeroAttr = builder.getZeroAttr(vecTy.getElementType());
@@ -127,9 +127,9 @@ struct LoadStoreConversionBase {
     return zeroVal;
   }
 
-  // Given a vector of values `elems` and a starting point `start`, create a
-  // LLVM vector of length `vec` whose elements are `elems[start, ...,
-  // elems+vec-1]`
+  /// Given a vector of values `elems` and a starting point `start`, create a
+  /// LLVM vector of length `vec` whose elements are `elems[start, ...,
+  /// elems+vec-1]`
   Value packElementRangeIntoVector(ConversionPatternRewriter &rewriter,
                                    const LLVMTypeConverter *typeConverter,
                                    Location loc, VectorType vecTy,
@@ -146,15 +146,15 @@ struct LoadStoreConversionBase {
     return v;
   }
 
-  // Return a tensor of pointers with the same type of `basePtr` and the same
-  // shape of `offset`
+  /// Return a tensor of pointers with the same type of `basePtr` and the same
+  /// shape of `offset`
   Type getPointerTypeWithShape(Value basePtr, Value offset) const {
     Type basePtrType = basePtr.getType();
     auto offsetType = cast<RankedTensorType>(offset.getType());
     return offsetType.cloneWith(std::nullopt, basePtrType);
   }
 
-  // Get contiguity for a tensor pointer `ptr`
+  /// Get contiguity for a tensor pointer `ptr`
   unsigned getContiguity(Value ptr) const {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
@@ -162,7 +162,7 @@ struct LoadStoreConversionBase {
     return axisAnalysisPass.getPtrContiguity(ptr);
   }
 
-  // Get contiguity for a scalar pointer `ptr` and a tensor `offset`
+  /// Get contiguity for a scalar pointer `ptr` and a tensor `offset`
   unsigned getContiguity(Value ptr, Value offset) const {
     // Get contiguity from the offset
     Type type = getPointerTypeWithShape(ptr, offset);
@@ -188,7 +188,7 @@ struct LoadStoreConversionBase {
     return contiguity;
   }
 
-  // Determine the vector size of a tensor of pointers
+  /// Determine the vector size of a tensor of pointers
   unsigned getVectorSize(Value ptr) const {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
@@ -198,16 +198,16 @@ struct LoadStoreConversionBase {
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
 
-  // Given a scalar pointer and a tensor of offsets, determine the vector size
+  /// Given a scalar pointer and a tensor of offsets, determine the vector size
   unsigned getVectorSize(Value ptr, Value offset) const {
     auto contiguity = getContiguity(ptr, offset);
     auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
 
-  // Unpack the elements contained in a `llvmStruct` into a `SmallVector` of
-  // `Value`s. While you do that, check also the alignment of the mask and
-  // update the vector length `vec` accordingly
+  /// Unpack the elements contained in a `llvmStruct` into a `SmallVector` of
+  /// `Value`s. While you do that, check also the alignment of the mask and
+  /// update the vector length `vec` accordingly
   SmallVector<Value>
   getMaskElemsAndUpdateVeclen(ConversionPatternRewriter &rewriter, Location loc,
                               Value llMask, Value mask, unsigned &vec) const {

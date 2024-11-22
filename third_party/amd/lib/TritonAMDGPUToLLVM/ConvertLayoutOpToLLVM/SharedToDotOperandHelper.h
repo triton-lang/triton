@@ -1,11 +1,11 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_SHARED_TO_DOT_OPERAND_MATRIXCORE_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_SHARED_TO_DOT_OPERAND_MATRIXCORE_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTLAYOUTOPTOLLVM_SHAREDTODOTOPERANDHELPER_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTLAYOUTOPTOLLVM_SHAREDTODOTOPERANDHELPER_H_
 
 #include "Utility.h"
 
 namespace mlir::triton::AMD {
 
-// Get warpId inside block of warps.
+/// Get warpId inside block of warps.
 Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
                        Value warpId, const ArrayRef<unsigned int> &wpt,
                        int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx,
@@ -61,4 +61,4 @@ llvm::SmallVector<Value> computeOffsetsBType(
 
 } // namespace mlir::triton::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTLAYOUTOPTOLLVM_SHAREDTODOTOPERANDHELPER_H_

@@ -1,5 +1,5 @@
-#ifndef TRITON_DIALECT_TRITONAMDGPU_TRANSFORMS_MFMAGROUP_H_
-#define TRITON_DIALECT_TRITONAMDGPU_TRANSFORMS_MFMAGROUP_H_
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_MFMAGROUP_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_MFMAGROUP_H_
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "llvm/ADT/DenseMap.h"
@@ -29,14 +29,14 @@ struct MfmaInsnGroupSelectKey {
 };
 
 struct MfmaInsnAttr {
-  // m,n,k refer to the shapes of the two operands of mfma instructions.
-  // Operand A has shape m x k. Operand B has shape k x n.
-  // For mfma32 and mfma16 instructions, they are the same as
-  // the dims in the instruction name, i.e. mfma_DType_mxnxkxABType
+  /// m,n,k refer to the shapes of the two operands of mfma instructions.
+  /// Operand A has shape m x k. Operand B has shape k x n.
+  /// For mfma32 and mfma16 instructions, they are the same as
+  /// the dims in the instruction name, i.e. mfma_DType_mxnxkxABType
   unsigned m;
   unsigned n;
   unsigned k;
-  // kBase refers to the number of elements per thread
+  /// kBase refers to the number of elements per thread
   unsigned kBase;
   llvm::StringRef insn;
 };
@@ -91,4 +91,4 @@ public:
 };
 } // namespace mlir
 
-#endif // TRITON_DIALECT_TRITONAMDGPU_TRANSFORMS_MFMAGROUP_H_
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_MFMAGROUP_H_

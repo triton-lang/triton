@@ -4,7 +4,7 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace mlir::triton::AMD {
 
-// Get warpId inside block of warps.
+/// Get warpId inside block of warps.
 Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
                        Value warpId, const ArrayRef<unsigned int> &wpt,
                        int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx,

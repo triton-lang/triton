@@ -38,109 +38,109 @@
 
 using namespace mlir;
 
-// -----------------------------------------------------------------------------
-// Pointer canonicalizer utility class
-// -----------------------------------------------------------------------------
-// This class iterates through the argument of the `funcOp`, if the argument is
-// a pointer, starts a walk through its transitive uses to build a in-memory
-// data structure to record the current offset to that pointer. Only when the
-// pointer is really loaded/stored we materialize the base pointer with the
-// offset.
-//
-// Let's suppose that `arg0` is a pointer. The algorithm works like that:
-//
-// a) At the beginning the offset is a tensor initialized to zero, and we
-//    associate with `%arg0` a `FatPtr{basePtr=%arg0, offset=0}`. Through the
-//    algorithm `FatPtr.basePtr` represents the scalar base pointer (all the
-//    uniform updates will go into that) and `FatPtr.offset` represents the
-//    tensor offset (all the non-uniform updates will go into that)
-//
-//
-// b) Follow the pointer through the IR. When we meet:
-//    `%ptr = tt.addptr(%arg0, %offset)`
-//
-//    Isolate the uniform and the non-uniform contributions of %offset =
-//    (%u_offset, %nu_offset) and update the scalar pointer and the tensor
-//    offset
-//    ```
-//    %s_ptr = addi(%fatPoniters[ptr].basePtr, %u_offset)
-//    %t_offset = addi(%fatPoniters[ptr].offset, %nu_offset)
-//    %fatPointers[%ptr0] = FatPtr{base=%s_ptr, offset=%t_offset}
-//    ```
-// c) When we meet the `tt.load(%ptr)` or `tt.store(%ptr)` instructions,
-//    replace that instruction with:
-//    `%t_ptr = tt.splat(%fatPointers[%ptr].basePtr)
-//    `%fat_ptr = tt.addptr(%t_ptr, %fatPointers[ptr].offset)`
-//    `%data = tt.load(%fat_ptr)`
-//
-// Please note that `%offset` might be a 32bit or 64bit integer. If
-// we can, we would like to use 32 bit integers. This can happen under
-// certain conditions:
-//
-// a) We can determine that the offset cannot overflow. In this case, we can
-//    downcast the pointer just before emitting the load
-// b) We know that the underlying memory size can be expressed as a 32 bit
-//    value. In this case we can simply start with a 32bit offset and downcast
-//    if we ever meet 64 bit operations (because we know that the offset can be
-//    contained in 32 bits)
-//
+/// -----------------------------------------------------------------------------
+/// Pointer canonicalizer utility class
+/// -----------------------------------------------------------------------------
+/// This class iterates through the argument of the `funcOp`, if the argument is
+/// a pointer, starts a walk through its transitive uses to build a in-memory
+/// data structure to record the current offset to that pointer. Only when the
+/// pointer is really loaded/stored we materialize the base pointer with the
+/// offset.
+///
+/// Let's suppose that `arg0` is a pointer. The algorithm works like that:
+///
+/// a) At the beginning the offset is a tensor initialized to zero, and we
+///    associate with `%arg0` a `FatPtr{basePtr=%arg0, offset=0}`. Through the
+///    algorithm `FatPtr.basePtr` represents the scalar base pointer (all the
+///    uniform updates will go into that) and `FatPtr.offset` represents the
+///    tensor offset (all the non-uniform updates will go into that)
+///
+///
+/// b) Follow the pointer through the IR. When we meet:
+///    `%ptr = tt.addptr(%arg0, %offset)`
+///
+///    Isolate the uniform and the non-uniform contributions of %offset =
+///    (%u_offset, %nu_offset) and update the scalar pointer and the tensor
+///    offset
+///    ```
+///    %s_ptr = addi(%fatPoniters[ptr].basePtr, %u_offset)
+///    %t_offset = addi(%fatPoniters[ptr].offset, %nu_offset)
+///    %fatPointers[%ptr0] = FatPtr{base=%s_ptr, offset=%t_offset}
+///    ```
+/// c) When we meet the `tt.load(%ptr)` or `tt.store(%ptr)` instructions,
+///    replace that instruction with:
+///    `%t_ptr = tt.splat(%fatPointers[%ptr].basePtr)
+///    `%fat_ptr = tt.addptr(%t_ptr, %fatPointers[ptr].offset)`
+///    `%data = tt.load(%fat_ptr)`
+///
+/// Please note that `%offset` might be a 32bit or 64bit integer. If
+/// we can, we would like to use 32 bit integers. This can happen under
+/// certain conditions:
+///
+/// a) We can determine that the offset cannot overflow. In this case, we can
+///    downcast the pointer just before emitting the load
+/// b) We know that the underlying memory size can be expressed as a 32 bit
+///    value. In this case we can simply start with a 32bit offset and downcast
+///    if we ever meet 64 bit operations (because we know that the offset can be
+///    contained in 32 bits)
+///
 class PointerCanonicalizer {
 public:
   explicit PointerCanonicalizer(ModuleOp moduleOp)
       : rewriter(moduleOp.getContext()), mod(moduleOp) {}
 
-  // Propagate fat pointers in all the functions of the module
+  /// Propagate fat pointers in all the functions of the module
   LogicalResult run();
 
 private:
-  // A fat pointer is represented as `basePtr + offset` internally.
+  /// A fat pointer is represented as `basePtr + offset` internally.
   struct FatPtr {
-    // Scalar base pointer. Needs to be `tt.splat`ed before used
+    /// Scalar base pointer. Needs to be `tt.splat`ed before used
     Value basePtr;
-    // Tensor offset
+    /// Tensor offset
     Value offset;
-    // Flag to express if we can narrow the uses of the offset down to 32 bits
+    /// Flag to express if we can narrow the uses of the offset down to 32 bits
     bool canNarrow = false;
-    // Collection of attributes that need to be applied to the pointer
+    /// Collection of attributes that need to be applied to the pointer
     SmallVector<NamedAttribute> attributes;
 
-    // Utility copy functions
+    /// Utility copy functions
     FatPtr copy(Value newBasePtr, Value newOffset) {
       return FatPtr{newBasePtr, newOffset, canNarrow};
-    };
+    }
     FatPtr copyWithBase(Value newOffset) {
       return FatPtr{basePtr, newOffset, canNarrow};
     }
     FatPtr copyWithOffset(Value newBase) {
       return FatPtr{newBase, offset, canNarrow};
     }
-    // Attribute functions
+    /// Attribute functions
     void setAttr(NamedAttribute attr) { attributes.push_back(attr); }
     void setAttrs(ArrayRef<NamedAttribute> attrs) {
       llvm::append_range(attributes, attrs);
     }
   };
 
-  // Rewrite any operation that needs a pointer
+  /// Rewrite any operation that needs a pointer
   LogicalResult materializeFatPointer(Operation *op, Location loc, Value ptr);
 
-  // Start from an argument of a function and propagate its fat pointers
+  /// Start from an argument of a function and propagate its fat pointers
   LogicalResult rewritePointer(Value argPtr);
 
-  // Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
-  // obtained by splatting the `fatPtr.basePtr` using the `fatPtr.offset` shape
-  // and adding the offset to it.
+  /// Create a tensor pointer from a fat pointer `fatPtr`. The tensor pointer is
+  /// obtained by splatting the `fatPtr.basePtr` using the `fatPtr.offset` shape
+  /// and adding the offset to it.
   Value createTensorPointer(FatPtr fatPtr, Location loc);
 
-  // Push the attributes of the given operation `op` to the fat pointer
-  // corresponding to `val`
+  /// Push the attributes of the given operation `op` to the fat pointer
+  /// corresponding to `val`
   void collectFatPointerAttributes(Operation *op, Value val);
 
-  // Rewrite a given function, canonicalizing the different pointer arguments of
-  // the region
+  /// Rewrite a given function, canonicalizing the different pointer arguments of
+  /// the region
   LogicalResult rewriteFunction(triton::FuncOp funcOp);
 
-  // Rewriters for different operation a pointer can walk into
+  /// Rewriters for different operation a pointer can walk into
   LogicalResult rewriteSplatOp(triton::SplatOp splatOp, Location curLoc,
                                Value &nextPtr);
   LogicalResult rewriteBroadcastOp(triton::BroadcastOp broadcastOp,
@@ -163,24 +163,24 @@ private:
   LogicalResult rewriteBranchOp(cf::BranchOp branchOp, Location curLoc,
                                 OpOperand *operand, Value &nextPtr);
 
-  // Perform simplified scalar extraction. An offset can be composed by Unifrom
-  // (U) and non-uniform(N) components. A uniform component is basically a
-  // tensor constant (or a splat). A NonUniform value is a `make_range` or
-  // whatever we multiply with a `make_range` operation. We consider the generic
-  // expressions:
-  //   offset = (N+U)*(N+U)
-  //
-  // Where the `uniformOffset=U*U` and the `nonUniformOffset=(N*U+U*N+N*N).
-  //
-  // We do not consider any expression not involving * and +.
-  //
-  // The function accepts the `rewriter`, the `location` and start recursing at
-  // the given `expr`.
-  //
-  // We also pass the bitness of the offset.
-  //
-  // The function returns the two components of the given offset as a
-  // std::pair{U, NU}
+  /// Perform simplified scalar extraction. An offset can be composed by Unifrom
+  /// (U) and non-uniform(N) components. A uniform component is basically a
+  /// tensor constant (or a splat). A NonUniform value is a `make_range` or
+  /// whatever we multiply with a `make_range` operation. We consider the generic
+  /// expressions:
+  ///   offset = (N+U)*(N+U)
+  ///
+  /// Where the `uniformOffset=U*U` and the `nonUniformOffset=(N*U+U*N+N*N).
+  ///
+  /// We do not consider any expression not involving * and +.
+  ///
+  /// The function accepts the `rewriter`, the `location` and start recursing at
+  /// the given `expr`.
+  ///
+  /// We also pass the bitness of the offset.
+  ///
+  /// The function returns the two components of the given offset as a
+  /// std::pair{U, NU}
   std::pair<Value, Value> decomposeOffsetFromExpr(Location loc, Value expr,
                                                   int64_t bitness);
   std::pair<Value, Value> decomposeOffsetFromAdd(Location loc, Value expr,
@@ -188,7 +188,7 @@ private:
   std::pair<Value, Value> decomposeOffsetFromMul(Location loc, Value expr,
                                                  int64_t bitness);
 
-  // Return either the operation or its rewritten op
+  /// Return either the operation or its rewritten op
   template <typename OpTy>
   OpTy resolveOp(Operation *op,
                  const DenseMap<Operation *, Operation *> &rewriteOpMap) {
@@ -201,7 +201,7 @@ private:
   mlir::IRRewriter rewriter;
   ModuleOp mod;
 
-  // Symbol table: association between pointers and fatPointers
+  /// Symbol table: association between pointers and fatPointers
   llvm::MapVector<Value, FatPtr> pointers;
 
   void clearFunctionState() {
@@ -210,20 +210,20 @@ private:
     opToDelete.clear();
   }
 
-  // This structure is used to point to the right operation during the traversal
-  // of a function
+  /// This structure is used to point to the right operation during the traversal
+  /// of a function
   DenseMap<Operation *, Operation *> rewriteOpMap;
 
-  // Queue of operations to visit in the current function
+  /// Queue of operations to visit in the current function
   SmallVector<OpOperand *> queue;
 
-  // List of IR to delete in the current function
+  /// List of IR to delete in the current function
   SetVector<Operation *> opToDelete;
 };
 
 namespace {
 
-// Extend a 32bit `offset` into 64bit using a arith.extsi operation
+/// Extend a 32bit `offset` into 64bit using a arith.extsi operation
 static Value extend32bitOffsetTo64Bits(IRRewriter &rewriter, Location loc,
                                        Value offset) {
   Type elementType = getElementTypeOrSelf(offset);
@@ -237,7 +237,7 @@ static Value extend32bitOffsetTo64Bits(IRRewriter &rewriter, Location loc,
   return rewriter.create<arith::ExtSIOp>(loc, rewriter.getI64Type(), offset);
 }
 
-// Narrow a 64bit `offset` into 32bit using a arith.trunci operation
+/// Narrow a 64bit `offset` into 32bit using a arith.trunci operation
 static Value narrow64bitOffsetTo32bits(IRRewriter &rewriter, Location loc,
                                        Value offset) {
   Type elementType = getElementTypeOrSelf(offset);
@@ -253,8 +253,8 @@ static Value narrow64bitOffsetTo32bits(IRRewriter &rewriter, Location loc,
   return rewriter.create<arith::TruncIOp>(loc, rewriter.getI32Type(), offset);
 }
 
-// Helper function to determine if the given `op` is a constant tensor and in
-// that case return the scalar value.
+/// Helper function to determine if the given `op` is a constant tensor and in
+/// that case return the scalar value.
 Value getScalarConstant(IRRewriter &rewriter, Location loc, Value expr) {
   Operation *op = expr.getDefiningOp();
 
@@ -281,16 +281,16 @@ Value getScalarConstant(IRRewriter &rewriter, Location loc, Value expr) {
   return Value();
 }
 
-// Narrowing logic
-// For now we allow to narrow down to 32 bits only in the following case:
-// - `baseOffset` is 32-bits and `addOffset`(64-bits) is zero
+/// Narrowing logic
+/// For now we allow to narrow down to 32 bits only in the following case:
+/// - `baseOffset` is 32-bits and `addOffset`(64-bits) is zero
 bool canNarrowOffset(Value baseOffset, Value addOffset) {
   Type addOffsetType = getElementTypeOrSelf(addOffset);
   auto baseSplatOp = baseOffset.getDefiningOp<triton::SplatOp>();
   return baseSplatOp && addOffsetType.isInteger(32);
 }
 
-// Create a zero tensor with a given `type`
+/// Create a zero tensor with a given `type`
 Value createTensorZero(IRRewriter &rw, Location loc, RankedTensorType type) {
   mlir::Attribute zeroAttr = rw.getZeroAttr(type.getElementType());
   auto zeroDenseAttr = DenseElementsAttr::get(type, zeroAttr);
@@ -339,8 +339,8 @@ void PointerCanonicalizer::collectFatPointerAttributes(Operation *op,
     pointers[val].setAttr(attr);
 }
 
-// Offset extraction logic for an addition op:
-// decompose(A+B) = {U(A)+U(B), NU(A)+NU(B)}
+/// Offset extraction logic for an addition op:
+/// decompose(A+B) = {U(A)+U(B), NU(A)+NU(B)}
 std::pair<Value, Value>
 PointerCanonicalizer::decomposeOffsetFromAdd(Location loc, Value expr,
                                              int64_t bitness) {
@@ -356,8 +356,8 @@ PointerCanonicalizer::decomposeOffsetFromAdd(Location loc, Value expr,
   return {uniformAdd, nonUniformAdd};
 }
 
-// Offset extraction logic for a multiplication op:
-// decompose(A*B) = {U(A)*U(B), NU(A)*NU(B)+NU(B)*U(A)+U(A)*NU(B)}
+/// Offset extraction logic for a multiplication op:
+/// decompose(A*B) = {U(A)*U(B), NU(A)*NU(B)+NU(B)*U(A)+U(A)*NU(B)}
 std::pair<Value, Value>
 PointerCanonicalizer::decomposeOffsetFromMul(Location loc, Value expr,
                                              int64_t bitness) {
@@ -476,7 +476,7 @@ Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   return addPtrOp.getResult();
 }
 
-// Rewrite a memory operation
+/// Rewrite a memory operation
 LogicalResult PointerCanonicalizer::materializeFatPointer(Operation *op,
                                                           Location loc,
                                                           Value ptr) {
@@ -730,10 +730,10 @@ LogicalResult PointerCanonicalizer::rewriteWhileOp(scf::WhileOp whileOp,
   return success();
 }
 
-// ConditionOp can only be contained within the BeforeRegion of a
-// WhileOp. We already rewrote the WhileOp with the right operands, so
-// we need only to add the offset the current operand to be the base
-// pointer and continue the walk inside the AfterRegion
+/// ConditionOp can only be contained within the BeforeRegion of a
+/// WhileOp. We already rewrote the WhileOp with the right operands, so
+/// we need only to add the offset the current operand to be the base
+/// pointer and continue the walk inside the AfterRegion
 LogicalResult
 PointerCanonicalizer::rewriteConditionOp(scf::ConditionOp conditionOp,
                                          Location curLoc, OpOperand *curOperand,
@@ -900,8 +900,8 @@ LogicalResult PointerCanonicalizer::rewriteBranchOp(cf::BranchOp branchOp,
   return success();
 }
 
-// Start from an argument of a function and propagate its
-// fat pointers
+/// Start from an argument of a function and propagate its
+/// fat pointers
 LogicalResult PointerCanonicalizer::rewritePointer(Value argPtr) {
   // Start the visit
   for (OpOperand &use : argPtr.getUses())
@@ -1016,8 +1016,9 @@ LogicalResult PointerCanonicalizer::run() {
   }
   return success();
 }
-// This pass is calling the pointer canonicalization utility
-// on the given MLIR module
+
+/// This pass is calling the pointer canonicalization utility
+/// on the given MLIR module
 class TritonAMDGPUCanonicalizePointersPass
     : public TritonAMDGPUCanonicalizePointersBase<
           TritonAMDGPUCanonicalizePointersPass> {

@@ -20,8 +20,8 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef TRITON_CONVERSION_TRITON_GPU_TO_LLVM_GCN_FORMAT_H_
-#define TRITON_CONVERSION_TRITON_GPU_TO_LLVM_GCN_FORMAT_H_
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_GCNASMFORMAT_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_GCNASMFORMAT_H_
 
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -31,79 +31,82 @@
 #include <string>
 
 namespace mlir {
+
 class ConversionPatternRewriter;
 class Location;
 
-namespace triton {
+} // namespace mlir
+
+namespace mlir::triton {
 using llvm::StringRef;
 
 class GCNInstr;
 class GCNInstrCommon;
 class GCNInstrExecution;
 
-// GCNBuilder helps to manage a GCN asm program consists of one or multiple
-// instructions.
-//
-// A helper for building an ASM program, the objective of GCNBuilder is to give
-// a thin encapsulation and make the ASM code for MLIR LLVM Dialect more clear.
-// Currently, several factors are introduced to reduce the need for mixing
-// string and C++ if-else code.
-//
-// Usage:
-// To create a multiplcation operation
-//
-//
-// GCNBuilder gcnBuilder;
-// unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
-//
-// const std::string readConstraint = "v";
-// const std::string writeConstraint = "=v";
-// auto res = gcnBuilder.newOperand(writeConstraint);
-// auto lhs = gcnBuilder.newOperand(operands[0], readConstraint);
-// auto rhs = gcnBuilder.newOperand(operands[1], readConstraint);
-//
-// create inst
-// auto &mul_inst =
-// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
-//
-// launch insts
-// mul_inst(res, lhs, rhs);
-//
-// return result
-// Value ret = gcnBuilder.launch(rewriter, loc, elemTy, false);
-// return ret;
-// To get the asm code:
-// builder.dump()
-//
-// To get all the mlir::Value used in the GCN code,
-//
-// builder.getAllMlirArgs() // get {pVal, iVal, jVal, kVal}
-//
-// To get the string containing all the constraints with "," separated,
-// builder.getConstraints() // get "=v,v,v"
-//
-// GCNBuilder can build a GCN asm with multiple instructions, sample code:
-//
-// GCNBuilder builder;
-// auto &rcp = gcnBuilder.create<GCNInstr>("v_rcp")->float_op_type(bitwidth);
-// auto &mul_inst =
-// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
-//
-// rcp(...);
-// mul_inst(...);
-// This will get a GCN code with two instructions.
-//
-// Similar to a C function, a declared GCNInstr instance can be launched
-// multiple times with different operands, e.g.
-//
-//   auto &mul_inst =
-//   gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth); mul_inst(...
-//   some operands ...); mul_inst(... some different operands ...);
-//
-// Finally, we will get a GCN code with two mov instructions.
-//
-// There are several derived instruction type for typical instructions, for
-// example, the GCNIOInstr for ld and st instructions.
+/// GCNBuilder helps to manage a GCN asm program consists of one or multiple
+/// instructions.
+///
+/// A helper for building an ASM program, the objective of GCNBuilder is to give
+/// a thin encapsulation and make the ASM code for MLIR LLVM Dialect more clear.
+/// Currently, several factors are introduced to reduce the need for mixing
+/// string and C++ if-else code.
+///
+/// Usage:
+/// To create a multiplcation operation
+///
+///
+/// GCNBuilder gcnBuilder;
+/// unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+///
+/// const std::string readConstraint = "v";
+/// const std::string writeConstraint = "=v";
+/// auto res = gcnBuilder.newOperand(writeConstraint);
+/// auto lhs = gcnBuilder.newOperand(operands[0], readConstraint);
+/// auto rhs = gcnBuilder.newOperand(operands[1], readConstraint);
+///
+/// create inst
+/// auto &mul_inst =
+/// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+///
+/// launch insts
+/// mul_inst(res, lhs, rhs);
+///
+/// return result
+/// Value ret = gcnBuilder.launch(rewriter, loc, elemTy, false);
+/// return ret;
+/// To get the asm code:
+/// builder.dump()
+///
+/// To get all the mlir::Value used in the GCN code,
+///
+/// builder.getAllMlirArgs() // get {pVal, iVal, jVal, kVal}
+///
+/// To get the string containing all the constraints with "," separated,
+/// builder.getConstraints() // get "=v,v,v"
+///
+/// GCNBuilder can build a GCN asm with multiple instructions, sample code:
+///
+/// GCNBuilder builder;
+/// auto &rcp = gcnBuilder.create<GCNInstr>("v_rcp")->float_op_type(bitwidth);
+/// auto &mul_inst =
+/// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+///
+/// rcp(...);
+/// mul_inst(...);
+/// This will get a GCN code with two instructions.
+///
+/// Similar to a C function, a declared GCNInstr instance can be launched
+/// multiple times with different operands, e.g.
+///
+///   auto &mul_inst =
+///   gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth); mul_inst(...
+///   some operands ...); mul_inst(... some different operands ...);
+///
+/// Finally, we will get a GCN code with two mov instructions.
+///
+/// There are several derived instruction type for typical instructions, for
+/// example, the GCNIOInstr for ld and st instructions.
 struct GCNBuilder {
   struct Operand {
     std::string constraint;
@@ -112,7 +115,7 @@ struct GCNBuilder {
     llvm::SmallVector<Operand *> list;
     std::function<std::string(int idx)> repr;
 
-    // for list
+    /// for list
     Operand() = default;
     Operand(const Operation &) = delete;
     Operand(Value value, StringRef constraint)
@@ -172,7 +175,7 @@ struct GCNBuilder {
     return static_cast<INSTR *>(instrs.back().get());
   }
 
-  // Create a list of operands.
+  /// Create a list of operands.
   Operand *newListOperand() { return newOperand(); }
 
   Operand *newListOperand(ArrayRef<std::pair<mlir::Value, std::string>> items) {
@@ -200,21 +203,21 @@ struct GCNBuilder {
     return list;
   }
 
-  // Create a new operand. It will not add to operand list.
-  // @value: the MLIR value bind to this operand.
-  // @constraint: ASM operand constraint, .e.g. "=r"
-  // @formatter: extra format to represent this operand in ASM code, default is
-  //             "%{0}".format(operand.idx).
+  /// Create a new operand. It will not add to operand list.
+  /// @value: the MLIR value bind to this operand.
+  /// @constraint: ASM operand constraint, .e.g. "=r"
+  /// @formatter: extra format to represent this operand in ASM code, default is
+  ///             "%{0}".format(operand.idx).
   Operand *newOperand(mlir::Value value, StringRef constraint,
                       std::function<std::string(int idx)> formatter = nullptr);
 
-  // Create a new operand which is written to, that is, the constraint starts
-  // with "=", e.g. "=r".
+  /// Create a new operand which is written to, that is, the constraint starts
+  /// with "=", e.g. "=r".
   Operand *newOperand(StringRef constraint);
 
-  // Create a constant integer operand.
+  /// Create a constant integer operand.
   Operand *newConstantOperand(int v);
-  // Create a constant operand with explicit code specified.
+  /// Create a constant operand with explicit code specified.
   Operand *newConstantOperand(const std::string &v);
 
   Operand *newAddrOperand(mlir::Value addr, StringRef constraint);
@@ -256,8 +259,8 @@ protected:
   int oprCounter{};
 };
 
-// GCN instruction common interface.
-// Put the generic logic for all the instructions here.
+/// GCN instruction common interface.
+/// Put the generic logic for all the instructions here.
 struct GCNInstrCommon {
   explicit GCNInstrCommon(GCNBuilder *builder) : builder(builder) {}
 
@@ -275,7 +278,7 @@ struct GCNInstrCommon {
   GCNInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e, Operand* f, Operand* g) { return call({a, b, c, d, e, f, g}, {}); }
   // clang-format on
 
-  // Set operands of this instruction.
+  /// Set operands of this instruction.
   GCNInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,
                                 llvm::ArrayRef<Modifier *> mods);
 
@@ -397,7 +400,6 @@ struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   }
 };
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
-#endif // TRITON_CONVERSION_TRITON_GPU_TO_LLVM_ASM_FORMAT_H_
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_GCNASMFORMAT_H_

@@ -17,8 +17,8 @@ namespace ttg = mlir::triton::gpu;
 // Utility functions
 //===----------------------------------------------------------------------===//
 
-// Return true if the given moduleOp contains a pure matmul problem; i.e.,
-// single dot in the main loop.
+/// Return true if the given moduleOp contains a pure matmul problem; i.e.,
+/// single dot in the main loop.
 static bool isPureMatmulProblem(triton::FuncOp funcOp) {
   bool isMatmul = true;
   bool foundLoop = false;
@@ -31,9 +31,9 @@ static bool isPureMatmulProblem(triton::FuncOp funcOp) {
   return foundLoop && isMatmul;
 }
 
-// Search through block to find earliest insertion point for move op. This can
-// be either an atomic op or last usage of source pointer. Search ends when move
-// op is encountered.
+/// Search through block to find earliest insertion point for move op. This can
+/// be either an atomic op or last usage of source pointer. Search ends when move
+/// op is encountered.
 static llvm::ilist<Operation>::iterator
 findEarlyInsertionPoint(Block *block, Operation *move) {
   Value src;
@@ -68,9 +68,9 @@ findEarlyInsertionPoint(Block *block, Operation *move) {
   return ipnt;
 }
 
-// Return the first user in the same block of the given op. If the user is in a
-// nested block then return the op owning the block. Return nullptr if not
-// existing.
+/// Return the first user in the same block of the given op. If the user is in a
+/// nested block then return the op owning the block. Return nullptr if not
+/// existing.
 static Operation *getFirstUseInSameBlock(Operation *op) {
   SmallVector<Operation *> usersInSameBlock;
   for (auto user : op->getUsers()) {
@@ -84,8 +84,8 @@ static Operation *getFirstUseInSameBlock(Operation *op) {
   return minOpIt != usersInSameBlock.end() ? *minOpIt : nullptr;
 }
 
-// Check if the operation opInsideLoop is inside any scf::ForOp and
-// opOutsideLoop is not inside the same loop.
+/// Check if the operation opInsideLoop is inside any scf::ForOp and
+/// opOutsideLoop is not inside the same loop.
 static bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
                                 mlir::Operation *opOutsideLoop) {
   scf::ForOp parentForOp = opInsideLoop->getParentOfType<scf::ForOp>();
@@ -96,8 +96,8 @@ static bool isCrossLoopBoundary(mlir::Operation *opInsideLoop,
 // Reorder mechanisms
 //===----------------------------------------------------------------------===//
 
-// Sink dot layout conversions into loops to decrease register pressure when
-// possible.
+/// Sink dot layout conversions into loops to decrease register pressure when
+/// possible.
 static void sinkDotConversion(triton::FuncOp funcOp) {
   DenseMap<Operation *, Operation *> opToMove;
   funcOp.walk([&](ttg::ConvertLayoutOp op) {
@@ -117,28 +117,28 @@ static void sinkDotConversion(triton::FuncOp funcOp) {
     kv.first->moveBefore(kv.second);
 }
 
-// Adjust the placement of shared memory writes and reads to immediately follow
-// the definition of their operands in case where shared memory write is in the
-// loop but its operand is not.
-//
-// This is a heuristic driven by optimizing fused attention by hoisting Q tensor
-// shared memory read/write operations outside of the loop, as Q is a loop
-// invariant and can be loaded once before entering the loop. But it should be
-// generally applicable.
-//
-// There are two possible patterns for this adjustment depending on whether the
-// write to shared memory is performed using an optional `local_alloc` argument
-// or a `local_store` instruction.
-//
-// 1) %1 = some_op ... (typically a load or an operation that scales the tensor
-//                      after loading)
-//    %2 = local_alloc %1
-//    %3 = local_load %2
-//
-// 2) %1 = some_op ...
-//    %2 = local_alloc
-//    %3 = local_store %1, %2
-//    %4 = local_load %2
+/// Adjust the placement of shared memory writes and reads to immediately follow
+/// the definition of their operands in case where shared memory write is in the
+/// loop but its operand is not.
+///
+/// This is a heuristic driven by optimizing fused attention by hoisting Q tensor
+/// shared memory read/write operations outside of the loop, as Q is a loop
+/// invariant and can be loaded once before entering the loop. But it should be
+/// generally applicable.
+///
+/// There are two possible patterns for this adjustment depending on whether the
+/// write to shared memory is performed using an optional `local_alloc` argument
+/// or a `local_store` instruction.
+///
+/// 1) %1 = some_op ... (typically a load or an operation that scales the tensor
+///                      after loading)
+///    %2 = local_alloc %1
+///    %3 = local_load %2
+///
+/// 2) %1 = some_op ...
+///    %2 = local_alloc
+///    %3 = local_store %1, %2
+///    %4 = local_load %2
 static void hoistLocalLoad(triton::FuncOp funcOp) {
   funcOp.walk([&](ttg::LocalLoadOp localLoad) {
     auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
@@ -188,8 +188,8 @@ static void hoistLocalLoad(triton::FuncOp funcOp) {
   });
 }
 
-// Sink conversion after the last dealloc but before the first use in its block.
-// This helps to avoid unnecessary shared memory allocation.
+/// Sink conversion after the last dealloc but before the first use in its block.
+/// This helps to avoid unnecessary shared memory allocation.
 static void moveDownCoversion(triton::FuncOp funcOp) {
   SmallVector<ttg::ConvertLayoutOp> convertOps;
   funcOp.walk([&](ttg::ConvertLayoutOp op) { convertOps.push_back(op); });
@@ -203,7 +203,7 @@ static void moveDownCoversion(triton::FuncOp funcOp) {
   }
 }
 
-// Move transpositions just after their definition.
+/// Move transpositions just after their definition.
 static void moveUpTranspose(triton::FuncOp funcOp) {
   SmallVector<triton::TransposeOpInterface> transOps;
   funcOp.walk([&](triton::TransposeOpInterface op) { transOps.push_back(op); });
@@ -213,7 +213,7 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
       op->moveAfter(argOp);
 }
 
-// Schedule global load and local store ops for better GEMM performance.
+/// Schedule global load and local store ops for better GEMM performance.
 static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
   SmallVector<Operation *> moveOps;
   // Move global loads early to prefetch. This may increase register pressure

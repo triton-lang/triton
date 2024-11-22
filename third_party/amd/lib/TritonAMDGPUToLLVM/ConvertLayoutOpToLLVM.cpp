@@ -85,7 +85,7 @@ private:
     return res;
   }
 
-  // shared -> matrix_core_dot_operand
+  /// shared -> matrix_core_dot_operand
   LogicalResult
   lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
                           triton::gpu::LocalLoadOpAdaptor adaptor,

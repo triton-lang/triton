@@ -93,9 +93,9 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
 
     Value laneVOffset = urem(laneId, nonKDim);
     Value laneHOffset;
-    if (iNonKDim == 32)
+    if (iNonKDim == 32) {
       laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
-    else {
+    } else {
       // In this configuration warp contains 16 copies of same data
       if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4) {
         laneHOffset = i32_val(0);
@@ -127,17 +127,17 @@ bool hasSwizzleEnabled(const SharedEncodingAttr &srcEncoding) {
   return srcEncoding.getMaxPhase() > 1;
 }
 
-// Computes offsets for operand B or transposed operand A
-// @param rewriter
-// @param loc
-// @param elemsPerInstr operand tile shape [K, nonK] consumed by one MFMA
-// instruction
-// @param warpId warp id for the "non K" axis
-// @param laneId lane id in warp [0..63]
-// @param warpsPerBlock number of warps per horizontal axis
-// @param numOfElems number of elements accessed by threads per repetition
-// @param reps number of instructions repretition to fully cover dot operand
-// @param cSwizzleOffset
+/// Computes offsets for operand B or transposed operand A
+/// @param rewriter
+/// @param loc
+/// @param elemsPerInstr operand tile shape [K, nonK] consumed by one MFMA
+/// instruction
+/// @param warpId warp id for the "non K" axis
+/// @param laneId lane id in warp [0..63]
+/// @param warpsPerBlock number of warps per horizontal axis
+/// @param numOfElems number of elements accessed by threads per repetition
+/// @param reps number of instructions repretition to fully cover dot operand
+/// @param cSwizzleOffset
 llvm::SmallVector<Value>
 fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
                        const ArrayRef<int64_t> &elemsPerInstr, Value warpId,

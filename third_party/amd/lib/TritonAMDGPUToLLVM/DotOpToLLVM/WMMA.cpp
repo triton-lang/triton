@@ -239,7 +239,7 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
   }
 }
 
-// Conduct the Dot conversion.
+/// Conduct the Dot conversion.
 LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                          ConversionPatternRewriter &rewriter,
                          const LLVMTypeConverter *typeConverter) {

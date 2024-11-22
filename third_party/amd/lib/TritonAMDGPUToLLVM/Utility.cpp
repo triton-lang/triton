@@ -42,8 +42,8 @@ std::string mangleFunc(std::string name, Type type) {
   return mangled;
 }
 
-// Utility function to create a constant vector mask of length `vecSize` with
-// the same `pred` value
+/// Utility function to create a constant vector mask of length `vecSize` with
+/// the same `pred` value
 Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
                                     Value pred, int64_t vecSize) {
   auto vecMaskTy = LLVM::getFixedVectorType(rewriter.getI1Type(), vecSize);
@@ -56,14 +56,14 @@ Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
   return maskVal;
 }
 
-// Utility function to get the number of elements of a vector or a scalar
+/// Utility function to get the number of elements of a vector or a scalar
 int64_t getNumElements(Type ty) {
   if (auto vecType = dyn_cast<VectorType>(ty))
     return vecType.getNumElements();
   return 1;
 }
 
-// Utility function to cast the given scalar or vector type to a vector type
+/// Utility function to cast the given scalar or vector type to a vector type
 Type castToVectorType(Type ty) {
   if (isa<VectorType>(ty))
     return ty;

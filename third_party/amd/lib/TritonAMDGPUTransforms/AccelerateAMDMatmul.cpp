@@ -68,8 +68,9 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
         tensorShape[1] / shapePerWarp.second / ret[1]) {
       if (ret[0] < tensorShape[0] / shapePerWarp.first) {
         ret[0] *= 2;
-      } else
+      } else {
         ret[1] *= 2;
+      }
     } else {
       ret[1] *= 2;
     }
@@ -94,9 +95,9 @@ warpsPerTileWMMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps) {
   return warpsPerTile(dotOp, shape, numWarps, {mnk[0], mnk[1]});
 }
 
-// Chooses a proper MFMA instruction that can used to compute the given dot op.
-// If enforcedNonKDim is not zero, it will be used to overwrite the default
-// logic to chose a MFMA with matching M/N dim.
+/// Chooses a proper MFMA instruction that can used to compute the given dot op.
+/// If enforcedNonKDim is not zero, it will be used to overwrite the default
+/// logic to chose a MFMA with matching M/N dim.
 FailureOr<MfmaInsn> chooseMfmaInstruction(RankedTensorType cType,
                                           Type aElemType, Type bElemType,
                                           int inputKSize, int mfmaVersion,
@@ -639,8 +640,8 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
   return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
 }
 
-// promote operands of dot op if the existing combination is not natively
-// supported.
+/// promote operands of dot op if the existing combination is not natively
+/// supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
   mod.walk([](triton::DotOp dotOp) -> void {
     auto D = dotOp.getD();

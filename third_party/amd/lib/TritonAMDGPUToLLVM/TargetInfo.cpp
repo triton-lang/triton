@@ -23,7 +23,7 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
   return ret;
 }
 
-// Extend all values to 64-bit per printf call requirements.
+/// Extend all values to 64-bit per printf call requirements.
 Value printfPromoteValue(RewriterBase &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto loc = UnknownLoc::get(context);
@@ -127,8 +127,8 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
-// Cast and sext values into specific-length int to meet the requirements of
-// instructions like UpdateDpp or readlane if necessary.
+/// Cast and sext values into specific-length int to meet the requirements of
+/// instructions like UpdateDpp or readlane if necessary.
 static inline Type castToAndSExtInt(RewriterBase &rewriter, Location loc,
                                     Value &val, Type fromType,
                                     unsigned toBits) {
@@ -148,9 +148,9 @@ static inline Type castToAndSExtInt(RewriterBase &rewriter, Location loc,
   return toType;
 }
 
-// Trunc the value to specific length and then cast it to given type if
-// necessary. This function is typically used in conjunction with
-// castToAndSExtInt.
+/// Trunc the value to specific length and then cast it to given type if
+/// necessary. This function is typically used in conjunction with
+/// castToAndSExtInt.
 static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
                                         Value val, Type valType,
                                         unsigned fromBits) {

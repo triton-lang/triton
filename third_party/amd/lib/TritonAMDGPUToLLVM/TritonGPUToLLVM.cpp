@@ -26,12 +26,10 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 using namespace mlir;
 
@@ -261,13 +259,11 @@ private:
 
 } // anonymous namespace
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
   return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
 }
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton

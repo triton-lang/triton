@@ -95,7 +95,7 @@ namespace {
 //       ops in stages 1 to last_stage. This must consider that the loop
 //       bounds may be shorter than num_stages. In this case, the epilogue
 //       iterations must align with the prologue.
-//
+//===----------------------------------------------------------------------===//
 class StreamPipeliner {
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, bool _prefetch)
@@ -148,55 +148,55 @@ private:
   }
 
 private:
-  // Data members
+  /// Data members
   scf::ForOp forOp;
 
-  // User settings
+  /// User settings
   bool prefetch;
   int numStages;
 
-  // Scheduling clusters
+  /// Scheduling clusters
   tt::CoarseSchedule schedule;
 
-  // ScheduleConfig lookup by SchedType to get the stage and cluster.
+  /// ScheduleConfig lookup by SchedType to get the stage and cluster.
   struct ScheduleConfig {
     int stage;
     tt::CoarseSchedule::Cluster cluster;
   };
   SmallVector<ScheduleConfig, 5> config;
 
-  // Mapping and indirection level for each `tt.load` to its use.
+  /// Mapping and indirection level for each `tt.load` to its use.
   SmallVector<std::tuple<Operation *, int, Operation *>> loadOpToIndLevelAndUse;
 
   struct LoadInfo {
-    // Shared layout is used for loads feeding into dot ops.
+    /// Shared layout is used for loads feeding into dot ops.
     ttg::SharedEncodingAttr sharedEncoding = nullptr;
-    // The distance of this load's stage to its use' stage.
+    /// The distance of this load's stage to its use' stage.
     int distToUse = 0;
     bool usedByDot = false;
   };
 
-  // Mapping for each pipelined load to scheduling details.
+  /// Mapping for each pipelined load to scheduling details.
   llvm::MapVector<Operation *, LoadInfo> loadToInfo;
 
-  // Lookup alignment/contiguity mappings for the current module.
+  /// Lookup alignment/contiguity mappings for the current module.
   tt::ModuleAxisInfoAnalysis axisInfoAnalysis;
 
-  // Capture list of new shared memory buffers.
+  /// Capture list of new shared memory buffers.
   SmallVector<Value> sharedMemAllocs;
 
-  // Pipelining options for the PipelineExpander
+  /// Pipelining options for the PipelineExpander
   tt::PipeliningOption options;
 };
 
 } // namespace
 
-// Init Schedule Config based on settings and loop characteristics.
-// Create clusters in order of ops in loop. This can interleave ops
-// from different stages in the same cluster to achieve better backend
-// scheduling.
-//   WARNING: Changing the order of schedule.clusters.newAtBack() calls
-//            can cause invalid schedules to be produced.
+/// Init Schedule Config based on settings and loop characteristics.
+/// Create clusters in order of ops in loop. This can interleave ops
+/// from different stages in the same cluster to achieve better backend
+/// scheduling.
+///   WARNING: Changing the order of schedule.clusters.newAtBack() calls
+///            can cause invalid schedules to be produced.
 void StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   int lastStage = numStages - 1;
   config.resize(SCHED_TAIL + 1);
@@ -319,9 +319,9 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   loadOp.erase();
 }
 
-// If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return true and get the shared encoding that
-// needs to be used to be compatible with users' layouts.
+/// If all the transitive uses of the given value have are used by a convert to
+/// the same dot operand encoding, return true and get the shared encoding that
+/// needs to be used to be compatible with users' layouts.
 static std::optional<ttg::SharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val) {
   ttg::SharedEncodingAttr attr;
@@ -374,11 +374,11 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
   return attr;
 }
 
-// Create a map from load ops to their indirection levels and the final uses
-// of the load op (another load op, or a dot op).
-//
-// Indirection level is "0" for the load op directly used by the dot op,
-// "1" for the load op used by the load op used by the dot op, and so on.
+/// Create a map from load ops to their indirection levels and the final uses
+/// of the load op (another load op, or a dot op).
+///
+/// Indirection level is "0" for the load op directly used by the dot op,
+/// "1" for the load op used by the load op used by the dot op, and so on.
 void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
   DenseSet<Operation *> seen;
 
@@ -421,8 +421,8 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
   }
 }
 
-// Goes through all load ops to identify those that can be pipelined and assign
-// layout to them.
+/// Goes through all load ops to identify those that can be pipelined and assign
+/// layout to them.
 void StreamPipeliner::assignMemoryLayouts() {
   for (auto &[op, dist, use] : loadOpToIndLevelAndUse) {
     if (loadToInfo.count(op))
@@ -558,8 +558,8 @@ LogicalResult StreamPipeliner::scheduleLoads(DenseSet<Operation *> &rootUsers) {
   return success();
 }
 
-// Add dependencies of anchor ops to the coarse schedule. Schedule them to
-// the same stage and ordering cluster as the anchor op.
+/// Add dependencies of anchor ops to the coarse schedule. Schedule them to
+/// the same stage and ordering cluster as the anchor op.
 void StreamPipeliner::scheduleDependencies() {
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
       opsInOrder = schedule.getOpsInOrder(forOp);
@@ -573,8 +573,8 @@ void StreamPipeliner::scheduleDependencies() {
   }
 }
 
-// Find dependencies with distance of 1. They will go to the next stage,
-// but in the cluster before the current op.
+/// Find dependencies with distance of 1. They will go to the next stage,
+/// but in the cluster before the current op.
 void StreamPipeliner::scheduleDistanceOneDependencies() {
   auto getNestedOperands = [](Operation *op) {
     SmallVector<Value> operands;
@@ -660,7 +660,7 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
   }
 }
 
-// Create an allocation that can hold distance number of loadOp shapes.
+/// Create an allocation that can hold distance number of loadOp shapes.
 Value StreamPipeliner::createAlloc(Operation *loadOp,
                                    ttg::SharedEncodingAttr sharedEnc,
                                    unsigned numBuffers) {
@@ -679,8 +679,8 @@ Value StreamPipeliner::createAlloc(Operation *loadOp,
   return alloc;
 }
 
-// Convert load ops into shared memory allocation loads and apply
-// multi-buffering based on the required number of buffers.
+/// Convert load ops into shared memory allocation loads and apply
+/// multi-buffering based on the required number of buffers.
 void StreamPipeliner::createStreamOps() {
   // Calculate the number of buffers needed for each load.
   // TODO: Use the precise number of buffers needed by the particular load.
@@ -804,7 +804,7 @@ LogicalResult StreamPipeliner::pipelineLoop() {
   return tt::pipelineForLoop(rewriter, forOp, options);
 }
 
-// Return true if the preconditions for pipelining the loop are met.
+/// Return true if the preconditions for pipelining the loop are met.
 static bool checkPrecondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
@@ -822,8 +822,8 @@ static bool checkPrecondition(scf::ForOp forOp) {
 }
 
 namespace {
-// Go through a single use chain to get the result of the target op after all
-// unary ops - e.g., `convert_layout`, `fp_to_fp`, etc.
+/// Go through a single use chain to get the result of the target op after all
+/// unary ops - e.g., `convert_layout`, `fp_to_fp`, etc.
 template <typename TargetOpType> Operation *passPrevUnaryOps(Value value) {
   auto getNextUnaryOps = [](Value value) -> Operation * {
     if (auto defOp = value.getDefiningOp()) {
@@ -842,9 +842,9 @@ template <typename TargetOpType> Operation *passPrevUnaryOps(Value value) {
   return nullptr;
 }
 
-// Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
-// index. Note, this is a part of the instruction scheduling routine. Currently,
-// we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
+/// Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
+/// index. Note, this is a part of the instruction scheduling routine. Currently,
+/// we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
 void labelLoadOpsForTritonDot(scf::ForOp forOp) {
   mlir::MLIRContext *ctx = forOp->getContext();
   if (auto dotOp = triton::getSingleDotOpIfExists(forOp)) {

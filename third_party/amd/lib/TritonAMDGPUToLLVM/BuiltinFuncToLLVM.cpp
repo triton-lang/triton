@@ -6,12 +6,10 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTBUILTINFUNCTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 using namespace mlir;
 
@@ -244,13 +242,11 @@ struct ConvertBuiltinFuncToLLVM
 
 } // anonymous namespace
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertBuiltinFuncToLLVMPass(bool ftz) {
   return std::make_unique<ConvertBuiltinFuncToLLVM>(ftz);
 }
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton

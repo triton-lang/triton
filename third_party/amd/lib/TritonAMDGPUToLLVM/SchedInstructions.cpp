@@ -243,10 +243,10 @@ struct InstructionSchedHintsRewriter
     UNKNOWN
   };
 
-  // The following is inspired by ROCm Composable Kernel library's V3 pipelining
-  // (see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
-  // This scheduling requires 1x register and 1x LDS buffers combined with the
-  // local (LDS to registers) and global (HBM to registers) data prefetching.
+  /// The following is inspired by ROCm Composable Kernel library's V3 pipelining
+  /// (see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
+  /// This scheduling requires 1x register and 1x LDS buffers combined with the
+  /// local (LDS to registers) and global (HBM to registers) data prefetching.
   void createLocalPrefetchSchedule(
       PatternRewriter &rewriter, Location loc,
       triton::amdgpu::InstructionSchedHint schedHint) const {

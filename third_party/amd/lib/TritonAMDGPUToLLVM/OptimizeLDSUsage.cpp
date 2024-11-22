@@ -44,48 +44,48 @@ class OptimizeAMDLDSUsage
 
   int LDSLimit;
 
-  // Try to reduce LDS usage of convert op by adding tmp layout in conversion:
-  //
-  // %1 = convert %0 (src layout -> dst layout)
-  //     ->
-  // %1 = convert %0 (src layout -> tmp)
-  // %2 = convert %1 (tmp -> dst layout)
-  //
-  // The implicit LDS usage of convert op depends on src and dst layouts
-  //
-  // Consider mfma->blocked conversion as an example.
-  //
-  // tensor shape: [128, 128]
-  // mfma layout: warpsPerCTA = [1, 4], instrShape = [32, 32]
-  // blocked layout: sizePerThread = [1, 4], threadsPerWarp = [32, 2],
-  // warpsPerCTA = [4, 1]
-  //
-  // minimal mfma tile is: [1*32, 4*32] = [32, 128]
-  // minimal blocked tile is: [1*32*4, 4*2*1] = [128, 8]
-  //
-  // Roughtly scratch buffer shape for conversion is:
-  // [max(32, 128), max(128, 16)] = [128, 128].
-  //
-  // This shape could be reduces by introducing intermediate
-  // layout and replacing old convert operations with two new conversions:
-  //
-  // %1 = convert %0 (mfma -> blocked)
-  //     ->
-  // %1 = convert %0 (mfma -> tmp)
-  // %2 = convert %1 (tmp -> blocked)
-  //
-  // Let's consider tmp as blocked layout:
-  // sizePerThread = [1, 4], threadsPerWarp = [32, 2], warpsPerCTA = [1, 4]
-  // Tmp layout scratch buffer has shape: [1*32*1, 4*2*4] = [32, 32]
-  //
-  // With intermediate layout we have two scratch buffers:
-  //
-  // %1 = convert %0 (mfma -> tmp): [max(32, 32), max(128, 32)] = [32, 128]
-  // %2 = convert %1 (tmp -> blocked): [max(32, 128), max(32, 32)] = [128, 32]
-  //
-  // Both of these buffers are 4x times smaller than original one and their live
-  // times do not intersect, therefore this transformation lowers LDS
-  // consumption.
+  /// Try to reduce LDS usage of convert op by adding tmp layout in conversion:
+  ///
+  /// %1 = convert %0 (src layout -> dst layout)
+  ///     ->
+  /// %1 = convert %0 (src layout -> tmp)
+  /// %2 = convert %1 (tmp -> dst layout)
+  ///
+  /// The implicit LDS usage of convert op depends on src and dst layouts
+  ///
+  /// Consider mfma->blocked conversion as an example.
+  ///
+  /// tensor shape: [128, 128]
+  /// mfma layout: warpsPerCTA = [1, 4], instrShape = [32, 32]
+  /// blocked layout: sizePerThread = [1, 4], threadsPerWarp = [32, 2],
+  /// warpsPerCTA = [4, 1]
+  ///
+  /// minimal mfma tile is: [1*32, 4*32] = [32, 128]
+  /// minimal blocked tile is: [1*32*4, 4*2*1] = [128, 8]
+  ///
+  /// Roughtly scratch buffer shape for conversion is:
+  /// [max(32, 128), max(128, 16)] = [128, 128].
+  ///
+  /// This shape could be reduces by introducing intermediate
+  /// layout and replacing old convert operations with two new conversions:
+  ///
+  /// %1 = convert %0 (mfma -> blocked)
+  ///     ->
+  /// %1 = convert %0 (mfma -> tmp)
+  /// %2 = convert %1 (tmp -> blocked)
+  ///
+  /// Let's consider tmp as blocked layout:
+  /// sizePerThread = [1, 4], threadsPerWarp = [32, 2], warpsPerCTA = [1, 4]
+  /// Tmp layout scratch buffer has shape: [1*32*1, 4*2*4] = [32, 32]
+  ///
+  /// With intermediate layout we have two scratch buffers:
+  ///
+  /// %1 = convert %0 (mfma -> tmp): [max(32, 32), max(128, 32)] = [32, 128]
+  /// %2 = convert %1 (tmp -> blocked): [max(32, 128), max(32, 32)] = [128, 32]
+  ///
+  /// Both of these buffers are 4x times smaller than original one and their live
+  /// times do not intersect, therefore this transformation lowers LDS
+  /// consumption.
   void tryFitCvtIntoLDS(triton::gpu::ConvertLayoutOp cvtOp, int targetLDSSize) {
     OpBuilder builder(cvtOp);
 
@@ -168,9 +168,9 @@ class OptimizeAMDLDSUsage
     int64_t LDSSizeTarget;
   };
 
-  // Assuming that all buffer above scratch buffer in memory space can be
-  // shifted down in memory, gives an optimistic estimation of memory space
-  // available for scratch buffer.
+  /// Assuming that all buffer above scratch buffer in memory space can be
+  /// shifted down in memory, gives an optimistic estimation of memory space
+  /// available for scratch buffer.
   int64_t
   computeTargetScratchBufferSize(triton::gpu::ConvertLayoutOp op,
                                  Allocation *allocation,

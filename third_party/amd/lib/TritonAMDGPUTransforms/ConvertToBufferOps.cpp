@@ -117,8 +117,8 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
   return nonNegative;
 }
 
-// Quick analysis on the Triton IR to decide if we can safely use
-// buffer operations
+/// Quick analysis on the Triton IR to decide if we can safely use
+/// buffer operations
 bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
   // 1. Check if the pointer is uniform: i.e., if it comes from a uniform
   // pointer(splatted) and non-uniform offset addition
@@ -199,7 +199,7 @@ struct ConvertTritonLoadToBufferLoad
   }
 
 private:
-  // Assumptions collected through the function
+  /// Assumptions collected through the function
   DenseSet<Value> assumptions;
 };
 
@@ -239,7 +239,7 @@ struct ConvertTritonStoreToBufferStore
   }
 
 private:
-  // Assumptions collected through the function
+  /// Assumptions collected through the function
   DenseSet<Value> assumptions;
 };
 

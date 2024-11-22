@@ -1,14 +1,14 @@
-#ifndef TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_SCHED_INSTRUCTIONS_H
-#define TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_SCHED_INSTRUCTIONS_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_SCHEDINSTRUCTIONS_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_SCHEDINSTRUCTIONS_H_
 
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-// The following functions are used to collect and set side-channel information
-// during to LLVM conversion/lowering to facilitate instruction scheduling
-// controls.
+/// The following functions are used to collect and set side-channel information
+/// during to LLVM conversion/lowering to facilitate instruction scheduling
+/// controls.
 namespace mlir::triton {
 void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
                          unsigned k, Type elementType);
@@ -23,4 +23,4 @@ void storeOpConversionCallback(triton::gpu::LocalStoreOp op, size_t llvmOpCount,
 triton::DotOp getSingleDotOpIfExists(scf::ForOp forOp);
 } // namespace mlir::triton
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_SCHEDINSTRUCTIONS_H_

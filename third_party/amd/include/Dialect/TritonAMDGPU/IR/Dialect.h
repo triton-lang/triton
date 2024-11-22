@@ -21,8 +21,8 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef TRITON_DIALECT_AMDGPU_IR_DIALECT_H_
-#define TRITON_DIALECT_AMDGPU_IR_DIALECT_H_
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_DIALECT_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_DIALECT_H_
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -41,10 +41,7 @@
 #define GET_OP_CLASSES
 #include "amd/include/Dialect/TritonAMDGPU/IR/Ops.h.inc"
 
-namespace mlir {
-namespace triton {
-namespace amdgpu {} // namespace amdgpu
-} // namespace triton
-} // namespace mlir
+namespace mlir::triton::amdgpu {
+} // namespace mlir::triton::amdgpu
 
-#endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_DIALECT_H_
