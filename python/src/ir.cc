@@ -1705,6 +1705,25 @@ void init_triton_ir(py::module &&m) {
                    printingFlags);
              }
            })
+      .def("enable_debug_to_file_tree",
+           [](PassManager &self, const std::string &dumpPath) {
+             auto *context = self.getContext();
+               context->disableMultithreading();
+               auto printingFlags = OpPrintingFlags();
+               printingFlags.elideLargeElementsAttrs(16);
+               printingFlags.enableDebugInfo();
+               auto printAlways = [](Pass *, Operation *op) -> bool {
+                 return true;
+               };
+                self.enableIRPrintingToFileTree(
+                  /*shouldPrintBeforePass=*/printAlways,
+                  /*shouldPrintAfterPass=*/printAlways,
+                  /*printModuleScope=*/true,
+                  /*printAfterOnlyOnChange=*/false,
+                  /*printAfterOnlyOnFailure*/ false,
+                  /*printTreeDir*/ dumpPath,
+                  /*OpPrintingFlags*/ printingFlags);
+           })
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
