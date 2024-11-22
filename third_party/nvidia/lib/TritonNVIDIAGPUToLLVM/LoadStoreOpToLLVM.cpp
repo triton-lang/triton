@@ -36,7 +36,7 @@ Value getRedundantDataMask(ModuleOp moduleOp, Type valueTy,
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
   auto tid = tid_val();
-  auto mask = int_val(1, 1);
+  auto mask = true_val();
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -50,7 +50,7 @@ Value getRedundantDataMask(ModuleOp moduleOp, Type valueTy,
     auto regMasks = freeVariableMasks[kReg];
     if (regMasks & regIdx) {
       // Step 1: check register redundancy
-      mask = int_val(1, 0);
+      mask = false_val();
     } else {
       Value warpSize =
           i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp));
@@ -235,7 +235,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       PTXBuilder ptxBuilder;
 
-      Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
+      Value pred = mask ? maskElems[vecStart] : true_val();
 
       const std::string readConstraint =
           (width == 64) ? "l" : ((width == 32) ? "r" : "c");
