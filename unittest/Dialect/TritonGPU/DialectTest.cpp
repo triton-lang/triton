@@ -620,7 +620,135 @@ TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
   ASSERT_THAT(tdot3dOp1.getWarpOrder(), tmfma3d.getWarpOrder());
 }
 
-} // anonymous namespace
+class LinearEncodingTest : public ::testing::Test {
+public:
+  LinearEncodingTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
+
+protected:
+  MLIRContext ctx;
+};
+
+TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
+  // Define a tensor shape
+  auto rank = 2;
+  SmallVector<SmallVector<int64_t>> shapes = {{64, 128}, {256, 1024}};
+  SmallVector<SmallVector<unsigned>> orders = {{0, 1}, {1, 0}};
+  SmallVector<triton::gpu::CTALayoutAttr> ctaLayouts = {
+      triton::gpu::CTALayoutAttr::getDefault(&ctx, rank),
+      triton::gpu::CTALayoutAttr::get(&ctx, {4, 2}, {2, 2}, {1, 0}),
+  };
+  SmallVector<triton::gpu::DistributedEncodingTrait> distributedEncodings;
+
+  // Create BlockedEncodingAttr and SliceEncodingAttr
+  {
+    SmallVector<unsigned> sizePerThread = {4, 4};
+    SmallVector<unsigned> threadsPerWarp = {4, 8};
+    SmallVector<unsigned> warpsPerCTA = {2, 2};
+
+    for (auto ctaLayout : ctaLayouts) {
+      for (const auto &order : orders) {
+        auto blockedEncoding = triton::gpu::BlockedEncodingAttr::get(
+            &ctx, sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+        distributedEncodings.push_back(blockedEncoding);
+        distributedEncodings.push_back(
+            triton::gpu::SliceEncodingAttr::get(&ctx, 0, blockedEncoding));
+      }
+    }
+  }
+
+  // Create an MMAv2 and DotOperandEncodingAttr (MMAv3 doesn't support linear
+  // layouts yet)
+  {
+    unsigned versionMajor = 2;
+    unsigned versionMinor = 0;
+    SmallVector<unsigned> warpsPerCTA{4, 2};
+    SmallVector<unsigned> instrShape{16, 8}; // Instruction shape (M, N)
+    auto mma = triton::gpu::NvidiaMmaEncodingAttr::get(
+        &ctx, versionMajor, versionMinor, warpsPerCTA, ctaLayouts[0],
+        instrShape);
+    distributedEncodings.push_back(mma);
+    // Create an opIdx=0 and opIdx=1 encoding
+    for (unsigned opIdx = 0; opIdx < 2; ++opIdx) {
+      distributedEncodings.push_back(
+          triton::gpu::DotOperandEncodingAttr::get(&ctx, opIdx, mma, 2));
+    }
+  }
+
+  for (const auto &distributedEncoding : distributedEncodings) {
+    for (auto shape : shapes) {
+      if (auto sliceEncoding =
+              dyn_cast<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
+        shape.erase(shape.begin() + sliceEncoding.getDim());
+      }
+
+      // Create LinearEncodingAttr from the LinearLayout
+      auto linearLayout = *distributedEncoding.toLinearLayout(shape);
+      auto linearEncoding =
+          triton::gpu::LinearEncodingAttr::get(&ctx, linearLayout);
+
+      // Test that the canonical form of the LinearLayout is indeed canonical
+      // by expanding it to the original shape
+      auto expandedLL = linearEncoding.toLinearLayout(shape);
+      ASSERT_EQ(linearLayout, expandedLL);
+
+      // Test that methods of DistributedEncoding return the same values
+      Type eltTy = FloatType::getF32(&ctx);
+
+      ASSERT_EQ(getOrder(distributedEncoding), linearEncoding.getRepOrder());
+      ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
+                    .getTotalElemsPerThread(shape, eltTy),
+                linearEncoding.getTotalElemsPerThread(shape, eltTy));
+      ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
+                    .getElemsPerThread(shape, eltTy),
+                linearEncoding.getElemsPerThread(shape, eltTy));
+      ASSERT_EQ(distributedEncoding.getRepOrder(),
+                linearEncoding.getRepOrder());
+      ASSERT_EQ(distributedEncoding.getContigPerThread(),
+                linearEncoding.getContigPerThread());
+      // DotOperandEncodingAttr::getWarpOrder() is not defined
+      if (!isa<triton::gpu::DotOperandEncodingAttr>(distributedEncoding)) {
+        ASSERT_EQ(distributedEncoding.getWarpOrder(),
+                  linearEncoding.getWarpOrder());
+      }
+      ASSERT_EQ(distributedEncoding.getThreadOrder(),
+                linearEncoding.getThreadOrder());
+      // For slice these do not equal the total number of lines / warps
+      // See [Note. Divergence of methods wrt. legacy layouts]
+      if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
+        ASSERT_EQ(distributedEncoding.getWarpsPerCTA(),
+                  linearEncoding.getWarpsPerCTA());
+        ASSERT_EQ(distributedEncoding.getThreadsPerWarp(),
+                  linearEncoding.getThreadsPerWarp());
+      }
+      // Canonicalisation for opIdx=0 takes just a [2 x 2] subtile as it takes
+      // the second repetition along K as the second tile.
+      if (!isa<triton::gpu::DotOperandEncodingAttr>(distributedEncoding)) {
+        // FIXME: This happens to be correct for SliceLayout because of the hack
+        // in SliceEncodingAttr::toLinearLayout(). We should remove the hack
+        // and the skips in the getWarpsPerCTA() and getThreadsPerWarp()
+        ASSERT_EQ(distributedEncoding.getSizePerThread(),
+                  linearEncoding.getSizePerThread());
+      }
+
+      // block level
+      // SliceEncoding is not well-defined for CGAs
+      if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
+        ASSERT_EQ(distributedEncoding.getCTASplitNum(),
+                  linearEncoding.getCTASplitNum());
+        ASSERT_EQ(distributedEncoding.getCTAsPerCGA(),
+                  linearEncoding.getCTAsPerCGA());
+        // If we are not using CGAs, the order is meaningless
+        auto useCGA = distributedEncoding.getCTAsPerCGA() !=
+                      SmallVector<unsigned>(rank, 1);
+        if (useCGA) {
+          ASSERT_EQ(distributedEncoding.getCTAOrder(),
+                    linearEncoding.getCTAOrder());
+        }
+      }
+    }
+  }
+}
+} // namespace
 } // namespace mlir::triton::gpu
 
 int main(int argc, char *argv[]) {

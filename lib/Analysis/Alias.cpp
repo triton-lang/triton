@@ -28,7 +28,7 @@ LogicalResult SharedMemoryAliasAnalysis::visitOperation(
   bool pessimistic = true;
   auto result = op->getResult(0);
   // skip ops that return memdesc in a different memory space.
-  if (auto memdescTy = dyn_cast<triton::MemDescType>(result.getType())) {
+  if (auto memdescTy = dyn_cast<triton::gpu::MemDescType>(result.getType())) {
     if (!isa_and_nonnull<triton::gpu::SharedMemorySpaceAttr>(
             memdescTy.getMemorySpace()))
       return success();
@@ -43,7 +43,7 @@ LogicalResult SharedMemoryAliasAnalysis::visitOperation(
     aliasInfo = AliasInfo(operands[0]->getValue());
     pessimistic = false;
   } else {
-    assert(!isa<triton::MemDescType>(result.getType()) &&
+    assert(!isa<triton::gpu::MemDescType>(result.getType()) &&
            "unknown operation creating memory descriptor");
   }
 

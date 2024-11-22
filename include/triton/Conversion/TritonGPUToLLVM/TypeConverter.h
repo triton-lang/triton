@@ -18,11 +18,12 @@ public:
                                const TargetInfoBase &targetInfo,
                                const DataLayoutAnalysis *analysis = nullptr);
 
-  Type getElementTypeForStruct(TensorOrMemDesc type);
+  Type getElementTypeForStruct(triton::gpu::TensorOrMemDesc type);
   Type convertTritonPointerType(triton::PointerType type);
   Type convertTritonTensorType(RankedTensorType type,
                                const TargetInfoBase &targetInfo);
-  Type convertMemDescType(MemDescType type, const TargetInfoBase &targetInfo);
+  Type convertMemDescType(triton::gpu::MemDescType type,
+                          const TargetInfoBase &targetInfo);
   Type convertAsyncToken(triton::gpu::AsyncTokenType type);
 };
 
