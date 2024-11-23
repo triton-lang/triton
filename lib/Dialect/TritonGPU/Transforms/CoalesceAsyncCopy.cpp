@@ -100,8 +100,10 @@ struct ClipAsyncCopySizePerThread
 
     rewriter.modifyOpInPlace(copyOp, [&]() {
       copyOp.getSrcMutable().assign(src);
-      copyOp.getMaskMutable().assign(mask);
-      copyOp.getOtherMutable().assign(other);
+      if (mask)
+        copyOp.getMaskMutable().assign(mask);
+      if (other)
+        copyOp.getOtherMutable().assign(other);
     });
 
     return success();
