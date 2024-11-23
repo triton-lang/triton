@@ -250,3 +250,10 @@ tt.func @experimental_descriptor_load(%0: !tt.tensordesc<tensor<128xf32>>) {
   %1 = tt.experimental_descriptor_load %0[%c0_i32] : !tt.tensordesc<tensor<128xf32>> -> tensor<128xf32>
   tt.return
 }
+
+// CHECK-LABEL: @gather_op
+tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) -> tensor<512x4xf32> {
+  // CHECK-NEXT: %0 = tt.gather %arg0[%arg1] {dim = 0 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  %0 = tt.gather %arg0[%arg1] {dim = 0 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  tt.return %0 : tensor<512x4xf32>
+}

@@ -1068,6 +1068,37 @@ Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
   return Speculation::NotSpeculatable;
 }
 
+// -- GatherOp --
+LogicalResult GatherOp::verify() {
+  RankedTensorType indicesTy = getIndices().getType();
+  RankedTensorType srcTy = getSrc().getType();
+  RankedTensorType resTy = getResult().getType();
+
+  if (indicesTy.getShape() != resTy.getShape()) {
+    return emitOpError("indices and output shapes must match");
+  }
+  if (indicesTy.getEncoding() != resTy.getEncoding()) {
+    return emitOpError("indices and output encodings must match");
+  }
+  if (srcTy.getElementType() != resTy.getElementType()) {
+    return emitOpError("input and output element types must match");
+  }
+  if (srcTy.getRank() != indicesTy.getRank()) {
+    return emitOpError("input and indices ranks must match");
+  }
+  for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
+    if (dim == getDim())
+      continue;
+    if (indicesTy.getShape()[dim] > srcTy.getShape()[dim]) {
+      return emitOpError("indices dimension ")
+             << dim
+             << " cannot be greater than the corresponding input dimension";
+    }
+  }
+
+  return success();
+}
+
 // -- ExperimentalTensormapCreateOp --
 LogicalResult ExperimentalTensormapCreateOp::verify() {
   auto rank = getBoxDim().size();
