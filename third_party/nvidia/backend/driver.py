@@ -212,6 +212,15 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
+    CUcontext pctx;
+    CUDA_CHECK(cuCtxGetCurrent(&pctx));
+    if (!pctx) {{
+      // Ensure device context.
+      CUdevice device;
+      CUDA_CHECK(cuDeviceGet(&device, 0));
+      CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
+      CUDA_CHECK(cuCtxSetCurrent(pctx));
+    }}
     if (num_ctas == 1) {{
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
     }} else {{
