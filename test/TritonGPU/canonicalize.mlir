@@ -71,8 +71,8 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], hasLeadingOffset = false}>
 module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.compute-capability" = 80} {
 tt.func @test_canonicalize_convert_local_load() -> tensor<256xi32, #blocked1> {
-    %0 = triton_gpu.local_alloc  : () -> !triton_gpu.memdesc<256xi32, #shared, mutable>
-    %1 = triton_gpu.local_load %0 : !triton_gpu.memdesc<256xi32, #shared, mutable> -> tensor<256xi32, #blocked>
+    %0 = triton_gpu.local_alloc  : () -> !triton_gpu.memdesc<256xi32, #shared, #triton_gpu.shared_memory, mutable>
+    %1 = triton_gpu.local_load %0 : !triton_gpu.memdesc<256xi32, #shared, #triton_gpu.shared_memory, mutable> -> tensor<256xi32, #blocked>
     gpu.barrier
     %2 = triton_gpu.convert_layout %1 : tensor<256xi32, #blocked> -> tensor<256xi32, #blocked1>
     tt.return %2 : tensor<256xi32, #blocked1>

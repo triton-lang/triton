@@ -337,6 +337,14 @@ LinearLayout::checkInvariants(bool requireSurjective) {
            "can be reached by some `in` coordinate, but was not:" +
            toString();
   }
+
+  // Determine whether the this layout is injective, i.e. that every `in`
+  // coordinate can be reached by some `out` coordinate.
+  this->injective =
+      getMatrixRank(getMatrix(*this), /*numRows=*/getTotalInDimSizeLog2(),
+                    /*numCols=*/getTotalOutDimSizeLog2()) ==
+      getTotalInDimSizeLog2();
+
   return std::nullopt;
 }
 
@@ -916,6 +924,22 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     retOutDims.push_back({dim, outer.getInDimSize(dim)});
   }
   return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
+}
+
+LinearLayout LinearLayout::invert() const {
+  assert(isInjective() && "Can't invert a non-injective function");
+  // I = A^-1 * A
+  // I * A^-1 = A^-1
+  // So we can reuse the invertAndCompose function.
+  // A.invert() = I.invertAndCompose(A)
+  auto outDims = llvm::to_vector(getOutDimNames());
+  // Construct an identityND layout with the same outDims as this layout.
+  LinearLayout identity = LinearLayout::empty();
+  for (int i = 0; i < outDims.size(); i++) {
+    identity *= LinearLayout::identity1D(getOutDimSize(outDims[i]), outDims[i],
+                                         outDims[i]);
+  }
+  return identity.invertAndCompose(*this);
 }
 
 llvm::MapVector<StringAttr, int32_t>

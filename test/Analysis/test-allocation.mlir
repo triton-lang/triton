@@ -314,7 +314,7 @@ tt.func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512
   %cst0 = triton_gpu.local_alloc : () -> !triton_gpu.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
   %index = arith.constant 0 : i32
-  %cst1 = triton_gpu.memdesc_subview %cst0[%index, %index, %index] : !triton_gpu.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !triton_gpu.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable>
+  %cst1 = triton_gpu.memdesc_subview %cst0[%index, %index, %index] : !triton_gpu.memdesc<1x16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable> -> !triton_gpu.memdesc<16x16xf16, #A_SHARED, #triton_gpu.shared_memory, mutable, 16x16>
   tt.return
   // CHECK-NEXT: size = 512
 }

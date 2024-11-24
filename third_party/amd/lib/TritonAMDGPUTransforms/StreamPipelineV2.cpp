@@ -273,7 +273,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
       triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   auto subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
+      allocTy.getAllocShape());
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   // Clean up old local caches.

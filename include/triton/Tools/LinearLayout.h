@@ -325,6 +325,7 @@ private:
 
   llvm::MapVector<StringAttr, int32_t /*size*/> outDims;
   bool surjective;
+  bool injective;
 
 public:
   using BasesT = decltype(bases);
@@ -413,6 +414,8 @@ public:
       ArrayRef<std::pair<StringAttr, int32_t>> outDims, bool requireSurjective);
 
   bool isSurjective() const { return surjective; }
+
+  bool isInjective() const { return injective; }
 
   const BasesT &getBases() const { return bases; }
 
@@ -672,6 +675,8 @@ public:
   // ambiguity in which offset we choose for a given (lane, warp).  For now we
   // don't place any guarantees on the choices made by this function.
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
+
+  [[nodiscard]] LinearLayout invert() const;
 
   // For each in-dim, returns a bitmask of the "free variables" in the layout
   // function.

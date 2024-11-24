@@ -33,39 +33,54 @@ Type MemDescType::parse(AsmParser &parser) {
   if (parser.parseLess())
     return Type();
 
-  SmallVector<int64_t> dimensions;
-  if (parser.parseDimensionList(dimensions, /*allowDynamic=*/false))
+  SmallVector<int64_t> dimensions; // required
+  if (parser.parseDimensionList(dimensions, /*allowDynamic=*/false)) {
     return Type();
-
-  // Parse the element type.
-  Type elementType;
-  if (parser.parseType(elementType))
-    return Type();
-
-  Attribute encoding;
-  if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseAttribute(encoding))
-      return Type();
   }
-  bool mutableMemory = false;
-  Attribute memorySpace;
+
+  Type elementType; // required
+  if (failed(parser.parseType(elementType))) {
+    return Type();
+  }
+
+  Attribute encoding; // required
   if (succeeded(parser.parseOptionalComma())) {
-    if (failed(parser.parseOptionalKeyword(kMutableMemory))) {
-      if (parser.parseAttribute(memorySpace))
-        return Type();
-    } else {
-      mutableMemory = true;
+    if (failed(parser.parseAttribute(encoding))) {
+      return Type();
     }
   }
-  if (mutableMemory == false && succeeded(parser.parseOptionalComma())) {
-    if (parser.parseOptionalKeyword(kMutableMemory))
+
+  Attribute memorySpace; // required
+  if (succeeded(parser.parseOptionalComma())) {
+    if (failed(parser.parseAttribute(memorySpace))) {
       return Type();
-    mutableMemory = true;
+    }
   }
+
+  bool mutableMemory = false;                   // optional
+  SmallVector<int64_t> allocShape = dimensions; // optional
+  if (succeeded(parser.parseOptionalComma())) {
+    if (succeeded(parser.parseOptionalKeyword(kMutableMemory))) {
+      mutableMemory = true;
+    } else {
+      if (failed(parser.parseDimensionList(allocShape, /*allowDynamic=*/false,
+                                           /*withTrailingX=*/false))) {
+        return Type();
+      }
+    }
+  }
+
+  if (mutableMemory && succeeded(parser.parseOptionalComma())) {
+    if (failed(parser.parseDimensionList(allocShape, /*allowDynamic=*/false,
+                                         /*withTrailingX=*/false))) {
+      return Type();
+    }
+  }
+
   if (parser.parseGreater())
     return Type();
   return MemDescType::get(parser.getContext(), dimensions, elementType,
-                          encoding, memorySpace, mutableMemory);
+                          encoding, memorySpace, mutableMemory, allocShape);
 }
 
 void MemDescType::print(AsmPrinter &printer) const {
@@ -73,12 +88,19 @@ void MemDescType::print(AsmPrinter &printer) const {
   for (auto dim : getShape())
     printer << dim << "x";
   printer << getElementType();
-  if (getEncoding())
-    printer << ", " << getEncoding();
-  if (getMemorySpace())
-    printer << ", " << getMemorySpace();
+  printer << ", " << getEncoding();
+  printer << ", " << getMemorySpace();
   if (getMutableMemory())
     printer << ", " << kMutableMemory;
+  auto allocShape = getAllocShape();
+  if (allocShape != getShape()) {
+    printer << ", ";
+    for (auto [i, dim] : llvm::enumerate(allocShape)) {
+      printer << dim;
+      if (i != allocShape.size() - 1)
+        printer << "x";
+    }
+  }
   printer << ">";
 }
 
