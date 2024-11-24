@@ -419,10 +419,11 @@ loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
   llvm::SetVector<Operation *> slices;
   BackwardSliceOptions options;
   options.omitBlockArguments = true;
-  getBackwardSlice(src, &slices);
+  getBackwardSlice(src, &slices, options);
   ArrayRef<int64_t> allocShape;
   Attribute allocSharedEnc;
   for (auto *op : slices) {
+    llvm::errs() << "op: " << *op << "\n";
     if (auto localAlloc = dyn_cast<triton::gpu::LocalAllocOp>(op)) {
       auto allocMemDesc = cast<triton::gpu::MemDescType>(localAlloc.getType());
       allocSharedEnc = allocMemDesc.getEncoding();
