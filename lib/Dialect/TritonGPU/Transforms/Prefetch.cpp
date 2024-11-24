@@ -140,6 +140,11 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                     type.getMemorySpace()),
       v, offsetsVal);
 
+  newSmem.getDefiningOp()->setAttr("allocation.encoding", type.getEncoding());
+  auto denseArrayAttr =
+      mlir::DenseI64ArrayAttr::get(builder.getContext(), type.getShape());
+  newSmem.getDefiningOp()->setAttr("allocation.shape", denseArrayAttr);
+
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
   Value prefetchSlice = builder.create<triton::gpu::LocalLoadOp>(
