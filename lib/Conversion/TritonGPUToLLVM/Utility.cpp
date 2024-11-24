@@ -418,6 +418,16 @@ loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
   auto src = op.getSrc();
   llvm::SetVector<Operation *> slices;
   getBackwardSlice(src, &slices);
+  ArrayRef<int64_t> allocShape;
+  Attribute allocSharedEnc;
+  for (auto *op : slices) {
+    if (auto localAlloc = dyn_cast<triton::gpu::LocalAllocOp>(op)) {
+      auto allocMemDesc = cast<triton::gpu::MemDescType>(localAlloc.getType());
+      allocSharedEnc = allocMemDesc.getEncoding();
+      allocShape = allocMemDesc.getShape();
+      llvm::errs() << "allocSharedEnc: " << allocSharedEnc << "\n";
+    }
+  }
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
