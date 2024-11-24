@@ -167,7 +167,7 @@ bool emitTransferBetweenRegistersAndSharedWithAllocShape(
   MLIRContext *ctx = rewriter.getContext();
 
   auto shape = registerTy.getShape();
-  auto allocShape = sharedTy.getAllocShape();
+  auto allocShape = shape;
 
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
@@ -188,8 +188,6 @@ bool emitTransferBetweenRegistersAndSharedWithAllocShape(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   std::optional<LinearLayout> allocSharedLayout = triton::gpu::toLinearLayout(
       allocShape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
-  llvm::errs() << "allocSharedLayout: " << allocSharedLayout->toString()
-               << "\n";
   auto invertAllocSharedLayout = allocSharedLayout->invert();
   if (!regLayout.has_value() || !sharedLayout.has_value()) {
     return false;
@@ -301,12 +299,6 @@ bool emitTransferBetweenRegistersAndShared(
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   auto shape = registerTy.getShape();
-  auto allocShape = sharedTy.getAllocShape();
-  if (shape != allocShape) {
-    return emitTransferBetweenRegistersAndSharedWithAllocShape(
-        registerTy, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
-        target, perVectorCallback);
-  }
 
   MLIRContext *ctx = rewriter.getContext();
   auto smemBase = smemObj.getBase();

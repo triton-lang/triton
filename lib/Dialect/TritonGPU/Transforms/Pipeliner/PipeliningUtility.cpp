@@ -152,7 +152,7 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
           cast<triton::gpu::MemDescType>(val.getType()).getMutableMemory();
       Type newDstType = triton::gpu::MemDescType::get(
           oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
+          oldType.getMemorySpace(), isMutable);
       newVal = builder.create<triton::gpu::MemDescSubviewOp>(
           subview.getLoc(), newDstType, val, subview.getOffsets());
       newVal.getDefiningOp()->setAttrs(user->getAttrs());
