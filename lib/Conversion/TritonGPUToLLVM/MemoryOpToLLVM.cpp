@@ -216,7 +216,7 @@ private:
     auto elemLlvmTy = typeConverter->convertType(dstTy.getElementType());
 
     SmallVector<Value> outVals = loadSharedToDistributed(
-        dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
+        op, dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);

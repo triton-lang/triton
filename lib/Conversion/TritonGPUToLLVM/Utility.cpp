@@ -1,4 +1,5 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -409,12 +410,14 @@ bool emitTransferBetweenRegistersAndShared(
   return true;
 }
 
-SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           triton::gpu::MemDescType srcTy,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target) {
+SmallVector<Value>
+loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
+                        triton::gpu::MemDescType srcTy, Type elemLlvmTy,
+                        const SharedMemoryObject &smemObj, Location loc,
+                        RewriterBase &rewriter, const TargetInfoBase &target) {
+  auto src = op.getSrc();
+  llvm::SetVector<Operation *> slices;
+  getBackwardSlice(src, &slices);
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,

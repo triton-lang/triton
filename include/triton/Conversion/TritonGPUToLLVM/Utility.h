@@ -1310,12 +1310,11 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   return ret;
 }
 
-SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           triton::gpu::MemDescType srcTy,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target);
+SmallVector<Value>
+loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
+                        triton::gpu::MemDescType srcTy, Type elemLlvmTy,
+                        const SharedMemoryObject &smemObj, Location loc,
+                        RewriterBase &rewriter, const TargetInfoBase &target);
 
 void storeDistributedToShared(
     triton::gpu::MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
