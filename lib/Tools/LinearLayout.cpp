@@ -337,14 +337,6 @@ LinearLayout::checkInvariants(bool requireSurjective) {
            "can be reached by some `in` coordinate, but was not:" +
            toString();
   }
-
-  // Determine whether the this layout is injective, i.e. that every `in`
-  // coordinate can be reached by some `out` coordinate.
-  this->injective =
-      getMatrixRank(getMatrix(*this), /*numRows=*/getTotalInDimSizeLog2(),
-                    /*numCols=*/getTotalOutDimSizeLog2()) ==
-      getTotalInDimSizeLog2();
-
   return std::nullopt;
 }
 
@@ -927,7 +919,6 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
 }
 
 LinearLayout LinearLayout::invert() const {
-  assert(isInjective() && "Can't invert a non-injective function");
   // I = A^-1 * A
   // I * A^-1 = A^-1
   // So we can reuse the invertAndCompose function.
