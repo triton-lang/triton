@@ -337,7 +337,10 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
-        'name': name, 'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options':
+        'name': name, 'signature': signature, 
+        'constant_keys': list(constants.keys()),
+        'constant_vals': list(constants.values()),
+        'attrs': attrs.to_dict(), 'options':
         options.__dict__, 'key': key
     }
     serialized_obj = json.dumps(obj)
@@ -732,9 +735,11 @@ class JITFunction(KernelInterface[T]):
         if deserialized_obj['name'] != self.fn.__name__:
             raise RuntimeError(
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
+        constant_keys = map(tuple, deserialized_obj['constant_keys'])
+        constant_vals = deserialized_obj['constant_vals']
         constants = {
             key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
-            for key, value in deserialized_obj['constants'].items()
+            for key, value in zip(constant_keys, constant_vals)
         }
         signature = dict(deserialized_obj['signature'].items())
         src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))

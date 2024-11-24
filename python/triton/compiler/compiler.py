@@ -272,11 +272,11 @@ def compile(src, target=None, options=None):
 
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
-    try:
-        module = src.make_ir(options, codegen_fns, module_map, context)
-    except Exception as e:
-        filter_traceback(e)
-        raise
+    # try:
+    module = src.make_ir(options, codegen_fns, module_map, context)
+    # except Exception as e:
+    #     filter_traceback(e)
+    #     raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)

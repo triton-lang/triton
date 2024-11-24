@@ -66,7 +66,6 @@ def test_module_walk(device):
         signature={
             kernel.arg_names[i]: kernel._type_of(kernel._key_of(arg))
             for i, arg in enumerate(args)
-            if i not in kernel.constexprs
         },
         constants={kernel.arg_names[i]: arg
                    for i, arg in enumerate(args)

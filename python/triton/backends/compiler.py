@@ -104,7 +104,9 @@ class AttrsDescriptor:
         # Divisibility property
         divisibility_16 = []
         for param, arg in zip(params, values):
-            if param.do_not_specialize or param.do_not_specialize_on_alignment:
+            if not AttrsDescriptor.is_divisible_by_16(arg) or \
+               param.do_not_specialize or \
+               param.do_not_specialize_on_alignment:
                 continue
             paths = find_paths_if(arg, AttrsDescriptor.is_divisible_by_16)
             divisibility_16 += [(param.num,) + x for x in paths]
@@ -113,7 +115,7 @@ class AttrsDescriptor:
         # Equal to 1 property
         equal_to_1 = []
         for param, arg in zip(params, values):
-            if param.do_not_specialize:
+            if not AttrsDescriptor.is_equal_to_1(arg) or param.do_not_specialize:
                 continue
             paths = find_paths_if(arg, AttrsDescriptor.is_equal_to_1)
             equal_to_1 += [(param.num,) + x for x in paths]
@@ -187,7 +189,7 @@ class AttrsDescriptor:
         """
         attrs_descriptor = _descriptor_table[data["cls"]]()
         for prop_name, param_ids in data["arg_properties"].items():
-            attrs_descriptor.arg_properties[prop_name] = param_ids
+            attrs_descriptor.arg_properties[prop_name] = list(map(tuple, param_ids))
         attrs_descriptor._init_slots()
         return attrs_descriptor
 

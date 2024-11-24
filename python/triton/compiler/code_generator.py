@@ -343,7 +343,6 @@ class CodeGenerator(ast.NodeVisitor):
             stmts = [stmts]
         for stmt in stmts:
             self.visit(stmt)
-
             # Stop parsing as soon as we hit a `return` statement; everything
             # after this is dead code.
             if isinstance(stmt, ast.Return):
@@ -1080,6 +1079,9 @@ class CodeGenerator(ast.NodeVisitor):
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
+        for i, arg in enumerate(args):
+            if isinstance(arg, (language.dtype, float, int, bool)):
+                args[i] = language.core.constexpr(arg)
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
         args_val = find_paths_if(args, lambda _, x: not _is_constexpr(x)).values()
         # mangle

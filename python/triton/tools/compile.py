@@ -91,15 +91,16 @@ if __name__ == "__main__":
             pass
         return None
 
-    hints = {i: constexpr(s.split(":")[1]) for i, s in enumerate(signature) if ":" in s}
+    hints = {(i,): constexpr(s.split(":")[1]) for i, s in enumerate(signature) if ":" in s}
     hints = {k: v for k, v in hints.items() if v is not None}
     constants = {kernel.arg_names[i]: constexpr(s) for i, s in enumerate(signature)}
     constants = {k: v for k, v in constants.items() if v is not None}
     signature = {
         kernel.arg_names[i]: s.split(":")[0]
         for i, s in enumerate(signature)
-        if kernel.arg_names[i] not in constants
     }
+    for key in constants:
+        signature[key] = 'constexpr'
     const_sig = 'x'.join([str(v) for v in constants.values()])
     doc_string = [f"{k}={v}" for k, v in constants.items()]
     doc_string += [f"num_warps={args.num_warps}", f"num_stages={args.num_stages}"]
@@ -109,7 +110,7 @@ if __name__ == "__main__":
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
     attrs = triton.backends.compiler.AttrsDescriptor.from_hints(hints)
     for p, v in attrs.get_constants().items():
-        constants.update({kernel.arg_names[p]: v})
+        constants.update({kernel.arg_names[p[0]]: v})
     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     ccinfo = triton.compile(src, options=opts)
@@ -126,7 +127,7 @@ if __name__ == "__main__":
             arg_types.append(signature[arg_name])
             arg_names_not_1.append(arg_name)
             arg_types_not_1.append(signature[arg_name])
-        elif i in attrs.equal_to_1:
+        elif (i,) in attrs.equal_to_1:
             arg_names.append(arg_name)
             arg_types.append(signature[arg_name])
 

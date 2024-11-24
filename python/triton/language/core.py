@@ -1200,7 +1200,8 @@ class tuple:
         if isinstance(idx, constexpr):
             return self.values[idx]
         else:
-            assert isinstance(idx, slice)
+            import builtins
+            assert isinstance(idx, (slice, builtins.slice))
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
     # TODO: remove
@@ -1216,6 +1217,10 @@ class tuple:
         return tuple(self.values + other.values)
         # return tuple(a + b for a, b in zip(self.values, other.values))
     
+    def __mul__(self, other):
+        assert isinstance(other, constexpr)
+        return tuple(self.values * other.value)
+        
     def __eq__(self, other):
         import builtins
         if isinstance(other, (list, builtins.tuple)):
