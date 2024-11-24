@@ -417,6 +417,8 @@ loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
                         RewriterBase &rewriter, const TargetInfoBase &target) {
   auto src = op.getSrc();
   llvm::SetVector<Operation *> slices;
+  BackwardSliceOptions options;
+  options.omitBlockArguments = true;
   getBackwardSlice(src, &slices);
   ArrayRef<int64_t> allocShape;
   Attribute allocSharedEnc;
