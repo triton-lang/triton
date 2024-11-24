@@ -338,12 +338,12 @@ LinearLayout::checkInvariants(bool requireSurjective) {
            toString();
   }
 
-  // Determine whether the this layout is injective, i.e. that every `in`
-  // coordinate can be reached by some `out` coordinate.
-  this->injective =
-      getMatrixRank(getMatrix(*this), /*numRows=*/getTotalInDimSizeLog2(),
-                    /*numCols=*/getTotalOutDimSizeLog2()) ==
-      getTotalInDimSizeLog2();
+  //// Determine whether the this layout is injective, i.e. that every `in`
+  //// coordinate can be reached by some `out` coordinate.
+  // this->injective =
+  //     getMatrixRank(getMatrix(*this), /*numRows=*/getTotalInDimSizeLog2(),
+  //                   /*numCols=*/getTotalOutDimSizeLog2()) ==
+  //     getTotalInDimSizeLog2();
 
   return std::nullopt;
 }
