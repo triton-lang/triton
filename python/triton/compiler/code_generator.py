@@ -1295,9 +1295,9 @@ def kernel_suffix(signature, specialization):
     suffix = ''
     for i, _ in enumerate(signature):
         suffix += str(i)
-        if i in specialization.equal_to_1:
+        if (i,) in specialization.equal_to_1:
             suffix += 'c'
-        if i in specialization.divisibility_16:
+        if (i,) in specialization.divisibility_16:
             suffix += 'd'
     return suffix
 
