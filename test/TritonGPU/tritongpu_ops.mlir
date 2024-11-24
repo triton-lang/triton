@@ -5,7 +5,7 @@
 module attributes {"triton_gpu.target" = "cuda:0", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: memdesc
   // CHECK-SAME: !triton_gpu.memdesc<1x64x16xf16, #{{.+}}>
-  tt.func @memdesc(%d : !triton_gpu.memdesc<1x64x16xf16, #shared0, #triton_gpu.shared_memory>) {
+  tt.func @memdesc(%d : !triton_gpu.memdesc<1x64x16xf16, #shared0>) {
     tt.return
   }
 }

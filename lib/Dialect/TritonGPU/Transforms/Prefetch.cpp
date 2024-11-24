@@ -136,9 +136,8 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
         builder.create<arith::ConstantIntOp>(v.getLoc(), off, 32));
   Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
       v.getLoc(),
-      triton::gpu::MemDescType::get(
-          shape, elementType, type.getEncoding(), type.getMemorySpace(),
-          type.getMutableMemory(), type.getAllocShape()),
+      triton::gpu::MemDescType::get(shape, elementType, type.getEncoding(),
+                                    type.getMemorySpace()),
       v, offsetsVal);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(

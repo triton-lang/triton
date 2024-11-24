@@ -780,10 +780,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
       %11 = tt.broadcast %10 : tensor<128x1xi32, #blocked1> -> tensor<128x128xi32, #blocked1>
       %12 = tt.addptr %1, %11 : tensor<128x128x!tt.ptr<f8E4M3FNUZ>, #blocked1>, tensor<128x128xi32, #blocked1>
       %13 = tt.load %arg0 : tensor<128x128x!tt.ptr<f8E4M3FNUZ>, #blocked>
-      %14 = triton_gpu.local_alloc %13 : (tensor<128x128xf8E4M3FNUZ, #blocked>) -> !triton_gpu.memdesc<128x128xf8E4M3FNUZ, #shared, #triton_gpu.shared_memory>
+      %14 = triton_gpu.local_alloc %13 : (tensor<128x128xf8E4M3FNUZ, #blocked>) -> !triton_gpu.memdesc<128x128xf8E4M3FNUZ, #shared>
       %15 = tt.load %12 : tensor<128x128x!tt.ptr<f8E4M3FNUZ>, #blocked1>
-      %16 = triton_gpu.local_alloc %15 : (tensor<128x128xf8E4M3FNUZ, #blocked1>) -> !triton_gpu.memdesc<128x128xf8E4M3FNUZ, #shared1, #triton_gpu.shared_memory>
-      %17 = triton_nvidia_gpu.warp_group_dot %14, %16, %arg9 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 1073741824 : i32} : !triton_gpu.memdesc<128x128xf8E4M3FNUZ, #shared, #triton_gpu.shared_memory> * !triton_gpu.memdesc<128x128xf8E4M3FNUZ, #shared1, #triton_gpu.shared_memory> -> tensor<128x128xf32, #mma>
+      %16 = triton_gpu.local_alloc %15 : (tensor<128x128xf8E4M3FNUZ, #blocked1>) -> !triton_gpu.memdesc<128x128xf8E4M3FNUZ, #shared1>
+      %17 = triton_nvidia_gpu.warp_group_dot %14, %16, %arg9 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 1073741824 : i32} : !triton_gpu.memdesc<128x128xf8E4M3FNUZ, #shared> * !triton_gpu.memdesc<128x128xf8E4M3FNUZ, #shared1> -> tensor<128x128xf32, #mma>
       %18 = tt.splat %7 : f32 -> tensor<128x128xf32, #mma>
       %19 = arith.mulf %17, %18 : tensor<128x128xf32, #mma>
       %20 = scf.if %6 -> (tensor<128x128xf32, #mma>) {
