@@ -133,6 +133,7 @@ ttg::BlockedEncodingAttr getThreadRakedBlockedEnc(Value operand,
   auto shape = tensorTy.getShape();
   auto opEnc = tensorTy.getEncoding();
   auto opDotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(opEnc);
+  auto kWidth = opDotOpEnc.getKWidth();
   int kDimNum = opDotOpEnc.getOpIdx() == 0 ? 1 : 0;
   // get the current blocked encoding
   auto cvtOperand = operand.getDefiningOp()->getOperand(0);
@@ -149,6 +150,8 @@ ttg::BlockedEncodingAttr getThreadRakedBlockedEnc(Value operand,
   auto bitwidth = tensorTy.getElementType().getIntOrFloatBitWidth();
   // Current the widest is set to ds_write_b64
   auto newKOuterDim = std::min(numMaxIters, 64 / bitwidth);
+  // the new vectorization needs to be bound by kWidth as well
+  newKOuterDim = std::min(newKOuterDim, kWidth);
   LDBG("Choose the minimum of numIters: " << numMaxIters << " and numDtype: "
                                           << 64 / bitwidth);
   SmallVector<unsigned> newSizePerThread(sizePerThread);
