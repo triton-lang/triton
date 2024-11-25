@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-project(triton CXX)
+project(triton CXX C)
 include(CTest)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -38,6 +38,13 @@ if(TRITON_BUILD_WITH_CCACHE)
         "Could not find ccache. Consider installing ccache to speed up compilation."
     )
   endif()
+endif()
+
+set(TRITON_PARALLEL_LINK_JOBS "" CACHE STRING
+  "Define the maximum number of concurrent link jobs (Ninja only).")
+if (TRITON_PARALLEL_LINK_JOBS)
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS link_job_pool=${TRITON_PARALLEL_LINK_JOBS})
+    set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
 
@@ -212,6 +219,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   if (TRITON_BUILD_PROTON)
     add_subdirectory(third_party/proton)
   endif()
+  # We always build proton dialect
+  list(APPEND TRITON_PLUGIN_NAMES "proton")
+  add_subdirectory(third_party/proton/dialect)
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
@@ -319,6 +329,7 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
+  add_subdirectory(third_party/proton/dialect)
 endif()
 
 find_package(Threads REQUIRED)

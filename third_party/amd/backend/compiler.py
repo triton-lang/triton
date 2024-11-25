@@ -342,6 +342,9 @@ class HIPBackend(BaseBackend):
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
 
         amd.cleanup_bitcode_metadata(llvm_mod)
+        # Disable inlining of print related functions,
+        # because inlining of these function could slow down compilation significantly
+        amd.disable_print_inline(llvm_mod)
         return str(llvm_mod)
 
     @staticmethod

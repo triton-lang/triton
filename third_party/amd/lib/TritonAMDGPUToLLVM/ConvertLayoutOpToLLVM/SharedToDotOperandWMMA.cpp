@@ -152,7 +152,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   assert(wmmaLayout.getMNKDimPerInstr()[nonKDimIdx] == 16);
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
 
-  auto aTensorTy = cast<MemDescType>(tensor.getType());
+  auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();

@@ -148,16 +148,16 @@ public:
   LogicalResult matchAndRewrite(ConvertLayoutOp cvtOp,
                                 PatternRewriter &rewriter) const override {
     // Match outerCvt(trans(innerCvt(x))).
-    auto trans = cvtOp.getSrc().getDefiningOp<MemDescTransOp>();
+    auto trans = cvtOp.getSrc().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
       return failure();
 
-    auto srcTy = dyn_cast<RankedTensorType>(trans.getSrc().getType());
+    RankedTensorType srcTy = trans.getSrc().getType();
 
     if (auto srcCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
       srcTy = srcCvt.getSrc().getType();
     }
-    auto sharedLoadTy = cast<RankedTensorType>(cvtOp.getType());
+    RankedTensorType sharedLoadTy = cvtOp.getType();
     auto cvtEncoding =
         dyn_cast<DotOperandEncodingAttr>(sharedLoadTy.getEncoding());
     if (!cvtEncoding)
@@ -326,13 +326,13 @@ public:
       return failure();
 
     // Match outerCvt(trans(innerCvt(x))).
-    auto trans = allocOp.getSrc().getDefiningOp<MemDescTransOp>();
+    auto trans = allocOp.getSrc().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>({1, 0}))
       return failure();
 
     MemDescType allocType = allocOp.getType();
     auto allocEncoding = cast<SharedEncodingAttr>(allocType.getEncoding());
-    MemDescType srcTy = trans.getSrc().getType();
+    RankedTensorType srcTy = trans.getSrc().getType();
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
     // without transpose for other data types.)

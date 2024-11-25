@@ -397,6 +397,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
       }
+      if (isa<LinearEncodingAttr>(layout)) {
+        return true;
+      }
       if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
         return layoutIsOK(slice.getParent());
       }

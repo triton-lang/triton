@@ -41,6 +41,11 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           echo "enable_integration=true" >> $GITHUB_ENV
+      - name: Decide manual trigger integration test enablement
+        # Always enable integration tests when manually triggered
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
       - name: Checkout post-submit commits
         if: github.event_name == 'push'
         uses: actions/checkout@v4
@@ -309,7 +314,7 @@ jobs:
           path: |
             ~/.triton/cache
             ~/.ccache
-          key: ${{ steps.restore-build-cache.outputs.cache-primary-key }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
   Integration-Tests-AMD:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-HIP != ''
@@ -477,7 +482,7 @@ jobs:
           path: |
             ~/.triton/cache
             ~/.ccache
-          key: ${{ steps.restore-build-cache.outputs.cache-primary-key }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Clean up caches
         run: |
           rm -rf ~/.triton/cache
@@ -485,7 +490,7 @@ jobs:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
@@ -605,4 +610,4 @@ jobs:
           path: |
             ~/.triton/cache
             ~/.ccache
-          key: ${{ steps.restore-build-cache.outputs.cache-primary-key }}
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
