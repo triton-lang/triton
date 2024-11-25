@@ -426,7 +426,8 @@ loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
     if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(op)) {
       allocShape =
           subview->getAttrOfType<DenseI64ArrayAttr>("allocation.shape");
-      allocSharedEnc = subview->getAttrOfType<Attribute>("encoding");
+      allocSharedEnc = subview->getAttrOfType<Attribute>("allocation.encoding");
+      assert(allocSharedEnc && "allocation.encoding is not set");
       llvm::errs() << "allocSharedEnc: " << allocSharedEnc << "\n";
       break;
     }
