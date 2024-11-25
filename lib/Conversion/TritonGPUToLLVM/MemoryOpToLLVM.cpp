@@ -28,8 +28,10 @@ void lowerDistributedToShared(
   // NV path because for non-KContig tensor their blocked and shared layout
   // still have the same order.
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding())) {
+    auto rank = blocked.getOrder().size();
     auto inOrd = blocked.getOrder();
-    crossGrain = inOrd[0] != outOrd[0];
+    // it has to be 2D and blocked's and shared's order mismatch
+    crossGrain = (rank == 2) && (inOrd[0] != outOrd[0]);
   }
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
