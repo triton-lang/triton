@@ -108,3 +108,14 @@ tt.func @arith_splat_bool(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
   tt.return
 }
 }
+
+// -----
+
+// CHECK-LABEL: gather_op
+tt.func @gather_op() {
+  %cst = arith.constant dense<1.0> : tensor<128x4xf32>
+  %cst_0 = arith.constant dense<1> : tensor<256x4xi32>
+  // CHECK: tt.gather %{{.*}}[%{{.*}}] {dim = 0 : i32} : (tensor<128x4xf32, #blocked>, tensor<256x4xi32, #blocked>) -> tensor<256x4xf32, #blocked>
+  %0 = tt.gather %cst[%cst_0] {dim = 0 : i32} : (tensor<128x4xf32>, tensor<256x4xi32>) -> tensor<256x4xf32>
+  tt.return
+}

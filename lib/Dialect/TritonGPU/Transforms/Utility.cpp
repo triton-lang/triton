@@ -472,6 +472,8 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferSrcEncoding(reshape, encoding);
+  // TODO(jeff): Handle progagating tt.gather indices -> dst layout.
+  // This requires updating the API to specify the exact operands and results.
 
   return std::nullopt;
 }
@@ -499,6 +501,7 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferDstEncoding(reshape, encoding);
+  // TODO(jeff): Handle progagating tt.gather indices -> dst layout.
 
   return std::nullopt;
 }
