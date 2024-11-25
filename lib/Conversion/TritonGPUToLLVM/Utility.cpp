@@ -424,7 +424,12 @@ loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
   Attribute allocSharedEnc;
   for (auto *op : slices) {
     if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(op)) {
-      llvm::errs() << "subview: " << subview << "\n";
+      allocShape =
+          subview->getAttrOfType<DenseI64ArrayAttr>("allocation.shape");
+      allocSharedEnc = subview->getAttrOfType<Attribute>("encoding");
+      llvm::errs() << "allocShape: " << allocShape << "\n";
+      llvm::errs() << "allocSharedEnc: " << allocSharedEnc << "\n";
+      break;
     }
   }
   SmallVector<Value> ret;
