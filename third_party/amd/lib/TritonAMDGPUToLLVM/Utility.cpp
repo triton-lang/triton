@@ -366,9 +366,9 @@ SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp) {
 
   SmallVector<scf::ForOp> leafOps;
   for (scf::ForOp forOp : allOps) {
-    auto searchResult =
-        forOp->walk([](scf::ForOp) { return WalkResult::interrupt(); });
-    if (searchResult.wasInterrupted())
+    auto searchResult = forOp.getBody()->walk(
+        [](scf::ForOp) { return WalkResult::interrupt(); });
+    if (!searchResult.wasInterrupted())
       leafOps.push_back(forOp);
   }
   return leafOps;
