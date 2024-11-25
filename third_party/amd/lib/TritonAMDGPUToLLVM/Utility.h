@@ -49,4 +49,8 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 } // namespace mlir::LLVM::AMD
 
+namespace mlir::triton::AMD {
+SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp);
+} // namespace mlir::triton::AMD
+
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
