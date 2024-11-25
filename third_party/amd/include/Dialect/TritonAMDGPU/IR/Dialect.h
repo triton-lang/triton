@@ -41,10 +41,6 @@
 #define GET_OP_CLASSES
 #include "amd/include/Dialect/TritonAMDGPU/IR/Ops.h.inc"
 
-namespace mlir {
-namespace triton {
-namespace amdgpu {} // namespace amdgpu
-} // namespace triton
-} // namespace mlir
+namespace mlir::triton::amdgpu {} // namespace mlir::triton::amdgpu
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_DIALECT_H_

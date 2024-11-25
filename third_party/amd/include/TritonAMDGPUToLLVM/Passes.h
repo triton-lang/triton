@@ -13,12 +13,16 @@ namespace mlir {
 class ModuleOp;
 template <typename T> class OperationPass;
 
-namespace triton {
+} // namespace mlir
+
+namespace mlir::triton {
 
 #define GEN_PASS_DECL
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 
-namespace AMD {
+} // namespace mlir::triton
+
+namespace mlir::triton::AMD {
 std::unique_ptr<OperationPass<ModuleOp>>
 createDecomposeUnsupportedConversionsPass(StringRef targetArch);
 
@@ -29,7 +33,9 @@ createDecomposeUnsupportedConversionsPass(StringRef targetArch);
 /// @return created pass
 std::unique_ptr<OperationPass<ModuleOp>>
 createOptimizeLDSUsagePass(StringRef arch, int32_t customLDSLimit = 0);
-} // namespace AMD
+} // namespace mlir::triton::AMD
+
+namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz);
@@ -45,8 +51,6 @@ createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 
-} // namespace triton
-
-} // namespace mlir
+} // namespace mlir::triton
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_PASSES_H_

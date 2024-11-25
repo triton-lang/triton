@@ -31,10 +31,13 @@
 #include <string>
 
 namespace mlir {
+
 class ConversionPatternRewriter;
 class Location;
 
-namespace triton {
+} // namespace mlir
+
+namespace mlir::triton {
 using llvm::StringRef;
 
 class GCNInstr;
@@ -397,7 +400,6 @@ struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   }
 };
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_GCNASMFORMAT_H_
