@@ -162,6 +162,29 @@ proton-viewer -h
 
 ## Advanced features
 
+### State annotation
+
+In addition to `proton.scope`, we can also customize the call path of each GPU operation using `proton.state`.
+
+`state` is different from `scope` in several ways:
+
+1. State is not recursive; each operation can have only a single state. Inner most state will overwrite the outer most state.
+2. A states is a suffix, meaning that the original call path will append a state above the name of each kernel.
+3. State is compatible with both Python and shadow contexts.
+
+The following example demonstrates a basic use of state:
+
+```python
+with proton.scope("test"):
+    with proton.state("state0"):
+        with proton.scope("test0"):
+            foo0[1,](x, y)
+        with proton.scope("test1"):
+            foo1[1,](x, y)
+```
+
+The call path of `foo1` will be `test->test1->state0`.
+
 ### Instrumentation (experimental)
 
 In addition to profiling, Proton also incorporates MLIR/LLVM based compiler instrumentation passes to get Triton level analysis

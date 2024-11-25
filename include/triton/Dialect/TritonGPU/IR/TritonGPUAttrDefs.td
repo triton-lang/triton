@@ -2,8 +2,8 @@
 #define TRITONGPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
-include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 
 //===----------------------------------------------------------------------===//
 // TritonGPU Attribute Definitions
@@ -56,7 +56,6 @@ Right now, Triton implements two main classes of layouts: shared, and distribute
   code extraBaseClassDeclaration = [{
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
-    ::mlir::LogicalResult verifyLayoutForArg(::mlir::Operation* op, unsigned argNo) const;
   }];
 }
 
@@ -147,7 +146,6 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
   let genVerifyDecl = 1;
   let skipDefaultBuilders = 1;
 }
-
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
@@ -502,11 +500,6 @@ We call each individual tile "rep".
                     "SmallVector<unsigned>",
                     "getCTASplitNum">,
 
-    InterfaceMethod<"Gets the shape of the encoding's tile, e.g. sizePerThread * threadsPerWarp * warpsPerCTA",
-                    "SmallVector<unsigned>",
-                    "getShapePerCTATile",
-                     (ins "ArrayRef<int64_t>":$tensorShape)>,
-
     InterfaceMethod<"Gets the number of contiguous elements per thread.",
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
@@ -565,11 +558,38 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getThreadOrder() const;
 
     SmallVector<unsigned> getSizePerThread() const;
-    SmallVector<unsigned> getShapePerCTATile(ArrayRef<int64_t> tensorShape = ArrayRef<int64_t>()) const;
 
     std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
 }
+
+//===----------------------------------------------------------------------===//
+// Linear Layout Encoding
+//===----------------------------------------------------------------------===//
+
+def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"> {
+  let mnemonic = "linear";
+
+  let description = [{
+    See the docs in LinearLayout.h for the definition of linear layouts.
+  }];
+
+  let parameters = (ins "LinearLayout":$linearLayout);
+
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    SmallVector<unsigned> getContigPerThread() const;
+    SmallVector<unsigned> getOrder() const;
+  }];
+
+  let genVerifyDecl = 1;
+  // Example of assembly format:
+  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+  //   warp = [[16, 0], [32, 0]],
+  //   block = []}>
+  let hasCustomAssemblyFormat = 1;
+}
+
 
 //===----------------------------------------------------------------------===//
 // Blocked Layout Encoding
@@ -765,18 +785,16 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "bool",
                     "supportReduction">,
 
-    InterfaceMethod<"Return shape per CTA.",
-                    "SmallVector<unsigned>",
-                    "getShapePerCTATileForOperand",
-                    (ins "ArrayRef<int64_t>":$tensorShape,
-                         "int":$kWidth,
-                         "int":$opIdx)>,
-
     InterfaceMethod<"Return size per thread for dot operands.",
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperand",
                     (ins "int":$opIdx,
                          "int":$kWidth)>,
+
+    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getRepOrderForOperand",
+                    (ins "int":$opIdx)>,
   ];
 }
 
@@ -895,7 +913,6 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
       return true;
     }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
@@ -1003,7 +1020,6 @@ Row |       warp 0                warp 2
       return true;
     }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
@@ -1124,7 +1140,8 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     bool isHopper() const;
 
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
-                                          int bitwidth, int opIdx) const;
+                                          int bitwidth, int kWidth,
+                                          int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     bool supportReduction() const {
@@ -1134,7 +1151,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       return false;
     };
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
       assert(isAmpere() || isHopper());

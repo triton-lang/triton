@@ -50,7 +50,7 @@ public:
                                          blockEncoding);
     Value load =
         rewriter.create<LocalLoadOp>(op.getLoc(), tmpType, op.getSrc());
-    auto newSharedDescTy = triton::MemDescType::get(
+    auto newSharedDescTy = MemDescType::get(
         type.getShape(), type.getElementType(),
         triton::gpu::SharedEncodingAttr::get(
             op.getContext(), dstDotOp, type.getShape(),

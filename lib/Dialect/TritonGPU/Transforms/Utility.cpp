@@ -379,13 +379,13 @@ inferTransOpDstEncoding(Attribute srcEnc, ArrayRef<int32_t> order) {
   return std::nullopt;
 }
 
-static std::optional<Attribute> inferDstEncoding(triton::TransOp op,
-                                                 Attribute encoding) {
+static std::optional<Attribute>
+inferDstEncoding(triton::TransposeOpInterface op, Attribute encoding) {
   return inferTransOpDstEncoding(encoding, op.getOrder());
 }
 
-static std::optional<Attribute> inferSrcEncoding(triton::TransOp op,
-                                                 Attribute encoding) {
+static std::optional<Attribute>
+inferSrcEncoding(triton::TransposeOpInterface op, Attribute encoding) {
   // We want to solve for srcEnc in
   //   transpose(srcEnc, order) -> dstEnc.
   // Given the identity
@@ -468,7 +468,7 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(join, encoding);
   if (auto split = dyn_cast<triton::SplitOp>(op))
     return inferSrcEncoding(split, encoding);
-  if (auto trans = dyn_cast<triton::TransOp>(op))
+  if (auto trans = dyn_cast<triton::TransposeOpInterface>(op))
     return inferSrcEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferSrcEncoding(reshape, encoding);
@@ -495,7 +495,7 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(join, encoding);
   if (auto split = dyn_cast<triton::SplitOp>(op))
     return inferDstEncoding(split, encoding);
-  if (auto trans = dyn_cast<triton::TransOp>(op))
+  if (auto trans = dyn_cast<triton::TransposeOpInterface>(op))
     return inferDstEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferDstEncoding(reshape, encoding);
@@ -563,7 +563,8 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
              triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp,
-             triton::gpu::LocalAllocOp, triton::gpu::LocalStoreOp>(op);
+             triton::gpu::LocalAllocOp, triton::gpu::LocalLoadOp,
+             triton::gpu::LocalStoreOp>(op);
 }
 
 scf::ForOp replaceForOpWithNewSignature(
@@ -944,7 +945,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
-            dyn_cast<triton::MemDescType>(user->getResult(0).getType())) {
+            dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
@@ -955,10 +956,11 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return std::nullopt;
       auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
-          cast<TensorOrMemDesc>(user->getResult(0).getType()).getEncoding());
+          cast<triton::gpu::TensorOrMemDesc>(user->getResult(0).getType())
+              .getEncoding());
       if (!dotOpEnc)
         return std::nullopt;
-      auto srcTy = cast<TensorOrMemDesc>(val.getType());
+      auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();

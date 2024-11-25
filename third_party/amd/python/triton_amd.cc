@@ -72,10 +72,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUConvertToBufferOpsPass);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
+  ADD_PASS_WRAPPER_2("add_stream_pipelinev2",
+                     mlir::createTritonAMDGPUStreamPipelineV2Pass, int, int);
   ADD_PASS_WRAPPER_0("add_block_pingpong",
                      mlir::createTritonAMDGPUBlockPingpongPass);
-  ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
-                     mlir::createTritonAMDGPUStreamPipelineV2Pass, int);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
@@ -161,6 +161,24 @@ void init_triton_amd(py::module &&m) {
     // Also various OpenCL version details.
     if (auto *openclVersion = module->getNamedMetadata("opencl.ocl.version"))
       module->eraseNamedMetadata(openclVersion);
+  });
+
+  m.def("disable_print_inline", [](llvm::Module *module) {
+    // List of functions name prefixes we want to forbid inline.
+    std::array<const char *, 2> prefixes = {"__ockl_fprintf", "__ockl_printf"};
+
+    for (llvm::Function &f : module->functions()) {
+      if (!f.hasName())
+        continue;
+      llvm::StringRef name = f.getName();
+
+      auto isNamePrefixed = [&name](const char *prefix) {
+        return name.starts_with(prefix);
+      };
+
+      if (llvm::any_of(prefixes, isNamePrefixed))
+        f.addFnAttr(llvm::Attribute::NoInline);
+    }
   });
 
   m.def(

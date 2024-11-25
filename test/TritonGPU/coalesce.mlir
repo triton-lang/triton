@@ -131,3 +131,32 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// -----
+
+// COM: Reproducer for issue #5122
+// CHECK-LABEL: @test_5122
+module {
+  tt.func public @test_5122(%arg0: i32) attributes {noinline = false} {
+    %c1_i32 = arith.constant 1 : i32
+    %0 = arith.cmpi sgt, %arg0, %c1_i32 : i32
+    scf.if %0 {
+      %1 = scf.if %0 -> (i32) {
+        scf.yield %c1_i32 : i32
+      } else {
+        scf.yield %c1_i32 : i32
+      }
+      %2 = arith.cmpi sgt, %1, %c1_i32 : i32
+      %3 = scf.if %2 -> (i32) {
+        scf.yield %c1_i32 : i32
+      } else {
+        scf.yield %c1_i32 : i32
+      }
+      %4 = scf.for %arg1 = %1 to %1 step %c1_i32 iter_args(%arg2 = %3) -> (i32) : i32 {
+        %5 = arith.addi %arg2, %c1_i32 : i32
+        scf.yield %5 : i32
+      }
+    }
+    tt.return
+  }
+}

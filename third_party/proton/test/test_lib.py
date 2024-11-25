@@ -10,6 +10,11 @@ def test_record():
     assert id1 == id0 + 1
 
 
+def test_state():
+    libproton.enter_state("zero")
+    libproton.exit_state()
+
+
 def test_scope():
     id0 = libproton.record_scope()
     libproton.enter_scope(id0, "zero")
