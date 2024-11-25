@@ -321,10 +321,7 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   endforeach()
 endif()
 
-if(WIN32)
-  option(CMAKE_USE_WIN32_THREADS_INIT "using WIN32 threads" ON)
-  option(gtest_disable_pthreads "Disable uses of pthreads in gtest." ON)
-endif()
+find_package(Threads REQUIRED)
 
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
