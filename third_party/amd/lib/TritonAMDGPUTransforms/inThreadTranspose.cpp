@@ -70,10 +70,10 @@ void convertLayout(Attribute encoding, Operation *op) {
 
 SmallVector<Operation *> getLoadInsts(Operation *op) {
   SmallVector<Operation *> ret;
-  // Deal with the case that convert_layout intakes a scf.if, etc.
   auto v = op->getOperand(0);
   auto prevOp = v.getDefiningOp();
   if (isa<RegionBranchOpInterface>(prevOp)) {
+    // Deal with the case that convert_layout intakes from scf.if, etc.
     LDBG("Dealing with scf blocks");
     auto idx = cast<OpResult>(v).getResultNumber();
     llvm::SmallVector<scf::YieldOp> yieldOps;
@@ -88,12 +88,13 @@ SmallVector<Operation *> getLoadInsts(Operation *op) {
       if (isa<tt::LoadOp>(maybeLoadOp))
         ret.push_back(maybeLoadOp);
     }
-  } else {
+  } else if (isa<tt::LoadOp>(prevOp)) {
     // regular case
     LDBG("Regular cases");
-    assert(isa<tt::LoadOp>(prevOp) &&
-        "only load->convert_layout->dot is supported.");
     ret.push_back(prevOp);
+  } else {
+    // can't find any loadOp
+    LDBG("we assume load->convert_layout->dot chain but we cannot find it.");
   }
   return ret;
 }
@@ -187,6 +188,8 @@ public:
       if (performCvt) {
         LDBG("opA is K-outer");
         auto loadOps = getLoadInsts(opA.getDefiningOp());
+        if (!loadOps.size())
+            return;
         auto newBlockedEnc = getThreadRakedBlockedEnc(opA, mod);
         LDBG("opA newBlockedEnc = " << newBlockedEnc);
         for (auto loadOp : loadOps)
@@ -200,6 +203,8 @@ public:
       if (performCvt) {
         LDBG("opB is K-outer");
         auto loadOps = getLoadInsts(opB.getDefiningOp());
+        if (!loadOps.size())
+            return;
         auto newBlockedEnc = getThreadRakedBlockedEnc(opB, mod);
         LDBG("opB newBlockedEnc = " << newBlockedEnc);
         for (auto loadOp : loadOps)
