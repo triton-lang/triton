@@ -161,6 +161,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 
 bool emitTransferBetweenRegistersAndSharedWithAllocShape(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
+    ArrayRef<int64_t> allocShape, triton::gpu::SharedEncodingAttr allocEnc,
     Type elemLlvmTy, std::optional<int32_t> maxVecElems,
     const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
@@ -168,7 +169,6 @@ bool emitTransferBetweenRegistersAndSharedWithAllocShape(
   MLIRContext *ctx = rewriter.getContext();
 
   auto shape = registerTy.getShape();
-  auto allocShape = shape;
 
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
@@ -188,7 +188,7 @@ bool emitTransferBetweenRegistersAndSharedWithAllocShape(
   std::optional<LinearLayout> sharedLayout = triton::gpu::toLinearLayout(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   std::optional<LinearLayout> allocSharedLayout = triton::gpu::toLinearLayout(
-      allocShape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
+      allocShape, allocEnc, elemLlvmTy.getIntOrFloatBitWidth());
   auto invertAllocSharedLayout = allocSharedLayout->invert();
   if (!regLayout.has_value() || !sharedLayout.has_value()) {
     return false;
@@ -298,7 +298,15 @@ bool emitTransferBetweenRegistersAndShared(
     Type elemLlvmTy, std::optional<int32_t> maxVecElems,
     const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback,
+    std::optional<ArrayRef<int64_t>> allocShape,
+    std::optional<triton::gpu::SharedEncodingAttr> allocSharedLayout) {
+  if (allocShape) {
+    return emitTransferBetweenRegistersAndSharedWithAllocShape(
+        registerTy, sharedTy, *allocShape, *allocSharedLayout, elemLlvmTy,
+        maxVecElems, smemObj, loc, rewriter, target, perVectorCallback);
+  }
+
   auto shape = registerTy.getShape();
 
   MLIRContext *ctx = rewriter.getContext();
@@ -420,22 +428,22 @@ loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
   BackwardSliceOptions options;
   options.omitBlockArguments = true;
   getBackwardSlice(src, &slices, options);
-  ArrayRef<int64_t> allocShape;
-  Attribute allocSharedEnc;
+  std::optional<ArrayRef<int64_t>> allocShape;
+  std::optional<Attribute> allocSharedEnc;
   for (auto *op : slices) {
     if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(op)) {
       allocShape =
           subview->getAttrOfType<DenseI64ArrayAttr>("allocation.shape");
-      allocSharedEnc = subview->getAttrOfType<Attribute>("allocation.encoding");
-      assert(allocSharedEnc && "allocation.encoding is not set");
-      llvm::errs() << "allocSharedEnc: " << allocSharedEnc << "\n";
+      allocSharedEnc = subview->getAttrOfType<triton::gpu::SharedEncodingAttr>(
+          "allocation.encoding");
       break;
     }
   }
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+      rewriter, target,
+      [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
@@ -443,7 +451,8 @@ loadSharedToDistributed(triton::gpu::LocalLoadOp op, RankedTensorType dstTy,
         for (int v = 0; v < vecTy.getNumElements(); v++) {
           ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
         }
-      });
+      },
+      allocShape, allocSharedEnc);
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from shared to register");
 

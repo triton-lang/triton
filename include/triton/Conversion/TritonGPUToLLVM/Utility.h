@@ -1146,7 +1146,9 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     Type elemLlvmTy, std::optional<int32_t> maxVecElems,
     const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback,
+    std::optional<ArrayRef<int64_t>> allocShape,
+    std::optional<triton::gpu::SharedEncodingAttr> allocSharedLayout);
 
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     Location loc, const TargetInfoBase &target, unsigned inVec,
