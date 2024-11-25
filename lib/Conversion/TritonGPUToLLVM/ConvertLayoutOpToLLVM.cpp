@@ -376,26 +376,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // completed before we can remove the layoutIsOK check:
     // 1. Support for AMD's WMMA
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
+      if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
+        layout = layout.getParent();
+      }
+
       if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(layout)) {
         return !useLegacyMMAConversion;
       }
-      if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        auto parent = dotOperand.getParent();
-        if (isa<MmaEncodingTrait>(parent) && useLegacyMMAConversion) {
-          return false;
-        }
-        if (isa<NvidiaMmaEncodingAttr>(parent)) {
-          return true;
-        }
-        if (isa<AMDMfmaEncodingAttr>(parent)) {
-          return true;
-        }
-        return false;
-      }
-      if (isa<BlockedEncodingAttr>(layout)) {
-        return true;
-      }
-      if (isa<LinearEncodingAttr>(layout)) {
+      if (isa<BlockedEncodingAttr, LinearEncodingAttr>(layout)) {
         return true;
       }
       if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
