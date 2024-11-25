@@ -68,8 +68,9 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
         tensorShape[1] / shapePerWarp.second / ret[1]) {
       if (ret[0] < tensorShape[0] / shapePerWarp.first) {
         ret[0] *= 2;
-      } else
+      } else {
         ret[1] *= 2;
+      }
     } else {
       ret[1] *= 2;
     }

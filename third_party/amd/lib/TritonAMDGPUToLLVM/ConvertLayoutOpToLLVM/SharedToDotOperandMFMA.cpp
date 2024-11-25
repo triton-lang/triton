@@ -93,9 +93,9 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
 
     Value laneVOffset = urem(laneId, nonKDim);
     Value laneHOffset;
-    if (iNonKDim == 32)
+    if (iNonKDim == 32) {
       laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
-    else {
+    } else {
       // In this configuration warp contains 16 copies of same data
       if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4) {
         laneHOffset = i32_val(0);
