@@ -140,7 +140,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                     type.getMemorySpace()),
       v, offsetsVal);
 
-  if (v.getDefiningOp()->getAttrOfType<Attribute>("allocation.encoding")) {
+  if (v.getDefiningOp()->hasAttr("allocation.encoding")) {
     auto encoding =
         v.getDefiningOp()->getAttrOfType<Attribute>("allocation.encoding");
     auto shape =
