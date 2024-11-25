@@ -48,6 +48,8 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
       >();
 }
 
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.cpp.inc"
+
 #define GET_ATTRDEF_CLASSES
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.cpp.inc"
 

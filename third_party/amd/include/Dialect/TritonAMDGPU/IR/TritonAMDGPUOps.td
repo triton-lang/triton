@@ -128,6 +128,7 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   }];
 
   let arguments = (ins
+    TritonAMDGPU_SchedHintVariantAttr:$schedVariant,
     TritonAMDGPU_InstCounter:$numDsReadsA,
     TritonAMDGPU_InstCounter:$numDsReadsB,
     TritonAMDGPU_InstCounter:$numDsWritesA,
@@ -140,15 +141,30 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   );
 
   let builders = [
-    OpBuilder<(ins), [{
+    OpBuilder<(ins "SchedHint":$variant), [{
       auto ctx = $_state.getContext();
       auto noneType = NoneType::get(ctx);
       auto emptyAttr = amdgpu::InstCounterAttr::get(ctx, 0, noneType);
-      build($_builder, $_state, emptyAttr, emptyAttr, emptyAttr, emptyAttr,
-            emptyAttr, emptyAttr, false, false, emptyAttr);
+      build($_builder, $_state, variant, emptyAttr, emptyAttr, emptyAttr,
+            emptyAttr, emptyAttr, emptyAttr, false, false, emptyAttr);
     }]>
   ];
 
+  let assemblyFormat = [{ attr-dict }];
+}
+
+def InstructionSchedGuard : TT_AMDGPU_Op<"instruction_sched_guard", []> {
+  let summary = "A placeholder op for instruction scheduling guards within an MLIR region";
+  let description = [{
+    A placeholder op for instruction scheduling guard is applied to instructions within
+    an MLIR region where the placeholder op is located. Lowering of this instruction
+    results in inserting two @llvm.amdgcn.sched.barrier(0) calls (at the begining and
+    at the end of a region). The intrinsic calls prevent motions instrusion between
+    adjacent regions (basic blocks). This affects ordering of instructions and, thus,
+    register pressure.
+  }];
+
+  let arguments = (ins);
   let assemblyFormat = [{ attr-dict }];
 }
 
