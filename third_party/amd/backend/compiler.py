@@ -241,7 +241,7 @@ class HIPBackend(BaseBackend):
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
                                              "equivalent behavior in the past.")
-            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages, stream_prefetch)
+            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)

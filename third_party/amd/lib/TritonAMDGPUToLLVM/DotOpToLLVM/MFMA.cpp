@@ -294,8 +294,9 @@ struct DotOpMFMAConversionHelper {
           // rocdl.mfma.f32.32x32x8bf16.1k calls for input of i16 type
           auto cast = bitcast(val, i16_ty);
           vec = insert_element(vecTy, vec, cast, i32_val(elemId));
-        } else
+        } else {
           vec = insert_element(vecTy, vec, val, i32_val(elemId));
+        }
       }
       if (type.getIntOrFloatBitWidth() == 8) {
         if (4 == kBase)
@@ -303,8 +304,9 @@ struct DotOpMFMAConversionHelper {
           results.push_back(bitcast(vec, i32_ty));
         if (8 == kBase)
           results.push_back(bitcast(vec, i64_ty));
-      } else
+      } else {
         results.push_back(vec);
+      }
     }
     return results;
   }
