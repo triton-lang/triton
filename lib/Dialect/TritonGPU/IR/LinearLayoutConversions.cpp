@@ -241,12 +241,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
     llvm::report_fatal_error("Illegal shared layout");
   }
 
-  int vec = 8 * 16 / elemBitWidth;
-  if (vec != shared.getVec()) {
-    llvm::errs() << "Illegal shared layout; expected `vec` to be " << vec
-                 << ": " << shared << "\n";
-    llvm::report_fatal_error("Illegal shared layout");
-  }
+  int vec = shared.getVec();
 
   StringAttr colDimName = outDimNames[colDim];
   StringAttr rowDimName = outDimNames[rowDim];
