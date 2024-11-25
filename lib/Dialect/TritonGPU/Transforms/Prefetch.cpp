@@ -140,19 +140,10 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                     type.getMemorySpace()),
       v, offsetsVal);
 
-  if (v.getDefiningOp()->hasAttr("allocation.encoding")) {
-    auto encoding =
-        v.getDefiningOp()->getAttrOfType<Attribute>("allocation.encoding");
-    auto shape =
-        v.getDefiningOp()->getAttrOfType<DenseI64ArrayAttr>("allocation.shape");
-    newSmem.getDefiningOp()->setAttr("allocation.encoding", encoding);
-    newSmem.getDefiningOp()->setAttr("allocation.shape", shape);
-  } else {
-    newSmem.getDefiningOp()->setAttr("allocation.encoding", type.getEncoding());
-    auto denseArrayAttr =
-        mlir::DenseI64ArrayAttr::get(builder.getContext(), type.getShape());
-    newSmem.getDefiningOp()->setAttr("allocation.shape", denseArrayAttr);
-  }
+  newSmem.getDefiningOp()->setAttr("allocation.encoding", type.getEncoding());
+  auto denseArrayAttr =
+      mlir::DenseI64ArrayAttr::get(builder.getContext(), type.getShape());
+  newSmem.getDefiningOp()->setAttr("allocation.shape", denseArrayAttr);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
