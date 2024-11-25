@@ -1,5 +1,5 @@
-#ifndef TRITONAMDGPU_CONVERSION_PASSES_H
-#define TRITONAMDGPU_CONVERSION_PASSES_H
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_PASSES_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_PASSES_H_
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -49,4 +49,4 @@ createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
 
 } // namespace mlir
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_PASSES_H_

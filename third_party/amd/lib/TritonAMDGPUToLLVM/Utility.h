@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_UTILITY_H
-#define TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_UTILITY_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
 
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
@@ -49,4 +49,4 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 } // namespace mlir::LLVM::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

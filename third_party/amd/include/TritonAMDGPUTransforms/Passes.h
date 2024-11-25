@@ -1,5 +1,5 @@
-#ifndef TRITON_DIALECT_TRITONAMDGPU_TRANSFORMS_PASSES_H_
-#define TRITON_DIALECT_TRITONAMDGPU_TRANSFORMS_PASSES_H_
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_PASSES_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_PASSES_H_
 
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -32,4 +32,4 @@ std::unique_ptr<Pass> createTritonAMDGPUConvertToBufferOpsPass();
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 } // namespace mlir
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_PASSES_H_
