@@ -268,7 +268,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 // Check that the stream pipeliner updates atomic op in the k-loop correctly
 // CHECK-LABEL: _triton_gemm_kernel_atomic_rmw
+// CHECK:  scf.for
 // CHECK: tt.atomic_rmw fadd, acq_rel, gpu
+// CHECK:  tt.dot
+// CHECK: scf.yield
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #triton_gpu.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "hip:gfx942", "triton_gpu.threads-per-warp" = 64 : i32} {
