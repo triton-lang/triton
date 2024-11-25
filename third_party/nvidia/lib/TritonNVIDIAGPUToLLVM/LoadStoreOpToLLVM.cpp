@@ -1,4 +1,5 @@
 #include "TargetInfo.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -9,6 +10,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/DiagEmitter.hpp"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -204,10 +206,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     if (vec == 1 && numElems > 1) {
       int maskValue = !llMask ? -1 : getMaskAlignment(mask);
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
-                       << " numElems = " << numElems << " mask is " << maskValue
-                       << "\n";
+      EMIT_PERF_WARNING(op, "Warning: vectorization fails vec = "
+                                << vec << " origin vec = " << vecOrig
+                                << " numElems = " << numElems << " mask is "
+                                << maskValue << "\n");
     }
     // Get the LLVM values for pointers
     auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -431,10 +433,10 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
     if (vec == 1 && elemsPerThread > 1) {
       int mask = !llMask ? -1 : getMaskAlignment(op.getMask());
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
-                       << " elemsPerThread = " << elemsPerThread << " mask is "
-                       << mask << "\n";
+      EMIT_PERF_WARNING(op, "Warning: vectorization fails vec = "
+                                << vec << " origin vec = " << vecOrig
+                                << " elemsPerThread = " << elemsPerThread
+                                << " mask is " << mask << "\n");
     }
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
@@ -573,9 +575,10 @@ struct AtomicCASOpConversion
     }
 
     if (vec == 1 && elemsPerThread > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
-                       << " elemsPerThread = " << elemsPerThread << "\n";
+      EMIT_PERF_WARNING(op, "Warning: vectorization fails vec = "
+                                << vec << " origin vec = " << vecOrig
+                                << " elemsPerThread = " << elemsPerThread
+                                << "\n");
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
@@ -732,9 +735,10 @@ struct AtomicRMWOpConversion
     assert((packed == 1 || vec == 1) && "packed or vec must be 1");
 
     if (vec * packed == 1 && numElems > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " packed = " << packed << " origin vec = " << vecOrig
-                       << " numElems = " << numElems;
+      EMIT_PERF_WARNING(op, "Warning: vectorization fails vec = "
+                                << vec << " packed = " << packed
+                                << " origin vec = " << vecOrig
+                                << " numElems = " << numElems);
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
 

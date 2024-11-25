@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/DiagEmitter.hpp"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -37,8 +38,9 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
   for (int baseVersion : versionsSupported) {
     if (supportMMA(op, baseVersion))
       return baseVersion;
-    if (baseVersion == 3)
-      op.emitRemark() << "Warning: can't use MMA V3 for the dot op";
+    if (baseVersion == 3) {
+      EMIT_PERF_WARNING(op, "MMA V3 is not supported for this dot op. ");
+    }
   }
   return 0;
 }
