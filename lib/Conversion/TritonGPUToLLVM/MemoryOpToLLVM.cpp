@@ -138,18 +138,34 @@ public:
 
   // FIXME [Dot LL]
   // Do for all DotOperandEncodingAttr once we have LLs for all of them
-  static bool isSupportedDotOpLayout(RankedTensorType type) {
-    auto layout = type.getEncoding();
-    auto bitwidth = type.getElementType().getIntOrFloatBitWidth();
-    if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
+  static bool isSupportedDotOpLayout(MemDescType srcTy,
+                                     RankedTensorType dstTy) {
+    auto srcLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
+    auto dstLayout = dstTy.getEncoding();
+    auto bitwidth = dstTy.getElementTypeBitWidth();
+    auto rank = dstTy.getRank();
+    if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
+      auto vecWidth = 32 / bitwidth;
       auto kWidth = dot.getKWidth();
-      // Use when the SharedToDotOperandMMAv2OrV3 is known to be buggy:
-      // - kWidth == 8
-      // - kWidth == 4, bitwidth = 32
+      auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
       if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
+        auto needTrans = kOrder != srcLayout.getOrder()[0];
+        auto canUseLdmatrix =
+            (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
+        if (mma.isHopper()) {
+          // I think we should be able to remove this condition, but it's here
+          // as the legacy ldmatrix path does not support it
+          canUseLdmatrix &= srcTy.getElementTypeBitWidth() * kWidth == 32;
+        }
+        // If we remove this one, ldmatrix will IMA. It can probably be relaxed
+        // though
+        canUseLdmatrix &=
+            srcTy.getShape()[0] >= 8 && srcTy.getShape()[1] >= 4 * kWidth;
+        // To be removed in https://github.com/triton-lang/triton/pull/5154
         bool legacyLoweringIsBuggy =
-            kWidth >= 8 || (kWidth == 4 && bitwidth == 32);
-        return legacyLoweringIsBuggy && mma.isAmpere();
+            (kWidth >= 8 || (kWidth == 4 && bitwidth == 32)) && mma.isAmpere();
+        return (mma.isHopper() && !canUseLdmatrix) ||
+               (mma.isAmpere() && legacyLoweringIsBuggy);
       }
       if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
         return true;
@@ -162,12 +178,10 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<SharedEncodingAttr>(srcLayout) &&
-        (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
-             LinearEncodingAttr>(dstLayout) ||
-         isSupportedDotOpLayout(dstTy))) {
+    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
+            LinearEncodingAttr>(dstLayout) ||
+        isSupportedDotOpLayout(srcTy, dstTy)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -206,7 +220,7 @@ private:
     auto dstTy = op.getResult().getType();
     auto dstShape = dstTy.getShape();
     auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    assert((dstShape.size() <= 2 || isSupportedDotOpLayout(dstTy)) &&
+    assert((dstShape.size() <= 2 || isSupportedDotOpLayout(srcTy, dstTy)) &&
            "Unexpected rank of ConvertLayout(shared->distributed)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
