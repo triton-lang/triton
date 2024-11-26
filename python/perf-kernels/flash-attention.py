@@ -38,6 +38,7 @@ class MetaData():
     bias = None
     alibi_slopes = None
     causal = False
+    persistent = False
     num_contexts = 0
     varlen = False
     layout = None
@@ -75,6 +76,9 @@ class MetaData():
 
     def need_causal(self):
         self.causal = True
+    
+    def need_persistent(self):
+        self.persistent = True
 
     def need_dropout(self, dropout_p, return_encoded_softmax):
         self.dropout_p = dropout_p
@@ -672,7 +676,7 @@ autotune_configs_persistent, autotune_keys_persistent = get_autotune_configs_per
     use_cuda_graph=True,
 )
 @triton.jit
-def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
+def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
              stride_kh, stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh,
              stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, cu_seqlens_q,
              cu_seqlens_k, dropout_p, philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, NUM_CU, ZQ: tl.constexpr, HQ: tl.constexpr,
@@ -1325,6 +1329,31 @@ class _attention(torch.autograd.Function):
         else:
             alibi_strides = (0, 0)
 
+        if metadata.persistent:
+            NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count         
+            grid = lambda META: (min(NUM_CU*META['GRID_CU_MULTIP'], triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M'])*nheads_q*batch), )
+            attn_fwd_persistent[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
+                        *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
+                        dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
+                        encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, NUM_CU=NUM_CU, ZQ=batch, HQ=nheads_q, HK=nheads_k,
+                        ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
+                        MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
+                        BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
+                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
+                        > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
+
+        else: # baseline
+            grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
+            attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
+                        *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
+                        dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
+                        encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k,
+                        ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
+                        MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
+                        BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
+                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
+                        > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
+
 
         grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
 
@@ -1820,6 +1849,7 @@ def run_benchmark(custom, args):
     mode = 'fwd'
     x_names = ['BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
     causal = args.causal
+    persistent = args.persistent
     varlen = args.layout == 'thd'
     configs = []
     if custom:
@@ -1835,10 +1865,10 @@ def run_benchmark(custom, args):
         triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
                                  line_names=[line_names], styles=[('red', '-')], ylabel='ms',
                                  plot_name=f'fused-attention-{mode}-d{head_size}-layout{args.layout}',
-                                 args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
+                                 args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode, 'persistent': persistent}))
 
     @triton.testing.perf_report(configs)
-    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda"):
+    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, persistent, mode, provider, device="cuda"):
         assert mode in ["fwd", "bwd"]
         warmup = 25
         rep = 100
@@ -1868,6 +1898,9 @@ def run_benchmark(custom, args):
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
+        if persistent:
+            input_metadata.need_persistent()
+
         o = torch.empty_like(q)
         fn = lambda: attention(q, k, v, o, input_metadata)
         if mode == 'bwd':
@@ -1876,9 +1909,14 @@ def run_benchmark(custom, args):
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
-        # TODO: This needs to be fixed for unequal Q/K seqlens
         if causal:
-            total_flops *= 0.5
+            seqlen_q = N_CTX_Q
+            seqlen_k = N_CTX_K
+            # total_flops *= 0.5 # normally, but we have to take into account the unequal seqlen_q/k
+            if seqlen_q > seqlen_k:
+                total_flops *= seqlen_k / (2 * seqlen_q)
+            else:
+                total_flops *= 1 - seqlen_q / (2 * seqlen_k)
         if mode == "bwd":
             total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
         if print_time:
@@ -1916,6 +1954,7 @@ def parse_args():
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False)
     parser.add_argument("-layout", type=str, default='bhsd', help=supported_layouts())
+    parser.add_argument("-persistent", action='store_true')
     return parser.parse_args()
 
 
