@@ -166,7 +166,7 @@ public:
         return (mma.isHopper() && !canUseLdmatrix) ||
                (mma.isAmpere() && legacyLoweringIsBuggy);
       }
-      if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
+      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dot.getParent()))
         return true;
     }
     return false;
