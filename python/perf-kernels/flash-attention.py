@@ -624,17 +624,15 @@ def get_cdna_autotune_configs_persistent():
     return [
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
                       num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 3}, num_stages=1,
+                      num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
                       num_warps=4),
         # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
+        # triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
+        #               num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -1522,11 +1520,13 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlen
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_alibi', [True, False])
 @pytest.mark.parametrize('layout', ['bshd', 'bhsd'])
-def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, dtype=torch.float16):
+def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, persistent, dtype=torch.float16):
     torch.manual_seed(20)
     q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
     if causal:
         input_metadata.need_causal()
+    if persistent:
+        input_metadata.need_persistent()
 
     if use_alibi:
         # for n heads the set of slopes is the geometric sequence that starts 2^(-8/n)
@@ -1539,7 +1539,22 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     o = torch.empty_like(q)
 
     # triton implementation
+
+    # warmup: let the autotuner find the best config
     tri_out, _ = attention(q, k, v, o, input_metadata)
+
+    # measure execution time
+    import time as time
+
+    torch.cuda.synchronize()
+    start_t = time.time()
+
+    tri_out, _ = attention(q, k, v, o, input_metadata)
+    
+    torch.cuda.synchronize()
+    print(f"Execution time: {(time.time() - start_t)} s")
+
+
 
     # Transpose here if layout is bshd so we have same reference code for all layouts
     if layout == 'bshd':
@@ -1571,7 +1586,11 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     # compare
     if layout == 'bshd':
         ref_out = ref_out.transpose(1, 2).clone()
+
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
+    # print(f"ref out: {ref_out.flatten()[:100]}\ntri_out:{tri_out.flatten()[:100]}")
+
+
 
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD', [
@@ -1788,23 +1807,23 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sd
 def nonvarlen_benchmark_configs():
     configs = [
         (16, 16, 16, 1024, 1024),
-        # (8, 16, 16, 2048, 2048),
-        # (4, 16, 16, 4096, 4096),
-        # (2, 16, 16, 8192, 8192),
-        # (1, 16, 16, 16384, 16384),
-        # (2, 48, 48, 1024, 1024),
-        # (2, 48, 48, 2048, 1024),
-        # (2, 48, 48, 4096, 8192),
-        # (2, 48, 48, 8192, 4096),
-        # (2, 48, 48, 16384, 8192),
-        # (8, 16, 16, 1989, 15344),
-        # (4, 16, 16, 4097, 163),
-        # (2, 16, 16, 8122, 2159),
-        # (1, 16, 16, 16281, 7),
-        # (2, 48, 48, 1021, 1020),
-        # (2, 48, 48, 2001, 2048),
-        # (2, 48, 48, 3996, 9639),
-        # (2, 48, 48, 8181, 1021),
+        (8, 16, 16, 2048, 2048),
+        (4, 16, 16, 4096, 4096),
+        (2, 16, 16, 8192, 8192),
+        (1, 16, 16, 16384, 16384),
+        (2, 48, 48, 1024, 1024),
+        (2, 48, 48, 2048, 1024),
+        (2, 48, 48, 4096, 8192),
+        (2, 48, 48, 8192, 4096),
+        (2, 48, 48, 16384, 8192),
+        (8, 16, 16, 1989, 15344),
+        (4, 16, 16, 4097, 163),
+        (2, 16, 16, 8122, 2159),
+        (1, 16, 16, 16281, 7),
+        (2, 48, 48, 1021, 1020),
+        (2, 48, 48, 2001, 2048),
+        (2, 48, 48, 3996, 9639),
+        (2, 48, 48, 8181, 1021),
     ]
     return configs
 
@@ -1965,6 +1984,8 @@ def main():
 
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
+
+    # test_op_fwd(16,16,16,1024,1024,128, args.causal, False, "bhsd", args.persistent)
 
     run_benchmark(custom_config, args)
 
