@@ -380,11 +380,12 @@ struct LocalAllocOpConversion
     SmallVector<unsigned> shape =
         convertType<unsigned, int64_t>(srcTy.getShape());
     auto order = sharedLayout.getOrder();
+    if (!targetInfo.canUseStMatrix(srcTy, shape, shape, order,
+                                   swizzleByteSize)) {
+      return failure();
+    }
     auto layout = chooseStMatrixLayout(rewriter.getContext(), srcTy, shape,
                                        shape, order, swizzleByteSize);
-    if (!layout.has_value())
-      return failure();
-
     Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
     auto smemPtrTy = ptr_ty(ctx, 3);
 
@@ -394,23 +395,22 @@ struct LocalAllocOpConversion
     auto kBlock = str_attr("block");
 
     Value threadId = getThreadId(rewriter, loc);
-    Value threadsPerWarp = i32_val(layout->getInDimSize(kLane));
+    Value threadsPerWarp = i32_val(layout.getInDimSize(kLane));
     Value laneId = urem(threadId, threadsPerWarp);
     Value warpId = udiv(threadId, threadsPerWarp);
 
-    auto regBase = applyLinearLayout(loc, rewriter, *layout,
+    auto regBase = applyLinearLayout(loc, rewriter, layout,
                                      {{kRegister, i32_val(0)},
                                       {kLane, laneId},
                                       {kWarp, warpId},
                                       {kBlock, i32_val(0)}})[0]
                        .second;
     auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto srcVec = layout->getNumConsecutiveInOut();
+    auto srcVec = layout.getNumConsecutiveInOut();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
     for (int i = 0; i < srcVals.size(); i += srcVec) {
       auto regIdx =
-          layout
-              ->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
+          layout.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
               .second;
       Value offset = xor_(regBase, i32_val(regIdx));
       auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);

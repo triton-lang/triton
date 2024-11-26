@@ -853,40 +853,7 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 }
 
 namespace {
-
-// TODO (Keren): Currently, we have more restrictions than necessary when using
-// stmatrix.  These restrictions are retained from legacy code, and we could
-// relax some of them in the future.
-bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-                    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
-                    int swizzleByteSize) {
-  auto mmaLayout =
-      mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
-  if (!mmaLayout || !mmaLayout.isHopper())
-    return false;
-  if (isa<PointerType>(tensorTy.getElementType()))
-    return false;
-  if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
-    return false;
-  if (order[0] != 1)
-    return false;
-
-  auto tensorShapePerCTA = getShapePerCTA(mmaLayout, tensorTy.getShape());
-  if (tensorShapePerCTA.size() != 2)
-    return false;
-  auto numIterations = ceil<unsigned>(tensorShapePerCTA[1], repShape[1]) *
-                       ceil<unsigned>(tensorShapePerCTA[0], repShape[0]);
-  if (numIterations > 1)
-    return false;
-  if (paddedRepShape[1] % 8 != 0)
-    return false;
-  if (swizzleByteSize != 0 && swizzleByteSize != 32 && swizzleByteSize != 64 &&
-      swizzleByteSize != 128)
-    return false;
-  return true;
-}
-
-std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
+LinearLayout chooseStMatrixLayoutLeadingOffset(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
     int swizzleByteSize) {
@@ -957,7 +924,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
       .reshapeOuts({{kOffset, ret.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
-std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
+LinearLayout chooseStMatrixLayoutNoLeadingOffset(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order) {
   StringAttr kReg = S("register");
@@ -997,15 +964,11 @@ std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
 
 } // anonymous namespace
 
-std::optional<LinearLayout>
-chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
-                     ArrayRef<unsigned> repShape,
-                     ArrayRef<unsigned> paddedRepShape,
-                     ArrayRef<unsigned> order, int swizzleByteSize) {
-  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order,
-                      swizzleByteSize))
-    return std::nullopt;
-
+LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
+                                  ArrayRef<unsigned> repShape,
+                                  ArrayRef<unsigned> paddedRepShape,
+                                  ArrayRef<unsigned> order,
+                                  int swizzleByteSize) {
   if (swizzleByteSize == 0)
     return chooseStMatrixLayoutNoLeadingOffset(ctx, tensorTy, repShape,
                                                paddedRepShape, order);

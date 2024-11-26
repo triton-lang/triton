@@ -178,12 +178,10 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    auto srcLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<SharedEncodingAttr>(srcLayout) &&
-        (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
-             LinearEncodingAttr>(dstLayout) ||
-         isSupportedDotOpLayout(srcTy, dstTy))) {
+    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
+            LinearEncodingAttr>(dstLayout) ||
+        isSupportedDotOpLayout(srcTy, dstTy)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
