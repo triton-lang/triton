@@ -344,7 +344,7 @@ add_subdirectory(test)
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)
   # This target runs all the unit tests.
-  add_custom_target(check-triton-unit
+  add_custom_target(check-triton-unit-tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     DEPENDS TritonUnitTests
     USES_TERMINAL
