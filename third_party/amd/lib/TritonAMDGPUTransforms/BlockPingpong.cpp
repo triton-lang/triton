@@ -29,10 +29,8 @@ class Pingponger {
 
   Operation *lastInsertedOp;
 
-  IntegerAttr schedMaskAttr;
-  IntegerAttr schedMaskAttr0;
-  IntegerAttr lowPrioAttr;
-  IntegerAttr highPrioAttr;
+  int lowPrioAttr = 0;
+  int highPrioAttr = 1;
 
   int32_t kWidth;
   int32_t numWarps;
@@ -69,16 +67,16 @@ void Pingponger::transformOneWarp(OpBuilder &builder, Location loc) {
   // the other warp.
   // sched.barriers to keep the order.
   lLoadOps[0]->moveBefore(gLoadOps[0]);
-  auto schedB0 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
+  auto schedB0 = builder.create<ROCDL::SchedBarrier>(loc, 0);
   schedB0->moveAfter(lLoadOps[0]);
-  auto schedB1 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
+  auto schedB1 = builder.create<ROCDL::SchedBarrier>(loc, 0);
   schedB1->moveAfter(gLoadOps[0]);
   lLoadOps[1]->moveBefore(gLoadOps[1]);
-  auto schedB2 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr);
+  auto schedB2 = builder.create<ROCDL::SchedBarrier>(loc, 0);
   schedB2->moveAfter(lLoadOps[1]);
-  auto schedB3 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr0);
+  auto schedB3 = builder.create<ROCDL::SchedBarrier>(loc, 0);
   schedB3->moveAfter(gLoadOps[1]);
-  auto schedB4 = builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr0);
+  auto schedB4 = builder.create<ROCDL::SchedBarrier>(loc, 0);
   schedB4->moveAfter(dotOps[0]);
   auto setPrio1 = builder.create<ROCDL::SetPrioOp>(loc, highPrioAttr);
   auto setPrioBack0 = builder.create<ROCDL::SetPrioOp>(loc, lowPrioAttr);
@@ -183,9 +181,9 @@ void Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
   SmallVector<Operation *> setPrioHighs;
   SmallVector<Operation *> setPrioLows;
 
+  builder.setInsertionPointAfter(gLoadOps[1]);
   for (int i = 0; i < 8; i++) {
-    schedBarriers.push_back(
-        builder.create<ROCDL::SchedBarrier>(loc, schedMaskAttr0));
+    schedBarriers.push_back(builder.create<ROCDL::SchedBarrier>(loc, 0));
     // MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
     // barrier
     barriers.push_back(builder.create<gpu::BarrierOp>(loc));
@@ -309,10 +307,6 @@ void Pingponger::getDotPingponged() {
   MLIRContext *ctx = forOp.getContext();
   Location loc = forOp.getLoc();
 
-  schedMaskAttr = IntegerAttr::get(IntegerType::get(ctx, 32), 6);
-  schedMaskAttr0 = IntegerAttr::get(IntegerType::get(ctx, 32), 0);
-  lowPrioAttr = IntegerAttr::get(IntegerType::get(ctx, 16), 0);
-  highPrioAttr = IntegerAttr::get(IntegerType::get(ctx, 16), 1);
   auto f16_ty = builder.getF16Type();
 
   forOp->walk([&](Operation *op) {
@@ -337,7 +331,7 @@ void Pingponger::getDotPingponged() {
   if (numWarps == 4) { // pingpong between warps from different blocks
     transformOneWarp(builder, loc);
   } else if (numWarps == 8) { // pingpong between warps from the same block
-    transformTwoWarp(builder, loc);
+    transformTwoWarp(builder, dotOps[0]->getLoc());
     builder.setInsertionPointAfter(forOp);
     // barrier before starting pingpong
     auto preBarrier = builder.create<gpu::BarrierOp>(loc);

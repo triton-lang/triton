@@ -47,29 +47,29 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %18 = tt.broadcast %17 : tensor<64x1x!tt.ptr<f16>, #blocked> -> tensor<64x128x!tt.ptr<f16>, #blocked>
     %19 = tt.splat %arg7 : i32 -> tensor<64x128xi32, #blocked>
     %20 = tt.addptr %18, %19 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
-    %21 = triton_gpu.local_alloc  : () -> !tt.memdesc<1x128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
-    %22 = triton_gpu.local_alloc  : () -> !tt.memdesc<1x64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
-    %23 = triton_gpu.memdesc_subview %21[%c0_i32, %c0_i32, %c0_i32] : !tt.memdesc<1x128x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
-    %24 = triton_gpu.memdesc_subview %22[%c0_i32, %c0_i32, %c0_i32] : !tt.memdesc<1x64x128xf16, #shared1, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
-    %25:6 = scf.for %arg10 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg11 = %cst, %arg12 = %13, %arg13 = %20, %arg14 = %c0_i32, %arg15 = %23, %arg16 = %24) -> (tensor<128x128xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>, !tt.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>)  : i32 {
+    %21 = triton_gpu.local_alloc  : () -> !triton_gpu.memdesc<1x128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+    %22 = triton_gpu.local_alloc  : () -> !triton_gpu.memdesc<1x64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
+    %23 = triton_gpu.memdesc_subview %21[%c0_i32, %c0_i32, %c0_i32] : !triton_gpu.memdesc<1x128x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+    %24 = triton_gpu.memdesc_subview %22[%c0_i32, %c0_i32, %c0_i32] : !triton_gpu.memdesc<1x64x128xf16, #shared1, #triton_gpu.shared_memory, mutable> -> !triton_gpu.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
+    %25:6 = scf.for %arg10 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg11 = %cst, %arg12 = %13, %arg13 = %20, %arg14 = %c0_i32, %arg15 = %23, %arg16 = %24) -> (tensor<128x128xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>, !triton_gpu.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>)  : i32 {
       %26 = tt.addptr %arg12, %cst_1 : tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xi32, #blocked1>
       %27 = tt.load %26 : tensor<128x64x!tt.ptr<f16>, #blocked1>
       %28 = tt.addptr %arg13, %cst_0 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi32, #blocked>
       %29 = tt.load %28 : tensor<64x128x!tt.ptr<f16>, #blocked>
-      %30 = triton_gpu.local_load %arg15 : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %31 = triton_gpu.local_load %arg16 : !tt.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<64x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+      %30 = triton_gpu.local_load %arg15 : !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+      %31 = triton_gpu.local_load %arg16 : !triton_gpu.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable> -> tensor<64x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
       %32 = tt.dot %30, %31, %arg11 : tensor<128x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
       %33 = arith.addi %arg14, %c1_i32 : i32
       %34 = arith.cmpi slt, %33, %c1_i32 : i32
       %35 = arith.select %34, %33, %c0_i32 : i32
-      %36 = triton_gpu.memdesc_subview %21[%35, %c0_i32, %c0_i32] : !tt.memdesc<1x128x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
-      triton_gpu.local_store %27, %36 : tensor<128x64xf16, #blocked1> -> !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
-      %37 = triton_gpu.memdesc_subview %22[%35, %c0_i32, %c0_i32] : !tt.memdesc<1x64x128xf16, #shared1, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
-      triton_gpu.local_store %29, %37 : tensor<64x128xf16, #blocked> -> !tt.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
-      scf.yield %32, %26, %28, %35, %36, %37 : tensor<128x128xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>, !tt.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
+      %36 = triton_gpu.memdesc_subview %21[%35, %c0_i32, %c0_i32] : !triton_gpu.memdesc<1x128x64xf16, #shared, #triton_gpu.shared_memory, mutable> -> !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+      triton_gpu.local_store %27, %36 : tensor<128x64xf16, #blocked1> -> !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+      %37 = triton_gpu.memdesc_subview %22[%35, %c0_i32, %c0_i32] : !triton_gpu.memdesc<1x64x128xf16, #shared1, #triton_gpu.shared_memory, mutable> -> !triton_gpu.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
+      triton_gpu.local_store %29, %37 : tensor<64x128xf16, #blocked> -> !triton_gpu.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
+      scf.yield %32, %26, %28, %35, %36, %37 : tensor<128x128xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory, mutable>, !triton_gpu.memdesc<64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
     }
-    triton_gpu.local_dealloc %21 : !tt.memdesc<1x128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
-    triton_gpu.local_dealloc %22 : !tt.memdesc<1x64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
+    triton_gpu.local_dealloc %21 : !triton_gpu.memdesc<1x128x64xf16, #shared, #triton_gpu.shared_memory, mutable>
+    triton_gpu.local_dealloc %22 : !triton_gpu.memdesc<1x64x128xf16, #shared1, #triton_gpu.shared_memory, mutable>
     tt.return
   }
 }
