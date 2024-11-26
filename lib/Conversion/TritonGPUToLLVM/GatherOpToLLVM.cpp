@@ -75,7 +75,6 @@ GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
       emitIndices(loc, rewriter, targetInfo, dstType.getEncoding(), dstType,
                   /*withCTAOffset=*/true);
 
-
   unsigned idxWidth = op.getIndices().getType().getElementTypeBitWidth();
   unsigned axis = op.getAxis();
   SmallVector<Value> results(dstIndices.size());

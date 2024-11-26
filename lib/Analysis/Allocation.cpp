@@ -125,7 +125,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     ScanLoweringHelper helper(scanOp);
     return helper.getScratchSizeInBytes();
   }
-  if (auto gatherOp=dyn_cast<GatherOp>(op)) {
+  if (auto gatherOp = dyn_cast<GatherOp>(op)) {
     GatherLoweringHelper helper(gatherOp);
     return helper.getScratchSizeInBytes();
   }
