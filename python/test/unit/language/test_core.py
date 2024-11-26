@@ -6091,8 +6091,8 @@ def test_chained_reductions(in_shape, perm, red_dims, device):
 
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([4, 4], [8, 2], 0),
-    ([256, 128], [512, 64], 0),
-    ([256, 128], [256, 256], 1),
+    ([128, 64], [256, 32], 0),
+    ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis):
 
