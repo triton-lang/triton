@@ -442,6 +442,60 @@ mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 }
 
 std::optional<LinearLayout>
+wmmaDotToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
+                      ArrayRef<int64_t> shape) {
+  auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
+
+  auto rank = shape.size();
+  bool hasBatchDim = rank == 3;
+  int mIndex = 0 + hasBatchDim;
+
+  int32_t kWidth = dotWmmaLayout.getKWidth();
+  auto kDim = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  int32_t kSize = shape[kDim];
+  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
+
+  MLIRContext *ctx = dotWmmaLayout.getContext();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+
+  // register order
+  // operand A: [1, 0] / [2, 1, 0]
+  // operand B: [0, 1] / [1, 2, 0]
+  // for both cases it is [k, nonk]/[k, nonk, batch]
+  SmallVector<unsigned> order = triton::gpu::getOrder(dotWmmaLayout);
+  // warp order
+  // common for both operand A and B: [0, 1] / [0, 1, 2]
+  // in both cases it is [M dim, N dim]/[batch, M dim, N dim]
+  SmallVector<unsigned> warpOrder = triton::gpu::getWarpOrder(dotWmmaLayout);
+
+  std::vector<std::vector<int32_t>> registerBase = {{1, 0}, {2, 0}, {4, 0}};
+  if (kWidth == 16)
+    registerBase.emplace_back(std::vector<int32_t>{16, 0});
+  std::vector<std::vector<int32_t>> laneBase = {
+      {0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}};
+
+  LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
+                          {outDimNames[order[0]], outDimNames[order[1]]});
+
+  if (hasBatchDim) {
+    assert(order[2] == 0);
+    // Extend the base vector with one value to accomodate for the batch
+    // dimension, which appears at the last.
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
+  }
+
+  LinearLayout warpLayout = identityStandardND(kWarp, warpsPerCTA, warpOrder);
+  LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
+                           warpLayout.transposeOuts(outDimNames);
+  return combineCtaCgaWithShape(ctaLayout, wmmaLayout.getCTALayout(), shape);
+}
+
+std::optional<LinearLayout>
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int rank = shape.size();
   assert(rank == getWarpsPerCTA().size());
@@ -677,6 +731,10 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
   if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     return mfmaDotToLinearLayout(*this, shape);
+  } else if (auto wmmaLayout = llvm::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
+    if (wmmaLayout.getVersion() == 2) {
+      return wmmaDotToLinearLayout(*this, shape);
+    }
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     return nvidiaDotToLinearLayout(shape, *this);
   }
