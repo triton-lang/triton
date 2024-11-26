@@ -85,6 +85,15 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
+bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
+                                ArrayRef<unsigned> repShape,
+                                ArrayRef<unsigned> paddedRepShape,
+                                ArrayRef<unsigned> order,
+                                int swizzleByteSize) const {
+  // AMD does not support stmatrix
+  return false;
+}
+
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
                                    Value ptr, Value val) const {
   llvm::report_fatal_error("AMDGPU does not support stmatrix");

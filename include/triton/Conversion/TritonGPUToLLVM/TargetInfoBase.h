@@ -4,6 +4,7 @@
 #include "triton/Conversion/MLIRTypes.h"
 
 namespace mlir::triton {
+
 class TargetInfoBase {
 public:
   virtual bool supportMaximumMinimum() const = 0;
@@ -36,6 +37,12 @@ public:
     return loadDShared(rewriter, loc, ptr, /*ctaId=*/std::nullopt, elemTy,
                        pred);
   }
+
+  virtual bool canUseStMatrix(RankedTensorType tensorTy,
+                              ArrayRef<unsigned> repShape,
+                              ArrayRef<unsigned> paddedRepShape,
+                              ArrayRef<unsigned> order,
+                              int swizzleByteSize) const = 0;
 
   virtual void storeMatrixShared(RewriterBase &rewriter, Location loc,
                                  Value ptr, Value val) const = 0;
