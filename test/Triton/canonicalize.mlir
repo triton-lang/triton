@@ -173,3 +173,14 @@ tt.func @fold_broadcast_constant_pattern(%cst : f32) -> tensor<8x2xf32> {
     // CHECK-NEXT: tt.return %[[cst]] : tensor<8x2xf32>
     tt.return %bst_out : tensor<8x2xf32>
 }
+
+// -----
+
+// CHECK-LABEL: @fold_transpose_constant
+tt.func @fold_transpose_constant() -> tensor<128x16xf32> {
+    // CHECK: %[[cst:.*]] = arith.constant dense<1.000000e+00> : tensor<128x16xf32>
+    %cst = arith.constant dense<1.0> : tensor<16x128xf32>
+    %r = tt.trans %cst {order = array<i32: 1, 0>} : tensor<16x128xf32> -> tensor<128x16xf32>
+    // CHECK-NEXT: tt.return %[[cst]] : tensor<128x16xf32>
+    tt.return %r : tensor<128x16xf32>
+}
