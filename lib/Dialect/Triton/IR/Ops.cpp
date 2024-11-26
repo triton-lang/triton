@@ -201,9 +201,8 @@ OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
 
   // Eliminate splat constant transpose ops.
   if (auto attr =
-          llvm::dyn_cast_if_present<DenseElementsAttr>(adaptor.getSrc()))
-    if (attr.isSplat())
-      return attr.reshape(getResult().getType());
+          llvm::dyn_cast_if_present<SplatElementsAttr>(adaptor.getSrc()))
+    return attr.reshape(getType());
 
   return {};
 }
