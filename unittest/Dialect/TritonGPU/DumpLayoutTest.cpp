@@ -22,12 +22,12 @@ public:
   }
 
   SharedEncodingAttr shared(unsigned vec, unsigned perPhase, unsigned maxPhase,
-                            bool hasLeadingOffset, ArrayRef<unsigned> cpg,
-                            ArrayRef<unsigned> cSplit, ArrayRef<unsigned> ord,
-                            ArrayRef<unsigned> cOrd) {
+                            bool hasLeadingOffset, bool inThreadTranspose,
+                            ArrayRef<unsigned> cpg, ArrayRef<unsigned> cSplit,
+                            ArrayRef<unsigned> ord, ArrayRef<unsigned> cOrd) {
     return SharedEncodingAttr::get(&ctx, vec, perPhase, maxPhase, ord,
                                    CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd),
-                                   hasLeadingOffset);
+                                   hasLeadingOffset, inThreadTranspose);
   }
 
   void assertSameStr(const std::string &refStr, const std::string &output) {
@@ -177,6 +177,7 @@ TEST_F(DumpLayoutTest, Simple1DShared) {
                              1,     /* perPhase */
                              4,     /* maxPhase */
                              false, /* hasLeadingOffset */
+                             false, /* inThreadTranspose */
                              {1},   /* cpg */
                              {1},   /* csplit */
                              {1},   /* ord, row-major */
@@ -232,6 +233,7 @@ TEST_F(DumpLayoutTest, Larger2DShared) {
                              2,       /* perPhase */
                              8,       /* maxPhase */
                              false,   /* hasLeadingOffset */
+                             false,   /* inThreadTranspose */
                              {1, 1},  /* cpg */
                              {1, 1},  /* csplit */
                              {1, 0},  /* ord, row-major */
@@ -505,6 +507,7 @@ Offset: 255 -> (7,17)
                                1,       /* perPhase */
                                32,      /* maxPhase */
                                false,   /* hasLeadingOffset */
+                               false,   /* inThreadTranspose */
                                {1, 1},  /* cpg */
                                {1, 1},  /* csplit */
                                {1, 0},  /* ord, row-major */

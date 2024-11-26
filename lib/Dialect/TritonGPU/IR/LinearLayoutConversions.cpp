@@ -184,6 +184,7 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   }
 
   auto outDimNames = standardOutDimNames(ctx, rank);
+  bool inThreadTranspose = shared.getInThreadTranspose();
 
   // Construct bases for the 2 most minor dimensions of the layout.  These are
   // the dims that get swizzled.
@@ -204,7 +205,13 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
     int vec = shared.getVec();
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
-    bases2D.push_back({row, (vec * ((row / perPhase) % maxPhase)) % numCols});
+    int phase = (row / perPhase) % maxPhase;
+    // AMD special swizzling for K-major matrix. We switch up swizzling pattern
+    // every perPhase*maxPhase rows to reduce write bank conflict
+    if (inThreadTranspose) {
+      phase = (phase ^ row / maxPhase / perPhase) % maxPhase;
+    }
+    bases2D.push_back({row, (vec * phase) % numCols});
   }
   LinearLayout ctaLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
