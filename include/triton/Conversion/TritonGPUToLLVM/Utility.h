@@ -866,9 +866,15 @@ inline void emitWmmaOffsetForCTA(const AMDWmmaEncodingAttr &wmmaLayout,
   if (rank == 3)
     elemOffset[0] = ctaBatchOffset;
   for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-    elemOffset[rank - 2] =
-        ctaOffsetX * shapePerCta[rank - 2] + elemStride * elem;
-    elemOffset[rank - 1] = ctaOffsetY * shapePerCta[rank - 1];
+    if (wmmaLayout.getIsTransposed()) {
+      elemOffset[rank - 1] =
+          ctaOffsetX * shapePerCta[rank - 1] + elemStride * elem;
+      elemOffset[rank - 2] = ctaOffsetY * shapePerCta[rank - 2];
+    } else {
+      elemOffset[rank - 2] =
+          ctaOffsetX * shapePerCta[rank - 2] + elemStride * elem;
+      elemOffset[rank - 1] = ctaOffsetY * shapePerCta[rank - 1];
+    }
     offsets.push_back(elemOffset);
   }
 }
@@ -919,10 +925,19 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
         add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0);
   } else {
     assert(ver == 2);
-    multiDimBase[rank - 2] =
-        add(mul(udiv(threadIdPerWarp, i32_val(mnkDim[2])),
-                i32_val(wmmaLayout.getSizePerThread()[rank - 2])),
-            offWarp0);
+    if (wmmaLayout.getIsTransposed()) {
+      multiDimBase[rank - 1] =
+          add(mul(udiv(threadIdPerWarp, i32_val(16)),
+                  i32_val(wmmaLayout.getSizePerThread()[rank - 1])),
+              offWarp1);
+      multiDimBase[rank - 2] = add(laneId, offWarp0);
+    } else {
+      multiDimBase[rank - 2] =
+          add(mul(udiv(threadIdPerWarp, i32_val(16)),
+                  i32_val(wmmaLayout.getSizePerThread()[rank - 2])),
+              offWarp0);
+      multiDimBase[rank - 1] = add(laneId, offWarp1);
+    }
   }
   multiDimBase[rank - 1] = add(laneId, offWarp1);
 
