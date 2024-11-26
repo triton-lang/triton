@@ -872,7 +872,8 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
 //
 // Gather Op
 //
-def TT_GatherOp : TT_Op<"gather", [Pure]> {
+def TT_GatherOp : TT_Op<"gather", [Pure,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
   let summary = "local gather operation";
   let description = [{
     Gather elements from the input tensor using the indices tensor along a

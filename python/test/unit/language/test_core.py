@@ -6078,3 +6078,46 @@ def test_chained_reductions(in_shape, perm, red_dims, device):
                   perm[0], perm[1], perm[2], perm[3], perm[4], red_dims[0], red_dims[1], red_dims[2])
 
     assert torch.all(ref == result)
+
+
+@pytest.mark.parametrize("src_shape, indices_shape, dim", [
+    ([4, 4], [8, 2], 0),
+    ([256, 128], [512, 64], 0),
+    ([256, 128], [256, 256], 1),
+])
+def test_gather(src_shape, indices_shape, dim):
+
+    @triton.jit
+    def gather_kernel(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr,
+                      src_dim0: tl.constexpr, src_dim1: tl.constexpr, src_stride0: tl.constexpr, src_stride1: tl.constexpr,
+                      idx_dim0: tl.constexpr, idx_dim1: tl.constexpr, idx_stride0: tl.constexpr, idx_stride1: tl.constexpr,
+                      out_dim0: tl.constexpr, out_dim1: tl.constexpr, out_stride0: tl.constexpr, out_stride1: tl.constexpr):
+        src_offs = (tl.arange(0, src_dim0)[:, None] * src_stride0 +
+                    tl.arange(0, src_dim1)[None, :] * src_stride1)
+        src = tl.load(src_ptr + src_offs)
+
+        idx_offs = (tl.arange(0, idx_dim0)[:, None] * idx_stride0 +
+             tl.arange(0, idx_dim1)[None, :] * idx_stride1)
+        idx = tl.load(idx_ptr + idx_offs)
+
+        out = tl.gather(src, idx, axis)
+
+        out_offs = (tl.arange(0, out_dim0)[:, None] * out_stride0 +
+                    tl.arange(0, out_dim1)[None, :] * out_stride1)
+        tl.store(out_ptr + out_offs, out)
+
+    def triton_gather(src: torch.Tensor, dim: int, indices: torch.Tensor):
+        output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)
+
+        gather_kernel[(1,)](src, indices, output, dim,
+                            src.shape[0], src.shape[1], src.stride(0), src.stride(1),
+                            indices.shape[0], indices.shape[1], indices.stride(0), indices.stride(1),
+                            output.shape[0], output.shape[1], output.stride(0), output.stride(1))
+
+        return output
+
+    src = torch.randn(src_shape, device='cuda')
+    indices = torch.randint(0, src.shape[dim], indices_shape, device='cuda')
+    ref = torch.gather(src, dim, indices)
+    result = triton_gather(src, dim, indices)
+    assert torch.all(ref == result)

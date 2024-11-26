@@ -1098,6 +1098,9 @@ class tensor(_value):
     def associative_scan(self, axis, combine_fn, reverse=False) -> tensor:
         ...
 
+    def gather(self, indices, axis) -> tensor:
+        ...
+
     def histogram(self, num_bins) -> tensor:
         ...
 
@@ -2345,6 +2348,23 @@ def histogram(input, num_bins, _builder=None, _generator=None):
     """
     num_bins = _constexpr_to_value(num_bins)
     return semantic.histogram(input, num_bins, _builder)
+
+
+@_tensor_member_fn
+@builtin
+def gather(src, index, dim, _builder=None):
+    """Gather from a tensor along a given dimension.
+
+    :param src: the source tensor
+    :type src: Tensor
+    :param index: the index tensor
+    :type index: Tensor
+    :param dim: the dimension to gather along
+    :type dim: int
+
+    """
+    dim = _constexpr_to_value(dim)
+    return semantic.gather(src, index, dim, _builder)
 
 
 # -----------------------

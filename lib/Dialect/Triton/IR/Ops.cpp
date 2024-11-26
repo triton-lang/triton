@@ -1086,6 +1086,9 @@ LogicalResult GatherOp::verify() {
   if (srcTy.getRank() != indicesTy.getRank()) {
     return emitOpError("input and indices ranks must match");
   }
+  if (getDim() >= srcTy.getRank()) {
+    return emitOpError("gather dimension must be less than the input rank");
+  }
   for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
     if (dim == getDim())
       continue;
@@ -1096,6 +1099,21 @@ LogicalResult GatherOp::verify() {
     }
   }
 
+  return success();
+}
+
+LogicalResult GatherOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  GatherOpAdaptor adaptor(operands, attributes, properties, regions);
+  auto indicesType = cast<RankedTensorType>(adaptor.getIndices().getType());
+  auto srcType = cast<RankedTensorType>(adaptor.getSrc().getType());
+
+  // Shape and encoding of the indices with the element type of the src.
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(indicesType.getShape(), srcType.getElementType(),
+                            indicesType.getEncoding()));
   return success();
 }
 

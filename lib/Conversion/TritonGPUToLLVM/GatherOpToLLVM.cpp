@@ -75,20 +75,27 @@ GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
       emitIndices(loc, rewriter, targetInfo, dstType.getEncoding(), dstType,
                   /*withCTAOffset=*/true);
 
-  unsigned axis = op.getDim();
-  SmallVector<unsigned> dstShapePerCTA =
-      convertType<unsigned>(triton::gpu::getShapePerCTA(dstType));
 
+  unsigned idxWidth = op.getIndices().getType().getElementTypeBitWidth();
+  unsigned axis = op.getDim();
   SmallVector<Value> results(dstIndices.size());
   for (auto [i, idx, indices] : llvm::enumerate(idxValues, dstIndices)) {
+    // The LL index computations are performed with 32 bit integers. If the
+    // indices are something else, cast them to i32.
+    if (idxWidth > 32) {
+      idx = trunc(i32_ty, idx);
+    } else if (idxWidth < 32) {
+      // Negative indices don't make sense, so zero-extend.
+      idx = zext(i32_ty, idx);
+    }
     indices[axis] = idx;
-    Value offset = LLVM::linearize(rewriter, loc, indices, dstShapePerCTA);
-    Value ptr = gep(smemPtrType, elemType, smemBase, offset);
+    Value offset = LLVM::linearize(rewriter, loc, indices, srcShapePerCTA);
+    Value ptr = gep(smemBase.getType(), elemType, smemBase, offset);
     results[i] = load(elemType, ptr);
   }
 
-  Value packed = packLLElements(loc, getTypeConverter(), results, rewriter,
-                                dstType);
+  Value packed =
+      packLLElements(loc, getTypeConverter(), results, rewriter, dstType);
   rewriter.replaceOp(op, packed);
   return success();
 }

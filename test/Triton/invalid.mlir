@@ -396,3 +396,10 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x32xi32>) {
   %0 = tt.gather %arg0[%arg1] {dim = 0 : i32} : (tensor<128x16xf32>, tensor<512x32xi32>) -> tensor<512x32xf32>
   tt.return
 }
+// -----
+
+tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
+  // expected-error @below {{gather dimension must be less than the input rank}}
+  %0 = tt.gather %arg0[%arg1] {dim = 3 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  tt.return
+}
