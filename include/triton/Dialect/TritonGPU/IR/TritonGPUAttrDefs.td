@@ -1007,6 +1007,7 @@ Row |       warp 0                warp 2
   let parameters = (
     ins
     "unsigned": $version,
+    "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     "CTALayoutAttr":$CTALayout
   );

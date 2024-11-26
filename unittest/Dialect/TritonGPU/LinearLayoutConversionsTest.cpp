@@ -69,13 +69,15 @@ public:
     return DotOperandEncodingAttr::get(&ctx, opIdx, mfma, kWidth);
   }
 
-  AMDWmmaEncodingAttr wmma(ArrayRef<unsigned> warps, int version) {
+  AMDWmmaEncodingAttr wmma(ArrayRef<unsigned> warps, int version,
+                           bool transposed) {
     SmallVector<unsigned> cpg(warps.size(), 1u);
     SmallVector<unsigned> cSplit(warps.size(), 1u);
     SmallVector<unsigned> cOrd(warps.size());
     std::iota(cOrd.begin(), cOrd.end(), 0);
     return AMDWmmaEncodingAttr::get(
-        &ctx, version, warps, CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
+        &ctx, version, transposed, warps,
+        CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
   DotOperandEncodingAttr wmmaDotOp(AMDWmmaEncodingAttr wmma, unsigned opIdx,
