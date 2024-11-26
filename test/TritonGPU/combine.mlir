@@ -2701,7 +2701,7 @@ tt.func @propagate_layout_gather(%arg0: tensor<1024x4xi32, #blocked>, %arg1: ten
 
   // XCHECK-NOT: convert_layout
   %0 = triton_gpu.convert_layout %arg0 : tensor<1024x4xi32, #blocked> -> tensor<1024x4xi32, #blocked1>
-  %1 = tt.gather %arg1[%0] {dim = 0 : i32} : (tensor<128x256xf32, #blocked>, tensor<1024x4xi32, #blocked1>) -> tensor<1024x4xf32, #blocked1>
+  %1 = tt.gather %arg1[%0] {axis = 0 : i32} : (tensor<128x256xf32, #blocked>, tensor<1024x4xi32, #blocked1>) -> tensor<1024x4xf32, #blocked1>
   %2 = triton_gpu.convert_layout %1 : tensor<1024x4xf32, #blocked1> -> tensor<1024x4xf32, #blocked2>
   tt.return %2 : tensor<1024x4xf32, #blocked2>
 }

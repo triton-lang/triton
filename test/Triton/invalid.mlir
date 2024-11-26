@@ -357,7 +357,7 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32, #shared>) {
 
 tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
   // expected-error @below {{indices and output shapes must match}}
-  %0 = tt.gather %arg0[%arg1] {dim = 0 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512xf32>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512xf32>
   tt.return
 }
 
@@ -368,7 +368,7 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
 module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
 tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32, #blocked>) {
   // expected-error @below {{indices and output encodings must match}}
-  %0 = tt.gather %arg0[%arg1] {dim = 0 : i32} : (tensor<128x16xf32>, tensor<512x4xi32, #blocked>) -> tensor<512x4xf32, #blocked1>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x4xi32, #blocked>) -> tensor<512x4xf32, #blocked1>
   tt.return
 }
 }
@@ -377,7 +377,7 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32, #blocked>
 
 tt.func @gather_op(%arg0: tensor<128x16xf16>, %arg1: tensor<512x4xi32>) {
   // expected-error @below {{input and output element types must match}}
-  %0 = tt.gather %arg0[%arg1] {dim = 0 : i32} : (tensor<128x16xf16>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf16>, tensor<512x4xi32>) -> tensor<512x4xf32>
   tt.return
 }
 
@@ -385,7 +385,7 @@ tt.func @gather_op(%arg0: tensor<128x16xf16>, %arg1: tensor<512x4xi32>) {
 
 tt.func @gather_op(%arg0: tensor<128xf32>, %arg1: tensor<512x4xi32>) {
   // expected-error @below {{input and indices ranks must match}}
-  %0 = tt.gather %arg0[%arg1] {dim = 0 : i32} : (tensor<128xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
   tt.return
 }
 
@@ -393,13 +393,13 @@ tt.func @gather_op(%arg0: tensor<128xf32>, %arg1: tensor<512x4xi32>) {
 
 tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x32xi32>) {
   // expected-error @below {{indices dimension 1 cannot be greater than the corresponding input dimension}}
-  %0 = tt.gather %arg0[%arg1] {dim = 0 : i32} : (tensor<128x16xf32>, tensor<512x32xi32>) -> tensor<512x32xf32>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x32xi32>) -> tensor<512x32xf32>
   tt.return
 }
 // -----
 
 tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
   // expected-error @below {{gather dimension must be less than the input rank}}
-  %0 = tt.gather %arg0[%arg1] {dim = 3 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  %0 = tt.gather %arg0[%arg1] {axis = 3 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
   tt.return
 }

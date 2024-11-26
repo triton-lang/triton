@@ -1681,14 +1681,22 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
 #                               Gather
 # ===----------------------------------------------------------------------===
 
-def gather(src: tl.tensor, index: tl.tensor, dim: int, builder: ir.builder) -> tl.tensor:
+def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     assert index.dtype.is_int(), "index must be an integer tensor"
+
     rank = len(src.type.shape)
-    assert len(index.type.shape) == rank, "src and index must have the same rank"
-    assert 0 <= dim < rank, "dim must be a valid axis"
+    assert len(index.type.shape) == rank, "source and index tensors must have the same rank"
+
+    assert -rank <= axis < rank, f"gather axis {axis} must be < source rank ({rank})"
+    if axis < 0:
+        axis += rank
+
     for d in range(rank):
-        assert d == dim or index.type.shape[d] <= src.type.shape[d], f"index dim {dim} cannot be greater than the corresponding src dim"
-    gather = builder.create_gather(src.handle, index.handle, dim)
+        if d == axis:
+            continue
+        assert index.type.shape[d] <= src.type.shape[d], f"index dim {axis} cannot be greater than the corresponding source dim"
+
+    gather = builder.create_gather(src.handle, index.handle, axis)
     return wrap_tensor(gather, src.type.scalar, index.type.shape)
 
 

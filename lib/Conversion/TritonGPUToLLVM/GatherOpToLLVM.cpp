@@ -77,7 +77,7 @@ GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
 
 
   unsigned idxWidth = op.getIndices().getType().getElementTypeBitWidth();
-  unsigned axis = op.getDim();
+  unsigned axis = op.getAxis();
   SmallVector<Value> results(dstIndices.size());
   for (auto [i, idx, indices] : llvm::enumerate(idxValues, dstIndices)) {
     // The LL index computations are performed with 32 bit integers. If the

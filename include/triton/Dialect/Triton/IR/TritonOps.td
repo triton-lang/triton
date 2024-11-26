@@ -877,14 +877,14 @@ def TT_GatherOp : TT_Op<"gather", [Pure,
   let summary = "local gather operation";
   let description = [{
     Gather elements from the input tensor using the indices tensor along a
-    single specified dimension. The output tensor has the same shape as the
-    indices tensor. The input and indices tensors must have the same number of
+    single specified axis. The output tensor has the same shape as the indices
+    tensor. The input and indices tensors must have the same number of
     dimension, and each dimension of the indices tensor that is not the gather
     dimension cannot be greater than the corresponding dimension in the input
     tensor.
   }];
 
-  let arguments = (ins TT_Tensor:$src, TT_IntTensor:$indices, I32Attr:$dim);
+  let arguments = (ins TT_Tensor:$src, TT_IntTensor:$indices, I32Attr:$axis);
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{

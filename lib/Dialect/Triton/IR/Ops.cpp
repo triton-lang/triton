@@ -1086,11 +1086,11 @@ LogicalResult GatherOp::verify() {
   if (srcTy.getRank() != indicesTy.getRank()) {
     return emitOpError("input and indices ranks must match");
   }
-  if (getDim() >= srcTy.getRank()) {
+  if (getAxis() >= srcTy.getRank()) {
     return emitOpError("gather dimension must be less than the input rank");
   }
   for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
-    if (dim == getDim())
+    if (dim == getAxis())
       continue;
     if (indicesTy.getShape()[dim] > srcTy.getShape()[dim]) {
       return emitOpError("indices dimension ")

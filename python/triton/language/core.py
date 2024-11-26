@@ -2352,19 +2352,19 @@ def histogram(input, num_bins, _builder=None, _generator=None):
 
 @_tensor_member_fn
 @builtin
-def gather(src, index, dim, _builder=None):
+def gather(src, index, axis, _builder=None):
     """Gather from a tensor along a given dimension.
 
     :param src: the source tensor
     :type src: Tensor
     :param index: the index tensor
     :type index: Tensor
-    :param dim: the dimension to gather along
-    :type dim: int
+    :param axis: the dimension to gather along
+    :type axis: int
 
     """
-    dim = _constexpr_to_value(dim)
-    return semantic.gather(src, index, dim, _builder)
+    axis = _constexpr_to_value(axis)
+    return semantic.gather(src, index, axis, _builder)
 
 
 # -----------------------
