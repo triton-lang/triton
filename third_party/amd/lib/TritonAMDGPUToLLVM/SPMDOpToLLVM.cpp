@@ -43,7 +43,7 @@ struct CondBarrierOpConversion
     auto constWarpSize = rewriter.create<LLVM::ConstantOp>(
         loc, i32ty, IntegerAttr::get(i32ty, 256));
     auto warpIDX = rewriter.create<LLVM::SDivOp>(loc, workIDX, constWarpSize);
-    auto warpLow = rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq,
+    auto warpLow = rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
                                                  warpIDX, constZero);
     auto pred = rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq,
                                               warpLow, op->getOperand(0));

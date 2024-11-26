@@ -102,7 +102,7 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
   SmallVector<Operation *> slices;
   SmallVector<Operation *> subviews;
   auto memDesc = v.getDefiningOp()->getOperand(0);
-  auto type = cast<triton::MemDescType>(memDesc.getType());
+  auto type = cast<ttg::MemDescType>(memDesc.getType());
   auto encoding = cast<RankedTensorType>(v.getType()).getEncoding();
   auto srcEncoding = mlir::cast<ttg::DotOperandEncodingAttr>(encoding);
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
@@ -124,7 +124,7 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
 
     Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
         v.getLoc(),
-        triton::MemDescType::get(shape, elementType, type.getEncoding(),
+        ttg::MemDescType::get(shape, elementType, type.getEncoding(),
                                  type.getMemorySpace()),
         memDesc, offsetsVal);
     auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
