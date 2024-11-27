@@ -161,6 +161,8 @@ public:
 
   // Get the shared memory scratch size required by this op.
   unsigned getScratchSizeInBytes();
+  // Determine if the gather can be performed completely within a warp.
+  bool isWarpLocal();
 
 private:
   triton::GatherOp gatherOp;

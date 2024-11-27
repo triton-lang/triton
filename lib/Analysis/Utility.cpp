@@ -419,6 +419,22 @@ unsigned GatherLoweringHelper::getScratchSizeInBytes() {
          ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
 }
 
+bool GatherLoweringHelper::isWarpLocal() {
+  // The gather is warp-local if for each column along the gather axis in the
+  // source tensor, all the elements are owned by the same warp.
+  RankedTensorType srcType = gatherOp.getSrc().getType();
+  std::optional<LinearLayout> maybeLayout =
+      toLinearLayout(srcType.getShape(), srcType.getEncoding());
+  // FIXME: If an unsupported layout was encountered, assume the gather is not
+  // warp-local.
+  if (!maybeLayout)
+    return false;
+  LinearLayout layout = std::move(*maybeLayout);
+
+
+  return false;
+}
+
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   if (shape.empty())
     return 0;
