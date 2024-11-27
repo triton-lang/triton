@@ -26,6 +26,9 @@ python/triton/language/extra
 # Proton
 python/triton/profiler
 
+# Pytest
+pytest.ini
+
 # Instrumentation
 python/triton/instrumentation
 
