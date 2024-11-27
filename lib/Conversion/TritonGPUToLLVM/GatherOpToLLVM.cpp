@@ -17,12 +17,33 @@ public:
                   ConversionPatternRewriter &rewriter) const override;
 
 private:
+  // Codegen the gather by storing the source tensor into shared memory and then
+  // gathering directly from shared memory.
+  void emitGatherInShared(GatherOp op, OpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const;
+  // Codegen a warp-local gather by shuffling elements across the warp and
+  // selecting from them.
+  void emitWarpLocalGather(GatherOp op, OpAdaptor adaptor,
+                           ConversionPatternRewriter &rewriter) const;
+
   const TargetInfoBase &targetInfo;
 };
 
 LogicalResult
 GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
+  GatherLoweringHelper helper(op);
+  // Specialize the lowering based on the source layout.
+  if (helper.isWarpLocal()) {
+    emitWarpLocalGather(op, adaptor, rewriter);
+  } else {
+    emitGatherInShared(op, adaptor, rewriter);
+  }
+  return success();
+}
+
+void GatherOpConversion::emitGatherInShared(
+    GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
   Location loc = op.getLoc();
   RankedTensorType srcType = op.getSrc().getType();
 
@@ -99,7 +120,11 @@ GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
   Value packed =
       packLLElements(loc, getTypeConverter(), results, rewriter, dstType);
   rewriter.replaceOp(op, packed);
-  return success();
+}
+
+void GatherOpConversion::emitWarpLocalGather(
+    GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
+  Location loc = op.getLoc();
 }
 
 } // namespace

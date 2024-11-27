@@ -426,24 +426,43 @@ unsigned GatherLoweringHelper::getScratchSizeInBytes() {
 
 bool GatherLoweringHelper::isWarpLocal() {
   // The gather is warp-local if for each column along the gather axis in the
-  // source tensor, all the elements are owned by the same warp.
+  // source and index tensors, all the elements are owned by the same warp.
   RankedTensorType srcType = gatherOp.getSrc().getType();
-  std::optional<LinearLayout> maybeLayout =
+  RankedTensorType idxType = gatherOp.getIndices().getType();
+  std::optional<LinearLayout> srcLayout =
       toLinearLayout(srcType.getShape(), srcType.getEncoding());
+  std::optional<LinearLayout> idxLayout =
+      toLinearLayout(idxType.getShape(), idxType.getEncoding());
+
   // FIXME: If an unsupported layout was encountered, assume the gather is not
   // warp-local.
-  if (!maybeLayout)
+  if (!srcLayout || !idxLayout)
     return false;
-  LinearLayout layout = std::move(*maybeLayout);
 
-  // If the sublayout `(block, warp) -> dimN` is zero, then changing the warp or
-  // block does not alter how elements are mapped to `dimN`.
   Builder b(gatherOp.getContext());
   StringAttr block = b.getStringAttr("block");
   StringAttr warp = b.getStringAttr("warp");
   StringAttr gatherDim =
       b.getStringAttr("dim" + std::to_string(gatherOp.getAxis()));
-  return layout.sublayoutIsZero({block, warp}, gatherDim);
+
+  // If the sublayout `(block, warp) -> dimN` is zero, then changing the warp or
+  // block does not alter how elements are mapped to `dimN`.
+  if (!srcLayout->sublayoutIsZero({block, warp}, gatherDim) ||
+      !idxLayout->sublayoutIsZero({block, warp}, gatherDim))
+    return false;
+
+  // `dimN` is invariant to the warp, but the `(block, warp)` mapping to all
+  // other dimensions must be the same for both layouts. If so, then the warp
+  // that owns a particular index element also owns all the source elements it
+  // could index into.
+  SmallVector<StringAttr> otherDims;
+  for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
+    if (dim != gatherOp.getAxis()){
+      otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
+    }
+  }
+  return srcLayout->sublayout({block, warp}, otherDims) ==
+         idxLayout->sublayout({block, warp}, otherDims);
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
