@@ -82,17 +82,15 @@ bool isKMajor(llvm::ArrayRef<unsigned> order, int opIdx) {
   return order[0] == kdim;
 }
 
-/**
- * @brief checks that swizzle pattern fits into one warp block
- * and block size is a multiple of swizzle size along non-K dimension
- *
- * @param sharedLayout
- * @param opIdx operand id 0 or 1
- * @param reps number of repetitions: [non-k, k] or [batch, non-k, k]
- * @param elemsPerInstr one instruction size
- * @param warpsPerBlockNonK number of warps along non-k Dim
- * @return bool
- */
+/// Checks that swizzle pattern fits into one warp block
+/// and block size is a multiple of swizzle size along non-K dimension
+///
+/// \param sharedLayout
+/// \param opIdx operand id 0 or 1
+/// \param reps number of repetitions: [non-k, k] or [batch, non-k, k]
+/// \param elemsPerInstr one instruction size
+/// \param warpsPerBlockNonK number of warps along non-k Dim
+/// \returns bool
 bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
                                    int opIdx, const ArrayRef<int64_t> reps,
                                    const ArrayRef<int64_t> elemsPerInstr,
