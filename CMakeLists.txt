@@ -77,6 +77,9 @@ if(NOT WIN32)
 endif()
 
 if(TRITON_BUILD_UT)
+  # This is an aggregate target for all unit tests.
+  add_custom_target(TritonUnitTests)
+  set_target_properties(TritonUnitTests PROPERTIES FOLDER "Triton/Tests")
   include(AddTritonUnitTest)
 endif()
 
@@ -340,4 +343,10 @@ add_subdirectory(test)
 
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)
+  # This target runs all the unit tests.
+  add_custom_target(check-triton-unit-tests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS TritonUnitTests
+    USES_TERMINAL
+  )
 endif()
