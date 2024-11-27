@@ -706,7 +706,7 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
         off_z = tile_id // num_tiles_per_sample # at which batch sample are we
         off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head # at which head are we inside the sample
 
-
+        # TODO: why doesnt the following work anymore and we have to use the flip order????????????
         # start_m = tile_id % num_tiles_per_sample % num_tiles_per_head
         # flip the traversal order of Q blocks inside head
         start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1 # at which tile are we inside the head
@@ -1976,9 +1976,9 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    # test_op_fwd(16,16,16,1024,1024,128, args.causal, False, "bhsd", args.persistent)
+    test_op_fwd(16,16,16,1024,1024,128, args.causal, False, "bhsd", args.persistent)
 
-    run_benchmark(custom_config, args)
+    # run_benchmark(custom_config, args)
 
 
 if __name__ == '__main__':
