@@ -47,7 +47,7 @@ struct GlobalScratchAllocOpConversion
     Location loc = op.getLoc();
 
     auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
-        "triton_gpu.global_scratch_memory_offset");
+        "ttg.global_scratch_memory_offset");
     assert(opOffsetAttr);
     auto opOffset = opOffsetAttr.getValue().getZExtValue();
 
