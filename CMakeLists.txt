@@ -186,6 +186,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # using pip install.
     include_directories(${PYTHON_INCLUDE_DIRS})
     include_directories(${PYBIND11_INCLUDE_DIR})
+    message(STATUS "PYTHON_LIB_DIRS ${PYTHON_LIB_DIRS}")
+    link_directories(${PYTHON_LIB_DIRS})
   else()
     # Otherwise, we might be building from top CMakeLists.txt directly.
     # Try to find Python and pybind11 packages.
