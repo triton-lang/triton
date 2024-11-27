@@ -400,7 +400,7 @@ class CMakeBuild(build_ext):
             pybind11_include_dir = os.path.join(pybind11_sys_path, "include")
         else:
             pybind11_include_dir = pybind11.get_include()
-        return [f"-DPYBIND11_INCLUDE_DIR={pybind11_include_dir}"]
+        return [f"-Dpybind11_INCLUDE_DIR='{pybind11_include_dir}'", f"-Dpybind11_DIR='{pybind11.get_cmake_dir()}'"]
 
     def get_proton_cmake_args(self):
         cmake_args = get_thirdparty_packages([get_json_package_info()])
