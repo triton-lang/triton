@@ -1173,24 +1173,22 @@ LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned opIdx, Attribute parent, unsigned kWidth) {
   if (opIdx != 0 && opIdx != 1) {
-    return emitError()
-           << "triton_gpu.dot_op opIdx paramenter can be 0 or 1, got: "
-           << opIdx;
+    return emitError() << "ttg.dot_op opIdx paramenter can be 0 or 1, got: "
+                       << opIdx;
   }
   if (!parent) {
-    return emitError() << "triton_gpu.dot_op parent paramenter cannot be null";
+    return emitError() << "ttg.dot_op parent paramenter cannot be null";
   }
   if (auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (kWidth != 0 && !(parentAttr.isAmpere() || parentAttr.isHopper()))
-      return emitError() << "triton_gpu.dot_op kWidth parameter can only be "
+      return emitError() << "ttg.dot_op kWidth parameter can only be "
                             "non-zero for Ampere or Hopper MMA parent";
     if (kWidth == 0 && (parentAttr.isAmpere() || parentAttr.isHopper()))
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is mandatory for "
-                "Ampere or Hopper MMA parent";
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "Ampere or Hopper MMA parent";
     if (opIdx != 0 && parentAttr.isHopper())
       return emitError()
-             << "triton_gpu.dot_op opIdx parameter must be 0 for "
+             << "ttg.dot_op opIdx parameter must be 0 for "
                 "Hopper MMA parent, since Hopper WGMMA only allows first "
                 "operand to be in registers";
     return success();
@@ -1199,29 +1197,26 @@ LogicalResult DotOperandEncodingAttr::verify(
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     if (kWidth != 16 && parentAttr.getVersion() == 1 ||
         kWidth != 8 && parentAttr.getVersion() == 2)
-      return emitError() << "triton_gpu.dot_op kWidth parameter must be 16 for "
+      return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
                             "gfx11 and 8 for gfx12";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     if (kWidth == 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is mandatory for "
-                "MFMA parent";
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "MFMA parent";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
     if (kWidth != 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is not supported "
-                "when the parent is a blocked layout";
+      return emitError() << "ttg.dot_op kWidth parameter is not supported "
+                            "when the parent is a blocked layout";
     return success();
   }
 
-  return emitError() << "triton_gpu.dot_op unexpected parent layout: "
-                     << parent;
+  return emitError() << "ttg.dot_op unexpected parent layout: " << parent;
 }
 
 //===----------------------------------------------------------------------===//
