@@ -2452,6 +2452,14 @@ public:
     } */
     return OpAsmDialectInterface::getAlias(attr, os);
   }
+
+  AliasResult getAlias(Type type, raw_ostream &os) const override {
+    if (auto memDescType = mlir::dyn_cast<MemRefType>(type)) {
+      os << "memdesc";
+      return AliasResult::FinalAlias;
+    }
+    return OpAsmDialectInterface::getAlias(type, os);
+  }
 };
 
 struct TritonGPUInferLayoutInterface

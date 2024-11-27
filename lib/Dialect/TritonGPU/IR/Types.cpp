@@ -30,47 +30,52 @@ void TokenType::print(AsmPrinter &printer) const {
 static constexpr llvm::StringRef kMutableMemory = "mutable";
 
 Type MemDescType::parse(AsmParser &parser) {
-  if (parser.parseLess())
+  if (failed(parser.parseLess()))
     return Type();
 
-  SmallVector<int64_t> dimensions;
-  if (parser.parseDimensionList(dimensions, /*allowDynamic=*/false))
+  SmallVector<int64_t> dimensions; // required
+  if (failed(parser.parseDimensionList(dimensions, /*allowDynamic=*/false)))
     return Type();
 
-  // Parse the element type.
-  Type elementType;
-  if (parser.parseType(elementType))
+  Type elementType; // required
+  if (failed(parser.parseType(elementType)))
     return Type();
 
-  Attribute encoding;
+  Attribute encoding; // required
+  if (failed(parser.parseComma()) || failed(parser.parseAttribute(encoding)))
+    return Type();
+
+  Attribute memorySpace; // required
+  if (failed(parser.parseComma()) || failed(parser.parseAttribute(memorySpace)))
+    return Type();
+
+  bool mutableMemory = false;      // optional
+  SmallVector<int64_t> allocShape; // optional
   if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseAttribute(encoding))
-      return Type();
-  }
-  bool mutableMemory = false;
-  Attribute memorySpace;
-  if (succeeded(parser.parseOptionalComma())) {
-    if (failed(parser.parseOptionalKeyword(kMutableMemory))) {
-      if (parser.parseAttribute(memorySpace))
-        return Type();
-    } else {
+    if (succeeded(parser.parseOptionalKeyword(kMutableMemory))) {
       mutableMemory = true;
+    } else if (failed(parser.parseDimensionList(allocShape,
+                                                /*allowDynamic=*/false,
+                                                /*withTrailingX=*/false))) {
+      return Type();
     }
   }
-  if (mutableMemory == false && succeeded(parser.parseOptionalComma())) {
-    if (parser.parseOptionalKeyword(kMutableMemory))
+
+  if (mutableMemory && succeeded(parser.parseOptionalComma())) {
+    if (failed(parser.parseDimensionList(allocShape, /*allowDynamic=*/false)))
       return Type();
-    mutableMemory = true;
   }
+
   if (parser.parseGreater())
     return Type();
   return MemDescType::get(parser.getContext(), dimensions, elementType,
-                          encoding, memorySpace, mutableMemory);
+                          encoding, memorySpace, mutableMemory, dimensions);
 }
 
 void MemDescType::print(AsmPrinter &printer) const {
   printer << "<";
-  for (auto dim : getShape())
+  auto shape = getShape();
+  for (auto dim : shape)
     printer << dim << "x";
   printer << getElementType();
   if (getEncoding())
@@ -79,7 +84,24 @@ void MemDescType::print(AsmPrinter &printer) const {
     printer << ", " << getMemorySpace();
   if (getMutableMemory())
     printer << ", " << kMutableMemory;
+  auto allocShape = getAllocShape();
+  if (allocShape != shape) {
+    printer << ", " << allocShape[0];
+    for (auto dim : allocShape.take_front(1)) {
+      printer << "x" << dim;
+    }
+  }
   printer << ">";
+}
+
+LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
+                                  ArrayRef<int64_t> shape, Type elementType,
+                                  Attribute encoding, Attribute memorySpace,
+                                  bool mutableMemory,
+                                  ArrayRef<int64_t> allocShape) {
+  if (allocShape.size() < shape.size())
+    emitError() << "alloc shape must have at least as many dimensions as shape";
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
