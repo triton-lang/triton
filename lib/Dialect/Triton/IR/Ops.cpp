@@ -1097,10 +1097,9 @@ LogicalResult GatherOp::verify() {
   for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
     if (dim == getAxis())
       continue;
-    if (indicesTy.getShape()[dim] > srcTy.getShape()[dim]) {
+    if (indicesTy.getShape()[dim] != srcTy.getShape()[dim]) {
       return emitOpError("indices dimension ")
-             << dim
-             << " cannot be greater than the corresponding input dimension";
+             << dim << " must match the corresponding input dimension";
     }
   }
 

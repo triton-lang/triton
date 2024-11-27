@@ -6090,8 +6090,8 @@ def test_chained_reductions(in_shape, perm, red_dims, device):
 
 
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
-    ([4, 4], [8, 2], 0),
-    ([128, 64], [256, 32], 0),
+    ([4, 4], [8, 4], 0),
+    ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])
 def test_gather(src_shape, indices_shape, axis):
@@ -6126,4 +6126,4 @@ def test_gather(src_shape, indices_shape, axis):
     indices = torch.randint(0, src.shape[axis], indices_shape, device='cuda')
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
-    torch.testing.assert_close(result, ref)
+    torch.testing.assert_close(result, ref, rtol=0, atol=0)

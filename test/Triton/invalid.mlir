@@ -392,7 +392,7 @@ tt.func @gather_op(%arg0: tensor<128xf32>, %arg1: tensor<512x4xi32>) {
 // -----
 
 tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x32xi32>) {
-  // expected-error @below {{indices dimension 1 cannot be greater than the corresponding input dimension}}
+  // expected-error @below {{indices dimension 1 must match the corresponding input dimension}}
   %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x32xi32>) -> tensor<512x32xf32>
   tt.return
 }
