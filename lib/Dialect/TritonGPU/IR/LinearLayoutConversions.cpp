@@ -920,9 +920,10 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
 
     // Expand the `register` dimension so the size of columns matches `n`.
     int numWarpRows = layout.getOutDimSize(kRow);
-    layout *= (layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
-               LinearLayout::identity1D(instrN / numCols, kReg, kOffset))
-                  .reshapeOuts({{kCol, instrN}, {kRow, numWarpRows}});
+    layout *=
+        (layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
+         LinearLayout::identity1D(instrN / numColsPerChunk, kReg, kOffset))
+            .reshapeOuts({{kCol, instrN}, {kRow, numWarpRows}});
   } else {
     // Multiple warps are needed to fill in the chunk columns
     std::vector<std::vector<int>> basesWarp;
