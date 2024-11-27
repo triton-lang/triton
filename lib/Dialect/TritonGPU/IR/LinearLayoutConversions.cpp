@@ -898,26 +898,54 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   // Expand the tile's register dimension to fit the "n" dimension of the WGMMA
   // instruction
   auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
-  int n = mma.getInstrShape()[1];
-  for (int logChunk = 0; logChunk < llvm::Log2_32(n / 16); logChunk++) {
-    int chunk = 1 << logChunk;
+  int instrN = mma.getInstrShape()[1];
+  int numCols = std::min<int>(instrN, numColsPerChunk);
+  for (int logCol = 0; logCol < llvm::Log2_32(numCols / 16); logCol++) {
+    int chunk = 1 << logCol;
     basesReg.push_back({16 * chunk, 0});
   }
 
-  std::vector<std::vector<int>> basesWarp;
-  auto warpsPerCTA = mma.getWarpsPerCTA();
-  assert(warpsPerCTA.size() == 2 && "Only 2D WGMMA is supported");
-  // Warp order is always column major on hopper
-  for (int i = 0; i < llvm::Log2_32(warpsPerCTA[0]); i++) {
-    basesWarp.push_back({0, numRows * (1 << i)});
-  }
-  for (int i = 0; i < llvm::Log2_32(warpsPerCTA[1]); i++) {
-    basesWarp.push_back({n * (1 << i), 0});
-  }
+  LinearLayout layout = LinearLayout::empty();
 
-  // Construct the layout for warpsPerCTA[0] chunks
-  LinearLayout layout = LinearLayout(
-      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}}, {kCol, kRow});
+  if (instrN > numColsPerChunk) {
+    // A single warp is enough to fill in the chunk columns
+    // Construct the layout for a single chunk
+    LinearLayout layout =
+        LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
+
+    // Expand the `warp` dimension according to warpsPerCTA.
+    auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+    layout *= identityStandardND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1})
+                  .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
+
+    // Expand the `register` dimension so the size of columns matches `n`.
+    int numWarpRows = layout.getOutDimSize(kRow);
+    layout *= (layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
+               LinearLayout::identity1D(instrN / numCols, kReg, kOffset))
+                  .reshapeOuts({{kCol, instrN}, {kRow, numWarpRows}});
+  } else {
+    // Multiple warps are needed to fill in the chunk columns
+    std::vector<std::vector<int>> basesWarp;
+    auto warpsPerCTA = mma.getWarpsPerCTA();
+    assert(warpsPerCTA.size() == 2 && "Only 2D WGMMA is supported");
+    // Warp order is always column major on hopper
+    for (int i = 0; i < llvm::Log2_32(warpsPerCTA[0]); i++) {
+      basesWarp.push_back({0, numRows * (1 << i)});
+    }
+    for (int i = 0; i < llvm::Log2_32(warpsPerCTA[1]); i++) {
+      basesWarp.push_back({instrN * (1 << i), 0});
+    }
+    // Expand the register dimension again
+    for (int logN = llvm::Log2_32(instrN * warpsPerCTA[1] / 16);
+         logN < llvm::Log2_32(numColsPerChunk / 16); logN++) {
+      int chunk = 1 << logN;
+      basesReg.push_back({16 * chunk, 0});
+    }
+    // Construct the layout for warpsPerCTA[0] chunks
+    layout *=
+        LinearLayout({{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}},
+                     {kCol, kRow});
+  }
 
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
