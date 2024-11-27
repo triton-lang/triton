@@ -274,11 +274,9 @@ struct DotOpMFMAConversionHelper {
     return success();
   }
 
-  /**
-   * @brief extract vector from rawElems based on kWidth and kBase
-   * rawElems is a vector of kWidth elements. We need to prepare vector(s) of
-   * kBase elements for each mfma instruction
-   */
+  /// Extract vector from rawElems based on kWidth and kBase
+  /// rawElems is a vector of kWidth elements. We need to prepare vector(s) of
+  /// kBase elements for each mfma instruction
   SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
                                      Type type) const {
     int kpack = kWidth / kBase;
@@ -311,10 +309,8 @@ struct DotOpMFMAConversionHelper {
     return results;
   }
 
-  /**
-   * @brief Converts dot operand structure to value table and converts types
-   * appropriate for mfma instructions
-   */
+  /// Converts dot operand structure to value table and converts types
+  /// appropriate for mfma instructions
   SmallVector<ValueTable>
   getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
                                       int kWidth, int kBase, Type type) const {

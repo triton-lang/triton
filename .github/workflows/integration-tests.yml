@@ -327,7 +327,7 @@ jobs:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
     name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
     container:
-      image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.4
+      image: rocmshared/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
@@ -396,22 +396,15 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
-      - name: Update PATH
+      - name: Update compiler to clang
         run: |
-          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
-      - name: Install pip dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install lit
-      - name: Install apt dependencies
-        run: |
-          apt update
-          apt install ccache
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
       - name: Install Triton
         id: amd-install-triton
         run: |
           echo "PATH is '$PATH'"
-          pip uninstall -y triton
+          pip uninstall -y triton pytorch-triton-rocm
           cd python
           ccache --zero-stats
           pip install -v -e '.[tests]'
