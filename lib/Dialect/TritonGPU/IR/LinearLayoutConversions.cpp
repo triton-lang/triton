@@ -884,7 +884,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   int elemBitWidth = 16;
   int vecSize = 8;
   int numRows = 16;
-  int numCols = 8 * swizzleByteSize / elemBitWidth;
+  int numColsPerChunk = 8 * swizzleByteSize / elemBitWidth;
 
   // Construct a single stmatrix.x4 (16x16) tile
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
@@ -895,28 +895,29 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   }
   basesLane.push_back({8, 0});
 
-  // Expand the tile's register dimension to fit swizzleByteSize, which is a
-  // "chunk"
-  for (int logChunk = 0; logChunk < llvm::Log2_32(numCols / 16); logChunk++) {
+  // Expand the tile's register dimension to fit the "n" dimension of the WGMMA
+  // instruction
+  auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  int n = mma.getInstrShape()[1];
+  for (int logChunk = 0; logChunk < llvm::Log2_32(n / 16); logChunk++) {
     int chunk = 1 << logChunk;
     basesReg.push_back({16 * chunk, 0});
   }
 
-  // Construct the layout for a single chunk
-  LinearLayout layout =
-      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
+  std::vector<std::vector<int>> basesWarp;
+  auto warpsPerCTA = mma.getWarpsPerCTA();
+  assert(warpsPerCTA.size() == 2 && "Only 2D WGMMA is supported");
+  // Warp order is always column major on hopper
+  for (int i = 0; i < llvm::Log2_32(warpsPerCTA[0]); i++) {
+    basesWarp.push_back({0, numRows * (1 << i)});
+  }
+  for (int i = 0; i < llvm::Log2_32(warpsPerCTA[1]); i++) {
+    basesWarp.push_back({n * (1 << i), 0});
+  }
 
-  // Expand the `warp` dimension according to warpsPerCTA.
-  auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
-  layout *= identityStandardND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1})
-                .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
-
-  // Expand the `register` dimension so the size of columns matches `n`.
-  int n = mma.getInstrShape()[1];
-  int numWarpRows = layout.getOutDimSize(kRow);
-  layout = (layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
-            LinearLayout::identity1D(n / numCols, kReg, kOffset))
-               .reshapeOuts({{kCol, n}, {kRow, numWarpRows}});
+  // Construct the layout for warpsPerCTA[0] chunks
+  LinearLayout layout = LinearLayout(
+      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}}, {kCol, kRow});
 
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
