@@ -59,7 +59,6 @@ GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
   }
 
   // Synchronize the whole CTA.
-  // TODO(jeff): Should we teach Membar that gather synchronizes?
   barrier();
 
   // Grab the index values owned by this thread.
