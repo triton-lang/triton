@@ -872,7 +872,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   LinearLayout layout = LinearLayout::empty();
 
   if (instrN > numColsPerChunk) {
-    for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk); logCol++) {
+    for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk / 16);
+         logCol++) {
       int chunk = 1 << logCol;
       basesReg.push_back({16 * chunk, 0});
     }
@@ -893,7 +894,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
          LinearLayout::identity1D(instrN / numColsPerChunk, kReg, kOffset))
             .reshapeOuts({{kCol, instrN}, {kRow, numWarpRows}});
   } else {
-    for (int logCol = 0; logCol < llvm::Log2_32(instrN); logCol++) {
+    for (int logCol = 0; logCol < llvm::Log2_32(instrN / 16); logCol++) {
       int chunk = 1 << logCol;
       basesReg.push_back({16 * chunk, 0});
     }
