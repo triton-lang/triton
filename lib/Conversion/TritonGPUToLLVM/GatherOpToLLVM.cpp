@@ -66,6 +66,10 @@ GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
   SmallVector<Value> idxValues =
       unpackLLElements(loc, adaptor.getIndices(), rewriter);
 
+  // Apply the layout of the destination tensor to obtain the indices of the
+  // column to gather along, then for each column, replace the index along the
+  // gather axis with the appropriate index value.
+  //
   // I = LL(pid)
   // idx = indices[I]
   // I_gather = [I[d] if d != axis else idx for d in range(len(I))]
