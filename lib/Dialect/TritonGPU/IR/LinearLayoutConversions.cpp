@@ -879,7 +879,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
     }
     // A single warp is enough to fill in the chunk columns
     // Construct the layout for a single chunk
-    LinearLayout layout =
+    layout *=
         LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
 
     // Expand the `warp` dimension according to warpsPerCTA.
