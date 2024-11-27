@@ -412,8 +412,13 @@ GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
     : gatherOp(gatherOp) {}
 
 unsigned GatherLoweringHelper::getScratchSizeInBytes() {
-  // For now, lower the gather op by writing the source tensor to shared memory.
-  // TODO(jeff): Leverage locality to avoid using scratch space when possible.
+  // If the gather is warp-local, no scratch space is needed.
+  if (isWarpLocal())
+    return 0;
+
+  // Otherwise, performing the gather will require scratch space to communicate
+  // the source tensor across threads. For now, assume the whole source tensor
+  // is written back to shared memory.
   RankedTensorType srcType = gatherOp.getSrc().getType();
   return product(srcType.getShape()) *
          ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
@@ -431,8 +436,14 @@ bool GatherLoweringHelper::isWarpLocal() {
     return false;
   LinearLayout layout = std::move(*maybeLayout);
 
-
-  return false;
+  // If the sublayout `(block, warp) -> dimN` is zero, then changing the warp or
+  // block does not alter how elements are mapped to `dimN`.
+  Builder b(gatherOp.getContext());
+  StringAttr block = b.getStringAttr("block");
+  StringAttr warp = b.getStringAttr("warp");
+  StringAttr gatherDim =
+      b.getStringAttr("dim" + std::to_string(gatherOp.getAxis()));
+  return layout.sublayoutIsZero({block, warp}, gatherDim);
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
