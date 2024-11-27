@@ -688,26 +688,17 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
     and each workgroup loops over num_tiles_total // NUM_WG number of tiles. This is meant to amortize the workgroup launch overhead that we would otherwise incure when launching
     a workgroup per each Q tile as is done with the standard flash attention (flash-attention.py).
     
-    TODO: figure out a way to ensure balanced workloads. 
-    Unbalanced workloads can result in low occupancy running at the end,
-    when only a part of the launched workgroups still continue running.
-    This is particularly problematic when causal=True and MAX_SEQLENS_Q >> MAX_SEQLENS_K 
-    (i.e. most of the Q tiles have 0 workload due to masking).
-    
-    What is currently done:
-    - tile_ID is increased iteratively by NUM_WG
-    - tiles are traversed in reverse order inside the heads in order to have low workload tiles at the very end
-
-    Software scheduler is probably an overkill, but would solve it. Maybe a simple atomic counter would work?
+    Balancing the workloads is handled by scheduling the tasks to different workgroups with a simple atomic counter. 
+    TODO: atomic counter way of scheduling leads to worse performance in causal=False case. 
+    Possible reason: when causal=False workloads are already balanced and tl.atomic_add calls become bottleneck (all WGs arrive at the same time to the tl.atomic_add call and it becomes serialized).
     """
-    NUM_WG = NUM_CU * GRID_CU_MULTIP
+    # NUM_WG = NUM_CU * GRID_CU_MULTIP # number of workgroups launched
 
     num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) #the number of work units (tiles) of a single head
     num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
     num_tiles_total = num_tiles_per_sample * ZQ # times the number of samples
 
-    start_pid = tl.program_id(0) # number in range 0 to NUM_WG
-    tile_id = tl.atomic_add(atomic_counter, 1)  # start_pid - NUM_WG
+    tile_id = tl.atomic_add(atomic_counter, 1)
 
     while tile_id < num_tiles_total:
         # tile id basically tells us the Q block we are handling
