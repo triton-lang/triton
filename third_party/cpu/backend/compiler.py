@@ -162,7 +162,8 @@ class CPUBackend(BaseBackend):
         pm.enable_debug()
         cpu.passes.ttcpuir.add_optimize_masks(pm)
         passes.common.add_canonicalizer(pm)
-        convert_bf16_dot_product = self.cpu_arch == "aarch64" and 'fp-armv8' in self.cpu_features and 'neon' in self.cpu_features
+        convert_bf16_dot_product = ((self.cpu_arch == "aarch64" or self.cpu_arch == "armv8")
+                                    and 'fp-armv8' in self.cpu_features and 'neon' in self.cpu_features)
         if convert_bf16_dot_product:
             use_horizontal_sum = os.getenv("TRITON_CPU_DOT_PROD_HORIZ_SUM", "1") == "1"
             cpu.passes.ttcpuir.add_convert_dot_product(pm, use_horizontal_sum)
@@ -215,7 +216,7 @@ class CPUBackend(BaseBackend):
             VecLib.libmvec: {"avx512f"},
         }
         if (vec_lib := options.get_vec_lib()) and vec_lib_requirements[vec_lib] & self.cpu_features:
-            cpu.passes.ttcpuir.add_math_to_vec_lib(pm, vec_lib)
+            cpu.passes.ttcpuir.add_math_to_vec_lib(pm, vec_lib, self.cpu_features)
 
         passes.convert.add_math_to_llvmir(pm)
         cpu.passes.ttcpuir.add_math_to_libm(pm)

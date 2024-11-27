@@ -5,8 +5,21 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._C.libtriton import llvm
 from triton.language.extra import libdevice
 from itertools import chain, product
+
+
+def get_native_vector_size_in_bits():
+    """
+    Returns the native vector size of the CPU.
+    Assuming x86 always uses "auto dispatch" with 512-bit vectors for Sleef.
+    """
+    cpu_features = llvm.get_cpu_features()
+    # TODO support for arm sve w/ VLA
+    if "neon" in cpu_features:
+        return 128
+    return 512
 
 
 def is_interpreter():
@@ -34,9 +47,13 @@ def check_num_vec_calls(meta, vec_lib, dtype_str, size, is_always_extern=False):
     # FP16 and BF16 are cast to FP32 for math ops
     elem_size = 8 if dtype_str == "float64" else 4
     data_size = size * elem_size
-    if data_size > 64:
-        num_vec_calls = data_size // 64
-    elif data_size >= 16:
+
+    vec_size = get_native_vector_size_in_bits() / 8  # bytes
+    # 128-bit vector is the smallest supported by Sleef for both x86 and arm
+    smallest_vec_size = 128 / 8  # bytes
+    if data_size > vec_size:
+        num_vec_calls = data_size // vec_size
+    elif data_size >= smallest_vec_size:
         num_vec_calls = 1
     else:
         num_vec_calls = 1 if is_always_extern else 0

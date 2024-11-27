@@ -580,6 +580,24 @@ void init_triton_llvm(py::module &&m) {
       if (f.second)
         res.insert(f.first().str());
     }
+
+    // Likely something went wrong with the LLVM feature detection.
+    if (!res.size()) {
+      std::string triple = llvm::sys::getProcessTriple();
+      // e.g. arm64-apple-darwin24.1.0
+      //      ^^^^^
+      std::size_t pos = triple.find('-');
+      if (pos == std::string::npos) {
+        return res;
+      }
+
+      std::string arch = triple.substr(0, pos);
+      if (arch == "aarch64" || arch == "arm64") {
+        // Safe because NEON is a mandatory feature for aarch64.
+        res.insert("neon"); // For math tests
+      }
+    }
+
     return res;
   });
 }

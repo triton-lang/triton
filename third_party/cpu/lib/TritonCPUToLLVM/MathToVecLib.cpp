@@ -56,14 +56,17 @@ public:
 };
 
 // Decompose vector operation to single-dimensional vector operations
-// with a native AVX512 vector size.
+// with a AVX512 for x86 or NEON for ARM.
 template <typename OpT>
 struct DecomposeToNativeVecs : public OpRewritePattern<OpT> {
 public:
   using OpRewritePattern<OpT>::OpRewritePattern;
+  // CPU SIMD vector size in bits
+  size_t vec_bits;
 
-  DecomposeToNativeVecs(MLIRContext *context)
-      : OpRewritePattern<OpT>(context) {}
+  DecomposeToNativeVecs(MLIRContext *context,
+                        size_t native_vec_size_in_bits = 512)
+      : OpRewritePattern<OpT>(context), vec_bits(native_vec_size_in_bits) {}
 
   LogicalResult matchAndRewrite(OpT op, PatternRewriter &rewriter) const {
     Location loc = op.getLoc();
@@ -83,7 +86,7 @@ public:
     // vector size.
     auto shape = vecTy.getShape();
     SmallVector<int64_t> newShape(1, 1);
-    int64_t elemsPerVec = 512 / elemTy.getIntOrFloatBitWidth();
+    int64_t elemsPerVec = vec_bits / elemTy.getIntOrFloatBitWidth();
     for (int64_t i = shape.size() - 1; i >= 0; --i) {
       int64_t size = shape[i];
       if (newShape.size() > 1) {
@@ -330,9 +333,11 @@ struct ExternElementwiseOpConversion
 
 template <typename OpTy>
 void populatePatternsForOp(RewritePatternSet &patterns,
-                           GetVecFnNameFn getVecFnName) {
+                           GetVecFnNameFn getVecFnName,
+                           size_t vec_size_in_bits = 512) {
   patterns.add<VecOpToFp32<OpTy>>(patterns.getContext());
-  patterns.add<DecomposeToNativeVecs<OpTy>>(patterns.getContext());
+  patterns.add<DecomposeToNativeVecs<OpTy>>(patterns.getContext(),
+                                            vec_size_in_bits);
   patterns.add<VecOpToVecLibConversion<OpTy>>(patterns.getContext(),
                                               getVecFnName);
 }
@@ -340,8 +345,27 @@ void populatePatternsForOp(RewritePatternSet &patterns,
 struct MathToVecLibPass
     : public mlir::triton::cpu::impl::MathToVecLibBase<MathToVecLibPass> {
   MathToVecLibPass() = default;
+  size_t vec_size_in_bits;
 
-  explicit MathToVecLibPass(VecLib lib) { this->lib = lib; }
+  explicit MathToVecLibPass(VecLib lib, std::set<std::string> cpu_features) {
+    this->lib = lib;
+    update_vec_size(cpu_features);
+  }
+
+  void update_vec_size(std::set<std::string> &cpu_features) {
+    // TODO:
+    //  Refactor this as an independent function.
+    //  And improve this to support other x86 SIMD ISAs and also for arm SVE
+    //  (VLA)
+    vec_size_in_bits = 512;
+    for (auto feature : cpu_features) {
+      // Arm NEON is fixed 128-bit SIMD ISA.
+      if (feature == "neon") {
+        vec_size_in_bits = 128;
+        break;
+      }
+    }
+  }
 
   void runOnOperation() override {
     Operation *op = getOperation();
@@ -356,20 +380,20 @@ struct MathToVecLibPass
     }
     case VecLib::Sleef: {
       populateCommonPatterns<SleefNameGenerator>(patterns);
-      populatePatternsForOp<math::ExpM1Op>(patterns,
-                                           SleefNameGenerator("expm1"));
+      populatePatternsForOp<math::ExpM1Op>(
+          patterns, SleefNameGenerator("expm1"), vec_size_in_bits);
       populatePatternsForOp<math::FloorOp>(
-          patterns, SleefNameGenerator("floor", /*ulp=*/0));
+          patterns, SleefNameGenerator("floor", /*ulp=*/0), vec_size_in_bits);
       populatePatternsForOp<math::SqrtOp>(
-          patterns, SleefNameGenerator("sqrt", /*ulp=*/5));
+          patterns, SleefNameGenerator("sqrt", /*ulp=*/5), vec_size_in_bits);
       populatePatternsForOp<math::TruncOp>(
-          patterns, SleefNameGenerator("trunc", /*ulp=*/0));
+          patterns, SleefNameGenerator("trunc", /*ulp=*/0), vec_size_in_bits);
       break;
     }
     }
 
     patterns.add<DecomposeToNativeVecs<ExternElementwiseOp>>(
-        patterns.getContext());
+        patterns.getContext(), vec_size_in_bits);
     patterns.add<PadSmallVecsForSleef>(patterns.getContext());
     patterns.add<ExternElementwiseOpConversion>(patterns.getContext());
 
@@ -379,26 +403,46 @@ struct MathToVecLibPass
 
   template <typename VecFnNameGenerator>
   void populateCommonPatterns(RewritePatternSet &patterns) const {
-    populatePatternsForOp<math::AcosOp>(patterns, VecFnNameGenerator("acos"));
-    populatePatternsForOp<math::AcoshOp>(patterns, VecFnNameGenerator("acosh"));
-    populatePatternsForOp<math::AsinOp>(patterns, VecFnNameGenerator("asin"));
-    populatePatternsForOp<math::AsinhOp>(patterns, VecFnNameGenerator("asinh"));
-    populatePatternsForOp<math::AtanOp>(patterns, VecFnNameGenerator("atan"));
-    populatePatternsForOp<math::AtanhOp>(patterns, VecFnNameGenerator("atanh"));
-    populatePatternsForOp<math::CbrtOp>(patterns, VecFnNameGenerator("cbrt"));
-    populatePatternsForOp<math::CosOp>(patterns, VecFnNameGenerator("cos"));
-    populatePatternsForOp<math::CoshOp>(patterns, VecFnNameGenerator("cosh"));
-    populatePatternsForOp<math::ErfOp>(patterns, VecFnNameGenerator("erf"));
-    populatePatternsForOp<math::ExpOp>(patterns, VecFnNameGenerator("exp"));
-    populatePatternsForOp<math::Exp2Op>(patterns, VecFnNameGenerator("exp2"));
-    populatePatternsForOp<math::LogOp>(patterns, VecFnNameGenerator("log"));
-    populatePatternsForOp<math::Log2Op>(patterns, VecFnNameGenerator("log2"));
-    populatePatternsForOp<math::Log10Op>(patterns, VecFnNameGenerator("log10"));
-    populatePatternsForOp<math::Log1pOp>(patterns, VecFnNameGenerator("log1p"));
-    populatePatternsForOp<math::SinOp>(patterns, VecFnNameGenerator("sin"));
-    populatePatternsForOp<math::SinhOp>(patterns, VecFnNameGenerator("sinh"));
-    populatePatternsForOp<math::TanOp>(patterns, VecFnNameGenerator("tan"));
-    populatePatternsForOp<math::TanhOp>(patterns, VecFnNameGenerator("tanh"));
+    populatePatternsForOp<math::AcosOp>(patterns, VecFnNameGenerator("acos"),
+                                        vec_size_in_bits);
+    populatePatternsForOp<math::AcoshOp>(patterns, VecFnNameGenerator("acosh"),
+                                         vec_size_in_bits);
+    populatePatternsForOp<math::AsinOp>(patterns, VecFnNameGenerator("asin"),
+                                        vec_size_in_bits);
+    populatePatternsForOp<math::AsinhOp>(patterns, VecFnNameGenerator("asinh"),
+                                         vec_size_in_bits);
+    populatePatternsForOp<math::AtanOp>(patterns, VecFnNameGenerator("atan"),
+                                        vec_size_in_bits);
+    populatePatternsForOp<math::AtanhOp>(patterns, VecFnNameGenerator("atanh"),
+                                         vec_size_in_bits);
+    populatePatternsForOp<math::CbrtOp>(patterns, VecFnNameGenerator("cbrt"),
+                                        vec_size_in_bits);
+    populatePatternsForOp<math::CosOp>(patterns, VecFnNameGenerator("cos"),
+                                       vec_size_in_bits);
+    populatePatternsForOp<math::CoshOp>(patterns, VecFnNameGenerator("cosh"),
+                                        vec_size_in_bits);
+    populatePatternsForOp<math::ErfOp>(patterns, VecFnNameGenerator("erf"),
+                                       vec_size_in_bits);
+    populatePatternsForOp<math::ExpOp>(patterns, VecFnNameGenerator("exp"),
+                                       vec_size_in_bits);
+    populatePatternsForOp<math::Exp2Op>(patterns, VecFnNameGenerator("exp2"),
+                                        vec_size_in_bits);
+    populatePatternsForOp<math::LogOp>(patterns, VecFnNameGenerator("log"),
+                                       vec_size_in_bits);
+    populatePatternsForOp<math::Log2Op>(patterns, VecFnNameGenerator("log2"),
+                                        vec_size_in_bits);
+    populatePatternsForOp<math::Log10Op>(patterns, VecFnNameGenerator("log10"),
+                                         vec_size_in_bits);
+    populatePatternsForOp<math::Log1pOp>(patterns, VecFnNameGenerator("log1p"),
+                                         vec_size_in_bits);
+    populatePatternsForOp<math::SinOp>(patterns, VecFnNameGenerator("sin"),
+                                       vec_size_in_bits);
+    populatePatternsForOp<math::SinhOp>(patterns, VecFnNameGenerator("sinh"),
+                                        vec_size_in_bits);
+    populatePatternsForOp<math::TanOp>(patterns, VecFnNameGenerator("tan"),
+                                       vec_size_in_bits);
+    populatePatternsForOp<math::TanhOp>(patterns, VecFnNameGenerator("tanh"),
+                                        vec_size_in_bits);
   }
 };
 
@@ -408,8 +452,9 @@ namespace mlir {
 namespace triton {
 namespace cpu {
 
-std::unique_ptr<OperationPass<ModuleOp>> createMathToVecLibPass(VecLib lib) {
-  return std::make_unique<MathToVecLibPass>(lib);
+std::unique_ptr<OperationPass<ModuleOp>>
+createMathToVecLibPass(VecLib lib, std::set<std::string> cpu_features) {
+  return std::make_unique<MathToVecLibPass>(lib, cpu_features);
 }
 
 } // namespace cpu
