@@ -891,7 +891,7 @@ private:
     return numStages;
   }
 };
-} // anonymous namespace
+} // namespace
 
 std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(int numStages,
                                                                  int prefetch) {
