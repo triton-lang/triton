@@ -645,10 +645,12 @@ class InterpreterBuilder:
 
     def create_assert(self, condition, message):
         # Interpreter's device_assert function has a different format than Triton's device_assert
-        assert condition, f"{message}"
+        if not condition:
+            raise AssertionError(f"{message}")
 
     def create_assume(self, condition):
-        assert condition, "Assume failed"
+        if not condition:
+            raise RuntimeError("Assume failed")
 
     def create_barrier(self):
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
@@ -969,7 +971,8 @@ def _patch_lang_core(lang):
         return range(start, end, step)
 
     def _new_static_assert(cond, msg=""):
-        assert cond, msg
+        if not cond:
+            raise AssertionError(msg)
 
     def _set_attr(input, values, name):
         # skip non tensor types. This may happen for induction variables.
@@ -997,7 +1000,8 @@ def _patch_lang_core(lang):
 
 def _patch_lang(fn):
     langs = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
-    assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
+    if len(langs) < 1:
+        raise RuntimeError("triton.language must be visible from within jit'd function")
     for lang in langs:
         _patch_builtin(lang, interpreter_builder)
         _patch_builtin(lang.tensor, interpreter_builder)
@@ -1090,7 +1094,8 @@ class GridExecutor:
         args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
         # iterate through grid
         grid = self.grid(args) if callable(self.grid) else self.grid
-        assert len(grid) <= 3, "grid must have at most 3 dimensions"
+        if len(grid) > 3:
+            raise RuntimeError(f"grid must have at most 3 dimensions: {len(grid)=}")
         grid = grid + (1, ) * (3 - len(grid))
         interpreter_builder.set_grid_dim(*grid)
         try:
@@ -1190,7 +1195,7 @@ class FunctionRewriter:
         for key, value in globals().items():
             if key not in fn_globals:
                 fn_globals[key] = value
-        exec(compiled_code, fn_globals, local_namespace)
+        exec(compiled_code, fn_globals, local_namespace)  # nosec B102
         return local_namespace[self.fn.__name__]
 
 

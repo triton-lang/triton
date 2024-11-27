@@ -1,0 +1,186 @@
+
+### Bandit config file generated from:
+# '/bandit-config-generator -o bandit.yaml'
+
+### This config may optionally select a subset of tests to run or skip by
+### filling out the 'tests' and 'skips' lists given below. If no tests are
+### specified for inclusion then it is assumed all tests are desired. The skips
+### set will remove specific tests from the include set. This can be controlled
+### using the -t/-s CLI options. Note that the same test ID should not appear
+### in both 'tests' and 'skips', this would be nonsensical and is detected by
+### Bandit at runtime.
+
+# Available tests:
+# B101 : assert_used
+# B102 : exec_used
+# B103 : set_bad_file_permissions
+# B104 : hardcoded_bind_all_interfaces
+# B105 : hardcoded_password_string
+# B106 : hardcoded_password_funcarg
+# B107 : hardcoded_password_default
+# B108 : hardcoded_tmp_directory
+# B110 : try_except_pass
+# B112 : try_except_continue
+# B113 : request_without_timeout
+# B201 : flask_debug_true
+# B202 : tarfile_unsafe_members
+# B301 : pickle
+# B302 : marshal
+# B303 : md5
+# B304 : ciphers
+# B305 : cipher_modes
+# B306 : mktemp_q
+# B307 : eval
+# B308 : mark_safe
+# B310 : urllib_urlopen
+# B311 : random
+# B312 : telnetlib
+# B313 : xml_bad_cElementTree
+# B314 : xml_bad_ElementTree
+# B315 : xml_bad_expatreader
+# B316 : xml_bad_expatbuilder
+# B317 : xml_bad_sax
+# B318 : xml_bad_minidom
+# B319 : xml_bad_pulldom
+# B320 : xml_bad_etree
+# B321 : ftplib
+# B323 : unverified_context
+# B324 : hashlib_insecure_functions
+# B401 : import_telnetlib
+# B402 : import_ftplib
+# B403 : import_pickle
+# B404 : import_subprocess
+# B405 : import_xml_etree
+# B406 : import_xml_sax
+# B407 : import_xml_expat
+# B408 : import_xml_minidom
+# B409 : import_xml_pulldom
+# B410 : import_lxml
+# B411 : import_xmlrpclib
+# B412 : import_httpoxy
+# B413 : import_pycrypto
+# B415 : import_pyghmi
+# B501 : request_with_no_cert_validation
+# B502 : ssl_with_bad_version
+# B503 : ssl_with_bad_defaults
+# B504 : ssl_with_no_version
+# B505 : weak_cryptographic_key
+# B506 : yaml_load
+# B507 : ssh_no_host_key_verification
+# B508 : snmp_insecure_version
+# B509 : snmp_weak_cryptography
+# B601 : paramiko_calls
+# B602 : subprocess_popen_with_shell_equals_true
+# B603 : subprocess_without_shell_equals_true
+# B604 : any_other_function_with_shell_equals_true
+# B605 : start_process_with_a_shell
+# B606 : start_process_with_no_shell
+# B607 : start_process_with_partial_path
+# B608 : hardcoded_sql_expressions
+# B609 : linux_commands_wildcard_injection
+# B610 : django_extra_used
+# B611 : django_rawsql_used
+# B612 : logging_config_insecure_listen
+# B701 : jinja2_autoescape_false
+# B702 : use_of_mako_templates
+# B703 : django_mark_safe
+
+# (optional) list included test IDs here, eg '[B101, B406]':
+tests: []
+
+# (optional) list skipped test IDs here, eg '[B101, B406]':
+skips: []
+
+### (optional) plugin settings - some test plugins require configuration data
+### that may be given here, per-plugin. All bandit test plugins have a built in
+### set of sensible defaults and these will be used if no configuration is
+### provided. It is not necessary to provide settings for every (or any) plugin
+### if the defaults are acceptable.
+assert_used:
+  skips: ['./benchmarks/*'] # accept those assert in test scripts
+hardcoded_tmp_directory:
+  tmp_dirs:
+  - /tmp
+  - /var/tmp
+  - /dev/shm
+# subprocess_popen_with_shell_equals_true: #B602
+# subprocess_without_shell_equals_true: #B603
+# any_other_function_with_shell_equals_true: #B604
+# start_process_with_a_shell: #B605
+# start_process_with_no_shell: #B606
+# start_process_with_partial_path: #B607
+# linux_commands_wildcard_injection: #B609
+# test ID B6* shares a configuration in the same family, namely shell_injection
+shell_injection:
+  no_shell:
+  - os.execl
+  - os.execle
+  - os.execlp
+  - os.execlpe
+  - os.execv
+  - os.execve
+  - os.execvp
+  - os.execvpe
+  - os.spawnl
+  - os.spawnle
+  - os.spawnlp
+  - os.spawnlpe
+  - os.spawnv
+  - os.spawnve
+  - os.spawnvp
+  - os.spawnvpe
+  - os.startfile
+  shell:
+  - os.system
+  - os.popen
+  - os.popen2
+  - os.popen3
+  - os.popen4
+  - popen2.popen2
+  - popen2.popen3
+  - popen2.popen4
+  - popen2.Popen3
+  - popen2.Popen4
+  - commands.getoutput
+  - commands.getstatusoutput
+  - subprocess.getoutput
+  - subprocess.getstatusoutput
+  subprocess:
+  - subprocess.Popen
+  - subprocess.call
+  - subprocess.check_call
+  - subprocess.check_output
+  - subprocess.run
+ssl_with_bad_defaults:
+  bad_protocol_versions:
+  - PROTOCOL_SSLv2
+  - SSLv2_METHOD
+  - SSLv23_METHOD
+  - PROTOCOL_SSLv3
+  - PROTOCOL_TLSv1
+  - SSLv3_METHOD
+  - TLSv1_METHOD
+  - PROTOCOL_TLSv1_1
+  - TLSv1_1_METHOD
+ssl_with_bad_version:
+  bad_protocol_versions:
+  - PROTOCOL_SSLv2
+  - SSLv2_METHOD
+  - SSLv23_METHOD
+  - PROTOCOL_SSLv3
+  - PROTOCOL_TLSv1
+  - SSLv3_METHOD
+  - TLSv1_METHOD
+  - PROTOCOL_TLSv1_1
+  - TLSv1_1_METHOD
+try_except_continue:
+  check_typed_exception: false
+try_except_pass:
+  check_typed_exception: false
+weak_cryptographic_key:
+  weak_key_size_dsa_high: 1024
+  weak_key_size_dsa_medium: 2048
+  weak_key_size_ec_high: 160
+  weak_key_size_ec_medium: 224
+  weak_key_size_rsa_high: 1024
+  weak_key_size_rsa_medium: 2048

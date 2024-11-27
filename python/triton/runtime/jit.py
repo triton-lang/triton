@@ -161,7 +161,8 @@ class DependenciesFinder(ast.NodeVisitor):
         #              expr* kw_defaults, arg? kwarg, expr* defaults)
         def visit_defaults(defaults):
             try:
-                assert not self.visiting_arg_default_value
+                if self.visiting_arg_default_value:
+                    raise RuntimeError(f"the folowing value must be 'False': {self.visiting_arg_default_value=}")
                 self.visiting_arg_default_value = True
                 for expr in defaults:
                     if expr is not None:
@@ -350,7 +351,8 @@ def create_function_from_signature(sig, kparams, backend):
     much of the kernel launch overhead -- every time we run the kernel.
     """
 
-    assert len(sig.parameters) == len(kparams)
+    if len(sig.parameters) != len(kparams):
+        raise RuntimeError(f"{len(sig.parameters)=} must be equal to {len(kparams)=}")
 
     # Create the function argument list and the dict entries for the return statement
     func_args = []
@@ -404,7 +406,7 @@ def create_function_from_signature(sig, kparams, backend):
     func_namespace['compute_spec_key'] = backend.compute_spec_key
 
     # Execute the function string in func_namespace to create the function
-    exec(func_body, func_namespace)
+    exec(func_body, func_namespace)  # nosec B102
 
     # Extract the newly created function from the namespace
     return func_namespace['dynamic_func']
@@ -541,7 +543,8 @@ class JITFunction(KernelInterface[T]):
         Add a hook that will be executed prior to the execution of run
         function with args and kwargs passed into the kernel
         '''
-        assert callable(hook)
+        if not callable(hook):
+            raise TypeError(f"hook must be of callable type: {type(hook)=}")
         self.pre_run_hooks.append(hook)
 
     def create_binder(self, backend):
@@ -588,9 +591,12 @@ class JITFunction(KernelInterface[T]):
             options = backend.parse_options(kwargs)
 
             # deprecated arguments
-            assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
-            assert "device" not in kwargs, "device option is deprecated; current device will be used"
-            assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+            if "device_type" in kwargs:
+                raise ValueError("`device_type` option is deprecated; current target will be used")
+            if "device" in kwargs:
+                raise ValueError("`device` option is deprecated; current device will be used")
+            if "stream" in kwargs:
+                raise ValueError("`stream` option is deprecated; current stream will be used")
             for k in excess_kwargs:
                 if k not in options.__dict__:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
@@ -637,7 +643,8 @@ class JITFunction(KernelInterface[T]):
 
         if not warmup:
             # canonicalize grid
-            assert grid is not None
+            if grid is None:
+                raise ValueError(f"`grid` shouldn't be None")
             if callable(grid):
                 # Arguments are passed as a dict to `grid`, by contract.
                 # TODO(jlebar): In the new launch API, pass the compiler flags as a
@@ -758,9 +765,12 @@ class JITFunction(KernelInterface[T]):
     # Our unit tests do this, for example.
     def parse(self):
         tree = ast.parse(self.src)
-        assert isinstance(tree, ast.Module)
-        assert len(tree.body) == 1
-        assert isinstance(tree.body[0], ast.FunctionDef)
+        if not isinstance(tree, ast.Module):
+            raise RuntimeError(f"`ast.parse` must return `ast.Module`: {type(tree)=}")
+        if len(tree.body) != 1:
+            raise RuntimeError(f"`ast.parse` result should have one body: {len(tree.body)=}")
+        if not isinstance(tree.body[0], ast.FunctionDef):
+            raise RuntimeError(f"`ast.parse` result's body should be of `ast.FunctionDef` type: {type(tree.body[0])=}")
         return tree
 
     def __call__(self, *args, **kwargs):
@@ -831,7 +841,8 @@ def jit(
     """
 
     def decorator(fn: T) -> JITFunction[T]:
-        assert callable(fn)
+        if not callable(fn):
+            raise TypeError(f"'fn' should be callable: {type(fn)=}")
         if os.getenv("TRITON_INTERPRET", "0") == "1":
             from .interpreter import InterpretedFunction
             return InterpretedFunction(fn, version=version, do_not_specialize=do_not_specialize,

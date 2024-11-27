@@ -115,7 +115,8 @@ class FileCacheManager(CacheManager):
         binary = isinstance(data, bytes)
         if not binary:
             data = str(data)
-        assert self.lock_path is not None
+        if self.lock_path is None:
+            raise RuntimeError("`self.lock_path` shouldn't be None")
         filepath = self._make_path(filename)
         # Random ID to avoid any collisions
         rnd_id = str(uuid.uuid4())
