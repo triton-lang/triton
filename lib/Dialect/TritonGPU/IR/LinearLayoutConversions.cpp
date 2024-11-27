@@ -869,15 +869,13 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   // instruction
   auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   int instrN = mma.getInstrShape()[1];
-  int numCols = std::min<int>(instrN, numColsPerChunk);
-  for (int logCol = 0; logCol < llvm::Log2_32(numCols / 16); logCol++) {
-    int chunk = 1 << logCol;
-    basesReg.push_back({16 * chunk, 0});
-  }
-
   LinearLayout layout = LinearLayout::empty();
 
   if (instrN > numColsPerChunk) {
+    for (int logCol = 0; logCol < numColsPerChunk; logCol++) {
+      int chunk = 1 << logCol;
+      basesReg.push_back({16 * chunk, 0});
+    }
     // A single warp is enough to fill in the chunk columns
     // Construct the layout for a single chunk
     LinearLayout layout =
@@ -895,6 +893,10 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
          LinearLayout::identity1D(instrN / numColsPerChunk, kReg, kOffset))
             .reshapeOuts({{kCol, instrN}, {kRow, numWarpRows}});
   } else {
+    for (int logCol = 0; logCol < instrN; logCol++) {
+      int chunk = 1 << logCol;
+      basesReg.push_back({16 * chunk, 0});
+    }
     // Multiple warps are needed to fill in the chunk columns
     std::vector<std::vector<int>> basesWarp;
     auto warpsPerCTA = mma.getWarpsPerCTA();
