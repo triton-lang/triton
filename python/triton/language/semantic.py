@@ -1695,8 +1695,7 @@ def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> 
     for d in range(rank):
         if d == axis:
             continue
-        assert index.type.shape[d] <= src.type.shape[
-            d], f"index dim {axis} cannot be greater than the corresponding source dim"
+        assert index.type.shape[d] == src.type.shape[d], f"index dim {axis} must match the corresponding source dim"
 
     gather = builder.create_gather(src.handle, index.handle, axis)
     return wrap_tensor(gather, src.type.scalar, index.type.shape)
