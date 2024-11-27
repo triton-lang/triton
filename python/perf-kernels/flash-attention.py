@@ -1976,7 +1976,7 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    test_op_fwd(16,16,16,1024,1024,128, args.causal, False, "bhsd", args.persistent)
+    test_op_fwd(22,16,16,1500,1500,128, args.causal, False, "bhsd", args.persistent)
 
     # run_benchmark(custom_config, args)
 
