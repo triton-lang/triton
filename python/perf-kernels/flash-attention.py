@@ -698,7 +698,9 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
     num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
     num_tiles_total = num_tiles_per_sample * ZQ # times the number of samples
 
-    tile_id = tl.atomic_add(atomic_counter, 1)
+    tile_id = atomic_counter.atomic_add(1)
+    if tile_id >= num_tiles_total:
+        return
 
     while tile_id < num_tiles_total:
         # tile id basically tells us the Q block we are handling
@@ -706,19 +708,9 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
         off_z = tile_id // num_tiles_per_sample # at which batch sample are we
         off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head # at which head are we inside the sample
 
-        # TODO: why doesnt the following work anymore and we have to use the flip order????????????
-        # start_m = tile_id % num_tiles_per_sample % num_tiles_per_head
+        start_m = tile_id % num_tiles_per_sample % num_tiles_per_head
         # flip the traversal order of Q blocks inside head
-        start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1 # at which tile are we inside the head
-
-
-        # flip the order of traversing the Q blocks per head periodically
-        # period = NUM_WG // num_tiles_per_head + 1
-        # off_hz = tile_id // (num_tiles_per_head) # at which head are we in
-        # if off_hz % period:
-        #     start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1 # at which tile are we inside the head
-        # else:
-        #     start_m = tile_id % num_tiles_per_sample % num_tiles_per_head
+        # start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1 # at which tile are we inside the head
 
         # Do the specified Q block computation (following is the same as in normal flash attention)
         offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M) 
@@ -952,7 +944,7 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
                     o_ptrs_mask = o_ptrs_mask & (offs_d[None, :] < ACTUAL_BLOCK_DMODEL)
                 tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=o_ptrs_mask)
 
-        tile_id = tl.atomic_add(atomic_counter, 1)
+        tile_id = atomic_counter.atomic_add(1)
 
 
 @triton.jit
@@ -1323,7 +1315,7 @@ class _attention(torch.autograd.Function):
         if metadata.persistent:
             NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count         
             grid = lambda META: (min(NUM_CU*META['GRID_CU_MULTIP'], triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M'])*nheads_q*batch), )
-            atomic_counter = -torch.ones([1], dtype=torch.int32, device='cuda')
+            atomic_counter = torch.zeros([1], dtype=torch.int32, device='cuda')
             attn_fwd_persistent[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
                         *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
                         dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
