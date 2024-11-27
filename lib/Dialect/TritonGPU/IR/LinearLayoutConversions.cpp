@@ -883,7 +883,6 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
         LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
 
     // Expand the `warp` dimension according to warpsPerCTA.
-    auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
     layout *= identityStandardND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1})
                   .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
 
