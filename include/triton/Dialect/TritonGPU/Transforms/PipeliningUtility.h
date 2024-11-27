@@ -35,7 +35,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 // Return the minClusterId and maxClusterId for the given ForOp.
 std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp);
 std::pair<int, int> getStageCluster(Operation *op);
-void setStageCluster(scf::ForOp &forOp, Operation *op, int stage, int cluster);
+void setStageCluster(Operation *op, int stage, int cluster);
 } // namespace triton
 } // namespace mlir
 
