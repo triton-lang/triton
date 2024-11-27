@@ -698,19 +698,17 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
     num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
     num_tiles_total = num_tiles_per_sample * ZQ # times the number of samples
 
-    tile_id = atomic_counter.atomic_add(1)
-    if tile_id >= num_tiles_total:
-        return
+    # atomic counter is initialized as 0
+    tile_id = atomic_counter.atomic_add(1) # retuns the value BEFORE the atomic operation
 
     while tile_id < num_tiles_total:
         # tile id basically tells us the Q block we are handling
-        # tile_id += NUM_WG 
         off_z = tile_id // num_tiles_per_sample # at which batch sample are we
         off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head # at which head are we inside the sample
 
-        start_m = tile_id % num_tiles_per_sample % num_tiles_per_head
+        start_m = tile_id % num_tiles_per_sample % num_tiles_per_head # at which tile are we inside the head
         # flip the traversal order of Q blocks inside head
-        # start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1 # at which tile are we inside the head
+        # start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1 
 
         # Do the specified Q block computation (following is the same as in normal flash attention)
         offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M) 
@@ -1968,9 +1966,9 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    test_op_fwd(22,16,16,1500,1500,128, args.causal, False, "bhsd", args.persistent)
+    # test_op_fwd(22,16,16,1500,1500,128, args.causal, False, "bhsd", args.persistent)
 
-    # run_benchmark(custom_config, args)
+    run_benchmark(custom_config, args)
 
 
 if __name__ == '__main__':
