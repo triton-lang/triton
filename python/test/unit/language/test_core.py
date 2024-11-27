@@ -6126,4 +6126,4 @@ def test_gather(src_shape, indices_shape, axis):
     indices = torch.randint(0, src.shape[axis], indices_shape, device='cuda')
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
-    assert torch.all(ref == result)
+    torch.testing.assert_close(result, ref)
