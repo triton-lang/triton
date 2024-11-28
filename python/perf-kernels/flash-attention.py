@@ -38,7 +38,7 @@ class MetaData():
     bias = None
     alibi_slopes = None
     causal = False
-    persistent = False
+    persistent = None
     num_contexts = 0
     varlen = False
     layout = None
@@ -77,8 +77,6 @@ class MetaData():
     def need_causal(self):
         self.causal = True
     
-    def need_persistent(self):
-        self.persistent = True
 
     def need_dropout(self, dropout_p, return_encoded_softmax):
         self.dropout_p = dropout_p
@@ -677,8 +675,8 @@ autotune_configs_persistent, autotune_keys_persistent = get_autotune_configs_per
 def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
              stride_kh, stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh,
              stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, cu_seqlens_q,
-             cu_seqlens_k, dropout_p, philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, NUM_CU, atomic_counter, ZQ: tl.constexpr, HQ: tl.constexpr,
-             HK: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr,
+             cu_seqlens_k, dropout_p, philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, NUM_CU, atomic_counter, USE_DYNAMIC: tl.constexpr,
+             ZQ: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr,
              MAX_SEQLENS_K: tl.constexpr, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
              BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, GRID_CU_MULTIP: tl.constexpr):
@@ -688,18 +686,20 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
     and each workgroup loops over num_tiles_total // NUM_WG number of tiles. This is meant to amortize the workgroup launch overhead that we would otherwise incure when launching
     a workgroup per each Q tile as is done with the standard flash attention (flash-attention.py).
     
-    Balancing the workloads is handled by scheduling the tasks to different workgroups with a simple atomic counter. 
-    TODO: atomic counter way of scheduling leads to worse performance in causal=False case than fixed scheduling. 
-    Possible reason: when causal=False workloads are already balanced and tl.atomic_add calls become a bottleneck.
+    If USE_DYNAMIC=True the tiles are scheduled dynamically to the workgroups with atomic add calls. This effectively balances the workloads for the workgroups and is beneficial when IS_CAUSAL=True.
+    Atomic add calls however add overhead, which leads to worse performance if the workloads are already balanced (as is with IS_CAUSAL=FALSE). Then we can just use fixed scheduling. 
     """
-    # NUM_WG = NUM_CU * GRID_CU_MULTIP # number of workgroups launched
+    NUM_WG = NUM_CU * GRID_CU_MULTIP # number of workgroups launched
 
     num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) #the number of work units (tiles) of a single head
     num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
     num_tiles_total = num_tiles_per_sample * ZQ # times the number of samples
 
     # atomic counter is initialized as 0
-    tile_id = atomic_counter.atomic_add(1) # retuns the value BEFORE the atomic operation
+    if USE_DYNAMIC:
+        tile_id = atomic_counter.atomic_add(1) # retuns the value BEFORE the atomic operation
+    else:
+        tile_id = tl.program_id(0)
 
     while tile_id < num_tiles_total:
         # tile id basically tells us the Q block we are handling
@@ -942,7 +942,11 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
                     o_ptrs_mask = o_ptrs_mask & (offs_d[None, :] < ACTUAL_BLOCK_DMODEL)
                 tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=o_ptrs_mask)
 
-        tile_id = atomic_counter.atomic_add(1)
+
+        if USE_DYNAMIC:
+            tile_id = atomic_counter.atomic_add(1)
+        else:
+            tile_id += NUM_WG
 
 
 @triton.jit
@@ -1310,15 +1314,17 @@ class _attention(torch.autograd.Function):
         else:
             alibi_strides = (0, 0)
 
-        if metadata.persistent:
+        if metadata.persistent is not None:
             NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count         
             grid = lambda META: (min(NUM_CU*META['GRID_CU_MULTIP'], triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M'])*nheads_q*batch), )
             atomic_counter = torch.zeros([1], dtype=torch.int32, device='cuda')
+            
             attn_fwd_persistent[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
                         *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
                         dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
-                        encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, NUM_CU=NUM_CU, atomic_counter=atomic_counter, ZQ=batch, HQ=nheads_q, HK=nheads_k,
-                        ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
+                        encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, 
+                        NUM_CU=NUM_CU, atomic_counter=atomic_counter, USE_DYNAMIC=True if metadata.persistent=="dynamic" else False,
+                        ZQ=batch, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
                         MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
                         BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
                         USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
@@ -1506,8 +1512,8 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
     if causal:
         input_metadata.need_causal()
-    if persistent:
-        input_metadata.need_persistent()
+    
+    input_metadata.persistent = persistent
 
     if use_alibi:
         # for n heads the set of slopes is the geometric sequence that starts 2^(-8/n)
@@ -1809,6 +1815,17 @@ def nonvarlen_benchmark_configs():
     return configs
 
 
+def nonvarlen_benchmark_configs2():
+    head_dim = 128
+    heads = 2048 // head_dim
+    seq_lens = [512, 1024, 2048, 4096, 8192, 16384]
+    configs = []
+    for seq_len in seq_lens:
+        configs.append((16384 // seq_len, heads, heads, seq_len, seq_len))
+
+    return configs
+
+
 def varlen_benchmark_configs():
     configs = [
         (2, 16, 4, 1024, 1024),
@@ -1888,8 +1905,8 @@ def run_benchmark(custom, args):
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
-        if persistent:
-            input_metadata.need_persistent()
+        
+        input_metadata.persistent = persistent
 
         o = torch.empty_like(q)
         fn = lambda: attention(q, k, v, o, input_metadata)
@@ -1944,7 +1961,17 @@ def parse_args():
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False)
     parser.add_argument("-layout", type=str, default='bhsd', help=supported_layouts())
-    parser.add_argument("-persistent", action='store_true')
+    parser.add_argument(
+        "-persistent",
+        nargs='?',                        # Accept zero or one argument
+        const='fixed',                  # Value if -persistent is provided without an argument
+        choices=['fixed', 'dynamic'],   # Allowed values if an argument is provided
+        default=None,                     # Value if -persistent is not provided
+        help=(
+            "Enable persistent kernels. "
+            "Use '-persistent dynamic' for dynamic scheduling of the tiles."
+        )
+    )
     return parser.parse_args()
 
 
