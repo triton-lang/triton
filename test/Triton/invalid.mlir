@@ -352,3 +352,54 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32, #shared>) {
     tt.return
 }
 }  // end module
+
+// -----
+
+tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
+  // expected-error @below {{indices and output shapes must match}}
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512xf32>
+  tt.return
+}
+
+// -----
+
+#blocked  = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32, #blocked>) {
+  // expected-error @below {{indices and output encodings must match}}
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x4xi32, #blocked>) -> tensor<512x4xf32, #blocked1>
+  tt.return
+}
+}
+
+// -----
+
+tt.func @gather_op(%arg0: tensor<128x16xf16>, %arg1: tensor<512x4xi32>) {
+  // expected-error @below {{input and output element types must match}}
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf16>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  tt.return
+}
+
+// -----
+
+tt.func @gather_op(%arg0: tensor<128xf32>, %arg1: tensor<512x4xi32>) {
+  // expected-error @below {{input and indices ranks must match}}
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  tt.return
+}
+
+// -----
+
+tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x32xi32>) {
+  // expected-error @below {{indices dimension 1 must match the corresponding input dimension}}
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x32xi32>) -> tensor<512x32xf32>
+  tt.return
+}
+// -----
+
+tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
+  // expected-error @below {{gather dimension must be less than the input rank}}
+  %0 = tt.gather %arg0[%arg1] {axis = 3 : i32} : (tensor<128x16xf32>, tensor<512x4xi32>) -> tensor<512x4xf32>
+  tt.return
+}
