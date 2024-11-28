@@ -689,8 +689,8 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
     a workgroup per each Q tile as is done with the standard flash attention (flash-attention.py).
     
     Balancing the workloads is handled by scheduling the tasks to different workgroups with a simple atomic counter. 
-    TODO: atomic counter way of scheduling leads to worse performance in causal=False case. 
-    Possible reason: when causal=False workloads are already balanced and tl.atomic_add calls become bottleneck (all WGs arrive at the same time to the tl.atomic_add call and it becomes serialized).
+    TODO: atomic counter way of scheduling leads to worse performance in causal=False case than fixed scheduling. 
+    Possible reason: when causal=False workloads are already balanced and tl.atomic_add calls become a bottleneck.
     """
     # NUM_WG = NUM_CU * GRID_CU_MULTIP # number of workgroups launched
 
