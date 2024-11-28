@@ -2706,11 +2706,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked2 = #triton_gpu.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // TODO(jeff): Support indices -> dst layout propagation to remove both
 // layout conversions here.
@@ -2718,9 +2718,9 @@ tt.func @propagate_layout_gather(%arg0: tensor<1024x256xi32, #blocked>, %arg1: t
   // CHECK-LABEL: propagate_layout_gather
 
   // XCHECK-NOT: convert_layout
-  %0 = triton_gpu.convert_layout %arg0 : tensor<1024x256xi32, #blocked> -> tensor<1024x256xi32, #blocked1>
+  %0 = ttg.convert_layout %arg0 : tensor<1024x256xi32, #blocked> -> tensor<1024x256xi32, #blocked1>
   %1 = tt.gather %arg1[%0] {axis = 0 : i32} : (tensor<128x256xf32, #blocked>, tensor<1024x256xi32, #blocked1>) -> tensor<1024x256xf32, #blocked1>
-  %2 = triton_gpu.convert_layout %1 : tensor<1024x256xf32, #blocked1> -> tensor<1024x256xf32, #blocked2>
+  %2 = ttg.convert_layout %1 : tensor<1024x256xf32, #blocked1> -> tensor<1024x256xf32, #blocked2>
   tt.return %2 : tensor<1024x256xf32, #blocked2>
 }
 
