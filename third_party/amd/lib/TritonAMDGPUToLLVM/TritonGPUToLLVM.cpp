@@ -191,6 +191,8 @@ struct ConvertTritonAMDGPUToLLVM
                       commonBenefit);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns,
                       commonBenefit);
+    populatePatterns7(mlir::triton::populateGatherOpToLLVMPatterns,
+                      commonBenefit);
 
     mlir::triton::BackendCallbacks callbacks;
     callbacks.localStoreOpConversion = storeOpConversionCallback;

@@ -1901,12 +1901,81 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // CHECK: inline_asm_pack
-#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // check specifically for the case where asm has two results, pack > 1, and the result bitwidth is < 32
   tt.func public @inline_asm_pack(%80: tensor<64x64xi8, #blocked>) attributes {noinline = false} {
     // CHECK: llvm.inline_asm asm_dialect {{.*}} (vector<4xi8>) -> !llvm.struct<(vector<2xbf16>, vector<2xbf16>, vector<2xbf16>, vector<2xbf16>)>
     %83:2 = tt.elementwise_inline_asm "" {constraints = "=r,=r,=r,=r,r", packed_element = 4 : i32, pure = true} %80 : tensor<64x64xi8, #blocked> -> tensor<64x64xbf16, #blocked>, tensor<64x64xbf16, #blocked>
     tt.return
   }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+tt.func @gather_in_shared(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4xf32, #blocked>) {
+  // CHECK-LABEL: gather_in_shared
+
+  // CHECK: [[S0:%.*]] = llvm.extractvalue %arg1[0]
+
+  // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
+  // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
+  // CHECK: store [[S0]]
+  // CHECK-NEXT: nvvm.barrier0
+
+  // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
+
+  // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
+  // CHECK-NEXT: [[OUT0:%.*]] = llvm.load [[PTR]]
+
+  // CHECK: insertvalue [[OUT0]], {{.*}}[0]
+
+  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<8x4xf32, #blocked>, tensor<16x4xi32, #blocked1>) -> tensor<16x4xf32, #blocked1>
+  tt.return
+}
+
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [1, 1]}>
+#dot = #ttg.dot_op<{opIdx=0, parent=#mma, kWidth=1}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+tt.func @gather_in_shared_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: tensor<8x4xf32, #dot>) {
+  // CHECK-LABEL: gather_in_shared_dot_input
+
+  // CHECK: [[S0:%.*]] = llvm.extractvalue %arg1[0]
+  // CHECK: [[S1:%.*]] = llvm.extractvalue %arg1[1]
+  // CHECK: [[S2:%.*]] = llvm.extractvalue %arg1[2]
+  // CHECK: [[S3:%.*]] = llvm.extractvalue %arg1[3]
+
+  // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
+  // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
+  // CHECK: store [[S0]]
+  // CHECK: store [[S1]]
+  // CHECK: store [[S2]]
+  // CHECK: store [[S3]]
+  // CHECK-NEXT: nvvm.barrier0
+
+  // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
+
+  // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
+  // CHECK-NEXT: [[OUT0:%.*]] = llvm.load [[PTR]]
+
+  // CHECK: insertvalue [[OUT0]], {{.*}}[0]
+
+  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<8x4xf32, #dot>, tensor<16x4xi32, #blocked>) -> tensor<16x4xf32, #blocked>
+  tt.return
+}
+
 }
