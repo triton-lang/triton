@@ -27,7 +27,6 @@
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
@@ -254,9 +253,9 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value linearWarpId = udiv(thread, warpSize);
   Value lane = urem(thread, warpSize);
 
-  Value spatialWarpId = AMD::getWarpIdInBlock(
-      rewriter, loc, linearWarpId, warpsPerCTA, mfmaInstrNonK,
-      shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(mfmaLayout));
+  auto [warpIdInBatch, spatialWarpId] = AMD::getWarpIdsInBlock(
+      rewriter, loc, linearWarpId, warpsPerCTA, mfmaInstrNonK, shape,
+      nonKDimIdx, mfmaLayout.getWarpOrder());
 
   // number of duplicates of elements in warp
   // In case of 64x4 x 4x4 multiplication, 4x4 B operand is duplicated 16 times
@@ -271,7 +270,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
   int warpsPerBatch =
       rank == 3 ? std::min<unsigned>(shape[0], warpsPerCTA[0]) : 1;
-  Value warpIdInBatch = urem(linearWarpId, i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
   SmallVector<Value> loadedValues;

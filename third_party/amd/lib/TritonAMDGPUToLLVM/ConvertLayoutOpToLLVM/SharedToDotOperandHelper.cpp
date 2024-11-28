@@ -5,15 +5,22 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 namespace mlir::triton::AMD {
 
 // Get warpId inside block of warps.
-Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
-                       Value warpId, const ArrayRef<unsigned int> &wpt,
-                       int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx,
-                       const ArrayRef<unsigned int> &order) {
+// Returns pair<batchId, nonKId>
+std::pair<Value, Value>
+getWarpIdsInBlock(ConversionPatternRewriter &rewriter, Location loc,
+                  Value warpId, const ArrayRef<unsigned int> &wpt,
+                  int elemPerInstrNonK, ArrayRef<int64_t> tensorShape,
+                  int nonKIdx, const ArrayRef<unsigned int> &order) {
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warpId, wpt, order);
 
-  return urem(multiDimWarpId[nonKIdx],
-              i32_val(tensorSizeNonK / elemPerInstrNonK));
+  int rank = tensorShape.size();
+  auto batchId =
+      rank == 3 ? urem(multiDimWarpId[0], i32_val(tensorShape[0])) : i32_val(0);
+  auto nonKId = urem(multiDimWarpId[nonKIdx],
+                     i32_val(tensorShape[nonKIdx] / elemPerInstrNonK));
+
+  return {batchId, nonKId};
 }
 
 bool isSwizzled(SharedEncodingAttr layout) { return layout.getMaxPhase() != 1; }

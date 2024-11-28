@@ -264,9 +264,9 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
   // register and lane layout for mfma instructions.
 
-  // We use the order from fastest varying to slowest varying. So each base
-  // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
-  SmallVector<unsigned> order = triton::gpu::getOrder(*this);
+  // We use the threadOrder from fastest varying to slowest varying. So each
+  // base vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
+  SmallVector<unsigned> threadOrder = getThreadOrder();
   auto tileLayout = LinearLayout::empty();
 
   if (getMDim() == 32) {
@@ -282,14 +282,7 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     tileLayout = LinearLayout(
         {{kRegister, {{0, 1}, {0, 2}, {0, 8}, /*gap*/ {0, 16}}},
          {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, /*gap*/ {0, 4}}}},
-        {outDimNames[order[0]], outDimNames[order[1]]});
-    // For mfma.transposed layout, the element ownership among threads are
-    // "transposed" within each warp.
-    if (getIsTransposed())
-      tileLayout = LinearLayout(
-          {{kRegister, {{1, 0}, {2, 0}, {8, 0}, /*gap*/ {16, 0}}},
-           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, /*gap*/ {4, 0}}}},
-          {outDimNames[order[0]], outDimNames[order[1]]});
+        {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
   } else {
     assert(getMDim() == 16);
     // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
@@ -303,28 +296,29 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     tileLayout = LinearLayout(
         {{kRegister, {{0, 1}, {0, 2}}},
          {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
-        {outDimNames[order[0]], outDimNames[order[1]]});
-    // For mfma.transposed layout, the element ownership among threads are
-    // "transposed" within each warp.
-    if (getIsTransposed())
-      tileLayout = LinearLayout(
-          {{kRegister, {{1, 0}, {2, 0}}},
-           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0}}}},
-          {outDimNames[order[0]], outDimNames[order[1]]});
+        {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
   }
   if (hasBatchDim) {
-    assert(order[2] == 0);
+    assert(threadOrder[2] == 0);
     // Extend the base vector with one value to accomodate for the batch
     // dimension, which appears at the last.
-    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
-    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[0]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[0]);
   }
 
   // And each warp takes the same register and lane sub-layout. So mulitply with
   // an identity layout for the warp.
   LinearLayout warpLayout =
-      identityStandardND(S("warp"), getWarpsPerCTA(), order);
-  LinearLayout ctaLayout = tileLayout * warpLayout;
+      identityStandardND(S("warp"), getWarpsPerCTA(), getWarpOrder());
+
+  // reorder dim names in rep order, so combineCtaCgaWithShape generate proper
+  // extension of layout
+  auto repOrder = getRepOrder();
+  SmallVector<StringAttr> repDimNames;
+  for (auto dim : repOrder)
+    repDimNames.push_back(outDimNames[dim]);
+  LinearLayout ctaLayout = tileLayout.transposeOuts(repDimNames) *
+                           warpLayout.transposeOuts(repDimNames);
 
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
@@ -470,7 +464,9 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   // We use the order from fastest varying to slowest varying. So each base
   // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
-  SmallVector<unsigned> order = triton::gpu::getOrder(*this);
+  SmallVector<unsigned> threadOrder = getThreadOrder();
+  assert(threadOrder[0] == mIndex || threadOrder[0] == nIndex);
+  assert(threadOrder[1] == mIndex || threadOrder[1] == nIndex);
 
   // For wmma with 16x16 output, each of the 32 threads holds 8 elements.
   //
@@ -498,25 +494,34 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
           ? LinearLayout(
                 {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
                  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
-                {outDimNames[order[0]], outDimNames[order[1]]})
+                {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]})
           : LinearLayout(
                 {{kRegister, {{0, 1}, {0, 2}, {0, 4}}},
                  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}}},
-                {outDimNames[order[0]], outDimNames[order[1]]});
+                {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
 
   if (hasBatchDim) {
-    assert(order[2] == 0);
+    int batchIndex = 0;
     // Extend the base vector with one value to accomodate for the batch
     // dimension, which appears at the last.
-    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
-    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
+    tileLayout *=
+        LinearLayout::identity1D(1, kRegister, outDimNames[batchIndex]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[batchIndex]);
   }
 
   // And each warp takes the same register and lane sub-layout. So mulitply with
   // an identity layout for the warp.
+  auto warpOrder = getWarpOrder();
   LinearLayout warpLayout =
-      identityStandardND(S("warp"), getWarpsPerCTA(), order);
-  LinearLayout ctaLayout = tileLayout * warpLayout;
+      identityStandardND(S("warp"), getWarpsPerCTA(), warpOrder);
+  // reorder dim names in rep order, so combineCtaCgaWithShape generate proper
+  // extension of layout
+  auto repOrder = getRepOrder();
+  SmallVector<StringAttr> repDimNames;
+  for (auto dim : repOrder)
+    repDimNames.push_back(outDimNames[dim]);
+  LinearLayout ctaLayout = tileLayout.transposeOuts(repDimNames) *
+                           warpLayout.transposeOuts(repDimNames);
 
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
