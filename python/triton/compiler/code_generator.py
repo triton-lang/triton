@@ -1,7 +1,6 @@
 import ast
 import inspect
 import re
-import sys
 import warnings
 import os
 import textwrap
