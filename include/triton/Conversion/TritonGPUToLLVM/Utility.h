@@ -400,7 +400,7 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
 
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-      "triton_gpu.global_scratch_memory_size");
+      "ttg.global_scratch_memory_size");
   if (!allocSizeAttr) {
     return gmemBase;
   }

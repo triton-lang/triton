@@ -15,12 +15,12 @@
 //
 // %a: tensor<128x32xf16, #enc>
 // %a_tmp = tensor.subview %a[0, 0] [128, 16]
-// %a_prefetch = triton_gpu.local_load %a_tmp
+// %a_prefetch = ttg.local_load %a_tmp
 // scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch)
 // {
 //   %x = tt.dot %a_prefetch_arg, %b, %c
 //   %a_tmp_rem = tensor.subview %a_buf[0, 16] [128, 16]
-//   %a_prefetch_next = triton_gpu.local_load %a_tmp_rem
+//   %a_prefetch_next = ttg.local_load %a_tmp_rem
 //   ...
 //   scf.yield %next_a, ..., %a_prefetch_next
 // }
