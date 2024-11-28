@@ -113,8 +113,12 @@ warpsPerTileV3(DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
                const SmallVector<unsigned, 3> &instrShape) {
   SetVector<Operation *> slices;
   mlir::getForwardSlice(dotOp.getResult(), &slices);
-  if (llvm::find_if(slices, [](Operation *op) { return isa<DotOp>(op); }) !=
-      slices.end())
+  // Contains a chained dot. We prefer to assign warps to one axis
+  // to facilitate use cases like flash attention, allowing reductions within
+  // the same warp.
+  if (llvm::find_if(slices, [](Operation *op) {
+        return op->hasTrait<OpTrait::DotLike>();
+      }) != slices.end())
     return {(unsigned)numWarps, 1};
 
   // For MMAv3, the smallest indivisible unit of warp shape is (4, 1).
