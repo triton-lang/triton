@@ -155,7 +155,7 @@ memory operations properly if we want to handle any possible input shapes:
 
 We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-.. GENERATED FROM PYTHON SOURCE LINES 112-186
+.. GENERATED FROM PYTHON SOURCE LINES 112-183
 
 .. code-block:: Python
 
@@ -189,35 +189,32 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
         y = torch.empty_like(x)
 
         # pre-compile kernel to get register usage and compute thread occupancy.
-        kernel, num_programs = kernels.get(BLOCK_SIZE, (None, 0))
-        if kernel is None:
-            kernel = softmax_kernel.warmup(y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE=BLOCK_SIZE,
-                                           num_stages=num_stages, num_warps=num_warps, grid=(1, ))
-            kernel._init_handles()
-            n_regs = kernel.n_regs
-            size_smem = kernel.metadata.shared
-            if is_hip():
-                # NUM_REGS represents the number of regular purpose registers. On CDNA architectures this is half of all registers available.
-                # However, this is not always the case. In most cases all registers can be used as regular purpose registers.
-                # ISA SECTION (3.6.4 for CDNA3)
-                # VGPRs are allocated out of two pools: regular VGPRs and accumulation VGPRs. Accumulation VGPRs are used
-                # with matrix VALU instructions, and can also be loaded directly from memory. A wave may have up to 512 total
-                # VGPRs, 256 of each type. When a wave has fewer than 512 total VGPRs, the number of each type is flexible - it is
-                # not required to be equal numbers of both types.
-                if is_cdna():
-                    NUM_GPRS = NUM_REGS * 2
+        kernel = softmax_kernel.warmup(y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE=BLOCK_SIZE,
+                                       num_stages=num_stages, num_warps=num_warps, grid=(1, ))
+        kernel._init_handles()
+        n_regs = kernel.n_regs
+        size_smem = kernel.metadata.shared
+        if is_hip():
+            # NUM_REGS represents the number of regular purpose registers. On CDNA architectures this is half of all registers available.
+            # However, this is not always the case. In most cases all registers can be used as regular purpose registers.
+            # ISA SECTION (3.6.4 for CDNA3)
+            # VGPRs are allocated out of two pools: regular VGPRs and accumulation VGPRs. Accumulation VGPRs are used
+            # with matrix VALU instructions, and can also be loaded directly from memory. A wave may have up to 512 total
+            # VGPRs, 256 of each type. When a wave has fewer than 512 total VGPRs, the number of each type is flexible - it is
+            # not required to be equal numbers of both types.
+            if is_cdna():
+                NUM_GPRS = NUM_REGS * 2
 
-                # MAX_NUM_THREADS represents maximum number of resident threads per multi-processor.
-                # When we divide this number with WARP_SIZE we get maximum number of waves that can
-                # execute on a CU (multi-processor)  in parallel.
-                MAX_NUM_THREADS = properties["max_threads_per_sm"]
-                max_num_waves = MAX_NUM_THREADS // WARP_SIZE
-                occupancy = min(NUM_GPRS // WARP_SIZE // n_regs, max_num_waves) // num_warps
-            else:
-                occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
-            occupancy = min(occupancy, SIZE_SMEM // size_smem)
-            num_programs = NUM_SM * occupancy
-            kernels[BLOCK_SIZE] = (kernel, num_programs)
+            # MAX_NUM_THREADS represents maximum number of resident threads per multi-processor.
+            # When we divide this number with WARP_SIZE we get maximum number of waves that can
+            # execute on a CU (multi-processor)  in parallel.
+            MAX_NUM_THREADS = properties["max_threads_per_sm"]
+            max_num_waves = MAX_NUM_THREADS // WARP_SIZE
+            occupancy = min(NUM_GPRS // WARP_SIZE // n_regs, max_num_waves) // num_warps
+        else:
+            occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
+        occupancy = min(occupancy, SIZE_SMEM // size_smem)
+        num_programs = NUM_SM * occupancy
 
         num_programs = min(num_programs, n_rows)
 
@@ -240,17 +237,17 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 187-189
+.. GENERATED FROM PYTHON SOURCE LINES 184-186
 
 Unit Test
 ---------
 
-.. GENERATED FROM PYTHON SOURCE LINES 191-193
+.. GENERATED FROM PYTHON SOURCE LINES 188-190
 
 We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.
 
-.. GENERATED FROM PYTHON SOURCE LINES 193-200
+.. GENERATED FROM PYTHON SOURCE LINES 190-197
 
 .. code-block:: Python
 
@@ -268,11 +265,11 @@ This will allow us to verify that our padding mechanism works.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 201-202
+.. GENERATED FROM PYTHON SOURCE LINES 198-199
 
 As expected, the results are identical.
 
-.. GENERATED FROM PYTHON SOURCE LINES 204-209
+.. GENERATED FROM PYTHON SOURCE LINES 201-206
 
 Benchmark
 ---------
@@ -280,7 +277,7 @@ Benchmark
 Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
 We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
-.. GENERATED FROM PYTHON SOURCE LINES 209-240
+.. GENERATED FROM PYTHON SOURCE LINES 206-237
 
 .. code-block:: Python
 
@@ -330,109 +327,109 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
 
     softmax-performance:
               N       Triton        Torch
-    0     256.0   476.052316   691.024313
-    1     384.0   612.518414   817.513509
-    2     512.0   749.314489   936.494386
-    3     640.0   789.038860   969.684341
-    4     768.0   875.523923  1031.532715
-    5     896.0   932.841883  1074.053869
-    6    1024.0   988.150493  1113.340659
-    7    1152.0  1102.532226   616.823901
-    8    1280.0  1150.083166   670.437353
-    9    1408.0  1159.038937   722.734029
-    10   1536.0  1193.902188   784.150788
-    11   1664.0  1212.817097   814.628302
-    12   1792.0  1242.274985   856.718659
-    13   1920.0  1254.797565   905.296914
-    14   2048.0  1280.925337   961.684162
-    15   2176.0  1259.257664   979.180032
-    16   2304.0  1274.827845  1011.810312
-    17   2432.0  1303.367289  1053.782992
-    18   2560.0  1300.002779  1087.002501
-    19   2688.0  1316.037788  1104.736315
-    20   2816.0  1326.269722  1134.697942
-    21   2944.0  1329.738123  1165.880168
-    22   3072.0  1350.894140  1183.055694
-    23   3200.0  1351.181021  1190.763359
-    24   3328.0  1365.044843  1227.391699
-    25   3456.0  1371.637999  1250.191645
-    26   3584.0  1374.684877  1256.699127
-    27   3712.0  1386.937051  1271.783866
-    28   3840.0  1388.082503  1298.565385
-    29   3968.0  1389.333049  1316.498976
-    30   4096.0  1399.790969  1327.189515
-    31   4224.0  1340.089111  1159.962233
-    32   4352.0  1337.919732  1174.044070
-    33   4480.0  1358.177709  1180.950134
-    34   4608.0  1363.240723  1192.375504
-    35   4736.0  1357.872628  1197.931323
-    36   4864.0  1374.061574  1222.875197
-    37   4992.0  1370.357658  1235.097193
-    38   5120.0  1379.672694  1250.630821
-    39   5248.0  1379.495119  1259.575386
-    40   5376.0  1378.474027  1288.643702
-    41   5504.0  1377.674935  1299.259985
-    42   5632.0  1387.365292  1313.721750
-    43   5760.0  1396.271269  1323.287326
-    44   5888.0  1393.728464  1345.655795
-    45   6016.0  1402.660452  1357.856041
-    46   6144.0  1412.945716  1374.822243
-    47   6272.0  1416.331446  1374.799843
-    48   6400.0  1421.199029  1388.942505
-    49   6528.0  1415.684675  1392.783834
-    50   6656.0  1421.889642  1404.966312
-    51   6784.0  1411.271190  1413.407868
-    52   6912.0  1423.950725  1425.784668
-    53   7040.0  1418.503040  1432.860257
-    54   7168.0  1429.417782  1435.080392
-    55   7296.0  1429.894085  1444.575360
-    56   7424.0  1430.793394  1449.134055
-    57   7552.0  1429.936494  1455.665348
-    58   7680.0  1438.008540  1463.349084
-    59   7808.0  1432.987061  1463.770231
-    60   7936.0  1439.928770  1471.108277
-    61   8064.0  1436.831643  1476.853823
-    62   8192.0  1441.413295  1487.377798
-    63   8320.0  1390.894813  1403.209295
-    64   8448.0  1382.428027  1404.993207
-    65   8576.0  1395.152411  1393.940419
-    66   8704.0  1390.279657  1398.243122
-    67   8832.0  1385.066086  1404.499019
-    68   8960.0  1395.994240  1414.517287
-    69   9088.0  1410.395414  1419.454642
-    70   9216.0  1405.241941  1423.928547
-    71   9344.0  1400.767864  1424.075288
-    72   9472.0  1402.989688  1433.762705
-    73   9600.0  1397.835588  1436.511649
-    74   9728.0  1401.655759  1442.080447
-    75   9856.0  1417.752463  1444.045962
-    76   9984.0  1404.029513  1450.727360
-    77  10112.0  1411.655237  1457.991361
-    78  10240.0  1419.371500  1467.412220
-    79  10368.0  1412.606323  1464.072257
-    80  10496.0  1416.324152  1467.348457
-    81  10624.0  1408.802102  1469.315563
-    82  10752.0  1404.998262  1472.988177
-    83  10880.0  1400.362199  1482.089087
-    84  11008.0  1417.302262  1478.432655
-    85  11136.0  1424.367755  1483.989150
-    86  11264.0  1429.224478  1488.062896
-    87  11392.0  1415.552802  1489.373779
-    88  11520.0  1421.827603  1494.620005
-    89  11648.0  1429.571096  1496.780721
-    90  11776.0  1432.332499  1503.369609
-    91  11904.0  1444.701943  1507.597536
-    92  12032.0  1425.150759  1506.591464
-    93  12160.0  1417.365971  1513.709640
-    94  12288.0  1431.802933  1391.020826
-    95  12416.0  1448.774896  1389.051716
-    96  12544.0  1441.274694  1394.562977
-    97  12672.0  1446.925045  1393.786591
+    0     256.0   475.804010   706.148867
+    1     384.0   609.648852   812.111130
+    2     512.0   751.012682   930.626155
+    3     640.0   822.738650   957.796962
+    4     768.0   884.798044  1017.033964
+    5     896.0   953.175631  1074.075459
+    6    1024.0  1007.261725  1111.450083
+    7    1152.0  1106.541577   609.291552
+    8    1280.0  1147.934393   668.482560
+    9    1408.0  1162.002697   724.022265
+    10   1536.0  1191.002065   778.654963
+    11   1664.0  1216.342959   813.050831
+    12   1792.0  1230.877684   854.777074
+    13   1920.0  1246.801224   908.332576
+    14   2048.0  1278.441284   958.973438
+    15   2176.0  1264.734667   975.208210
+    16   2304.0  1273.886366  1012.314710
+    17   2432.0  1293.304726  1053.773752
+    18   2560.0  1307.185488  1088.172740
+    19   2688.0  1310.526361  1099.614103
+    20   2816.0  1319.895368  1127.197619
+    21   2944.0  1323.352906  1167.722866
+    22   3072.0  1347.346929  1181.769022
+    23   3200.0  1348.763813  1193.698648
+    24   3328.0  1361.945489  1224.745949
+    25   3456.0  1376.384566  1246.426384
+    26   3584.0  1376.742366  1260.777426
+    27   3712.0  1379.317660  1268.720963
+    28   3840.0  1382.916507  1302.196374
+    29   3968.0  1392.966777  1312.387455
+    30   4096.0  1397.642813  1323.993886
+    31   4224.0  1337.456893  1157.146581
+    32   4352.0  1338.474264  1176.769362
+    33   4480.0  1353.860362  1187.910892
+    34   4608.0  1365.764313  1196.226600
+    35   4736.0  1363.052737  1195.581087
+    36   4864.0  1377.206895  1219.794973
+    37   4992.0  1370.176865  1238.604675
+    38   5120.0  1377.137421  1251.811209
+    39   5248.0  1376.152090  1258.282385
+    40   5376.0  1374.090007  1286.527664
+    41   5504.0  1378.522724  1295.030117
+    42   5632.0  1385.843443  1315.646514
+    43   5760.0  1396.688201  1327.697959
+    44   5888.0  1389.005438  1341.240362
+    45   6016.0  1397.640171  1355.017720
+    46   6144.0  1407.599513  1374.442665
+    47   6272.0  1416.953489  1373.424667
+    48   6400.0  1417.804109  1386.704664
+    49   6528.0  1414.143780  1396.701211
+    50   6656.0  1419.426084  1406.104792
+    51   6784.0  1414.008451  1414.688959
+    52   6912.0  1430.362935  1421.723097
+    53   7040.0  1419.761919  1433.078714
+    54   7168.0  1428.879132  1435.434292
+    55   7296.0  1429.889752  1441.156347
+    56   7424.0  1427.621011  1447.341343
+    57   7552.0  1425.390858  1452.210149
+    58   7680.0  1433.164196  1458.530659
+    59   7808.0  1432.177737  1462.453022
+    60   7936.0  1438.994941  1466.428060
+    61   8064.0  1440.909069  1470.778023
+    62   8192.0  1437.410933  1483.551302
+    63   8320.0  1389.480934  1402.454426
+    64   8448.0  1386.231906  1407.973486
+    65   8576.0  1395.105864  1396.561951
+    66   8704.0  1393.567296  1402.431416
+    67   8832.0  1388.358398  1403.281775
+    68   8960.0  1396.996596  1411.140613
+    69   9088.0  1409.944856  1418.405785
+    70   9216.0  1403.494611  1424.746401
+    71   9344.0  1397.233742  1424.576350
+    72   9472.0  1400.425838  1431.720714
+    73   9600.0  1395.064094  1428.761926
+    74   9728.0  1407.161310  1442.545957
+    75   9856.0  1413.584374  1444.761464
+    76   9984.0  1402.004040  1450.505861
+    77  10112.0  1408.151060  1456.842047
+    78  10240.0  1415.229229  1463.674006
+    79  10368.0  1409.761732  1461.821883
+    80  10496.0  1420.674126  1467.274765
+    81  10624.0  1412.601082  1465.000318
+    82  10752.0  1404.541555  1473.120974
+    83  10880.0  1400.463186  1477.498984
+    84  11008.0  1417.763795  1476.511415
+    85  11136.0  1423.263907  1486.068262
+    86  11264.0  1427.357730  1485.712271
+    87  11392.0  1411.550854  1490.840511
+    88  11520.0  1419.658240  1493.300735
+    89  11648.0  1422.656560  1499.613998
+    90  11776.0  1429.496971  1499.380454
+    91  11904.0  1445.375196  1507.894712
+    92  12032.0  1422.494487  1508.844861
+    93  12160.0  1415.932631  1512.476048
+    94  12288.0  1434.708776  1393.420934
+    95  12416.0  1450.019355  1389.745178
+    96  12544.0  1438.522567  1392.525869
+    97  12672.0  1450.893481  1393.008046
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 241-245
+.. GENERATED FROM PYTHON SOURCE LINES 238-242
 
 In the above plot, we can see that:
  - Triton is 4x faster than the Torch JIT. This confirms our suspicions that the Torch JIT does not do any fusion here.
@@ -442,7 +439,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 23.380 seconds)
+   **Total running time of the script:** (0 minutes 23.210 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:

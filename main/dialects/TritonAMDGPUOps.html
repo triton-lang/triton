@@ -61,8 +61,8 @@
 <p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
 <ul class="current">
 <li class="toctree-l1 current"><a class="reference internal" href="dialects.html">Triton MLIR Dialects and Ops</a><ul class="current">
-<li class="toctree-l2"><a class="reference internal" href="TritonNvidiaGPUDialect.html">‘triton_nvidia_gpu’ Dialect</a></li>
-<li class="toctree-l2"><a class="reference internal" href="TritonGPUDialect.html">‘triton_gpu’ Dialect</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TritonNvidiaGPUDialect.html">‘ttng’ Dialect</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TritonGPUDialect.html">‘ttg’ Dialect</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ProtonDialect.html">‘proton’ Dialect</a></li>
 <li class="toctree-l2"><a class="reference internal" href="NVGPUDialect.html">‘nvgpu’ Dialect</a></li>
 <li class="toctree-l2"><a class="reference internal" href="TritonDialect.html">‘tt’ Dialect</a></li>
@@ -245,11 +245,11 @@ registers.</p>
 <li><p>offsets: offsets into the base tensor at which to create the view</p></li>
 </ul>
 <p>Example 1:</p>
-<div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>#blocked = #triton_gpu.blocked&lt;{sizePerThread = [1, 8],
+<div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>#blocked = #ttg.blocked&lt;{sizePerThread = [1, 8],
     threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [0, 1]}&gt;
-#blocked1 = #triton_gpu.blocked&lt;{sizePerThread = [1, 8],
+#blocked1 = #ttg.blocked&lt;{sizePerThread = [1, 8],
     threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [0, 1]}&gt;
-%1 = triton_gpu.convert_layout %0 : tensor&lt;128x128xf16, #blocked&gt;
+%1 = ttg.convert_layout %0 : tensor&lt;128x128xf16, #blocked&gt;
     -&gt; tensor&lt;128x128xf16, #blocked1&gt;
 // create a slice of base tensor %1 with static offsets
 %2 = amdgpu.extract_slice %0 [0, 0] :
