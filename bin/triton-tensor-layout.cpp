@@ -85,6 +85,31 @@ LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
   // Dispatch to the corresponding dialect helper function to print the layout.
   if (dialectName == "triton_gpu") {
     os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
+
+    auto ll =
+        *cast<triton::gpu::DistributedEncodingTrait>(tensorType.getEncoding())
+             .toLinearLayout(tensorType.getShape());
+
+    llvm::errs() << ll.toString() << "\n";
+
+    MLIRContext *ctx = tensorType.getContext();
+    auto kWarp = StringAttr::get(ctx, "warp");
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto kLane = StringAttr::get(ctx, "lane");
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto kGatherDim = StringAttr::get(ctx, "dim0");
+
+    auto threadLayout = ll.sublayout({kRegister}, kGatherDim);
+
+    llvm::errs() << threadLayout.toString() << "\n";
+    llvm::errs() << threadLayout.getInDimSize(kRegister) << "\n";
+    for (unsigned i = 0; i < threadLayout.getInDimSize(kRegister); ++i) {
+      auto k = threadLayout.apply({ {kRegister, i}});
+      for (auto [j, e] : llvm::enumerate(k)) {
+        llvm::errs() << i << " : " << j << " : " << e.first << " : " << e.second << "\n";
+      }
+    }
+
     return success();
   }
 

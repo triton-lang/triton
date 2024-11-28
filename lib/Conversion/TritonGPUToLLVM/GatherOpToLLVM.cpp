@@ -1,8 +1,10 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 
 namespace {
 class GatherOpConversion : public ConvertOpToLLVMPattern<GatherOp> {
@@ -124,7 +126,64 @@ void GatherOpConversion::emitGatherInShared(
 
 void GatherOpConversion::emitWarpLocalGather(
     GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
+  MLIRContext *ctx = op.getContext();
   Location loc = op.getLoc();
+  RankedTensorType srcType = op.getSrc().getType();
+  RankedTensorType idxType = op.getIndices().getType();
+
+  llvm::errs() << getLayoutStr(srcType, false) << "\n";
+  llvm::errs() << getLayoutStr(idxType, false) << "\n";
+
+  StringAttr kLane = str_attr("lane");
+  StringAttr kRegister = str_attr("register");
+  StringAttr kGatherDim = rewriter.getStringAttr("dim" + Twine(op.getAxis()));
+
+  SmallVector<Value> srcValues =
+      unpackLLElements(loc, adaptor.getSrc(), rewriter);
+  SmallVector<Value> idxValues =
+      unpackLLElements(loc, adaptor.getIndices(), rewriter);
+
+  // For a warp-local gather, a couple things are true:
+  // - Each warp owns 2^N columns of the source tensor along the gather axis
+  //   and the same columns of the index tensor, which may be shorter or longer
+  //   than those in the source tensor.
+  // - Columns may be owned by multiple warps if the layout is oversubscribed.
+  // - In a particular column, each thread owns at least one element of the
+  //   source tensor and at least one element of the index tensor.
+
+  // Organize the source and index values into columns.
+  SmallVector<StringAttr> otherDims;
+  for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
+    if (dim != op.getAxis()) {
+      otherDims.push_back(str_attr("dim" + Twine(dim)));
+    }
+  }
+
+  LinearLayout srcLayout =
+      *toLinearLayout(srcType.getShape(), srcType.getEncoding());
+  LinearLayout idxLayout =
+      *toLinearLayout(idxType.getShape(), idxType.getEncoding());
+
+  LinearLayout srcColLayout = srcLayout.sublayout({kRegister}, otherDims);
+  LinearLayout idxColLayout = idxLayout.sublayout({kRegister}, otherDims);
+  LinearLayout srcThreadLayout = srcLayout.sublayout({kRegister}, kGatherDim);
+  LinearLayout idxThreadLayout = idxLayout.sublayout({kRegister}, kGatherDim);
+
+  // Sanity check the layouts.
+  assert(srcColLayout.getInDimSize(kRegister) == srcValues.size());
+  assert(idxColLayout.getInDimSize(kRegister) == idxValues.size());
+  assert(srcThreadLayout.getInDimSize(kRegister) == srcValues.size());
+  assert(idxThreadLayout.getInDimSize(kRegister) == idxValues.size());
+
+  SmallVector<SmallVector<Value>> srcValuesCol, idxValuesCol;
+  for (auto [i, srcVal] : llvm::enumerate(srcValues)) {
+    SmallVector<std::pair<StringAttr, int32_t>> colIdx =
+        srcColLayout.apply({{kRegister, i}});
+  }
+
+  SmallVector<Value> tmpResults(idxValues.size(), f32_val(0.0));
+  rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), tmpResults,
+                                        rewriter, op.getType()));
 }
 
 } // namespace
