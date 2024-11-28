@@ -1910,3 +1910,72 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+tt.func @gather_in_shared(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4xf32, #blocked>) {
+  // CHECK-LABEL: gather_in_shared
+
+  // CHECK: [[S0:%.*]] = llvm.extractvalue %arg1[0]
+
+  // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
+  // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
+  // CHECK: store [[S0]]
+  // CHECK-NEXT: nvvm.barrier0
+
+  // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
+
+  // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
+  // CHECK-NEXT: [[OUT0:%.*]] = llvm.load [[PTR]]
+
+  // CHECK: insertvalue [[OUT0]], {{.*}}[0]
+
+  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<8x4xf32, #blocked>, tensor<16x4xi32, #blocked1>) -> tensor<16x4xf32, #blocked1>
+  tt.return
+}
+
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [1, 1]}>
+#dot = #ttg.dot_op<{opIdx=0, parent=#mma, kWidth=1}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+tt.func @gather_in_shared_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: tensor<8x4xf32, #dot>) {
+  // CHECK-LABEL: gather_in_shared_dot_input
+
+  // CHECK: [[S0:%.*]] = llvm.extractvalue %arg1[0]
+  // CHECK: [[S1:%.*]] = llvm.extractvalue %arg1[1]
+  // CHECK: [[S2:%.*]] = llvm.extractvalue %arg1[2]
+  // CHECK: [[S3:%.*]] = llvm.extractvalue %arg1[3]
+
+  // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
+  // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
+  // CHECK: store [[S0]]
+  // CHECK: store [[S1]]
+  // CHECK: store [[S2]]
+  // CHECK: store [[S3]]
+  // CHECK-NEXT: nvvm.barrier0
+
+  // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
+
+  // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
+  // CHECK-NEXT: [[OUT0:%.*]] = llvm.load [[PTR]]
+
+  // CHECK: insertvalue [[OUT0]], {{.*}}[0]
+
+  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<8x4xf32, #dot>, tensor<16x4xi32, #blocked>) -> tensor<16x4xf32, #blocked>
+  tt.return
+}
+
+}
