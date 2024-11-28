@@ -41,9 +41,7 @@ struct DecomposeUnsupportedAMDConversions
 
     triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod, isShortcut);
 
-    /* -------------------------------- */
     // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`
-    /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
       auto srcType = cvtOp.getSrc().getType();
