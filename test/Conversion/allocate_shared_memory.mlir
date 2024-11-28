@@ -1,8 +1,8 @@
 // RUN: triton-opt %s --allocate-shared-memory | FileCheck %s
 
 // CHECK-LABEL: module
-// CHECK-SAME: triton_gpu.shared = 131072 : i32
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+// CHECK-SAME: ttg.shared = 131072 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: @gather_op
 // TODO(jeff): Optimize the lowering to reduce shared memory usage.
