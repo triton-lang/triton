@@ -99,12 +99,10 @@ private:
     rewriter.setInsertionPointToEnd(currentBlock);
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, afterStore);
     rewriter.setInsertionPointToStart(trueBlock);
-    /*
-                  | vialatile | non-tmp | gcn instr gfx94
-    LLVM::StoreOp | 0         | 0       | (cg) global store
-                  | 0         | 1       | (cs) global store nt
-                  | 1         | 0/1     | (wt) global store sc0 sc1
-    */
+    //               | vialatile | non-tmp | gcn instr gfx94
+    // LLVM::StoreOp | 0         | 0       | (cg) global store
+    //               | 0         | 1       | (cs) global store nt
+    //               | 1         | 0/1     | (wt) global store sc0 sc1
     bool vialatileFlag = isPredicatedStoreWT(callOp);
     bool nonTmpFlag = isPredicatedStoreCS(callOp);
     auto storeOp = rewriter.create<LLVM::StoreOp>(
@@ -136,12 +134,10 @@ private:
     rewriter.setInsertionPointToEnd(currentBlock);
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
     rewriter.setInsertionPointToStart(trueBlock);
-    /*
-                 | vialatile | non-tmp | gcn instr gfx94
-    LLVM::LoadOp | 0         | 0       | (ca) global load
-                 | 0/1       | 1       | (cg) global load nt
-                 | 1         | 0       | (cv) flat load sc0 sc1
-    */
+    //              | vialatile | non-tmp | gcn instr gfx94
+    // LLVM::LoadOp | 0         | 0       | (ca) global load
+    //              | 0/1       | 1       | (cg) global load nt
+    //              | 1         | 0       | (cv) flat load sc0 sc1
     bool vialatileFlag = isPredicatedLoadCV(callOp);
     bool nonTmpFlag = isPredicatedLoadCG(callOp);
     auto loadOp = rewriter.create<LLVM::LoadOp>(

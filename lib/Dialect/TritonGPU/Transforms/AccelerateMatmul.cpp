@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -394,6 +395,10 @@ public:
     auto aType = scaledDotOp.getLhsType();
     auto bType = scaledDotOp.getRhsType();
 
+    auto rank = oldRetType.getShape().size();
+    if (rank != 2)
+      return rewriter.notifyMatchFailure(scaledDotOp, "NYI: rank==3");
+
     assert((aType == ScaleDotElemType::E4M3 ||
             aType == ScaleDotElemType::E5M2 ||
             aType == ScaleDotElemType::E2M1) &&
@@ -430,71 +435,95 @@ public:
     // `bases[warps] = {(0, 0), (0, 0), ...}`
 
     auto newAEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaEnc, aKWidth);
-    auto rank = mmaEnc.getInstrShape().size();
+
     // MMAv3 uses the first dimension for the M dimension, while MMAv2 uses the
     // penultimate (ugh)
-    auto instrShapeM = mmaEnc.getInstrShape()[versionMajor == 3 ? 0 : rank - 2];
+    auto instrShapeM =
+        mmaEnc.getInstrShape()[versionMajor == 3
+                                   ? 0
+                                   : mmaEnc.getInstrShape().size() - 2];
     auto warpSize = getWarpSize(newAEncoding);
     assert(instrShapeM <= warpSize);
     // Necessary choice to leave all the scales of the tile in that given warp
     auto threadsPerWarp =
         SmallVector<unsigned>{instrShapeM, warpSize / instrShapeM};
 
-    assert(versionMajor == 2 &&
-           "NYI: MMAv3. Need to rethink the scale layout otherwise");
-
-    // Copy the bases
-
+    // This has to align with the order in UpcastMXFPOp
+    auto order = getMatrixOrder(rank, /*rowMajor=*/true);
     Attribute newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
-        ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(),
-        newAEncoding.getCTAOrder(), mmaEnc.getCTALayout());
+        ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(), order,
+        mmaEnc.getCTALayout());
 
+    // Lezcano: In the future we could just use the LLs unconditionally
+    // Not doing it now as they are not as performant as Blocked encoding at
+    // times E.g., we bail on them in the backwardMaterialization pass
     auto dotBroadcastsWarpLevel = mmaEnc.getWarpsPerCTA()[1] != 1;
     if (dotBroadcastsWarpLevel) {
-      // If mma has warpsPerCTA == {2, 2}, then newAEncoding has
-      // warpsPerCTA == {2, 1}. In this case, we need to broadcast the warps
-      // on the second dimension as per
-      // A: 0 1 | 0 1
-      //    - - | - -
-      //    2 3 | 2 3
-      // This broadcasting is not representable by standard blocked encodings,
-      // so we need to use linear layouts.
-      // This broadcasting is implemented in ampereDotToLinearLayout
-      auto blocked = cast<BlockedEncodingAttr>(newScaleEncoding);
-      auto blockedLL = *blocked.toLinearLayout(a.getType().getShape());
-      LinearLayout::BasesT scaleBases = blockedLL.getBases();
-      auto nBases = llvm::Log2_32(mmaEnc.getWarpsPerCTA()[1]);
-      auto &warps = scaleBases[StringAttr::get(ctx, "warp")];
-      // Prepend the vector of zeros to the warpBases
-      warps.insert(warps.begin(), nBases, std::vector<int32_t>(rank, 0));
-      auto outDims = llvm::to_vector(blockedLL.getOutDimNames());
-      auto newLL = LinearLayout(scaleBases, outDims);
-      auto llEncoding = LinearEncodingAttr::get(ctx, std::move(newLL));
-      // Adjust the shape of the layout to match the scale operand
-      auto scaleShape = scale.getType().getShape();
-      newScaleEncoding =
-          LinearEncodingAttr::get(ctx, *llEncoding.toLinearLayout(scaleShape));
+      auto kRegister = StringAttr::get(ctx, "register");
+      auto regs = identityStandardND(kRegister, {1, 1}, order);
+      auto lanes =
+          identityStandardND(StringAttr::get(ctx, "lane"), {16, 2}, order);
+
+      // Extract warp layout from dotAEncoding
+      // In the future we'll have some nice division utils, but until then...
+      auto dotLL = *newAEncoding.toLinearLayout(a.getType().getShape());
+      LinearLayout::BasesT scaleBases = dotLL.getBases();
+      auto kWarp = StringAttr::get(ctx, "warp");
+      auto &warpBases = scaleBases[kWarp];
+      // The tile shape was [16, 2 * 4 * kWidth] with broadcasting in K
+      // We divide the M dimension by 16
+      auto div = 16;
+      for (auto &warpBase : warpBases) {
+        if (warpBase[rank - 2] != 0) {
+          assert(warpBase[rank - 2] % div == 0);
+          warpBase[rank - 2] /= div;
+        }
+      }
+
+      LinearLayout::BasesT warpBlockBases;
+      auto standardOutDims = llvm::to_vector(dotLL.getOutDimNames());
+      warpBlockBases[kWarp] = warpBases;
+      auto kBlock = StringAttr::get(ctx, "block");
+      assert(scaleBases[kBlock].empty() && "NYI: CGAs");
+      warpBlockBases[kBlock] = {};
+      auto warpBlock = LinearLayout(std::move(warpBlockBases), standardOutDims);
+
+      auto newLL =
+          (regs * lanes) *
+          warpBlock.transposeOuts(llvm::to_vector(lanes.getOutDimNames()));
+      auto shape = scale.getType().getShape();
+
+      // Broadcast to the correct shape Equivalent to
+      // newLL = ensureLayoutNotSmallerThan(newLL.transposeOuts(getRepOrder),
+      // shape);
+      for (auto d : newAEncoding.getRepOrder()) {
+        auto outDim = standardOutDims[d];
+        auto dimSize = newLL.getOutDimSize(outDim);
+        newLL *=
+            LinearLayout::identity1D(shape[d] / dimSize, kRegister, outDim);
+      }
+      newLL = newLL.transposeOuts(standardOutDims);
+      newScaleEncoding = LinearEncodingAttr::get(ctx, std::move(newLL));
     }
 
     a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding);
 
-    // Upcast B operand
-    assert(bType != ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
-    auto newBEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaEnc, bKWidth);
-    b = createArg(rewriter, b, 1, bType, newBEncoding,
-                  /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt);
     Operation *newDot = nullptr;
     if (versionMajor == 2) {
+      // Upcast B operand
+      assert(bType != ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
+      auto newBEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaEnc, bKWidth);
+      b = createArg(rewriter, b, 1, bType, newBEncoding,
+                    /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt);
       newDot = rewriter.create<DotOp>(scaledDotOp.getLoc(), newRetType, a, b,
                                       newAcc);
     } else {
       assert(versionMajor == 3);
       // At the time of this writing, this is always true
       auto allowTranspose = b.getType().getElementType().isBF16();
-      b = cast<TypedValue<RankedTensorType>>(
-          getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose));
+      auto bShmem = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
       newDot = rewriter.create<triton::nvidia_gpu::WarpGroupDotOp>(
-          scaledDotOp.getLoc(), newRetType, a, b, newAcc, nullptr);
+          scaledDotOp.getLoc(), newRetType, a, bShmem, newAcc, nullptr);
     }
 
     // convert dot instruction
@@ -578,11 +607,11 @@ private:
     auto dotOp = rewriter.create<DotOp>(
         scaledDotOp.getLoc(), scaledDotOp.getType(), a, b, scaledDotOp.getC());
 
-    // Waiting for https://github.com/triton-lang/triton/pull/5003 to land
-    // cf.
-    // https://github.com/triton-lang/triton/pull/5003#issuecomment-2445091746
-    // int versionMajor = getMMAVersionSafe(computeCapability, dotOp);
     int versionMajor = 2;
+    // We just support bf16 for MMAv3 on the rhs
+    if (bType == ScaleDotElemType::BF16) {
+      versionMajor = getMMAVersionSafe(computeCapability, dotOp);
+    }
     int versionMinor = computeCapability == 75 ? 1 : 0;
 
     RankedTensorType oldRetType = dotOp.getType();
