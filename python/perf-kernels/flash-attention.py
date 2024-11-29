@@ -76,7 +76,6 @@ class MetaData():
 
     def need_causal(self):
         self.causal = True
-    
 
     def need_dropout(self, dropout_p, return_encoded_softmax):
         self.dropout_p = dropout_p
@@ -618,16 +617,17 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
 
 # Persistent kernel version of the flash attention forward
 
+
 def get_cdna_autotune_configs_persistent():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 3}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 3},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
         # Fall-back config.
         # triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
         #               num_warps=4),
@@ -636,21 +636,21 @@ def get_cdna_autotune_configs_persistent():
 
 def get_rdna_autotune_configs_persistent():
     return [
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
         # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -672,49 +672,50 @@ autotune_configs_persistent, autotune_keys_persistent = get_autotune_configs_per
     use_cuda_graph=True,
 )
 @triton.jit
-def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz,
-             stride_kh, stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh,
-             stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, cu_seqlens_q,
-             cu_seqlens_k, dropout_p, philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, NUM_CU, atomic_counter, USE_DYNAMIC: tl.constexpr,
-             ZQ: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr,
-             MAX_SEQLENS_K: tl.constexpr, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
-             BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
-             ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, GRID_CU_MULTIP: tl.constexpr):
-    
+def attn_fwd_persistent(
+        Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz, stride_kh,
+        stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh, stride_om, stride_on,
+        stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, cu_seqlens_q, cu_seqlens_k, dropout_p,
+        philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, NUM_CU, atomic_counter,
+        USE_DYNAMIC: tl.constexpr, ZQ: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,
+        ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr, MAX_SEQLENS_K: tl.constexpr,
+        VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
+        BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
+        RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, GRID_CU_MULTIP: tl.constexpr):
     """
     This implements the persistent kernel optimization to flash attention. With persistent kernels, we launch NUM_WG = NUM_CU * GRID_CU_MULTIP number of workgroups,
     and each workgroup loops over num_tiles_total // NUM_WG number of tiles. This is meant to amortize the workgroup launch overhead that we would otherwise incure when launching
     a workgroup per each Q tile as is done with the standard flash attention (flash-attention.py).
-    
-    If USE_DYNAMIC=True the tiles are scheduled dynamically to the workgroups with atomic add calls. This effectively balances the workloads for the workgroups and is beneficial when IS_CAUSAL=True.
-    Atomic add calls however add overhead, which leads to worse performance if the workloads are already balanced (as is with IS_CAUSAL=FALSE). Then we can just use fixed scheduling. 
-    """
-    NUM_WG = NUM_CU * GRID_CU_MULTIP # number of workgroups launched
 
-    num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) #the number of work units (tiles) of a single head
-    num_tiles_per_sample = num_tiles_per_head * HQ # times the number of heads
-    num_tiles_total = num_tiles_per_sample * ZQ # times the number of samples
+    If USE_DYNAMIC=True the tiles are scheduled dynamically to the workgroups with atomic add calls. This effectively balances the workloads for the workgroups and is beneficial when IS_CAUSAL=True.
+    Atomic add calls however add overhead, which leads to worse performance if the workloads are already balanced (as is with IS_CAUSAL=FALSE). Then we can just use fixed scheduling.
+    """
+    NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
+
+    num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M)  #the number of work units (tiles) of a single head
+    num_tiles_per_sample = num_tiles_per_head * HQ  # times the number of heads
+    num_tiles_total = num_tiles_per_sample * ZQ  # times the number of samples
 
     # atomic counter is initialized as 0
     if USE_DYNAMIC:
-        tile_id = atomic_counter.atomic_add(1) # retuns the value BEFORE the atomic operation
+        tile_id = atomic_counter.atomic_add(1)  # retuns the value BEFORE the atomic operation
     else:
         tile_id = tl.program_id(0)
 
     while tile_id < num_tiles_total:
         # tile id basically tells us the Q block we are handling
-        off_z = tile_id // num_tiles_per_sample # at which batch sample are we
-        off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head # at which head are we inside the sample
+        off_z = tile_id // num_tiles_per_sample  # at which batch sample are we
+        off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head  # at which head are we inside the sample
 
-        start_m = tile_id % num_tiles_per_sample % num_tiles_per_head # at which tile are we inside the head
+        start_m = tile_id % num_tiles_per_sample % num_tiles_per_head  # at which tile are we inside the head
         # flip the traversal order of Q blocks inside head
-        # start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1 
+        # start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1
 
         # Do the specified Q block computation (following is the same as in normal flash attention)
-        offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M) 
+        offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
         offs_n = tl.arange(0, BLOCK_N)
         offs_d = tl.arange(0, BLOCK_DMODEL)
-        
+
         # We need this because Triton does not allow return or continue statements inside loop
         continue_condition = True
 
@@ -757,16 +758,16 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
                 n_blocks = min(n_blocks, n_blocks_seqlen)
                 # If we have no blocks after adjusting for seqlen deltas, this WG is part of
                 # the blocks that are all 0. We exit early.
-            
+
             # return statement not allowed inside a loop in triton, so unfold the if (IS_CAUSAL) branch
             if (IS_CAUSAL) and n_blocks <= 0:
                 o_offset = Out + off_z * stride_oz + off_h_q * stride_oh + cu_seqlens_q_start * stride_om
                 o_ptrs = o_offset + offs_m[:, None] * stride_om + offs_d[None, :] * stride_on
                 acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=Out.type.element_ty)
-                
+
                 # We still need to write 0s to the result
                 # needs the broadcast, otherwise get:
-                # AssertionError('Mismatched type for o_ptrs_mask between then block (<[128, 1], int1>) and else block (<[128, 64], int1>)') 
+                # AssertionError('Mismatched type for o_ptrs_mask between then block (<[128, 1], int1>) and else block (<[128, 64], int1>)')
                 o_ptrs_mask = (offs_m[:, None] < seqlen_q).broadcast_to([BLOCK_M, BLOCK_DMODEL])
                 tl.store(o_ptrs, acc, mask=o_ptrs_mask)
                 # work around would be
@@ -864,16 +865,16 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
                 # value because there is no masking. Similarly we do not need padding.
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
-                    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn,
-                                                    start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset,
-                                                    encoded_sm_ptrs,
+                    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk,
+                                                    stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed,
+                                                    batch_philox_offset, encoded_sm_ptrs,
                                                     # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
                                                     block_min, block_max, 0, 0, 0, alibi_slope,
                                                     # IS_CAUSAL, ....
                                                     False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                                     # _, MASK_STEPS, ...
-                                                    PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
-                                                    ACTUAL_BLOCK_DMODEL)
+                                                    PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX,
+                                                    PADDED_HEAD, ACTUAL_BLOCK_DMODEL)
                     block_min = block_max
                     block_max = n_blocks * BLOCK_N
 
@@ -890,14 +891,14 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
                         bias_ptrs += n_full_blocks * BLOCK_N * stride_bn
                     if RETURN_ENCODED_SOFTMAX:
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
-                    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn,
-                                                    start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset,
-                                                    encoded_sm_ptrs, block_min, block_max, offs_n_causal, masked_blocks,
-                                                    n_extra_tokens, alibi_slope, IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m,
-                                                    offs_n,
+                    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk,
+                                                    stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed,
+                                                    batch_philox_offset, encoded_sm_ptrs, block_min, block_max,
+                                                    offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope,
+                                                    IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                                     # _, MASK_STEPS, ...
-                                                    PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
-                                                    ACTUAL_BLOCK_DMODEL)
+                                                    PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX,
+                                                    PADDED_HEAD, ACTUAL_BLOCK_DMODEL)
                 # epilogue
                 # This helps the compiler do Newton Raphson on l_i vs on acc which is much larger.
                 l_recip = 1 / l_i[:, None]
@@ -941,7 +942,6 @@ def attn_fwd_persistent(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz
                 if PADDED_HEAD:
                     o_ptrs_mask = o_ptrs_mask & (offs_d[None, :] < ACTUAL_BLOCK_DMODEL)
                 tl.store(o_ptrs, acc.to(Out.dtype.element_ty), mask=o_ptrs_mask)
-
 
         if USE_DYNAMIC:
             tile_id = atomic_counter.atomic_add(1)
@@ -1285,8 +1285,6 @@ class _attention(torch.autograd.Function):
         # kernel is padded - there is no padding in memory for any dims.
         padded_d_model = max(padded_d_model, 16)
 
-        
-
         # encoded_softmax is used to validate dropout behavior vs the PyTorch SDPA math backend reference.  We zero this out
         # to give a consistent starting point and then populate it with the output of softmax with the sign bit set according
         # to the dropout mask. The resulting return allows this mask to be fed into the reference implementation for testing
@@ -1315,32 +1313,34 @@ class _attention(torch.autograd.Function):
             alibi_strides = (0, 0)
 
         if metadata.persistent is not None:
-            NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count         
-            grid = lambda META: (min(NUM_CU*META['GRID_CU_MULTIP'], triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M'])*nheads_q*batch), )
+            NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count
+            grid = lambda META: (min(NUM_CU * META['GRID_CU_MULTIP'],
+                                     triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']) * nheads_q * batch), )
             atomic_counter = torch.zeros([1], dtype=torch.int32, device='cuda')
-            
-            attn_fwd_persistent[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
-                        *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
-                        dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
-                        encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, 
-                        NUM_CU=NUM_CU, atomic_counter=atomic_counter, USE_DYNAMIC=True if metadata.persistent=="dynamic" else False,
-                        ZQ=batch, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
-                        MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
-                        BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
-                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
-                        > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
 
-        else: # baseline
+            attn_fwd_persistent[grid](
+                q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
+                *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
+                dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
+                encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, NUM_CU=NUM_CU,
+                atomic_counter=atomic_counter, USE_DYNAMIC=True if metadata.persistent == "dynamic" else False,
+                ZQ=batch, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
+                MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
+                BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
+                USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p > 0.0,
+                RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
+
+        else:  # baseline
             grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
-            attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
-                        *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
-                        dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
-                        encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k,
-                        ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
-                        MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
-                        BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
-                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
-                        > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
+            attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides,
+                           *o_strides, *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
+                           dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
+                           encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, HQ=nheads_q,
+                           HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
+                           MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
+                           BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
+                           USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
+                           > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -1513,7 +1513,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
     if causal:
         input_metadata.need_causal()
-    
+
     input_metadata.persistent = persistent
 
     if use_alibi:
@@ -1528,8 +1528,6 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
 
     # triton implementation
     tri_out, _ = attention(q, k, v, o, input_metadata)
-
-
 
     # Transpose here if layout is bshd so we have same reference code for all layouts
     if layout == 'bshd':
@@ -1863,13 +1861,14 @@ def run_benchmark(custom, args):
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
-        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
-                                 line_names=[line_names], styles=[('red', '-')], ylabel='ms',
-                                 plot_name=f'fused-attention-{mode}-d{head_size}-layout{args.layout}',
-                                 args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode, 'persistent': persistent}))
+        triton.testing.Benchmark(
+            x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'], line_names=[line_names],
+            styles=[('red', '-')], ylabel='ms', plot_name=f'fused-attention-{mode}-d{head_size}-layout{args.layout}',
+            args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode, 'persistent': persistent}))
 
     @triton.testing.perf_report(configs)
-    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, persistent, mode, provider, device="cuda"):
+    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, persistent, mode, provider,
+                              device="cuda"):
         assert mode in ["fwd", "bwd"]
         warmup = 25
         rep = 100
@@ -1899,7 +1898,7 @@ def run_benchmark(custom, args):
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
-        
+
         input_metadata.persistent = persistent
 
         o = torch.empty_like(q)
@@ -1955,7 +1954,7 @@ def parse_args():
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False)
     parser.add_argument("-layout", type=str, default='bhsd', help=supported_layouts())
-    parser.add_argument("-persistent", nargs='?', const='fixed', choices=['fixed', 'dynamic'], default=None,           
+    parser.add_argument("-persistent", nargs='?', const='fixed', choices=['fixed', 'dynamic'], default=None,
         help="Enable persistent kernels. " \
             "Use '-persistent dynamic' for dynamic scheduling of the tiles.")
     return parser.parse_args()
