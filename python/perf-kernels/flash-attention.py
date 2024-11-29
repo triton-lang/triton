@@ -1961,17 +1961,9 @@ def parse_args():
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False)
     parser.add_argument("-layout", type=str, default='bhsd', help=supported_layouts())
-    parser.add_argument(
-        "-persistent",
-        nargs='?',                        # Accept zero or one argument
-        const='fixed',                  # Value if -persistent is provided without an argument
-        choices=['fixed', 'dynamic'],   # Allowed values if an argument is provided
-        default=None,                     # Value if -persistent is not provided
-        help=(
-            "Enable persistent kernels. "
-            "Use '-persistent dynamic' for dynamic scheduling of the tiles."
-        )
-    )
+    parser.add_argument("-persistent", nargs='?', const='fixed', choices=['fixed', 'dynamic'], default=None,           
+        help="Enable persistent kernels. " \
+            "Use '-persistent dynamic' for dynamic scheduling of the tiles.")
     return parser.parse_args()
 
 
