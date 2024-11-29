@@ -42,6 +42,7 @@ This script contains the Flash Attention kernel with the following support
 - Multi and Grouped Query attention
 - ALiBi bias
 - Matrix bias
+- Int8 quantization
 
 These are currently supported for the forward kernel only.
 
