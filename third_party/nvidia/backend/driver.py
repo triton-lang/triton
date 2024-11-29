@@ -282,6 +282,9 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
         PyErr_Format(PyExc_ValueError,
                      "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
         ptr_info.valid = false;
+    }} else if (status != CUDA_SUCCESS) {{
+        CUDA_CHECK(status);  // Catch any other cuda API errors
+        ptr_info.valid = false;
     }}
     ptr_info.dev_ptr = dev_ptr;
     Py_DECREF(ret);  // Thanks ChatGPT!
@@ -338,7 +341,22 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   return (CUtensorMap*)(ptr_as_uint);
 }}
 
+static void ensureCudaContext() {{
+  CUcontext pctx;
+  CUDA_CHECK(cuCtxGetCurrent(&pctx));
+  if (!pctx) {{
+    // Ensure device context.
+    CUdevice device;
+    CUDA_CHECK(cuDeviceGet(&device, 0));
+    CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
+    CUDA_CHECK(cuCtxSetCurrent(pctx));
+  }}
+}}
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
+  // ensure cuda context is valid before calling any CUDA APIs, e.g. before getPointer calls cuPointerGetAttributes
+  ensureCudaContext();
+
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
