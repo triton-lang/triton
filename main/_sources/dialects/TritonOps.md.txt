@@ -941,6 +941,51 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | floating-point or ranked tensor of floating-point values
 
+### `tt.gather` (triton::GatherOp)
+
+_Local gather operation_
+
+
+Syntax:
+
+```
+operation ::= `tt.gather` $src `[` $indices `]` attr-dict `:`
+              functional-type(operands, results)
+```
+
+Gather elements from the input tensor using the indices tensor along a
+single specified axis. The output tensor has the same shape as the indices
+tensor. The input and indices tensors must have the same number of
+dimension, and each dimension of the indices tensor that is not the gather
+dimension cannot be greater than the corresponding dimension in the input
+tensor.
+
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | ranked tensor of floating-point or integer or ptr values
+| `indices` | ranked tensor of integer values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values
+
 ### `tt.get_num_programs` (triton::GetNumProgramsOp)
 
 Syntax:
