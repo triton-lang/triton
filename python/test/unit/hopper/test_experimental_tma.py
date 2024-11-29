@@ -559,9 +559,9 @@ def test_experimetal_descriptor_load_4d(inner_size):
         tl.store(out_ptrs, x)
 
     x = torch.randint(size=(4, 8, 32, inner_size), low=0, high=100, dtype=torch.uint8).to(device)
-    desc = TmaDescKernelParam(x.data_ptr(), [4, 8, 32, inner_size], [2, 2, 32, inner_size], 1)
-
     z_tri = torch.zeros(size=(2, 2, 32, inner_size), dtype=torch.uint8, device=device)
+    desc = TmaDescKernelParam(x.data_ptr(), x.shape, z_tri.shape, 1)
+
     kernel[(1, )](z_tri, desc, inner_size)
 
     assert torch.equal(x[2:4, 2:4, :, :], z_tri)
@@ -570,15 +570,9 @@ def test_experimetal_descriptor_load_4d(inner_size):
 def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
     @triton.jit
     def kernel(
-        q_ptr,
-        k_ptr,
+        q_desc,
+        k_desc,
         o_ptr,
-        stride_qb,
-        stride_qm,
-        stride_qk,
-        stride_kb,
-        stride_kk,
-        stride_kn,
         stride_ob,
         stride_om,
         stride_on,
@@ -591,12 +585,9 @@ def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
         startn = tl.program_id(2) * BLOCK_N
         offs_m = startm + tl.arange(0, BLOCK_M)
         offs_n = startn + tl.arange(0, BLOCK_N)
-        offs_k = tl.arange(0, BLOCK_K)
-        q_ptrs = q_ptr + batch_id * stride_qb + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
-        k_ptrs = k_ptr + batch_id * stride_kb + offs_k[:, None] * stride_kk + offs_n[None, :] * stride_kn
-        q = tl.load(q_ptrs)
-        k = tl.load(k_ptrs)
-        qk = tl.dot(q, k, out_dtype=tl.float32)
+        q = tl._experimental_descriptor_load(q_desc, [batch_id, startm, 0], [1, BLOCK_M, BLOCK_K], tl.float16)
+        k = tl._experimental_descriptor_load(k_desc, [batch_id, 0, startn], [1, BLOCK_K, BLOCK_N], tl.float16)
+        qk = tl.dot(q.reshape(BLOCK_M, BLOCK_K), k.reshape(BLOCK_K, BLOCK_N), out_dtype=tl.float32)
         o_ptrs = o_ptr + batch_id * stride_ob + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
         tl.store(o_ptrs, qk)
 
@@ -612,9 +603,12 @@ def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
 
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
-    out_tri = to_triton(out, device=device)
 
     BLOCK_K = K
+    x_desc = TmaDescKernelParam(x_tri.data_ptr(), x_tri.shape, [1, BLOCK_M, BLOCK_K], 2)
+    y_desc = TmaDescKernelParam(y_tri.data_ptr(), y_tri.shape, [1, BLOCK_K, BLOCK_N], 2)
+
+    out_tri = to_triton(out, device=device)
 
     grid = (
         B,
@@ -622,15 +616,9 @@ def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
         triton.cdiv(N, BLOCK_N),
     )
     out = kernel[grid](
-        x_tri,
-        y_tri,
+        x_desc,
+        y_desc,
         out_tri,
-        x_tri.stride(0),
-        x_tri.stride(1),
-        x_tri.stride(2),
-        y_tri.stride(0),
-        y_tri.stride(1),
-        y_tri.stride(2),
         out_tri.stride(0),
         out_tri.stride(1),
         out_tri.stride(2),
