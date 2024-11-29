@@ -582,26 +582,22 @@ def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
         stride_ob,
         stride_om,
         stride_on,
-        BLOCK_B: tl.constexpr,
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         BLOCK_K: tl.constexpr,
     ):
-        startm = tl.program_id(0) * BLOCK_M
-        startn = tl.program_id(1) * BLOCK_N
-        offs_b = tl.arange(0, BLOCK_B)
+        batch_id = tl.program_id(0)
+        startm = tl.program_id(1) * BLOCK_M
+        startn = tl.program_id(2) * BLOCK_N
         offs_m = startm + tl.arange(0, BLOCK_M)
         offs_n = startn + tl.arange(0, BLOCK_N)
         offs_k = tl.arange(0, BLOCK_K)
-        q_ptrs = q_ptr + offs_b[:, None, None] * stride_qb + offs_m[None, :, None] * stride_qm + offs_k[
-            None, None, :] * stride_qk
-        k_ptrs = k_ptr + offs_b[:, None, None] * stride_kb + offs_k[None, :, None] * stride_kk + offs_n[
-            None, None, :] * stride_kn
+        q_ptrs = q_ptr + batch_id * stride_qb + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
+        k_ptrs = k_ptr + batch_id * stride_kb + offs_k[:, None] * stride_kk + offs_n[None, :] * stride_kn
         q = tl.load(q_ptrs)
         k = tl.load(k_ptrs)
         qk = tl.dot(q, k, out_dtype=tl.float32)
-        o_ptrs = o_ptr + offs_b[:, None, None] * stride_ob + offs_m[None, :, None] * stride_om + offs_n[
-            None, None, :] * stride_on
+        o_ptrs = o_ptr + batch_id * stride_ob + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
         tl.store(o_ptrs, qk)
 
     device = "cuda"
@@ -618,14 +614,14 @@ def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
     y_tri = to_triton(y, device=device)
     out_tri = to_triton(out, device=device)
 
-    BLOCK_B = B
     BLOCK_K = K
 
     grid = (
+        B,
         triton.cdiv(M, BLOCK_M),
         triton.cdiv(N, BLOCK_N),
     )
-    kernel[grid](
+    out = kernel[grid](
         x_tri,
         y_tri,
         out_tri,
@@ -638,11 +634,12 @@ def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
         out_tri.stride(0),
         out_tri.stride(1),
         out_tri.stride(2),
-        BLOCK_B=BLOCK_B,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
     )
+
+    # print(out.asm["ttgir"])
 
     out_ref = np.matmul(x, y)
     np.testing.assert_allclose(out_ref, out_tri.cpu().float().numpy(), rtol=0.01, atol=1e-2)
