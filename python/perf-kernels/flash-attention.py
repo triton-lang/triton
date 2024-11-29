@@ -1507,6 +1507,7 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlen
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_alibi', [True, False])
 @pytest.mark.parametrize('layout', ['bshd', 'bhsd'])
+@pytest.mark.parametrize('persistent', [None, 'fixed', 'dynamic'])
 def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, persistent, dtype=torch.float16):
     torch.manual_seed(20)
     q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
@@ -1526,20 +1527,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     o = torch.empty_like(q)
 
     # triton implementation
-
-    # warmup: let the autotuner find the best config
     tri_out, _ = attention(q, k, v, o, input_metadata)
-
-    # measure execution time
-    import time as time
-
-    torch.cuda.synchronize()
-    start_t = time.time()
-
-    tri_out, _ = attention(q, k, v, o, input_metadata)
-    
-    torch.cuda.synchronize()
-    print(f"Execution time: {(time.time() - start_t)} s")
 
 
 
@@ -1576,8 +1564,6 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
 
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
     # print(f"ref out: {ref_out.flatten()[:100]}\ntri_out:{tri_out.flatten()[:100]}")
-
-
 
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD', [
@@ -1644,7 +1630,8 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype):
                                                  (4, 48, 128, 128), (4, 48, 4096, 128), (4, 48, 16384, 128),
                                                  (4, 16, 1024, 128), (4, 16, 8192, 128), (32, 48, 8192, 128)])
 @pytest.mark.parametrize('causal', [True, False])
-def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
+@pytest.mark.parametrize('persistent', [None, 'fixed', 'dynamic'])
+def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, persistent, dtype=torch.float16):
 
     q, k, v, input_metadata = varlen_input_helper(Z, H, H, N_CTX, N_CTX, D_HEAD, dtype)
 
@@ -1984,8 +1971,6 @@ def main():
 
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
-
-    # test_op_fwd(22,16,16,1500,1500,128, args.causal, False, "bhsd", args.persistent)
 
     run_benchmark(custom_config, args)
 
