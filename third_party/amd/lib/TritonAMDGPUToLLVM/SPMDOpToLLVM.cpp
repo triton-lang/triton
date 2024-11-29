@@ -60,7 +60,7 @@ struct CondBarrierOpConversion
     rewriter.create<ROCDL::SBarrierOp>(loc);
     rewriter.create<LLVM::BrOp>(loc, afterCondBarBlock);
 
-    rewriter.setInsertionPointToStart(afterCondBarBlock);
+    //rewriter.setInsertionPointToStart(afterCondBarBlock);
     rewriter.eraseOp(op);
     return success();
   }
