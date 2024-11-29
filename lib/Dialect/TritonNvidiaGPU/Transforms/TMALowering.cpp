@@ -36,7 +36,8 @@ public:
     auto ctaLayout = getCTALayout(tensorType.getEncoding());
     Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
                                                  1, order, ctaLayout);
-    if (tensorType.getRank() == 2) {
+    // TOOD
+    if (tensorType.getRank() > 1) {
       // The following SharedEncodingAttr constructor creates SMEM encoding with
       // hasLeadingOffset = true, which is not currently supported for
       // higher-rank TMA.

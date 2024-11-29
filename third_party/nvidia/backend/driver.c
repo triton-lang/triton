@@ -305,7 +305,13 @@ static PyObject *fillTMADescriptior(unsigned long long global_address,
   CUtensorMapSwizzle swizzle = CU_TENSOR_MAP_SWIZZLE_NONE;
   CUtensorMapL2promotion l2Promotion = CU_TENSOR_MAP_L2_PROMOTION_NONE;
 
-  if (rank == 2) {
+  int non_unit_rank = 0;
+
+  for (int i = 0; i < rank; ++i) {
+    if (tensorDims[i] != 1) non_unit_rank += 1;
+  }
+
+  if (non_unit_rank == 2) {
     // For now, we do not swizzle for higher ranks. Enabling swizzling in TMA
     // implies hasLeadingOffset = true in SMEM encoding, which is currently not
     // supported for higher rank TMA copies. This convention needs to be in sync
