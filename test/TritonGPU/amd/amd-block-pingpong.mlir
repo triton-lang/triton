@@ -1,11 +1,11 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-block-pingpong | FileCheck %s
 
 //CHECK: triton_gpu.local_load
-//CHECK: rocdl.sched.barrier 6
+//CHECK: rocdl.sched.barrier 0
 //CHECK: tt.load
-//CHECK: rocdl.sched.barrier 6
+//CHECK: rocdl.sched.barrier 0
 //CHECK: triton_gpu.local_load
-//CHECK: rocdl.sched.barrier 6
+//CHECK: rocdl.sched.barrier 0
 //CHECK: tt.load
 //CHECK: rocdl.sched.barrier 0
 //CHECK: rocdl.s.setprio 1

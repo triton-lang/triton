@@ -88,12 +88,12 @@ void Pingponger::transformOneWarp(OpBuilder &builder, Location loc) {
   memCluster.push_back(gLoadOps[0]);
   memCluster.push_back(lLoadOps[1]);
   memCluster.push_back(gLoadOps[1]);
-  memCluster.push_back(lLoadOps[0]);
   for (auto op : memCluster) {
     attachOp(op);
     attachOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
   }
   attachOpWithPrio(builder, dotOps[0], loc);
+  attachOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 }
 
 void Pingponger::genOffsetConstants(Location loc, OpBuilder &builder,
