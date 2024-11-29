@@ -320,7 +320,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
               BLOCK_M2: tl.constexpr,  #
               BLOCK_N2: tl.constexpr,  #
               BLK_SLICE_FACTOR: tl.constexpr,  #
-              CAUSAL: tl.constexpr, HEAD_DIM: tl.constexpr):
+              CAUSAL: tl.constexpr,  #
+              HEAD_DIM: tl.constexpr):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     bhid = tl.program_id(2)
