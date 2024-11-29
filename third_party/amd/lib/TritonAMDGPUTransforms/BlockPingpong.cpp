@@ -34,7 +34,7 @@ class Pingponger {
 
 public:
   Pingponger(scf::ForOp forOp, int32_t numWarps)
-      : forOp(forOp), numWarps(numWarps){};
+      : forOp(forOp), numWarps(numWarps) {};
   void getDotPingponged();
   void genOffsetConstants(Location loc, OpBuilder &builder, unsigned numSlices,
                           int64_t sliceWidth);
@@ -186,7 +186,7 @@ LogicalResult Pingponger::transformTwoWarp(OpBuilder &builder, Location loc) {
 
   builder.setInsertionPointAfter(gLoadOps[1]);
   // Reorder operations into four mem/dot clusters
-  
+
   // mem1: global load A, local load A(1/4), local load B(1/4)
   initOpInsertion(gLoadOps[1]);
   attachSlicedLoadAB(/* slice */ 0);

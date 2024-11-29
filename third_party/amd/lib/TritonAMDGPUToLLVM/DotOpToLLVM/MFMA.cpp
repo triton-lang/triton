@@ -235,6 +235,10 @@ struct DotOpMFMAConversionHelper {
     if (prevOp)
       setPrioOp = dyn_cast<ROCDL::SetPrioOp>(prevOp);
     Value firstMfma;
+    auto getFirstMfma = [&](Value mfma) {
+      if (!firstMfma)
+        firstMfma = mfma;
+    };
 
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int b = 0; b < numRepB; ++b) {
@@ -257,8 +261,7 @@ struct DotOpMFMAConversionHelper {
                                        operandA[kPack][{b, m, k}], acc)
                       : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
                                        operandB[kPack][{b, n, k}], acc);
-              if (b + m + n + k + kPack == 0)
-                firstMfma = acc;
+              getFirstMfma(acc);
             }
           }
           acc = reduceSubBlocks(subBlocks, acc);
