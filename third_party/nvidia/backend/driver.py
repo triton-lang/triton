@@ -438,6 +438,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   {"".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
   {"".join([f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" if ty == "nvTmaDesc" else "" for i, ty in signature.items()])};
   Py_BEGIN_ALLOW_THREADS;
+  //printf("%llu %d %d %llu %llu %d %d %llu %llu", {",".join(internal_args_list)});
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
