@@ -565,3 +565,89 @@ def test_experimetal_descriptor_load_4d(inner_size):
     kernel[(1, )](z_tri, desc, inner_size)
 
     assert torch.equal(x[2:4, 2:4, :, :], z_tri)
+
+
+def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
+    @triton.jit
+    def kernel(
+        q_ptr,
+        k_ptr,
+        o_ptr,
+        stride_qb,
+        stride_qm,
+        stride_qk,
+        stride_kb,
+        stride_kk,
+        stride_kn,
+        stride_ob,
+        stride_om,
+        stride_on,
+        BLOCK_B: tl.constexpr,
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+    ):
+        startm = tl.program_id(0) * BLOCK_M
+        startn = tl.program_id(1) * BLOCK_N
+        offs_b = tl.arange(0, BLOCK_B)
+        offs_m = startm + tl.arange(0, BLOCK_M)
+        offs_n = startn + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        q_ptrs = q_ptr + offs_b[:, None, None] * stride_qb + offs_m[None, :, None] * stride_qm + offs_k[
+            None, None, :] * stride_qk
+        k_ptrs = k_ptr + offs_b[:, None, None] * stride_kb + offs_k[None, :, None] * stride_kk + offs_n[
+            None, None, :] * stride_kn
+        q = tl.load(q_ptrs)
+        k = tl.load(k_ptrs)
+        qk = tl.dot(q, k, out_dtype=tl.float32)
+        o_ptrs = o_ptr + offs_b[:, None, None] * stride_ob + offs_m[None, :, None] * stride_om + offs_n[
+            None, None, :] * stride_on
+        tl.store(o_ptrs, qk)
+
+    device = "cuda"
+
+    import numpy as np
+    from numpy.random import RandomState
+
+    rs = RandomState(17)
+    x = numpy_random((B, M, K), dtype_str="float16", rs=rs)
+    y = numpy_random((B, K, N), dtype_str="float16", rs=rs)
+    out = numpy_random((B, M, N), dtype_str="float32", rs=rs)
+
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    out_tri = to_triton(out, device=device)
+
+    BLOCK_B = B
+    BLOCK_K = K
+
+    grid = (
+        triton.cdiv(M, BLOCK_M),
+        triton.cdiv(N, BLOCK_N),
+    )
+    kernel[grid](
+        x_tri,
+        y_tri,
+        out_tri,
+        x_tri.stride(0),
+        x_tri.stride(1),
+        x_tri.stride(2),
+        y_tri.stride(0),
+        y_tri.stride(1),
+        y_tri.stride(2),
+        out_tri.stride(0),
+        out_tri.stride(1),
+        out_tri.stride(2),
+        BLOCK_B=BLOCK_B,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
+    )
+
+    out_ref = np.matmul(x, y)
+    np.testing.assert_allclose(out_ref, out_tri.cpu().float().numpy(), rtol=0.01, atol=1e-2)
+
+    print("ok")
+
+
+test_dot3d(8, 64, 64, 64, 32, 32)
