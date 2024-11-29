@@ -345,9 +345,9 @@ def get_cdna_autotune_configs():
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
-        # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
+        # # Fall-back config.
+        # triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
+        #               num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -1588,7 +1588,8 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_bias', [True])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
-def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype):
+@pytest.mark.parametrize('persistent', [None, 'fixed', 'dynamic'])
+def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype, persistent):
     torch.manual_seed(20)
     sm_scale = D_HEAD**-0.5
     input_metadata = MetaData(sm_scale=sm_scale)
@@ -1600,6 +1601,9 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype):
         input_metadata.need_bias(bias, Z, H, N_CTX_Q, N_CTX_K)
     else:
         bias = None
+
+    input_metadata.persistent = persistent
+
     o = torch.empty_like(q)
 
     # triton implementation
@@ -1634,6 +1638,7 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype):
 def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, persistent, dtype=torch.float16):
 
     q, k, v, input_metadata = varlen_input_helper(Z, H, H, N_CTX, N_CTX, D_HEAD, dtype)
+    input_metadata.persistent = persistent
 
     tri_out = torch.empty_like(q)
     ref_out = torch.empty_like(q)
@@ -1654,8 +1659,10 @@ def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, persistent, dtype=torch.floa
                                                       (4, 64, 8, 16384, 128), (4, 16, 4, 1024, 128),
                                                       (4, 16, 2, 8192, 128), (32, 128, 32, 8192, 128)])
 @pytest.mark.parametrize('causal', [False])
-def test_op_varlen_mqa_fwd(Z, HQ, HK, N_CTX, D_HEAD, causal, dtype=torch.float16):
+@pytest.mark.parametrize('persistent', [None, "fixed", "dynamic"])
+def test_op_varlen_mqa_fwd(Z, HQ, HK, N_CTX, D_HEAD, causal, persistent, dtype=torch.float16):
     q, k, v, input_metadata = varlen_input_helper(Z, HQ, HK, N_CTX, N_CTX, D_HEAD, dtype)
+    input_metadata.persistent = persistent
     ref_out = torch.empty_like(q)
     tri_out = torch.empty_like(q)
     # Make KV look like HQ/HK "groups" of HK. Later, we will reshape so the
