@@ -21,8 +21,14 @@ typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
     ConverterT;
 
 namespace {
-// ROCM utility functions for data type conversion
-/* ----- FP8E5M2 ------ */
+//===-------------------------------------------===//
+/// ROCM utility functions for data type conversion
+//===-------------------------------------------===//
+
+//===----------------===//
+///      FP8E5M2
+//===----------------===//
+
 // This data-type is the standard FP8E5M2 format
 // NVIDIA GPU supports it natively but we don't have hardware native
 // support on MI300.
@@ -221,6 +227,7 @@ Fp8E4M3FNUZ_to_Fp32(Location loc, ConversionPatternRewriter &rewriter,
   assert(v.size() == 2);
   return cvtFp8ToFp32(loc, rewriter, v[0], v[1], "fp8");
 }
+
 // Depend on whether we focus more on performance, we may skip
 // the processing of submornal values
 static Value Fp16_to_Fp8E5M2FNUZ_oneValue(Location loc,
@@ -537,7 +544,9 @@ static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
           extract_element(i8_ty, fp8x4Vec, i32_val(3))};
 }
 
-// ROCM type conversion between fp8 and bf16
+//===-----------------------------------------===//
+/// ROCM type conversion between fp8 and bf16
+//===-----------------------------------------===//
 
 // fp8e4m3fn to bf16
 static SmallVector<Value> Fp8E4M3FN_to_Bf16(Location loc,

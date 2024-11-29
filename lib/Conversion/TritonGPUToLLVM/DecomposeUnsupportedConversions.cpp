@@ -91,7 +91,7 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
         dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
     if (srcBlocked && dstDotOp) {
       auto dotParent = dyn_cast<NvidiaMmaEncodingAttr>(dstDotOp.getParent());
-      if (dotParent && dotParent.isAmpere()) {
+      if (dotParent) {
         return;
       }
       Attribute sharedMemorySpace =

@@ -241,7 +241,7 @@ class HIPBackend(BaseBackend):
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
                                              "equivalent behavior in the past.")
-            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages, stream_prefetch)
+            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
@@ -341,7 +341,7 @@ class HIPBackend(BaseBackend):
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["shared"] = src.get_int_attr("ttg.shared")
 
         amd.cleanup_bitcode_metadata(llvm_mod)
         # Disable inlining of print related functions,

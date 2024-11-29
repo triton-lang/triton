@@ -374,30 +374,19 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
     // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
     // completed before we can remove the layoutIsOK check:
-    // 1. Support for AMD's WMMA
+    // 1. Support for AMD's WMMA dot operand
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
-      if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(layout)) {
+      if (isa<MmaEncodingTrait>(layout)) {
         return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        auto parent = dotOperand.getParent();
-        if (isa<MmaEncodingTrait>(parent) && useLegacyMMAConversion) {
-          return false;
-        }
-        if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
-          if (nvidiaMma.isAmpere()) {
-            return true;
-          }
-        }
-        if (isa<AMDMfmaEncodingAttr>(parent)) {
-          return true;
+        if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(
+                dotOperand.getParent())) {
+          return !useLegacyMMAConversion;
         }
         return false;
       }
-      if (isa<BlockedEncodingAttr>(layout)) {
-        return true;
-      }
-      if (isa<LinearEncodingAttr>(layout)) {
+      if (isa<BlockedEncodingAttr, LinearEncodingAttr>(layout)) {
         return true;
       }
       if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -406,6 +395,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return false;
     };
     if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
+      return failure();
+    }
+    // FIXME [Dot LL] Remove this once we implement this trick in LLs
+    if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
       return failure();
     }
 
@@ -498,19 +491,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // don't need to avoid duplicate writes.
     // Input dims: [reg, lane, warp]
     // Output dims: [offset, iteration]
-    std::optional<LinearLayout> shmemStoreLayout =
-        chooseStMatrixLayout(ctx, op.getSrc().getType(), scratchConfig.repShape,
-                             scratchConfig.paddedRepShape, scratchConfig.order,
-                             /*swizzleByteSize=*/0);
-    bool isStMatrix = shmemStoreLayout.has_value();
-    if (!isStMatrix) {
-      shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
-    }
-    assert(shmemStoreLayout.has_value());
+    bool isStMatrix = targetInfo.canUseStMatrix(
+        op.getSrc().getType(), scratchConfig.repShape,
+        scratchConfig.paddedRepShape, scratchConfig.order,
+        /*swizzleByteSize=*/0);
+    LinearLayout shmemStoreLayout =
+        isStMatrix ? chooseStMatrixLayout(
+                         ctx, op.getSrc().getType(), scratchConfig.repShape,
+                         scratchConfig.paddedRepShape, scratchConfig.order,
+                         /*swizzleByteSize=*/0)
+                   : srcLayout.invertAndCompose(sharedLayout);
 
     const int shmemAllocatedNumElems =
         getNumScratchElements(scratchConfig.paddedRepShape);
-    assert(shmemStoreLayout->getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+    assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
 
     // Layout for the load from shmem to registers.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
@@ -518,14 +512,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Check that the `register` fully determines the `iteration`.  That is,
     // each thread does exactly the same reads and writes to shmem on each
     // iteration, just with different input/output registers.
-    assert(shmemStoreLayout->sublayoutIsZero({kLane, kWarp, kBlock},
-                                             {kIteration}));
+    assert(
+        shmemStoreLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
     assert(
         shmemLoadLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
 
     // iteration -> registers
     SmallVector<SmallVector<int>> inRegsForIter =
-        collectRegsForIter(ctx, *shmemStoreLayout);
+        collectRegsForIter(ctx, shmemStoreLayout);
     SmallVector<SmallVector<int>> outRegsForIter =
         collectRegsForIter(ctx, shmemLoadLayout);
 
@@ -582,7 +576,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return vecAddr;
     };
 
-    auto storeBase = applyLinearLayout(loc, rewriter, *shmemStoreLayout,
+    auto storeBase = applyLinearLayout(loc, rewriter, shmemStoreLayout,
                                        {{kRegister, i32_val(0)},
                                         {kLane, laneId},
                                         {kWarp, warpId},
@@ -605,11 +599,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
       // When using `stmatrix`, we can store `inVec` elements even if they are
       // not contiguous
-      auto inVec = isStMatrix ? shmemStoreLayout->getNumConsecutiveInOut()
+      auto inVec = isStMatrix ? shmemStoreLayout.getNumConsecutiveInOut()
                               : scratchConfig.inVec;
       for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
-        Value vecAddr = getVecAddr(*shmemStoreLayout, storeBase, inRegSlice);
+        Value vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
         SmallVector<Value> inValsVec;
         for (int k = 0; k < inVec; k++)
           inValsVec.push_back(inVals[inRegSlice + k]);

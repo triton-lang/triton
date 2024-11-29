@@ -11,12 +11,10 @@
 #include <numeric>
 
 using namespace mlir;
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_DECOMPOSEUNSUPPORTEDAMDCONVERSIONS
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 namespace {
 
@@ -43,9 +41,7 @@ struct DecomposeUnsupportedAMDConversions
 
     triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod, isShortcut);
 
-    /* -------------------------------- */
     // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`
-    /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
       auto srcType = cvtOp.getSrc().getType();

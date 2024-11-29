@@ -68,8 +68,9 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
         tensorShape[1] / shapePerWarp.second / ret[1]) {
       if (ret[0] < tensorShape[0] / shapePerWarp.first) {
         ret[0] *= 2;
-      } else
+      } else {
         ret[1] *= 2;
+      }
     } else {
       ret[1] *= 2;
     }
@@ -264,23 +265,23 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
   return selectMatrixCoreOperandTypes(dot, applicableTypes);
 }
 
-/**
- * @brief Convert layout and cast element type of a given tensor
- *
- * If old element type is different from new element type, this function
- * creates two new operations:
- * 1. %converted_value = layout_convert %value, newEncoding
- * 2. %casted_value = cast(fext, ftrunc, etc.) %value, newElemType
- *
- * If old element type is same as new element type, this function creates only
- * one operation: %converted_value = layout_convert %value, newEncoding
- *
- * @param rewriter
- * @param value original tensor value, which we need to convert and cast
- * @param newEncoding new encoding for the tenosr
- * @param newElemType new element type for the tensor
- * @return converted and optionaly casted tensor value
- */
+//===---------------------------------------------------------------------===//
+// @brief Convert layout and cast element type of a given tensor
+//
+// If old element type is different from new element type, this function
+// creates two new operations:
+// 1. %converted_value = layout_convert %value, newEncoding
+// 2. %casted_value = cast(fext, ftrunc, etc.) %value, newElemType
+//
+// If old element type is same as new element type, this function creates only
+// one operation: %converted_value = layout_convert %value, newEncoding
+//
+// @param rewriter
+// @param value original tensor value, which we need to convert and cast
+// @param newEncoding new encoding for the tenosr
+// @param newElemType new element type for the tensor
+// @return converted and optionaly casted tensor value
+//===---------------------------------------------------------------------===//
 Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
                            Attribute newEncoding, Type newElemType) {
   assert(newElemType.isIntOrFloat());

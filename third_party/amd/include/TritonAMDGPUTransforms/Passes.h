@@ -1,5 +1,5 @@
-#ifndef TRITON_DIALECT_TRITONAMDGPU_TRANSFORMS_PASSES_H_
-#define TRITON_DIALECT_TRITONAMDGPU_TRANSFORMS_PASSES_H_
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_PASSES_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_PASSES_H_
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -8,8 +8,8 @@
 
 namespace mlir {
 
-std::unique_ptr<Pass> createTritonAMDGPUStreamPipelineV2Pass(int numStages = 2,
-                                                             int prefetch = 0);
+std::unique_ptr<Pass> createTritonAMDGPUStreamPipelinePass(int numStages = 2,
+                                                           int prefetch = 0);
 
 std::unique_ptr<Pass>
 createTritonAMDGPUAccelerateMatmulPass(std::string archGenName = std::string(),
@@ -35,4 +35,4 @@ std::unique_ptr<Pass> createTritonAMDGPUBlockPingpongPass();
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 } // namespace mlir
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_PASSES_H_

@@ -32,15 +32,6 @@ namespace {
 
 #define S(v) StringAttr::get(ctx, (v))
 
-// Returns ["dim0", "dim1", ..., "dim<rank-1>"].
-SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
-  SmallVector<StringAttr> ret;
-  for (int i = 0; i < rank; i++) {
-    ret.push_back(S("dim" + llvm::Twine(i)));
-  }
-  return ret;
-}
-
 // TODO Have order be a mandatory argument of standardOutDimNames.
 SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
                                         const SmallVector<unsigned> &order) {
@@ -48,27 +39,6 @@ SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
   SmallVector<StringAttr> ret;
   for (unsigned i : order) {
     ret.push_back(names[i]);
-  }
-  return ret;
-}
-
-// Returns a 1D -> ND layout into [dim0, dim1, ...] that's equivalent to
-// creating a 1D -> 1D mapping of size product(shape) and then reshaping to
-// permute(shape, order).
-LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
-                                ArrayRef<unsigned> order) {
-  assert(shape.size() == order.size());
-  MLIRContext *ctx = inDimName.getContext();
-  auto rank = shape.size();
-
-  // The order in triton is written wrt. [dim0, dim1, ...].
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  LinearLayout ret = LinearLayout::empty();
-  for (int i = 0; i < shape.size(); i++) {
-    // Start with the most-minor dimension, which is order[0].
-    int dim = order[i];
-    ret *= LinearLayout::identity1D(shape[dim], inDimName, outDimNames[dim]);
   }
   return ret;
 }
@@ -241,12 +211,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
     llvm::report_fatal_error("Illegal shared layout");
   }
 
-  int vec = 8 * 16 / elemBitWidth;
-  if (vec != shared.getVec()) {
-    llvm::errs() << "Illegal shared layout; expected `vec` to be " << vec
-                 << ": " << shared << "\n";
-    llvm::report_fatal_error("Illegal shared layout");
-  }
+  int vec = shared.getVec();
 
   StringAttr colDimName = outDimNames[colDim];
   StringAttr rowDimName = outDimNames[rowDim];
@@ -858,40 +823,7 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 }
 
 namespace {
-
-// TODO (Keren): Currently, we have more restrictions than necessary when using
-// stmatrix.  These restrictions are retained from legacy code, and we could
-// relax some of them in the future.
-bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-                    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
-                    int swizzleByteSize) {
-  auto mmaLayout =
-      mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
-  if (!mmaLayout || !mmaLayout.isHopper())
-    return false;
-  if (isa<PointerType>(tensorTy.getElementType()))
-    return false;
-  if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
-    return false;
-  if (order[0] != 1)
-    return false;
-
-  auto tensorShapePerCTA = getShapePerCTA(mmaLayout, tensorTy.getShape());
-  if (tensorShapePerCTA.size() != 2)
-    return false;
-  auto numIterations = ceil<unsigned>(tensorShapePerCTA[1], repShape[1]) *
-                       ceil<unsigned>(tensorShapePerCTA[0], repShape[0]);
-  if (numIterations > 1)
-    return false;
-  if (paddedRepShape[1] % 8 != 0)
-    return false;
-  if (swizzleByteSize != 0 && swizzleByteSize != 32 && swizzleByteSize != 64 &&
-      swizzleByteSize != 128)
-    return false;
-  return true;
-}
-
-std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
+LinearLayout chooseStMatrixLayoutLeadingOffset(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
     int swizzleByteSize) {
@@ -962,7 +894,7 @@ std::optional<LinearLayout> chooseStMatrixLayoutLeadingOffset(
       .reshapeOuts({{kOffset, ret.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
-std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
+LinearLayout chooseStMatrixLayoutNoLeadingOffset(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order) {
   StringAttr kReg = S("register");
@@ -1002,15 +934,11 @@ std::optional<LinearLayout> chooseStMatrixLayoutNoLeadingOffset(
 
 } // anonymous namespace
 
-std::optional<LinearLayout>
-chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
-                     ArrayRef<unsigned> repShape,
-                     ArrayRef<unsigned> paddedRepShape,
-                     ArrayRef<unsigned> order, int swizzleByteSize) {
-  if (!canUseStMatrix(tensorTy, repShape, paddedRepShape, order,
-                      swizzleByteSize))
-    return std::nullopt;
-
+LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
+                                  ArrayRef<unsigned> repShape,
+                                  ArrayRef<unsigned> paddedRepShape,
+                                  ArrayRef<unsigned> order,
+                                  int swizzleByteSize) {
   if (swizzleByteSize == 0)
     return chooseStMatrixLayoutNoLeadingOffset(ctx, tensorTy, repShape,
                                                paddedRepShape, order);
