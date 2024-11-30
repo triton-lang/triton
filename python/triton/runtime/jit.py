@@ -615,7 +615,7 @@ class JITFunction(KernelInterface[T]):
             constants = {
                 (p.num,): v
                 for (v, p) in zip(bound_vals, self.params)
-                if p.is_constexpr or v is None
+                if p.is_constexpr
             }
             for i, arg in constants.items():
                 if callable(arg):
