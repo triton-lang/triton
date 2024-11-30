@@ -25,6 +25,8 @@ from triton.language.extra import libdevice
 
 from pathlib import Path
 
+DEVICE = triton.runtime.driver.active.get_current_target().backend
+
 
 @triton.jit
 def asin_kernel(
@@ -49,8 +51,8 @@ def asin_kernel(
 
 torch.manual_seed(0)
 size = 98432
-x = torch.rand(size, device='cuda')
-output_triton = torch.zeros(size, device='cuda')
+x = torch.rand(size, device=DEVICE)
+output_triton = torch.zeros(size, device=DEVICE)
 output_torch = torch.asin(x)
 assert x.is_cuda and output_triton.is_cuda
 n_elements = output_torch.numel()

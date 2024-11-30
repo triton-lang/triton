@@ -27,7 +27,7 @@ import triton
 import triton.language as tl
 from triton.runtime import driver
 
-DEVICE = "cuda"
+DEVICE = triton.runtime.driver.active.get_current_target().backend
 
 
 def is_hip():

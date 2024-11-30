@@ -38,7 +38,7 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = "cuda"
+DEVICE = triton.runtime.driver.active.get_current_target().backend
 
 
 @triton.jit
