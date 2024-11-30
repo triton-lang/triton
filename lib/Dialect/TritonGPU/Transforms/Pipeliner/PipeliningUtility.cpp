@@ -188,9 +188,8 @@ std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
   return std::make_pair(stage, clusterId);
 }
 
-void mlir::triton::setStageCluster(scf::ForOp &forOp, Operation *op, int stage,
-                                   int cluster) {
-  auto ctx = forOp.getContext();
+void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {
+  auto ctx = op->getContext();
   op->setAttr(mlir::triton::kLoopStageAttrName,
               IntegerAttr::get(IntegerType::get(ctx, 32), stage));
   op->setAttr(mlir::triton::kLoopClusterAttrName,

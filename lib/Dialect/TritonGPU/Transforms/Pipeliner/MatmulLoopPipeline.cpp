@@ -64,11 +64,7 @@ public:
   OpTy createWithStage(Location location, int stage, int cluster,
                        Args &&...args) {
     OpTy op = OpBuilder::create<OpTy>(location, std::forward<Args>(args)...);
-    auto ctx = getContext();
-    op->setAttr(mlir::triton::kLoopStageAttrName,
-                IntegerAttr::get(IntegerType::get(ctx, 32), stage));
-    op->setAttr(mlir::triton::kLoopClusterAttrName,
-                IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
+    tt::setStageCluster(op, stage, cluster);
     return op;
   }
   using OpBuilder::create;
@@ -204,9 +200,8 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     // Prefetch load if is not MMAV3 and is used by the dot.
     if (loadToInfo[loadOp].usedByDot) {
       assert(stageForFirstUse >= 1);
-      tt::setStageCluster(forOp, wait, stageForFirstUse - 1, maxClusterId + 1);
-      tt::setStageCluster(forOp, viewLoad, stageForFirstUse - 1,
-                          maxClusterId + 1);
+      tt::setStageCluster(wait, stageForFirstUse - 1, maxClusterId + 1);
+      tt::setStageCluster(viewLoad, stageForFirstUse - 1, maxClusterId + 1);
       retCode = stageForFirstUse - 1;
     }
   }
