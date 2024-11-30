@@ -238,8 +238,9 @@ void Pingponger::getDotPingponged() {
       // Check if this is loading from pipeline
       auto src = op->getOperand(0);
       if (auto arg = mlir::dyn_cast<BlockArgument>(src))
-        if (forOp.getTiedLoopInit(arg)->get())
-          lLoadOps.push_back(op);
+        if (auto tiedLoopInit = forOp.getTiedLoopInit(arg))
+          if (tiedLoopInit->get())
+            lLoadOps.push_back(op);
     }
     if (isa<ttg::LocalStoreOp>(op))
       lStoreOps.push_back(op);
