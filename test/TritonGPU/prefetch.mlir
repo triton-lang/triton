@@ -10,10 +10,10 @@
 #A_OP = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_OP = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 
-!memdesc_A_32 = !triton_gpu.memdesc<128x32xf8E5M2, #A, #triton_gpu.shared_memory>
-!memdesc_B_32 = !triton_gpu.memdesc<32x128xf16, #B, #triton_gpu.shared_memory>
-!memdesc_A_16 = !triton_gpu.memdesc<128x16xf8E5M2, #A, #triton_gpu.shared_memory>
-!memdesc_B_16 = !triton_gpu.memdesc<16x128xf16, #B, #triton_gpu.shared_memory>
+!memdesc_A_32 = !ttg.memdesc<128x32xf8E5M2, #A, #ttg.shared_memory>
+!memdesc_B_32 = !ttg.memdesc<32x128xf16, #B, #ttg.shared_memory>
+!memdesc_A_16 = !ttg.memdesc<128x16xf8E5M2, #A, #ttg.shared_memory>
+!memdesc_B_16 = !ttg.memdesc<16x128xf16, #B, #ttg.shared_memory>
 
 // CHECK: tt.func @matmul_loop_mixed
 // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
