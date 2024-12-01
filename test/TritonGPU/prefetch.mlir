@@ -188,6 +188,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #A_OP = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_OP = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 
+// CHECK: tt.func @matmul_loop_mixed_amd
 // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
 // CHECK-DAG: %[[C16:.+]] = arith.constant 16 : i32
 // CHECK-DAG: %[[A0_PREFETCH_SMEM:.*]] = ttg.memdesc_subview %[[A0:.*]][%[[C0]], %[[C0]]]
