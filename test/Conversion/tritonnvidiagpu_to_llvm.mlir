@@ -3,9 +3,9 @@
 #shared0 = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: init_barrier
-  tt.func @init_barrier(%alloc: !ttg.memdesc<1xi64, #shared0>) {
+  tt.func @init_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory>) {
     // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;", "b,r" %{{.*}}, %{{.*}} : (i1, !llvm.ptr<3>) -> !llvm.void
-    ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0>
+    ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory>
     tt.return
   }
 }
@@ -15,11 +15,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared0 = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: wait_barrier
-  tt.func @wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0>, %phase: i32) {
+  tt.func @wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory>, %phase: i32) {
     // CHECK: waitLoop:
     // CHECK: mbarrier.try_wait.parity.shared.b64
     // CHECK: @!P1 bra.uni waitLoop
-    ttng.wait_barrier %alloc, %phase : !ttg.memdesc<1xi64, #shared0>
+    ttng.wait_barrier %alloc, %phase : !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory>
     tt.return
   }
 }
@@ -35,8 +35,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {$3, $4}], [$5];", "b,r,l,r,r,r" {{.*}} : (i1, !llvm.ptr<3>, !llvm.ptr<1>, i32, i32, !llvm.ptr<3>) -> !llvm.void
   // CHECK-NOT: cp.async.bulk.tensor.2d.shared
   // CHECK: return
-  tt.func @tma_copy_global_to_local(%tma: !tt.ptr<i64>, %alloc: !ttg.memdesc<128x128xf32, #shared1, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0>, %pred: i1) {
-    ttng.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.ptr<i64>, !ttg.memdesc<1xi64, #shared0> -> !ttg.memdesc<128x128xf32, #shared1, mutable>
+  tt.func @tma_copy_global_to_local(%tma: !tt.ptr<i64>, %alloc: !ttg.memdesc<128x128xf32, #shared1, #ttg.shared_memory, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory>, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.ptr<i64>, !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory> -> !ttg.memdesc<128x128xf32, #shared1, #ttg.shared_memory, mutable>
     tt.return
   }
 }
@@ -50,8 +50,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: "@$0 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [$1, {$2, $3}], [$4];", "b,l,r,r,r" {{.*}} : (i1, !llvm.ptr<1>, i32, i32, !llvm.ptr<3>) -> !llvm.void
   // CHECK-NOT: cp.async.bulk.tensor.2d.global.shared::cta.bulk_group
   // CHECK: cp.async.bulk.commit_group
-  tt.func @tma_copy_local_to_global(%tma: !tt.ptr<i64>, %alloc: !ttg.memdesc<128x128xf32, #shared1>, %x: i32) {
-    ttng.async_tma_copy_local_to_global %tma[%x, %x] %alloc : <i64>, <128x128xf32, #shared1>
+  tt.func @tma_copy_local_to_global(%tma: !tt.ptr<i64>, %alloc: !ttg.memdesc<128x128xf32, #shared1, #ttg.shared_memory>, %x: i32) {
+    ttng.async_tma_copy_local_to_global %tma[%x, %x] %alloc : !tt.ptr<i64>, !ttg.memdesc<128x128xf32, #shared1, #ttg.shared_memory>
     tt.return
   }
 }
@@ -74,8 +74,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier
   // CHECK: @$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], 16384;
-  tt.func @expect_barrier(%barrier: !ttg.memdesc<1xi64, #shared0, mutable>, %pred: i1) {
-    ttng.barrier_expect %barrier, 16384, %pred : <1xi64, #shared0, mutable>
+  tt.func @expect_barrier(%barrier: !ttg.memdesc<1xi64, #shared0, #ttg.shared_memory, mutable>, %pred: i1) {
+    ttng.barrier_expect %barrier, 16384, %pred : <1xi64, #shared0, #ttg.shared_memory, mutable>
     tt.return
   }
 }

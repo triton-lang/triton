@@ -71,8 +71,8 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], hasLeadingOffset = false}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.compute-capability" = 80} {
 tt.func @test_canonicalize_convert_local_load() -> tensor<256xi32, #blocked1> {
-    %0 = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, mutable>
-    %1 = ttg.local_load %0 : !ttg.memdesc<256xi32, #shared, mutable> -> tensor<256xi32, #blocked>
+    %0 = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #ttg.shared_memory, mutable>
+    %1 = ttg.local_load %0 : !ttg.memdesc<256xi32, #shared, #ttg.shared_memory, mutable> -> tensor<256xi32, #blocked>
     gpu.barrier
     %2 = ttg.convert_layout %1 : tensor<256xi32, #blocked> -> tensor<256xi32, #blocked1>
     tt.return %2 : tensor<256xi32, #blocked1>

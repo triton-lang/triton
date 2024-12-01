@@ -19,11 +19,11 @@
 // CHECK: %[[BBUFFER:.*]] = ttg.local_alloc
 // CHECK-DAG: %[[LOOP_COND_0:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_0]]
-// CHECK-DAG: %[[ASUB:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]] : !ttg.memdesc<2x128x32xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-// CHECK: %[[T_A0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]] : tensor<128x32x!tt.ptr<f16>, #blocked1> -> <128x32xf16, #shared, #ttg.shared_memory, mutable>
+// CHECK-DAG: %[[ASUB:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]] : !ttg.memdesc<2x128x32xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable, 2x128x32>
+// CHECK: %[[T_A0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]] : tensor<128x32x!tt.ptr<f16>, #blocked1> -> <128x32xf16, #shared, #ttg.shared_memory, mutable, 2x128x32>
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_0]]
 // CHECK-DAG: %[[BSUB:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] other %{{.*}} : tensor<32x128x!tt.ptr<f16>, #blocked> -> <32x128xf16, #shared1, #ttg.shared_memory, mutable>
+// CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] other %{{.*}} : tensor<32x128x!tt.ptr<f16>, #blocked> -> <32x128xf16, #shared1, #ttg.shared_memory, mutable, 2x32x128>
 // CHECK-DAG: %[[IV_1:.*]] = arith.addi %[[LB]], %[[STEP:.*]]
 // CHECK-DAG: %[[LOOP_COND_1:.*]] = arith.cmpi slt, %[[IV_1]], %[[UB]]
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_1]]
@@ -780,10 +780,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %11 = tt.broadcast %10 : tensor<128x1xi32, #blocked1> -> tensor<128x128xi32, #blocked1>
       %12 = tt.addptr %1, %11 : tensor<128x128x!tt.ptr<f8E4M3FNUZ>, #blocked1>, tensor<128x128xi32, #blocked1>
       %13 = tt.load %arg0 : tensor<128x128x!tt.ptr<f8E4M3FNUZ>, #blocked>
-      %14 = ttg.local_alloc %13 : (tensor<128x128xf8E4M3FNUZ, #blocked>) -> !ttg.memdesc<128x128xf8E4M3FNUZ, #shared>
+      %14 = ttg.local_alloc %13 : (tensor<128x128xf8E4M3FNUZ, #blocked>) -> !ttg.memdesc<128x128xf8E4M3FNUZ, #shared, #ttg.shared_memory>
       %15 = tt.load %12 : tensor<128x128x!tt.ptr<f8E4M3FNUZ>, #blocked1>
-      %16 = ttg.local_alloc %15 : (tensor<128x128xf8E4M3FNUZ, #blocked1>) -> !ttg.memdesc<128x128xf8E4M3FNUZ, #shared1>
-      %17 = ttng.warp_group_dot %14, %16, %arg9 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 1073741824 : i32} : !ttg.memdesc<128x128xf8E4M3FNUZ, #shared> * !ttg.memdesc<128x128xf8E4M3FNUZ, #shared1> -> tensor<128x128xf32, #mma>
+      %16 = ttg.local_alloc %15 : (tensor<128x128xf8E4M3FNUZ, #blocked1>) -> !ttg.memdesc<128x128xf8E4M3FNUZ, #shared1, #ttg.shared_memory>
+      %17 = ttng.warp_group_dot %14, %16, %arg9 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 1073741824 : i32} : !ttg.memdesc<128x128xf8E4M3FNUZ, #shared, #ttg.shared_memory> * !ttg.memdesc<128x128xf8E4M3FNUZ, #shared1, #ttg.shared_memory> -> tensor<128x128xf32, #mma>
       %18 = tt.splat %7 : f32 -> tensor<128x128xf32, #mma>
       %19 = arith.mulf %17, %18 : tensor<128x128xf32, #mma>
       %20 = scf.if %6 -> (tensor<128x128xf32, #mma>) {

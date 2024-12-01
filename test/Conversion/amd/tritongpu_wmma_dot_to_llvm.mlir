@@ -4,24 +4,25 @@
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], hasLeadingOffset = false}>
 #mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
 #mma2 = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2]}>
+!memdesc0 = !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   //  CHECK-LABEL: wmma1_dot_operand
-  tt.func @wmma1_dot_operand(%arg0: !ttg.memdesc<64x64xf16, #shared>) {
+  tt.func @wmma1_dot_operand(%arg0: !memdesc0) {
     // 2 CTA * 4 rep * load_per_thread_per_instr
     // CHECK-COUNT-8: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xf16>
-    %0 = ttg.local_load %arg0 : !ttg.memdesc<64x64xf16, #shared> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
+    %0 = ttg.local_load %arg0 : !memdesc0 -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
     // CHECK-COUNT-128: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xf16>
-    %1 = ttg.local_load %arg0 : !ttg.memdesc<64x64xf16, #shared> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
+    %1 = ttg.local_load %arg0 : !memdesc0 -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
     tt.return
   }
 
   //  CHECK-LABEL: wmma2_dot_operand
-  tt.func @wmma2_dot_operand(%arg0: !ttg.memdesc<64x64xf16, #shared>) {
+  tt.func @wmma2_dot_operand(%arg0: !memdesc0) {
     // 2 CTA * 4 rep * load_per_thread_per_instr
     // CHECK-COUNT-8: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<8xf16>
-    %0 = ttg.local_load %arg0 : !ttg.memdesc<64x64xf16, #shared> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>
+    %0 = ttg.local_load %arg0 : !memdesc0 -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>
     // CHECK-COUNT-64: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xf16>
-    %1 = ttg.local_load %arg0 : !ttg.memdesc<64x64xf16, #shared> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>
+    %1 = ttg.local_load %arg0 : !memdesc0 -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>
     tt.return
   }
 
@@ -168,13 +169,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0], hasLeadingOffset = false}>
 #mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 1, 4]}>
+!memdesc0 = !ttg.memdesc<4x16x32xf16, #shared, #ttg.shared_memory>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: wmma_dot_operand3d
-  tt.func @wmma_dot_operand3d(%arg0: !ttg.memdesc<4x16x32xf16, #shared>) {
+  tt.func @wmma_dot_operand3d(%arg0: !memdesc0) {
     // CHECK-COUNT-4: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xf16>
-    %0 = ttg.local_load %arg0 : !ttg.memdesc<4x16x32xf16, #shared> -> tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
+    %0 = ttg.local_load %arg0 : !memdesc0 -> tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
     // CHECK-COUNT-32: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xf16>
-    %1 = ttg.local_load %arg0 : !ttg.memdesc<4x16x32xf16, #shared> -> tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
+    %1 = ttg.local_load %arg0 : !memdesc0 -> tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
     tt.return
   }
 

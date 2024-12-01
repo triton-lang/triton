@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -canonicalize -tritongpu-loop-scheduling -tritongpu-pipeline -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -canonicalize -tritongpu-loop-scheduling -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=50 %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
@@ -108,20 +108,20 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
       %110 = tt.broadcast %109 : tensor<64x128xi64, #blocked> -> tensor<64x128xi64, #blocked>
       %111 = tt.addptr %101, %110 : tensor<64x128x!tt.ptr<f16>, #blocked>, tensor<64x128xi64, #blocked>
       %112 = tt.load %111 : tensor<64x128x!tt.ptr<f16>, #blocked>
-      %113 = ttg.local_alloc %38 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared>
-      %114 = ttg.local_alloc %90 : (tensor<128x64xf16, #blocked2>) -> !ttg.memdesc<128x64xf16, #shared1>
-      %115 = ttng.warp_group_dot %113, %114, %cst :!ttg.memdesc<128x128xf16, #shared> * !ttg.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
+      %113 = ttg.local_alloc %38 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+      %114 = ttg.local_alloc %90 : (tensor<128x64xf16, #blocked2>) -> !ttg.memdesc<128x64xf16, #shared1, #ttg.shared_memory>
+      %115 = ttng.warp_group_dot %113, %114, %cst :!ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<128x64xf16, #shared1, #ttg.shared_memory> -> tensor<128x64xf32, #mma>
       %116 = arith.truncf %115 : tensor<128x64xf32, #mma> to tensor<128x64xf16, #mma>
-      %117 = ttg.local_alloc %112 : (tensor<64x128xf16, #blocked>) -> !ttg.memdesc<64x128xf16, #shared>
+      %117 = ttg.local_alloc %112 : (tensor<64x128xf16, #blocked>) -> !ttg.memdesc<64x128xf16, #shared, #ttg.shared_memory>
       %118 = ttg.convert_layout %116 : tensor<128x64xf16, #mma> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
       // The first dot gets converted to dot-async + wait.  The second one
       // doesn't have a wait because the first wait is sufficient.
       // CHECK: ttng.warp_group_dot
-      // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+      // CHECK: ttng.warp_group_dot_wait {{.*}}, {{.*}} {pendings = 0 : i32}
       // CHECK: ttng.warp_group_dot
       // CHECK-NOT: ttng.warp_group_dot_wait
       // CHECK: scf.yield
-      %119 = ttng.warp_group_dot %118, %117, %arg23 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !ttg.memdesc<64x128xf16, #shared> -> tensor<128x128xf32, #mma1>
+      %119 = ttng.warp_group_dot %118, %117, %arg23 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !ttg.memdesc<64x128xf16, #shared, #ttg.shared_memory> -> tensor<128x128xf32, #mma1>
       %120 = arith.mulf %arg24, %arg25 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
       %121 = arith.addf %120, %arg25 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
       %122 = arith.extsi %c0_i32 : i32 to i64

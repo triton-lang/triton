@@ -14,6 +14,8 @@
 #blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #shared = #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [1, 0], hasLeadingOffset = false}>
 #mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [32, 32], isTransposed = true}>
+!memdesc0 = !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>
+!memdesc1 = !ttg.memdesc<128x128xf16, #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1], hasLeadingOffset = false}>, #ttg.shared_memory>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx90a", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @hoist_q_out_of_the_loop(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg20: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c0_i32 = arith.constant 0 : i32
@@ -34,10 +36,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %54:1 = scf.for %arg21 = %c0_i32 to %arg20 step %c128_i32 iter_args(%arg26 = %c0_i64) -> (i64)  : i32 {
       %73 = tt.splat %3 : !tt.ptr<f16> -> tensor<128x128x!tt.ptr<f16>, #blocked2>
       %74 = tt.load %73 : tensor<128x128x!tt.ptr<f16>, #blocked2>
-      %75 = ttg.local_alloc %45 : (tensor<256x128xf16, #blocked1>) -> !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>
-      %76 = ttg.local_load %75 : !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>>
-      %77 = ttg.local_alloc %74 : (tensor<128x128xf16, #blocked2>) -> !ttg.memdesc<128x128xf16, #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1], hasLeadingOffset = false}>, #ttg.shared_memory>
-      %78 = ttg.local_load %77 : !ttg.memdesc<128x128xf16, #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1], hasLeadingOffset = false}>, #ttg.shared_memory> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>>
+      %75 = ttg.local_alloc %45 : (tensor<256x128xf16, #blocked1>) -> !memdesc0
+      %76 = ttg.local_load %75 : !memdesc0 -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>>
+      %77 = ttg.local_alloc %74 : (tensor<128x128xf16, #blocked2>) -> !memdesc1
+      %78 = ttg.local_load %77 : !memdesc1 -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>>
       %79 = tt.dot %76, %78, %cst_2 : tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>> -> tensor<256x128xf32, #mfma>
       %107 = arith.addi %arg26, %c128_i64 : i64
       scf.yield %107 : i64
@@ -58,6 +60,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #shared = #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [1, 0], hasLeadingOffset = false}>
 #mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [32, 32], isTransposed = true}>
+!memdesc0 = !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>
+!memdesc1 = !ttg.memdesc<128x128xf16, #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1], hasLeadingOffset = false}>, #ttg.shared_memory>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx90a", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @no_hoist_q_type_reordering(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg20: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c0_i32 = arith.constant 0 : i32
@@ -78,10 +82,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %cst_2 = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mfma>
       %73 = tt.splat %3 : !tt.ptr<f16> -> tensor<128x128x!tt.ptr<f16>, #blocked2>
       %74 = tt.load %73 : tensor<128x128x!tt.ptr<f16>, #blocked2>
-      %75 = ttg.local_alloc %45 : (tensor<256x128xf16, #blocked1>) -> !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>
-      %76 = ttg.local_load %75 : !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>>
-      %77 = ttg.local_alloc %74 : (tensor<128x128xf16, #blocked2>) -> !ttg.memdesc<128x128xf16, #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1], hasLeadingOffset = false}>, #ttg.shared_memory>
-      %78 = ttg.local_load %77 : !ttg.memdesc<128x128xf16, #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1], hasLeadingOffset = false}>, #ttg.shared_memory> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>>
+      %75 = ttg.local_alloc %45 : (tensor<256x128xf16, #blocked1>) -> !memdesc0
+      %76 = ttg.local_load %75 : !memdesc0 -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>>
+      %77 = ttg.local_alloc %74 : (tensor<128x128xf16, #blocked2>) -> !memdesc1
+      %78 = ttg.local_load %77 : !memdesc1 -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>>
       %79 = tt.dot %76, %78, %cst_2 : tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth = 4}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 4}>> -> tensor<256x128xf32, #mfma>
       %107 = arith.addi %arg26, %c128_i64 : i64
       scf.yield %107 : i64
@@ -94,7 +98,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #mma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [32, 32], isTransposed = true}>
 #shared = #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1], hasLeadingOffset = false}>
-
+!memdesc0 = !ttg.memdesc<32x32xf32, #shared, #ttg.shared_memory, mutable>
 // CHECK-LABEL: order_load_alloc_local_load_local_store
 //       CHECK:   %[[LOAD:.+]] = tt.load
 //       CHECK:   %[[ALLOC:.+]] = ttg.local_alloc
@@ -104,10 +108,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
   tt.func public @order_load_alloc_local_load_local_store(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked>) attributes {noinline = false} {
     %9 = tt.load %arg0 : tensor<32x32x!tt.ptr<f32>, #blocked>
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
-    %10 = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #shared, mutable>
-    ttg.local_store %9, %10 : tensor<32x32xf32, #blocked> -> !ttg.memdesc<32x32xf32, #shared, mutable>
+    %10 = ttg.local_alloc : () -> !memdesc0
+    ttg.local_store %9, %10 : tensor<32x32xf32, #blocked> -> !memdesc0
     %cst_0 = arith.constant dense<1.230000e+02> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    %11 = ttg.local_load %10 : !ttg.memdesc<32x32xf32, #shared, mutable> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %11 = ttg.local_load %10 : !memdesc0 -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
     %12 = tt.dot %11, %cst_0, %cst : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<32x32xf32, #mma>
     %13 = ttg.convert_layout %12 : tensor<32x32xf32, #mma> -> tensor<32x32xf32, #blocked>
     tt.store %arg0, %13 : tensor<32x32x!tt.ptr<f32>, #blocked>
@@ -175,6 +179,16 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 #shared2 = #ttg.shared<{vec = 8, perPhase = 4, maxPhase = 2, order = [1, 0], hasLeadingOffset = false}>
 #shared3 = #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = false}>
 #shared4 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0], hasLeadingOffset = false}>
+!memdesc0_a = !ttg.memdesc<1x128x32xf16, #shared, #ttg.shared_memory, mutable>
+!memdesc0_b = !ttg.memdesc<1x32x128xf16, #shared1, #ttg.shared_memory, mutable>
+!memdesc1_a = !ttg.memdesc<2x128x32xf16, #shared, #ttg.shared_memory, mutable>
+!memdesc1_b = !ttg.memdesc<2x32x128xf16, #shared1, #ttg.shared_memory, mutable>
+!memdesc2 = !ttg.memdesc<1x16x16xf16, #shared2, #ttg.shared_memory, mutable>
+!memdesc0_a_slice = !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable, 1x128x32>
+!memdesc0_b_slice = !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable, 1x32x128>
+!memdesc1_a_slice = !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable, 1x128x32>
+!memdesc1_b_slice = !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable, 1x32x128>
+!memdesc2_slice = !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable, 1x16x16>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.target = "hip:gfx942"} {
 
 // CHECK-LABEL:  tt.func @matmul_loop
@@ -222,22 +236,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
     %8 = tt.broadcast %7 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
     %9 = tt.addptr %5, %8 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
-    %10 = ttg.local_alloc  : () -> !ttg.memdesc<1x128x32xf16, #shared, #ttg.shared_memory, mutable>
-    %11 = ttg.local_alloc  : () -> !ttg.memdesc<1x32x128xf16, #shared1, #ttg.shared_memory, mutable>
+    %10 = ttg.local_alloc  : () -> !memdesc0_a
+    %11 = ttg.local_alloc  : () -> !memdesc0_b
     %12 = arith.cmpi slt, %arg0, %arg1 : index
     %13 = tt.splat %12 : i1 -> tensor<128x32xi1, #blocked1>
     %14 = tt.load %4, %13 : tensor<128x32x!tt.ptr<f16>, #blocked1>
     %15 = tt.splat %12 : i1 -> tensor<32x128xi1, #blocked>
     %16 = tt.load %9, %15, %cst_3 : tensor<32x128x!tt.ptr<f16>, #blocked>
-    %17 = ttg.memdesc_subview %10[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x128x32xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-    ttg.local_store %14, %17 : tensor<128x32xf16, #blocked1> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-    %18 = ttg.memdesc_subview %11[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x32x128xf16, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
-    ttg.local_store %16, %18 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
+    %17 = ttg.memdesc_subview %10[%c0_i32, %c0_i32, %c0_i32] : !memdesc0_a -> !memdesc0_a_slice
+    ttg.local_store %14, %17 : tensor<128x32xf16, #blocked1> -> !memdesc0_a_slice
+    %18 = ttg.memdesc_subview %11[%c0_i32, %c0_i32, %c0_i32] : !memdesc0_b -> !memdesc0_b_slice
+    ttg.local_store %16, %18 : tensor<32x128xf16, #blocked> -> !memdesc0_b_slice
     %19:6 = scf.for %arg5 = %arg0 to %arg1 step %arg2 iter_args(%arg6 = %4, %arg7 = %9, %arg8 = %cst_2, %arg9 = %c0_i32, %arg10 = %17, %arg11 = %18) -> (tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<128x128xf32, #mma>, i32, !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>) {
       %20 = arith.subi %arg1, %arg2 : index
       %21 = arith.cmpi slt, %arg5, %20 : index
-      %22 = ttg.local_load %arg10 : !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %23 = ttg.local_load %arg11 : !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %22 = ttg.local_load %arg10 : !memdesc0_a_slice -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+      %23 = ttg.local_load %arg11 : !memdesc0_b_slice -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %24 = arith.mulf %23, %cst : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %25 = tt.dot %22, %24, %arg8 : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
       %26 = tt.addptr %arg6, %cst_1 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<128x32xi32, #blocked1>
@@ -249,10 +263,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %32 = arith.addi %arg9, %c1_i32 : i32
       %33 = arith.cmpi slt, %32, %c1_i32 : i32
       %34 = arith.select %33, %32, %c0_i32 : i32
-      %35 = ttg.memdesc_subview %10[%34, %c0_i32, %c0_i32] : !ttg.memdesc<1x128x32xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-      ttg.local_store %29, %35 : tensor<128x32xf16, #blocked1> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-      %36 = ttg.memdesc_subview %11[%34, %c0_i32, %c0_i32] : !ttg.memdesc<1x32x128xf16, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
-      ttg.local_store %31, %36 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
+      %35 = ttg.memdesc_subview %10[%34, %c0_i32, %c0_i32] : !memdesc0_a -> !memdesc0_a_slice
+      ttg.local_store %29, %35 : tensor<128x32xf16, #blocked1> -> !memdesc0_a_slice
+      %36 = ttg.memdesc_subview %11[%34, %c0_i32, %c0_i32] : !memdesc0_b -> !memdesc0_b_slice
+      ttg.local_store %31, %36 : tensor<32x128xf16, #blocked> -> !memdesc0_b_slice
       scf.yield %26, %27, %25, %34, %35, %36 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<128x128xf32, #mma>, i32, !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
     }
     ttg.local_dealloc %10 : !ttg.memdesc<1x128x32xf16, #shared, #ttg.shared_memory, mutable>
@@ -313,8 +327,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
     %8 = tt.broadcast %7 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
     %9 = tt.addptr %5, %8 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
-    %10 = ttg.local_alloc  : () -> !ttg.memdesc<2x128x32xf16, #shared, #ttg.shared_memory, mutable>
-    %11 = ttg.local_alloc  : () -> !ttg.memdesc<2x32x128xf16, #shared1, #ttg.shared_memory, mutable>
+    %10 = ttg.local_alloc  : () -> !memdesc1_a
+    %11 = ttg.local_alloc  : () -> !memdesc1_b
     %12 = arith.cmpi slt, %arg0, %arg1 : index
     %13 = tt.splat %12 : i1 -> tensor<128x32xi1, #blocked1>
     %14 = tt.load %4, %13 : tensor<128x32x!tt.ptr<f16>, #blocked1>
@@ -328,16 +342,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %22 = tt.load %19, %21 : tensor<128x32x!tt.ptr<f16>, #blocked1>
     %23 = tt.splat %18 : i1 -> tensor<32x128xi1, #blocked>
     %24 = tt.load %20, %23, %cst_3 : tensor<32x128x!tt.ptr<f16>, #blocked>
-    %25 = ttg.memdesc_subview %10[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x32xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-    ttg.local_store %14, %25 : tensor<128x32xf16, #blocked1> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-    %26 = ttg.memdesc_subview %11[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x32x128xf16, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
-    ttg.local_store %16, %26 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
+    %25 = ttg.memdesc_subview %10[%c0_i32, %c0_i32, %c0_i32] : !memdesc1_a -> !memdesc1_a_slice
+    ttg.local_store %14, %25 : tensor<128x32xf16, #blocked1> -> !memdesc1_a_slice
+    %26 = ttg.memdesc_subview %11[%c0_i32, %c0_i32, %c0_i32] : !memdesc1_b -> !memdesc1_b_slice
+    ttg.local_store %16, %26 : tensor<32x128xf16, #blocked> -> !memdesc1_b_slice
     %27:8 = scf.for %arg5 = %arg0 to %arg1 step %arg2 iter_args(%arg6 = %19, %arg7 = %20, %arg8 = %cst_2, %arg9 = %c0_i32, %arg10 = %25, %arg11 = %26, %arg12 = %22, %arg13 = %24) -> (tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<128x128xf32, #mma>, i32, !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>, tensor<128x32xf16, #blocked1>, tensor<32x128xf16, #blocked>) {
       %28 = arith.muli %arg2, %c2 : index
       %29 = arith.subi %arg1, %28 : index
       %30 = arith.cmpi slt, %arg5, %29 : index
-      %31 = ttg.local_load %arg10 : !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %32 = ttg.local_load %arg11 : !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %31 = ttg.local_load %arg10 : !memdesc1_a_slice -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+      %32 = ttg.local_load %arg11 : !memdesc1_b_slice -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %33 = arith.mulf %32, %cst : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %34 = tt.dot %31, %33, %arg8 : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
       %35 = tt.addptr %arg6, %cst_1 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<128x32xi32, #blocked1>
@@ -349,10 +363,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %41 = arith.addi %arg9, %c1_i32 : i32
       %42 = arith.cmpi slt, %41, %c2_i32 : i32
       %43 = arith.select %42, %41, %c0_i32 : i32
-      %44 = ttg.memdesc_subview %10[%43, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x32xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-      ttg.local_store %arg12, %44 : tensor<128x32xf16, #blocked1> -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
-      %45 = ttg.memdesc_subview %11[%43, %c0_i32, %c0_i32] : !ttg.memdesc<2x32x128xf16, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
-      ttg.local_store %arg13, %45 : tensor<32x128xf16, #blocked> -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>
+      %44 = ttg.memdesc_subview %10[%43, %c0_i32, %c0_i32] : !memdesc1_a -> !memdesc1_a_slice
+      ttg.local_store %arg12, %44 : tensor<128x32xf16, #blocked1> -> !memdesc1_a_slice
+      %45 = ttg.memdesc_subview %11[%43, %c0_i32, %c0_i32] : !memdesc1_b -> !memdesc1_b_slice
+      ttg.local_store %arg13, %45 : tensor<32x128xf16, #blocked> -> !memdesc1_b_slice
       scf.yield %35, %36, %34, %43, %44, %45, %38, %40 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<128x128xf32, #mma>, i32, !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory, mutable>, tensor<128x32xf16, #blocked1>, tensor<32x128xf16, #blocked>
     }
     ttg.local_dealloc %10 : !ttg.memdesc<2x128x32xf16, #shared, #ttg.shared_memory, mutable>
@@ -404,8 +418,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c0 = arith.constant 0 : index
     %c1_i32 = arith.constant 1 : i32
     %cst_0 = arith.constant dense<1> : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %0 = ttg.local_alloc  : () -> !ttg.memdesc<1x16x16xf16, #shared2, #ttg.shared_memory, mutable>
-    %1 = ttg.local_alloc  : () -> !ttg.memdesc<1x16x16xf16, #shared2, #ttg.shared_memory, mutable>
+    %0 = ttg.local_alloc  : () -> !memdesc2
+    %1 = ttg.local_alloc  : () -> !memdesc2
     %2 = arith.cmpi sgt, %arg1, %c0 : index
     %3 = tt.splat %2 : i1 -> tensor<16xi1, #ttg.slice<{dim = 1, parent = #blocked}>>
     %4 = tt.load %arg3, %3 : tensor<16x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -421,17 +435,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %14 = tt.load %12, %13 : tensor<16x16x!tt.ptr<f16>, #blocked>
     %15 = tt.splat %5 : i1 -> tensor<16xi1, #ttg.slice<{dim = 1, parent = #blocked}>>
     %16 = tt.load %6, %15 : tensor<16x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %17 = ttg.memdesc_subview %0[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x16x16xf16, #shared2, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>
-    ttg.local_store %8, %17 : tensor<16x16xf16, #blocked1> -> !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>
-    %18 = ttg.memdesc_subview %1[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x16x16xf16, #shared2, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>
-    ttg.local_store %14, %18 : tensor<16x16xf16, #blocked> -> !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>
+    %17 = ttg.memdesc_subview %0[%c0_i32, %c0_i32, %c0_i32] : !memdesc2 -> !memdesc2_slice
+    ttg.local_store %8, %17 : tensor<16x16xf16, #blocked1> -> !memdesc2_slice
+    %18 = ttg.memdesc_subview %1[%c0_i32, %c0_i32, %c0_i32] : !memdesc2 -> !memdesc2_slice
+    ttg.local_store %14, %18 : tensor<16x16xf16, #blocked> -> !memdesc2_slice
     %19:7 = scf.for %arg6 = %c0 to %arg1 step %c1 iter_args(%arg7 = %cst, %arg8 = %arg2, %arg9 = %6, %arg10 = %c0_i32, %arg11 = %17, %arg12 = %18, %arg13 = %16) -> (tensor<16x16xf32, #mma>, tensor<16x16x!tt.ptr<f16>, #blocked1>, tensor<16x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked}>>, i32, !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>, !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>, tensor<16xi64, #ttg.slice<{dim = 1, parent = #blocked}>>) {
       %20 = arith.subi %arg1, %c2 : index
       %21 = arith.cmpi slt, %arg6, %20 : index
       %22 = arith.subi %arg1, %c1 : index
       %23 = arith.cmpi slt, %arg6, %22 : index
-      %24 = ttg.local_load %arg11 : !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %25 = ttg.local_load %arg12 : !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %24 = ttg.local_load %arg11 : !memdesc2_slice -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+      %25 = ttg.local_load %arg12 : !memdesc2_slice -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %26 = tt.dot %24, %25, %arg7 : tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<16x16xf32, #mma>
       %27 = tt.addptr %arg8, %arg4 : tensor<16x16x!tt.ptr<f16>, #blocked1>, tensor<16x16xi32, #blocked1>
       %28 = tt.addptr %arg9, %cst_0 : tensor<16x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -448,10 +462,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %39 = arith.addi %arg10, %c1_i32 : i32
       %40 = arith.cmpi slt, %39, %c1_i32 : i32
       %41 = arith.select %40, %39, %c0_i32 : i32
-      %42 = ttg.memdesc_subview %0[%41, %c0_i32, %c0_i32] : !ttg.memdesc<1x16x16xf16, #shared2, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>
-      ttg.local_store %30, %42 : tensor<16x16xf16, #blocked1> -> !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>
-      %43 = ttg.memdesc_subview %1[%41, %c0_i32, %c0_i32] : !ttg.memdesc<1x16x16xf16, #shared2, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>
-      ttg.local_store %36, %43 : tensor<16x16xf16, #blocked> -> !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>
+      %42 = ttg.memdesc_subview %0[%41, %c0_i32, %c0_i32] : !memdesc2 -> !memdesc2_slice
+      ttg.local_store %30, %42 : tensor<16x16xf16, #blocked1> -> !memdesc2_slice
+      %43 = ttg.memdesc_subview %1[%41, %c0_i32, %c0_i32] : !memdesc2 -> !memdesc2_slice
+      ttg.local_store %36, %43 : tensor<16x16xf16, #blocked> -> !memdesc2_slice
       scf.yield %26, %27, %28, %41, %42, %43, %38 : tensor<16x16xf32, #mma>, tensor<16x16x!tt.ptr<f16>, #blocked1>, tensor<16x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked}>>, i32, !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>, !ttg.memdesc<16x16xf16, #shared2, #ttg.shared_memory, mutable>, tensor<16xi64, #ttg.slice<{dim = 1, parent = #blocked}>>
     }
     ttg.local_dealloc %0 : !ttg.memdesc<1x16x16xf16, #shared2, #ttg.shared_memory, mutable>
@@ -463,18 +477,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 //   CHECK-LABEL: sink_convert_dealloc
-// CHECK-COUNT-2: ttg.local_dealloc %{{.+}} : !ttg.memdesc<4x128x64xf16, #shared, mutable>
+// CHECK-COUNT-2: ttg.local_dealloc %{{.+}} : !ttg.memdesc<4x128x64xf16, #shared, #ttg.shared_memory, mutable>
 //         CHECK: ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked1>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+!memdesc0 = !ttg.memdesc<4x128x64xf16, #shared, #ttg.shared_memory, mutable>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @sink_convert_dealloc(%arg0: tensor<32x32xf32, #blocked>) attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<4x128x64xf16, #shared, mutable>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<4x128x64xf16, #shared, mutable>
+    %0 = ttg.local_alloc : () -> !memdesc0
+    %1 = ttg.local_alloc : () -> !memdesc0
     %2 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked1>
-    ttg.local_dealloc %0 : !ttg.memdesc<4x128x64xf16, #shared, mutable>
-    ttg.local_dealloc %1 : !ttg.memdesc<4x128x64xf16, #shared, mutable>
+    ttg.local_dealloc %0 : !memdesc0
+    ttg.local_dealloc %1 : !memdesc0
     %3 = arith.addf %2, %2 : tensor<32x32xf32, #blocked1>
     tt.return
   }
@@ -488,14 +503,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+!memdesc0 = !ttg.memdesc<4x128x64xf16, #shared, #ttg.shared_memory, mutable>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @anchor_barrier(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked>) attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<4x128x64xf16, #shared, mutable>
+    %0 = ttg.local_alloc : () -> !memdesc0
     gpu.barrier
     %2 = tt.load %arg0 : tensor<32x32x!tt.ptr<f16>, #blocked>
-    %1 = ttg.local_alloc %2 : (tensor<32x32xf16, #blocked>) -> !ttg.memdesc<4x128x64xf16, #shared, mutable>
-    ttg.local_dealloc %0 : !ttg.memdesc<4x128x64xf16, #shared, mutable>
-    ttg.local_dealloc %1 : !ttg.memdesc<4x128x64xf16, #shared, mutable>
+    %1 = ttg.local_alloc %2 : (tensor<32x32xf16, #blocked>) -> !memdesc0
+    ttg.local_dealloc %0 : !memdesc0
+    ttg.local_dealloc %1 : !memdesc0
     tt.return
   }
 }

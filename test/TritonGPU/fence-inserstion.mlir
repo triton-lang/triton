@@ -9,10 +9,10 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // CHECK-LABEL: matmul_like_fence
   tt.func public @matmul_like_fence(%arg0: tensor<128x128xf16, #blocked>, %arg1: tensor<128x64xf16, #blocked2>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
-    %0 = ttg.local_alloc %arg0 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared>
-    %1 = ttg.local_alloc %arg1 : (tensor<128x64xf16, #blocked2>) -> !ttg.memdesc<128x64xf16, #shared1>
+    %0 = ttg.local_alloc %arg0 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    %1 = ttg.local_alloc %arg1 : (tensor<128x64xf16, #blocked2>) -> !ttg.memdesc<128x64xf16, #shared1, #ttg.shared_memory>
     // CHECK: ttng.fence_async_shared
-    %2 = ttng.warp_group_dot %0, %1, %cst : !ttg.memdesc<128x128xf16, #shared> * !ttg.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
+    %2 = ttng.warp_group_dot %0, %1, %cst : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<128x64xf16, #shared1, #ttg.shared_memory> -> tensor<128x64xf32, #mma>
     tt.return
   }
 }
@@ -31,15 +31,15 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
     %c32_i32 = arith.constant 32 : i32
-    %0 = ttg.local_alloc %arg0 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared>
-    %1 = ttg.local_alloc %arg1 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared1>
+    %0 = ttg.local_alloc %arg0 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    %1 = ttg.local_alloc %arg1 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared1, #ttg.shared_memory>
     // CHECK: ttng.fence_async_shared
     // CHECK: scf.for
     // CHECK-NOT: ttng.fence_async_shared
     // CHECK:   ttng.warp_group_dot
     scf.for %iv0 = %c0_i32 to %c64_i32 step %c32_i32 : i32 {
       scf.for %iv1 = %c0_i32 to %c64_i32 step %c32_i32 : i32 {
-        %2 = ttng.warp_group_dot %0, %1, %cst : !ttg.memdesc<128x128xf16, #shared> * !ttg.memdesc<128x64xf16, #shared1> -> tensor<128x64xf32, #mma>
+        %2 = ttng.warp_group_dot %0, %1, %cst : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<128x64xf16, #shared1, #ttg.shared_memory> -> tensor<128x64xf32, #mma>
       }
     }
     tt.return

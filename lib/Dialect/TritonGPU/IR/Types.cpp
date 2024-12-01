@@ -55,8 +55,8 @@ Type MemDescType::parse(AsmParser &parser) {
     if (succeeded(parser.parseOptionalKeyword(kMutableMemory))) {
       mutableMemory = true;
       if (succeeded(parser.parseOptionalComma())) {
-        if (failed(parser.parseDimensionList(allocShape,
-                                             /*allowDynamic=*/false))) {
+        if (failed(parser.parseDimensionList(allocShape, /*allowDynamic=*/false,
+                                             /*withTrailingX=*/false))) {
           return Type();
         }
       }
@@ -89,7 +89,7 @@ void MemDescType::print(AsmPrinter &printer) const {
   auto allocShape = getAllocShape();
   if (allocShape != shape) {
     printer << ", " << allocShape[0];
-    for (auto dim : allocShape.take_front(1)) {
+    for (auto dim : allocShape.drop_front(1)) {
       printer << "x" << dim;
     }
   }

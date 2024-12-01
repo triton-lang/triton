@@ -1561,9 +1561,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     %20 = ttg.convert_layout %16 : tensor<32x32x!tt.ptr<f16>, #blocked> -> tensor<32x32x!tt.ptr<f16>, #blocked4>
     %21 = tt.load %20 : tensor<32x32x!tt.ptr<f16>, #blocked4>
     %22 = ttg.convert_layout %21 : tensor<32x32xf16, #blocked4> -> tensor<32x32xf16, #blocked>
-    %23 = ttg.local_alloc %22 : (tensor<32x32xf16, #blocked>) -> !ttg.memdesc<32x32xf16, #shared>
-    %24 = ttg.memdesc_trans %23 {order=array<i32: 1,0>} : !ttg.memdesc<32x32xf16, #shared> -> !ttg.memdesc<32x32xf16, #shared1>
-    %25 = ttg.local_load %24 : !ttg.memdesc<32x32xf16, #shared1> -> tensor<32x32xf16, #blocked>
+    %23 = ttg.local_alloc %22 : (tensor<32x32xf16, #blocked>) -> !ttg.memdesc<32x32xf16, #shared, #ttg.shared_memory>
+    %24 = ttg.memdesc_trans %23 {order=array<i32: 1,0>} : !ttg.memdesc<32x32xf16, #shared, #ttg.shared_memory> -> !ttg.memdesc<32x32xf16, #shared1, #ttg.shared_memory>
+    %25 = ttg.local_load %24 : !ttg.memdesc<32x32xf16, #shared1, #ttg.shared_memory> -> tensor<32x32xf16, #blocked>
     %26 = ttg.convert_layout %19 : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked5}>>
     %27 = ttg.convert_layout %25 : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked5}>>
     %28 = ttg.convert_layout %cst : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked5>
@@ -1993,10 +1993,10 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
       %67 = tt.load %66 : tensor<32x64x!tt.ptr<f16>, #blocked>
       %68 = tt.addptr %17, %65 : tensor<256x64x!tt.ptr<f16>, #blocked>, tensor<256x64xi32, #blocked>
       %69 = tt.load %68 : tensor<256x64x!tt.ptr<f16>, #blocked>
-      %70 = ttg.local_alloc %69 : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #shared>
-      %71 = ttg.memdesc_trans %70 {order=array<i32: 1,0>} : !ttg.memdesc<256x64xf16, #shared> -> !ttg.memdesc<64x256xf16, #shared1>
+      %70 = ttg.local_alloc %69 : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory>
+      %71 = ttg.memdesc_trans %70 {order=array<i32: 1,0>} : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory> -> !ttg.memdesc<64x256xf16, #shared1, #ttg.shared_memory>
       %72 = ttg.convert_layout %67 : tensor<32x64xf16, #blocked> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked3}>>
-      %73 = ttg.local_load %71 : !ttg.memdesc<64x256xf16, #shared1> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked3}>>
+      %73 = ttg.local_load %71 : !ttg.memdesc<64x256xf16, #shared1, #ttg.shared_memory> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked3}>>
       %74 = ttg.convert_layout %arg8 : tensor<32x256xf32, #blocked3> -> tensor<32x256xf32, #mma>
       %75 = ttg.convert_layout %72 : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked3}>> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
       %76 = ttg.convert_layout %73 : tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked3}>> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
