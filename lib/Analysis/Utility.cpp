@@ -408,6 +408,17 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
+GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
+    : gatherOp(gatherOp) {}
+
+unsigned GatherLoweringHelper::getScratchSizeInBytes() {
+  // For now, lower the gather op by writing the source tensor to shared memory.
+  // TODO(jeff): Leverage locality to avoid using scratch space when possible.
+  RankedTensorType srcType = gatherOp.getSrc().getType();
+  return product(srcType.getShape()) *
+         ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
+}
+
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   if (shape.empty())
     return 0;
@@ -628,7 +639,8 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&
              !cvtNeedsSharedMemory(parentTy, srcTy) &&
-             (elementTypeSize == 16 || elementTypeSize == 8);
+             (elementTypeSize == 16 || elementTypeSize == 8) &&
+             dotOperandLayout.getKWidth() == 32 / elementTypeSize;
   return ans;
 }
 

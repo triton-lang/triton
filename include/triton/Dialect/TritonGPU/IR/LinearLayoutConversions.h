@@ -241,11 +241,11 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 // TODO(Keren): We should replace tensorTy with a LinearLayout and the element
 // bit width of the tensor in the future to support more flexible tensor
 // encodings
-std::optional<LinearLayout>
-chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
-                     ArrayRef<unsigned> repShape,
-                     ArrayRef<unsigned> paddedRepShape,
-                     ArrayRef<unsigned> order, int swizzleByteSize);
+LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
+                                  ArrayRef<unsigned> repShape,
+                                  ArrayRef<unsigned> paddedRepShape,
+                                  ArrayRef<unsigned> order,
+                                  int swizzleByteSize);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

@@ -27,6 +27,11 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
+
+  bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+                      ArrayRef<unsigned> paddedRepShape,
+                      ArrayRef<unsigned> order,
+                      int swizzleByteSize) const override;
   void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
                          Value val) const override;
 

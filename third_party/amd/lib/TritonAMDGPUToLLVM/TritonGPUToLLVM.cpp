@@ -24,12 +24,10 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 using namespace mlir;
 
@@ -97,9 +95,9 @@ struct ConvertTritonAMDGPUToLLVM
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Hack: WSMaterialization may have changed the effective number of warps,
-    // in a way that isn't reflected in triton_gpu.num-warps.  If so, we have to
+    // in a way that isn't reflected in ttg.num-warps.  If so, we have to
     // respect that here.
-    if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
+    if (Attribute attr = mod->getAttr("ttg.num-warp-groups-per-cta")) {
       numWarps *= cast<IntegerAttr>(attr).getInt();
     }
 
@@ -193,6 +191,8 @@ struct ConvertTritonAMDGPUToLLVM
                       commonBenefit);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns,
                       commonBenefit);
+    populatePatterns7(mlir::triton::populateGatherOpToLLVMPatterns,
+                      commonBenefit);
 
     mlir::triton::BackendCallbacks callbacks;
     callbacks.localStoreOpConversion = storeOpConversionCallback;
@@ -256,15 +256,13 @@ private:
   }
 };
 
-} // anonymous namespace
+} // namespace
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
   return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
 }
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton

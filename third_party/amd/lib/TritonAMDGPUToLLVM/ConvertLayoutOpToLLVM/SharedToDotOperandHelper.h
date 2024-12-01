@@ -13,18 +13,16 @@ Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
 
 bool isSwizzled(gpu::SharedEncodingAttr layout);
 
-/**
- * @brief swizzling tensor element indexes according pattern encoded in
- * SharedEncodingAttr
- *
- * @param rewriter
- * @param loc
- * @param row row of target tensor element related to the start of smemObj
- * @param col col of target tensor element related to the start of smemObj
- * @param smemObj shared memory object, contains info about tensor in LDS
- * @param attr layout attribute, contains swizzling info
- * @return swizzled row, col indexes in tensor notation
- */
+/// Swizzling tensor element indexes according pattern encoded in
+/// SharedEncodingAttr
+///
+/// \param rewriter
+/// \param loc
+/// \param row row of target tensor element related to the start of smemObj
+/// \param col col of target tensor element related to the start of smemObj
+/// \param smemObj shared memory object, contains info about tensor in LDS
+/// \param attr layout attribute, contains swizzling info
+/// \returns swizzled row, col indexes in tensor notation
 std::pair<mlir::Value, mlir::Value>
 swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
                Value col, SharedMemoryObject smemObj,

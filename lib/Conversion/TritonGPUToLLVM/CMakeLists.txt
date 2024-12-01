@@ -13,6 +13,7 @@ add_triton_library(TritonGPUToLLVM
     AllocateSharedMemory.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
+    GatherOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
     FuncOpToLLVM.cpp

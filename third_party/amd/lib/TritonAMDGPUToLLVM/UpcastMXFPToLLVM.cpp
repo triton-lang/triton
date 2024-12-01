@@ -132,7 +132,7 @@ public:
     return success();
   }
 };
-} // anonymous namespace
+} // namespace
 
 void mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,

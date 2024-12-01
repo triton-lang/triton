@@ -282,6 +282,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
+    // TODO(jeff): Propagate tt.gather indices layout to dst.
   }
   return changed;
 }
@@ -709,6 +710,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     }
     return newOp;
   }
+  // TODO(jeff): Handle tt.gather once it supports layout propagation.
   llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
