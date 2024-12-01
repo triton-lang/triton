@@ -54,6 +54,12 @@ Type MemDescType::parse(AsmParser &parser) {
   if (succeeded(parser.parseOptionalComma())) {
     if (succeeded(parser.parseOptionalKeyword(kMutableMemory))) {
       mutableMemory = true;
+      if (succeeded(parser.parseOptionalComma())) {
+        if (failed(parser.parseDimensionList(allocShape,
+                                             /*allowDynamic=*/false))) {
+          return Type();
+        }
+      }
     } else if (failed(parser.parseDimensionList(allocShape,
                                                 /*allowDynamic=*/false,
                                                 /*withTrailingX=*/false))) {
@@ -61,13 +67,9 @@ Type MemDescType::parse(AsmParser &parser) {
     }
   }
 
-  if (mutableMemory && succeeded(parser.parseOptionalComma())) {
-    if (failed(parser.parseDimensionList(allocShape, /*allowDynamic=*/false)))
-      return Type();
-  }
-
   if (parser.parseGreater())
     return Type();
+
   return MemDescType::get(parser.getContext(), dimensions, elementType,
                           encoding, memorySpace, mutableMemory, dimensions);
 }
