@@ -94,7 +94,7 @@ void tt::CoarseSchedule::dump() {
 // Set <stage, cluster> based on CoarseSchedule.
 void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
   for (auto [op, stage, cluster] : getOpsInOrder(forOp)) {
-    tt::setStageCluster(forOp, op, stage, *cluster);
+    tt::setStageCluster(op, stage, *cluster);
   }
 }
 

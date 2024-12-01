@@ -236,7 +236,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-forked pytest-xdist lit
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit
       - name: Install Triton
         env:
           CUDA_HOME: "/usr/local/cuda"
@@ -569,7 +569,7 @@ jobs:
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit pybind11
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit pybind11
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_O1: "true"
@@ -581,7 +581,7 @@ jobs:
           echo "PATH is '$PATH'"
           cd python
           ccache --zero-stats
-          python3 -m pip install -v --no-build-isolation .
+          python3 -m pip install -v --no-build-isolation .[tests]
       - name: CCache Stats
         run: ccache --print-stats
       - name: Inspect cache directories
