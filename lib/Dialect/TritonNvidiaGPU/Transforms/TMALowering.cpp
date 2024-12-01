@@ -39,7 +39,7 @@ public:
     int non_unit_rank = 0;
     for (int i = 0; i < tensorType.getRank(); ++i) {
       if (tensorType.getDimSize(i) > 1)
-	non_unit_rank += 1;
+        non_unit_rank += 1;
     }
 
     if (non_unit_rank == 2) {
@@ -99,7 +99,7 @@ public:
     int non_unit_rank = 0;
     for (int i = 0; i < tensorType.getRank(); ++i) {
       if (tensorType.getDimSize(i) > 1)
-	non_unit_rank += 1;
+        non_unit_rank += 1;
     }
 
     if (non_unit_rank == 2) {

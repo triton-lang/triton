@@ -313,10 +313,11 @@ static PyObject *fillTMADescriptior(unsigned long long global_address,
   }
 
   if (non_unit_rank == 2) {
-    // For now, we do not swizzle for higher ranks, unless the rank of the box is effectively 2D.
-    // Enabling swizzling in TMA implies hasLeadingOffset = true in SMEM encoding, which is currently
-    // not supported for higher rank TMA copies. This convention needs to be in sync with
-    // the TMA lowering pass in codegen.
+    // For now, we do not swizzle for higher ranks, unless the rank of the box
+    // is effectively 2D. Enabling swizzling in TMA implies hasLeadingOffset =
+    // true in SMEM encoding, which is currently not supported for higher rank
+    // TMA copies. This convention needs to be in sync with the TMA lowering
+    // pass in codegen.
     l2Promotion = CU_TENSOR_MAP_L2_PROMOTION_L2_128B;
     uint32_t contigDimSizeInByte = elementSize * tensorDims[0];
 
