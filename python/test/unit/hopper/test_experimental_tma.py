@@ -6,7 +6,7 @@ import triton.language as tl
 from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor,
                                                   TmaDescKernelParam)
 from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma
-from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
+from triton._internal_testing import supports_tma, tma_skip_msg
 
 from typing import Optional
 
@@ -567,7 +567,9 @@ def test_experimetal_descriptor_load_4d(inner_size):
     assert torch.equal(x[2:4, 2:4, :, :], z_tri)
 
 
-def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
+def test_3d_tma_2d_load():
+    B, M, N, K, BLOCK_M, BLOCK_N = 8, 64, 64, 64, 32, 32
+
     @triton.jit
     def kernel(
         q_desc,
@@ -627,12 +629,5 @@ def test_dot3d(B, M, N, K, BLOCK_M, BLOCK_N):
         BLOCK_K=BLOCK_K,
     )
 
-    # print(out.asm["ttgir"])
-
     out_ref = np.matmul(x, y)
     np.testing.assert_allclose(out_ref, out_tri.cpu().float().numpy(), rtol=0.01, atol=1e-2)
-
-    print("ok")
-
-
-test_dot3d(8, 64, 64, 64, 32, 32)
