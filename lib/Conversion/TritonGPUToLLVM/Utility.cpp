@@ -4,7 +4,10 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Tools/Utils.h"
 #include "llvm/ADT/STLExtras.h"
+
+using ::mlir::triton::convertToFrom;
 
 namespace mlir {
 
@@ -202,7 +205,10 @@ bool emitTransferBetweenRegistersAndShared(
 
   // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
   // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
-  LinearLayout regToSharedLayout = regLayout->invertAndCompose(*sharedLayout);
+  // FIXME(lezcano): convertToFrom returns from^{-1} o to, but here we want
+  // to map from (register, lane, warp, block) to (offsetX1, ..., offsetXN,
+  // block) so invert sharedLayout.
+  LinearLayout regToSharedLayout = convertToFrom(*regLayout, *sharedLayout);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.

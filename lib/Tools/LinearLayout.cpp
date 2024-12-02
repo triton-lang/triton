@@ -7,6 +7,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/StrUtil.h"
+#include "triton/Tools/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
@@ -15,24 +16,6 @@
 #define DEBUG_TYPE "linear_layout"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
-
-#if defined(_MSC_VER) && !defined(__clang__)
-// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
-#include <intrin.h>
-
-static int __builtin_ctz(unsigned x) {
-  unsigned long r;
-  _BitScanForward(&r, x);
-  return static_cast<int>(r);
-}
-
-static int __builtin_ctzll(unsigned long long x) {
-  unsigned long r;
-  _BitScanForward64(&r, x);
-  return static_cast<int>(r);
-}
-
-#endif
 
 namespace mlir::triton {
 
@@ -60,80 +43,6 @@ void dumpMatrix(uint64_t *m, int numRows, int numCols) {
     }
     llvm::errs() << "\n";
   }
-}
-
-// Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
-// the bases of the given layout.  This can then be used by f2reduce.
-//
-// This function is called from the constructor of LinearLayout, so be careful
-// not to use any functions that create LLs in here.
-std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
-  int numRows = layout.getTotalOutDimSizeLog2();
-  int numCols = layout.getTotalInDimSizeLog2();
-
-  // Don't handle giant LLs.  This makes some things easier; for example, each
-  // row can be a single uint64_t.
-  assert(numCols <= 64 && "LinearLayout too large");
-  assert(numRows <= 64 && "LinearLayout too large");
-
-  // Suppose we have a layout specified by the following values.
-  //
-  //   L(0,1) = (0b01, 0b1)
-  //   L(0,2) = (0b10, 0b0)
-  //   L(1,0) = (0b10, 0b0)
-  //   L(2,0) = (0b11, 0b0)
-  //
-  // We will create one column per entry above.  The max bit width of the
-  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
-  // will be
-  //
-  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
-  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
-  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
-  //  |    ↓         ↓         ↓         ↓      |
-  //
-  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
-  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
-  int r = 0;
-  for (StringAttr outDim : layout.getOutDimNames()) {
-    int c = 0;
-    for (StringAttr inDim : layout.getInDimNames()) {
-      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
-        uint64_t basis = layout.getBasis(inDim, i, outDim);
-        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
-          m[r + j] |= ((basis >> j) & 1) << c;
-        }
-        c++;
-      }
-    }
-    r += layout.getOutDimSizeLog2(outDim);
-  }
-
-  return m;
-}
-
-// Get a matrix for `layout` with its codomain expanded so it's injective, i.e.
-// each input element maps to a unique output element.  We do this by finding
-// columns that are equal to 0 and adding a new row with a 1 in that column.
-std::tuple<std::unique_ptr<uint64_t[]>, int /*numRows*/, int /*numCols*/>
-getInjectiveMat(const LinearLayout &layout) {
-  int numRows = layout.getTotalOutDimSizeLog2();
-  int numCols = layout.getTotalInDimSizeLog2();
-  std::unique_ptr<uint64_t[]> mat = getMatrix(layout);
-
-  // Bits of mat or-reduced along the columns (so there's just one row).
-  uint64_t colBits = 0;
-  for (int r = 0; r < numRows; r++) {
-    colBits |= mat[r];
-  }
-  auto expanded = std::unique_ptr<uint64_t[]>(new uint64_t[numRows + numCols]);
-  std::memcpy(expanded.get(), mat.get(), numRows * sizeof(uint64_t));
-  for (int c = 0; c < numCols; c++) {
-    if ((colBits & (1 << c)) == 0) {
-      expanded[numRows++] = (1 << c);
-    }
-  }
-  return std::make_tuple(std::move(expanded), numRows, numCols);
 }
 
 // Compute the rank of the matrix formed by taking the bases for the given
@@ -328,7 +237,7 @@ LinearLayout::checkInvariants(bool requireSurjective) {
   // for an n x n matrix.  Our matrix size is sum(inDimSizeLog2) x
   // sum(outDimSizeLog2), so this should be plenty fast.
   this->surjective =
-      getMatrixRank(getMatrix(*this), /*numRows=*/getTotalOutDimSizeLog2(),
+      getMatrixRank(this->getMatrix(), /*numRows=*/getTotalOutDimSizeLog2(),
                     /*numCols=*/getTotalInDimSizeLog2()) ==
       getTotalOutDimSizeLog2();
 
@@ -804,123 +713,9 @@ LinearLayout LinearLayout::compose(const LinearLayout &outer) const {
                       compositionIsSurjective);
 }
 
-LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
-  assertDimsEqualIgnoringOrder(getOutDimNames(), outer.getOutDimNames());
-  for (StringAttr outDim : getOutDimNames()) {
-    assert(getOutDimSize(outDim) <= outer.getOutDimSize(outDim));
-  }
-  assert(outer.isSurjective());
-
-  // Make both `this` and `outer` injective.  We need to do this on the
-  // `outer` layout because we can't invert a non-injective function.  We
-  // choose to do so on the `this` layout as well.  The rest of the comment
-  // explains why we make that choice.
-  //
-  // Recall from the header that C = A.invertAndCompose(B) just means that
-  //  A(x) = B(C(x)).
-  //
-  // Sometimes we may have a choice of multiple values for a particular
-  // C(x). For example, if A(1) = B(0) = B(1) = 0, then C(1) can be either 0
-  // or 1.
-  //
-  // We want to choose C such that C(x) != 0 where possible.  For example,
-  // suppose we are transferring from registers to registers and we have the
-  // following layouts.
-  //
-  //   A(thread=1, block=0) = 1
-  //   A(thread=2, block=0) = 2
-  //   A(thread=0, block=1) = 0
-  //
-  //   B(thread=1, block=0) = 2
-  //   B(thread=2, block=0) = 1
-  //   B(thread=0, block=1) = 0
-  //
-  // Notice that A and B both have the same data in each of their two
-  // blocks. So if we want to transfer from A to B, we don't need to cross
-  // blocks, which is expensive.  We want A.invertAndCompose(B) to reflect
-  // that choice.
-  //
-  // Let A' be A with the last line changed to "=4", and similarly for B'.
-  // When transferring from A' to B', we can't cross blocks even if we wanted
-  // to, because the two blocks now have different data.  But also, any
-  // mapping of thread+block from A' to B' is also valid for mapping from A
-  // to B.
-  //
-  // Thus making A and B injective encodes our desire not to cross blocks,
-  // or more generally our desire that C(x) != 0 where possible.
-  auto [matThis, numRowsThis, numColsThis] = getInjectiveMat(*this);
-  auto [matOuter, numRowsOuter, numColsOuter] = getInjectiveMat(
-      outer.transposeOuts(llvm::to_vector(this->getOutDimNames())));
-
-  // Concatenate `matOuter` and `matThis` horizontally (i.e. `matThis`
-  // is to the right of `matOuter`).
-  int combinedNumRows = std::max(numRowsThis, numRowsOuter);
-  int combinedNumCols = numColsThis + numColsOuter;
-  assert(combinedNumCols <= 64 && "Can't handle huge layouts");
-
-  std::unique_ptr<uint64_t[]> m(new uint64_t[combinedNumRows]());
-  for (int r = 0; r < numRowsOuter; r++) {
-    m[r] = matOuter[r];
-  }
-  for (int r = 0; r < numRowsThis; r++) {
-    m[r] |= matThis[r] << numColsOuter;
-  }
-
-  // Perform Gaussian elimination on `m`.  Because `outer` was modified to
-  // be bijective, the first half of the matrix should be the identity
-  // matrix.  The remaining half are the bases for the combined
-  // transformation.
-  //
-  // `stride` is specified in number of 64-bit words per row, and we pack
-  // our matrix so that there's only one uint64_t per row.
-  f2reduce::inplace_rref_strided(m.get(), combinedNumRows, combinedNumCols,
-                                 /*stride=*/1);
-
-  // Check that the first half of the matrix is indeed the identity.
-  for (int r = 0; r < std::min(numRowsOuter, numColsOuter); r++) {
-    for (int c = 0; c < std::min(numColsOuter, numRowsOuter); c++) {
-      if (((m[r] >> c) & 1) != (r == c ? 1 : 0)) {
-        llvm::report_fatal_error("First half of the matrix was not the "
-                                 "identity, bug in invertAndCompose");
-      }
-    }
-  }
-
-  // We need names for the in/out dim of the flattened layout we're going to
-  // read off from `m`.  These could be anything, doesn't matter.
-  StringAttr inDim1D = *getInDimNames().begin();
-  StringAttr outDim1D = *getOutDimNames().begin();
-
-  // Read off the new bases.  These are for a flattened 1D -> 1D
-  // transformation from `this`'s in-dims to `outer`'s in-dims.
-  BasesT newBases;
-  auto &bs = newBases[inDim1D];
-  for (int c = 0; c < numColsThis; c++) {
-    int32_t basis = 0;
-    for (int r = 0; r < numRowsOuter; r++) {
-      basis |= (m[r] >> (numColsOuter + c) & 1) << r;
-    }
-    bs.push_back({basis});
-  }
-
-  LinearLayout flatComposed(std::move(newBases),
-                            {{outDim1D, outer.getTotalInDimSize()}},
-                            /*requireSurjective=*/false);
-
-  SmallVector<std::pair<StringAttr, int32_t>> retInDims;
-  SmallVector<std::pair<StringAttr, int32_t>> retOutDims;
-  for (StringAttr dim : getInDimNames()) {
-    retInDims.push_back({dim, getInDimSize(dim)});
-  }
-  for (StringAttr dim : outer.getInDimNames()) {
-    retOutDims.push_back({dim, outer.getInDimSize(dim)});
-  }
-  return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
-}
-
 llvm::MapVector<StringAttr, int32_t>
 LinearLayout::getFreeVariableMasks() const {
-  std::unique_ptr<uint64_t[]> mat = getMatrix(*this);
+  std::unique_ptr<uint64_t[]> mat = this->getMatrix();
   int numRows = getTotalOutDimSizeLog2();
   int numCols = getTotalInDimSizeLog2();
 
@@ -987,6 +782,56 @@ bool operator==(LinearLayout lhs, LinearLayout rhs) {
       return false;
   }
   return true;
+}
+
+// Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
+// the bases of the given layout.  This can then be used by f2reduce.
+//
+// This function is called from the constructor of LinearLayout, so be careful
+// not to use any functions that create LLs in here.
+std::unique_ptr<uint64_t[]> LinearLayout::getMatrix() const {
+  int numRows = getTotalOutDimSizeLog2();
+  int numCols = getTotalInDimSizeLog2();
+
+  // Don't handle giant LLs.  This makes some things easier; for example, each
+  // row can be a single uint64_t.
+  assert(numCols <= 64 && "LinearLayout too large");
+  assert(numRows <= 64 && "LinearLayout too large");
+
+  // Suppose we have a layout specified by the following values.
+  //
+  //   L(0,1) = (0b01, 0b1)
+  //   L(0,2) = (0b10, 0b0)
+  //   L(1,0) = (0b10, 0b0)
+  //   L(2,0) = (0b11, 0b0)
+  //
+  // We will create one column per entry above.  The max bit width of the
+  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
+  // will be
+  //
+  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
+  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
+  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
+  //  |    ↓         ↓         ↓         ↓      |
+  //
+  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
+  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
+  int r = 0;
+  for (StringAttr outDim : getOutDimNames()) {
+    int c = 0;
+    for (StringAttr inDim : getInDimNames()) {
+      for (int i = 0; i < getInDimSizeLog2(inDim); i++) {
+        uint64_t basis = getBasis(inDim, i, outDim);
+        for (int j = 0; j < getOutDimSizeLog2(outDim); j++) {
+          m[r + j] |= ((basis >> j) & 1) << c;
+        }
+        c++;
+      }
+    }
+    r += getOutDimSizeLog2(outDim);
+  }
+
+  return m;
 }
 
 bool LinearLayout::equalIgnoringOutDimSizes(const LinearLayout &other) const {

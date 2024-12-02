@@ -638,41 +638,6 @@ public:
   //
   [[nodiscard]] LinearLayout compose(const LinearLayout &outer) const;
 
-  // Inverts or pseudo-inverts `outer` and composes it with `this`.
-  //
-  // Formally, if C = A.invertAndCompose(B), then for all x, C(x) = y implies
-  // A(x) = B(y), or in other words A(x) = B(C(x)).  If B is invertible, then
-  // C(x) = B^-1(A(x)), which is how this function gets its name.
-  //
-  // For example, suppose you have the following two LLs.
-  //
-  //   - R is an LL representing registers, mapping (lane, warp) to a 2D index.
-  //   - S is an LL representing shared memory, mapping offset to a 2D index.
-  //
-  // Suppose you want to store tensor values from registers into shared memory.
-  // That is, given a (lane, warp), you want to know the corresponding shared
-  // memory offset to store into.
-  //
-  // This is equivalent to converting a (lane, warp) into a 2D index (i.e.
-  // applying R), then converting a 2D index into a shmem offset (i.e. applying
-  // the inverse of S).  R.invertAndCompose(S) computes this transformation.
-  //
-  // Notice the following requirements in order for this to work.
-  //
-  //   - R and S must have the same output dimension names (different order is
-  //     allowed).
-  //   - S must be surjective, i.e. there must be some offset for each output
-  //     dimension of S.  This way when we compose S^-1 with R, every possible
-  //     2D index that we might get from R has some shmem offset.
-  //   - The codomain of S must be at least as large as the codomain of R.
-  //     Otherwise, R could map some tensor index that is not stored in S.
-  //
-  // One requirement we *don't* have is that S is injective; we allow two shmem
-  // offsets to hold the same 2D index.  If S is not injective, there's
-  // ambiguity in which offset we choose for a given (lane, warp).  For now we
-  // don't place any guarantees on the choices made by this function.
-  [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
-
   // For each in-dim, returns a bitmask of the "free variables" in the layout
   // function.
   //
@@ -680,6 +645,14 @@ public:
   // output.  If all of the free variables are 0, then the layout is injective
   // (i.e. every input bit affects the output).
   llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
+
+  // Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2)
+  // representing the bases of the given layout.  This can then be used by
+  // f2reduce.
+  //
+  // This function is called from the constructor of LinearLayout, so be careful
+  // not to use any functions that create LLs in here.
+  std::unique_ptr<uint64_t[]> getMatrix() const;
 
   // Increase an input dimension without affecting the output dimension.  The
   // added free variables are mapped to 0, ensuring that the new input

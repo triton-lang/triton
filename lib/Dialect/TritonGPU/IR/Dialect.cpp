@@ -16,6 +16,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Utils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 // Include TableGen'erated code
@@ -1335,38 +1336,43 @@ LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   // The input dims must be {register, lane, warp, block}
   // The output dims of the linear layout should be dim0..dim[rank-1]
 
-  static const auto expectedInDims =
-      SmallVector<std::string>({"register", "lane", "warp", "block"});
-  for (const auto &[i, dims] : llvm::enumerate(
-           llvm::zip(linearLayout.getInDimNames(), expectedInDims))) {
-    const auto &[dim, expectedDimStr] = dims;
-    if (dim.str() != expectedDimStr) {
-      return emitError() << "Expected input dimension " << i << " to be '"
-                         << expectedDimStr << "'. Got " << dim;
-    }
+  if (!hasRegisterInDims(linearLayout)) {
+    return emitError() << "Expected input dimensions to be ['register', "
+                          "'lane', 'warp', 'block'].\n"
+                       // Start of Selection
+                       << "Got input dimensions: ["
+                       << llvm::join(linearLayout.getInDimNames(), ", ")
+                       << "].";
   }
 
   // outDims are ['dim0', 'dim1', ...]
-  for (auto [i, dim] : llvm::enumerate(linearLayout.getOutDimNames())) {
-    if (dim.str() != ("dim" + llvm::Twine(i)).str()) {
-      return emitError()
-             << "Expected output dimensions to be ['dim0', 'dim1', ...]. Got "
-             << dim << " at position " << i;
-    }
+  if (!hasCanonicalOutDims(linearLayout)) {
+    return emitError()
+           << "Expected output dimensions to be ['dim0', 'dim1', ...].\n"
+           << "Got output dimensions: ["
+           << llvm::join(linearLayout.getOutDimNames(), ", ") << "].";
   }
 
-  const auto &bases = linearLayout.getBases();
-  auto nonZero = [](auto val) { return val != 0; };
-  for (const auto &dimBases : llvm::make_second_range(bases)) {
-    if (!llvm::all_of(dimBases, [&](const auto &basis) {
-          return std::count_if(basis.begin(), basis.end(), nonZero) <= 1;
-        })) {
-      return emitError()
-             << "In a distributed layout, each base must move in at most one "
-                "dimension.";
+  // All bases must be powers of two or broadcast (all zeros)
+  if (!hasPowerOfTwoBases(linearLayout)) {
+    // Collect invalid bases
+    std::vector<std::string> invalidBases;
+    const auto &bases = linearLayout.getBases();
+    for (const auto &base : bases) {
+      const auto &baseVectors = base.second;
+      const auto &baseName = base.first.str();
+      for (const auto &vec : baseVectors) {
+        for (int32_t val : vec) {
+          if (val != 0 && (val & (val - 1)) != 0) {
+            invalidBases.push_back(baseName + ": " + std::to_string(val));
+          }
+        }
+      }
     }
+    return emitError() << "Expected all bases to be powers of two.\n"
+                       << "Got invalid bases: ["
+                       << llvm::join(invalidBases, ", ") << "].";
   }
-
   return success();
 }
 

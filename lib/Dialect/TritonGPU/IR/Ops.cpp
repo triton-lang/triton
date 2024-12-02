@@ -53,20 +53,8 @@ LogicalResult UpcastMXFPOp::verify() {
   if (!dotEncoding) {
     return emitOpError("Expected a DotOperandEncodingAttr for values");
   }
-  if (!isa<BlockedEncodingAttr, LinearEncodingAttr>(layoutScale)) {
-    return emitOpError(
-        "Expected a BlockOperandEncoding or LinearOperandEncoding "
-        "for scales");
-  }
-
-  if (isa<NvidiaMmaEncodingAttr>(dotEncoding.getParent())) {
-    // Necessary to keep all of the scales of a given block of values in the
-    // same warp
-    auto threadsPerWarp =
-        cast<DistributedEncodingTrait>(layoutScale).getThreadsPerWarp();
-    if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
-      return emitOpError("Expected threads per warp to be {16, 2}");
-    }
+  if (!isa<LinearEncodingAttr>(layoutScale)) {
+    return emitOpError("Expected a LinearOperandEncoding for scales");
   }
 
   // Change to support fp8 types
@@ -74,10 +62,10 @@ LogicalResult UpcastMXFPOp::verify() {
   // Figure out the K dimension for the input A/B. For A/B scale, the K
   // dimension is always the last dimension.
   const int opIdx = dotEncoding.getOpIdx();
-  const bool hasBatch = xShape.size() == 3;
+  const bool hasBatch = xShape.size() - 2;
   const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
 
-  if (xShape[kIdx] != (32 / elemsPacked) * scaleShape.back()) {
+  if (xShape[kIdx] * elemsPacked != scaleShape.back()) {
     return emitOpError("K dimension of first operand must be 16 times "
                        "larger than last/K dimension of the second operand");
   }

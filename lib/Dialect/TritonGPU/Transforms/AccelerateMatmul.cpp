@@ -14,6 +14,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
@@ -428,83 +429,30 @@ public:
       // Load 2x4-bit elements per thread
       aKWidth /= 2;
     }
-    // [Note: A trick to avoid warp shuffles in the lowering]
-    // Once we fully support LLs in the IR, we can craft an LL so that
-    // broadcasting happens effectively in the convertLayoutOp lowering. For
-    // this, we would just need to create an LL with
-    // `bases[warps] = {(0, 0), (0, 0), ...}`
 
     auto newAEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaEnc, aKWidth);
 
-    // MMAv3 uses the first dimension for the M dimension, while MMAv2 uses the
-    // penultimate (ugh)
-    auto instrShapeM =
-        mmaEnc.getInstrShape()[versionMajor == 3
-                                   ? 0
-                                   : mmaEnc.getInstrShape().size() - 2];
-    auto warpSize = getWarpSize(newAEncoding);
-    assert(instrShapeM <= warpSize);
-    // Necessary choice to leave all the scales of the tile in that given warp
-    auto threadsPerWarp =
-        SmallVector<unsigned>{instrShapeM, warpSize / instrShapeM};
-
-    // This has to align with the order in UpcastMXFPOp
-    auto order = getMatrixOrder(rank, /*rowMajor=*/true);
-    Attribute newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
-        ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(), order,
-        mmaEnc.getCTALayout());
-
-    // Lezcano: In the future we could just use the LLs unconditionally
-    // Not doing it now as they are not as performant as Blocked encoding at
-    // times E.g., we bail on them in the backwardMaterialization pass
-    auto dotBroadcastsWarpLevel = mmaEnc.getWarpsPerCTA()[1] != 1;
-    if (dotBroadcastsWarpLevel) {
-      auto kRegister = StringAttr::get(ctx, "register");
-      auto regs = identityStandardND(kRegister, {1, 1}, order);
-      auto lanes =
-          identityStandardND(StringAttr::get(ctx, "lane"), {16, 2}, order);
-
-      // Extract warp layout from dotAEncoding
-      // In the future we'll have some nice division utils, but until then...
-      auto dotLL = *newAEncoding.toLinearLayout(a.getType().getShape());
-      LinearLayout::BasesT scaleBases = dotLL.getBases();
-      auto kWarp = StringAttr::get(ctx, "warp");
-      auto &warpBases = scaleBases[kWarp];
-      // The tile shape was [16, 2 * 4 * kWidth] with broadcasting in K
-      // We divide the M dimension by 16
-      auto div = 16;
-      for (auto &warpBase : warpBases) {
-        if (warpBase[rank - 2] != 0) {
-          assert(warpBase[rank - 2] % div == 0);
-          warpBase[rank - 2] /= div;
-        }
+    // Get LinearLayout of the dot operand after unpacking
+    auto aDotType =
+        createArg(rewriter, a, 0, aType, newAEncoding, scale, {}).getType();
+    auto dotLL = *toLinearLayout(aDotType.getShape(), aDotType.getEncoding());
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto kLane = StringAttr::get(ctx, "lane");
+    // We need to broadcast the scale over 32 elements along the K dimension
+    // We know that all the bases have at most one non-zero element
+    LinearLayout::BasesT scaleBases = dotLL.getBases();
+    for (auto &base : llvm::concat<std::vector<int32_t>>(scaleBases[kRegister],
+                                                         scaleBases[kLane])) {
+      if (base.back() != 0) {
+        if (base.back() < 32)
+          base.back() = 0;
+        else
+          base.back() /= 32;
       }
-
-      LinearLayout::BasesT warpBlockBases;
-      auto standardOutDims = llvm::to_vector(dotLL.getOutDimNames());
-      warpBlockBases[kWarp] = warpBases;
-      auto kBlock = StringAttr::get(ctx, "block");
-      assert(scaleBases[kBlock].empty() && "NYI: CGAs");
-      warpBlockBases[kBlock] = {};
-      auto warpBlock = LinearLayout(std::move(warpBlockBases), standardOutDims);
-
-      auto newLL =
-          (regs * lanes) *
-          warpBlock.transposeOuts(llvm::to_vector(lanes.getOutDimNames()));
-      auto shape = scale.getType().getShape();
-
-      // Broadcast to the correct shape Equivalent to
-      // newLL = ensureLayoutNotSmallerThan(newLL.transposeOuts(getRepOrder),
-      // shape);
-      for (auto d : newAEncoding.getRepOrder()) {
-        auto outDim = standardOutDims[d];
-        auto dimSize = newLL.getOutDimSize(outDim);
-        newLL *=
-            LinearLayout::identity1D(shape[d] / dimSize, kRegister, outDim);
-      }
-      newLL = newLL.transposeOuts(standardOutDims);
-      newScaleEncoding = LinearEncodingAttr::get(ctx, std::move(newLL));
     }
+    auto newLL = LinearLayout(std::move(scaleBases),
+                              llvm::to_vector(dotLL.getOutDimNames()));
+    auto newScaleEncoding = LinearEncodingAttr::get(ctx, std::move(newLL));
 
     a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding);
 
@@ -514,7 +462,7 @@ public:
       assert(bType != ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
       auto newBEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaEnc, bKWidth);
       b = createArg(rewriter, b, 1, bType, newBEncoding,
-                    /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt);
+                    /*scale=*/{}, /*scaleEncoding=*/{});
       newDot = rewriter.create<DotOp>(scaledDotOp.getLoc(), newRetType, a, b,
                                       newAcc);
     } else {
@@ -535,40 +483,35 @@ public:
 private:
   TypedValue<RankedTensorType>
   createArg(mlir::PatternRewriter &rewriter, TypedValue<RankedTensorType> v,
-            int idx, ScaleDotElemType type, std::optional<Attribute> vEncoding,
-            std::optional<TypedValue<RankedTensorType>> opt_scale,
-            std::optional<Attribute> scaleEncoding) const {
+            int idx, ScaleDotElemType type, Attribute vEncoding,
+            TypedValue<RankedTensorType> scale, Attribute scaleEncoding) const {
     auto ctx = rewriter.getContext();
-    // Create a new tensor with a given encoding or remove the encoding
-    auto maybeWithEncoding =
-        [](RankedTensorType ty,
-           std::optional<Attribute> enc) -> RankedTensorType {
-      if (enc.has_value()) {
-        return RankedTensorType::get(ty.getShape(), ty.getElementType(), *enc);
-      } else {
-        return RankedTensorType::get(ty.getShape(), ty.getElementType());
-      }
-    };
 
-    auto newVType = maybeWithEncoding(v.getType(), vEncoding);
+    auto vType = v.getType();
+    vType = RankedTensorType::get(vType.getShape(), vType.getElementType(),
+                                  vEncoding);
     TypedValue<RankedTensorType> ret =
-        rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
+        rewriter.create<ConvertLayoutOp>(v.getLoc(), vType, v);
 
     // convert to bf16
     if (type != ScaleDotElemType::E2M1 && type != ScaleDotElemType::BF16) {
       assert(type == ScaleDotElemType::E5M2 || type == ScaleDotElemType::E4M3);
       auto vTypeBf16 = RankedTensorType::get(
-          newVType.getShape(), rewriter.getBF16Type(), newVType.getEncoding());
+          vType.getShape(), rewriter.getBF16Type(), vType.getEncoding());
       ret = cast<TypedValue<RankedTensorType>>(
           rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, ret).getResult());
     }
-    if (opt_scale.has_value()) {
-      auto scale = *opt_scale;
+    if (scale) {
       assert(idx == 0 && "NYI: rhs scale");
-      auto newScaleDotElemType =
-          maybeWithEncoding(scale.getType(), scaleEncoding);
-      scale = rewriter.create<ConvertLayoutOp>(scale.getLoc(),
-                                               newScaleDotElemType, scale);
+      auto scaleType = scale.getType();
+      auto vShape = SmallVector<int64_t>(vType.getShape());
+      if (type == ScaleDotElemType::E2M1) {
+        vShape[vShape.size() - 1] *= 2;
+      }
+      scaleType = RankedTensorType::get(vShape, scaleType.getElementType(),
+                                        scaleEncoding);
+      scale =
+          rewriter.create<ConvertLayoutOp>(scale.getLoc(), scaleType, scale);
       ret = rewriter.create<triton::gpu::UpcastMXFPOp>(v.getLoc(), ret, scale,
                                                        type);
     }
@@ -590,17 +533,16 @@ private:
     // rewriter to avoid duplicating createArg, but these ops are not going to
     // end up in the graph
     RankedTensorType aTType =
-        createArg(rewriter, a, 0, aType, /*vEncoding=*/std::nullopt, scale,
-                  /*scaleEncoding=*/std::nullopt)
+        createArg(rewriter, a, 0, aType, /*vEncoding=*/{}, scale,
+                  /*scaleEncoding=*/{})
             .getType();
     auto aTypeNoEnc =
         RankedTensorType::get(aTType.getShape(), aTType.getElementType());
     a = rewriter.create<ConvertLayoutOp>(scaledDotOp.getLoc(), aTypeNoEnc, a);
 
-    RankedTensorType bTType =
-        createArg(rewriter, b, 1, bType, /*vEncoding=*/std::nullopt,
-                  /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt)
-            .getType();
+    RankedTensorType bTType = createArg(rewriter, b, 1, bType, /*vEncoding=*/{},
+                                        /*scale=*/{}, /*scaleEncoding=*/{})
+                                  .getType();
     auto bTypeNoEnc =
         RankedTensorType::get(bTType.getShape(), bTType.getElementType());
     b = rewriter.create<ConvertLayoutOp>(scaledDotOp.getLoc(), bTypeNoEnc, b);

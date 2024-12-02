@@ -27,8 +27,7 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
 }
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [SameOperandsAndResultShape,
-                                  SameOperandsAndResultElementType,
+                                 [SameOperandsAndResultElementType,
                                   Pure]> {
   let summary = "convert layout";
 
