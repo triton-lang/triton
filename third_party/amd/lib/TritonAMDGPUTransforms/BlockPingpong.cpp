@@ -81,19 +81,14 @@ void Pingponger::transformOneWarp(OpBuilder &builder, Location loc) {
   // the congestion. Locate global load at the end. Otherwise, local_load at the
   // end of the sequence will be overlapped with the first local_stores from the
   // other warp. sched.barriers to keep the order.
-  SmallVector<Operation *> memCluster;
-
   initOpInsertion(lLoadOps[0]);
+  attachOp(builder.create<ROCDL::SetPrioOp>(loc, highPrioAttr));
+  attachOp(gLoadOps[0]);
   attachOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  memCluster.push_back(gLoadOps[0]);
-  memCluster.push_back(lLoadOps[1]);
-  memCluster.push_back(gLoadOps[1]);
-  for (auto op : memCluster) {
-    attachOp(op);
-    attachOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  }
+  attachOp(lLoadOps[1]);
+  attachOp(builder.create<ROCDL::SetPrioOp>(loc, lowPrioAttr));
+  attachOp(gLoadOps[1]);
   attachOpWithPrio(builder, dotOps[0], loc);
-  attachOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 }
 
 void Pingponger::genOffsetConstants(Location loc, OpBuilder &builder,
