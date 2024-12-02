@@ -323,8 +323,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         static_cast<const CUpti_CallbackData *>(cbData);
     auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
     if (callbackData->callbackSite == CUPTI_API_ENTER) {
-      auto scopeId = Scope::getNewScopeId();
-      threadState.record(scopeId);
+      auto scopeId = threadState.record();
       threadState.enterOp(scopeId);
       size_t numInstances = 1;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||

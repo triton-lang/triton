@@ -16,7 +16,6 @@
 
 namespace {
 
-using ::mlir::isLayoutMmaV1;
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -56,8 +55,7 @@ private:
     return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
                srcLayout) &&
            isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-               dstLayout) &&
-           !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
+               dstLayout);
   }
 
   // shared memory rd/st for blocked or mma layout with data padding
@@ -176,8 +174,8 @@ private:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
-    auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
-    auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
+    auto srcShapePerCTATile = getShapePerCTATile(srcLayout);
+    auto dstShapePerCTATile = getShapePerCTATile(dstLayout);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
     for (unsigned d = 0; d < rank; ++d) {
@@ -328,20 +326,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
-      auto dstCvt = requiresI32Conversion(dstTy);
-      auto srcCvt = requiresI32Conversion(srcTy);
-      if (dstCvt || srcCvt) {
-        auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
-        inVals = unpackI32s(inVals, srcTy, rewriter, op.getLoc(),
-                            getTypeConverter());
-        inVals =
-            packI32s(inVals, dstTy, rewriter, op.getLoc(), getTypeConverter());
-        auto res = packLLElements(op.getLoc(), getTypeConverter(), inVals,
-                                  rewriter, op.getType());
-        rewriter.replaceOp(op, res);
-      } else {
-        rewriter.replaceOp(op, adaptor.getSrc());
-      }
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
   }
@@ -358,7 +343,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
     SmallVector<Value> outVals(numRegs);
     for (int i = 0; i < numRegs; i++) {
       // Remove free masks from the register index
@@ -371,7 +355,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
-    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -388,33 +371,22 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    // TODO (Keren): Currently, we handle general mma/blocked/slice ->
-    // mma/blocked/slice conversions.
-    // The following tasks must be completed before we can remove the layoutIsOK
-    // check:
-    // 1. Support for AMD's MFMA and WMMA
+    // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
+    // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
+    // completed before we can remove the layoutIsOK check:
+    // 1. Support for AMD's WMMA dot operand
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
-      if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-        if (useLegacyMMAConversion) {
-          return false;
-        }
-        return true;
+      if (isa<MmaEncodingTrait>(layout)) {
+        return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        if (auto nvidiaMma =
-                dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
-          if (useLegacyMMAConversion) {
-            return false;
-          }
-          // FIXME [Dot LL]
-          // Enabling LL path for buggy kWidth path
-          bool largeKWidth =
-              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
-          return largeKWidth && nvidiaMma.isAmpere();
+        if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(
+                dotOperand.getParent())) {
+          return !useLegacyMMAConversion;
         }
         return false;
       }
-      if (isa<BlockedEncodingAttr>(layout)) {
+      if (isa<BlockedEncodingAttr, LinearEncodingAttr>(layout)) {
         return true;
       }
       if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -423,6 +395,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return false;
     };
     if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
+      return failure();
+    }
+    // FIXME [Dot LL] Remove this once we implement this trick in LLs
+    if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
       return failure();
     }
 
@@ -454,7 +430,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
-    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
@@ -474,7 +449,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -517,19 +491,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // don't need to avoid duplicate writes.
     // Input dims: [reg, lane, warp]
     // Output dims: [offset, iteration]
-    std::optional<LinearLayout> shmemStoreLayout =
-        chooseStMatrixLayout(ctx, op.getSrc().getType(), scratchConfig.repShape,
-                             scratchConfig.paddedRepShape, scratchConfig.order,
-                             /*swizzleByteSize=*/0);
-    bool isStMatrix = shmemStoreLayout.has_value();
-    if (!isStMatrix) {
-      shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
-    }
-    assert(shmemStoreLayout.has_value());
+    bool isStMatrix = targetInfo.canUseStMatrix(
+        op.getSrc().getType(), scratchConfig.repShape,
+        scratchConfig.paddedRepShape, scratchConfig.order,
+        /*swizzleByteSize=*/0);
+    LinearLayout shmemStoreLayout =
+        isStMatrix ? chooseStMatrixLayout(
+                         ctx, op.getSrc().getType(), scratchConfig.repShape,
+                         scratchConfig.paddedRepShape, scratchConfig.order,
+                         /*swizzleByteSize=*/0)
+                   : srcLayout.invertAndCompose(sharedLayout);
 
     const int shmemAllocatedNumElems =
         getNumScratchElements(scratchConfig.paddedRepShape);
-    assert(shmemStoreLayout->getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+    assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
 
     // Layout for the load from shmem to registers.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
@@ -537,14 +512,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Check that the `register` fully determines the `iteration`.  That is,
     // each thread does exactly the same reads and writes to shmem on each
     // iteration, just with different input/output registers.
-    assert(shmemStoreLayout->sublayoutIsZero({kLane, kWarp, kBlock},
-                                             {kIteration}));
+    assert(
+        shmemStoreLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
     assert(
         shmemLoadLayout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
 
     // iteration -> registers
     SmallVector<SmallVector<int>> inRegsForIter =
-        collectRegsForIter(ctx, *shmemStoreLayout);
+        collectRegsForIter(ctx, shmemStoreLayout);
     SmallVector<SmallVector<int>> outRegsForIter =
         collectRegsForIter(ctx, shmemLoadLayout);
 
@@ -601,7 +576,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return vecAddr;
     };
 
-    auto storeBase = applyLinearLayout(loc, rewriter, *shmemStoreLayout,
+    auto storeBase = applyLinearLayout(loc, rewriter, shmemStoreLayout,
                                        {{kRegister, i32_val(0)},
                                         {kLane, laneId},
                                         {kWarp, warpId},
@@ -624,11 +599,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
       // When using `stmatrix`, we can store `inVec` elements even if they are
       // not contiguous
-      auto inVec = isStMatrix ? shmemStoreLayout->getNumConsecutiveInOut()
+      auto inVec = isStMatrix ? shmemStoreLayout.getNumConsecutiveInOut()
                               : scratchConfig.inVec;
       for (int j = 0; j < inVals.size() / iterations; j += inVec) {
         auto inRegSlice = inRegs[j];
-        Value vecAddr = getVecAddr(*shmemStoreLayout, storeBase, inRegSlice);
+        Value vecAddr = getVecAddr(shmemStoreLayout, storeBase, inRegSlice);
         SmallVector<Value> inValsVec;
         for (int k = 0; k < inVec; k++)
           inValsVec.push_back(inVals[inRegSlice + k]);

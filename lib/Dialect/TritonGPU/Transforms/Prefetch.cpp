@@ -15,12 +15,12 @@
 //
 // %a: tensor<128x32xf16, #enc>
 // %a_tmp = tensor.subview %a[0, 0] [128, 16]
-// %a_prefetch = triton_gpu.local_load %a_tmp
+// %a_prefetch = ttg.local_load %a_tmp
 // scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch)
 // {
 //   %x = tt.dot %a_prefetch_arg, %b, %c
 //   %a_tmp_rem = tensor.subview %a_buf[0, 16] [128, 16]
-//   %a_prefetch_next = triton_gpu.local_load %a_tmp_rem
+//   %a_prefetch_next = ttg.local_load %a_tmp_rem
 //   ...
 //   scf.yield %next_a, ..., %a_prefetch_next
 // }
@@ -114,7 +114,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    std::optional<int64_t> offsetK,
                                    std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
-  auto type = cast<triton::MemDescType>(v.getType());
+  auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
   SmallVector<int64_t> offset{0, 0};
   Type elementType = type.getElementType();
@@ -136,8 +136,8 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
         builder.create<arith::ConstantIntOp>(v.getLoc(), off, 32));
   Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
       v.getLoc(),
-      triton::MemDescType::get(shape, elementType, type.getEncoding(),
-                               type.getMemorySpace()),
+      triton::gpu::MemDescType::get(shape, elementType, type.getEncoding(),
+                                    type.getMemorySpace()),
       v, offsetsVal);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(

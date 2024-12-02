@@ -1,6 +1,7 @@
 add_triton_library(TritonGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     DotOpToLLVM/FMA.cpp
+    GlobalScratchMemoryAllocation.cpp
     TypeConverter.cpp
     Utility.cpp
     ElementwiseOpToLLVM.cpp
@@ -12,6 +13,7 @@ add_triton_library(TritonGPUToLLVM
     AllocateSharedMemory.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
+    GatherOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
     FuncOpToLLVM.cpp

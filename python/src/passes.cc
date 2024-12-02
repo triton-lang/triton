@@ -64,10 +64,16 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      createAllocateSharedMemoryPass);
+  ADD_PASS_WRAPPER_0("add_allocate_global_scratch_memory",
+                     createTritonGPUGlobalScratchAllocationPass);
   ADD_PASS_WRAPPER_0("add_combine_tensor_select_and_if",
                      createTritonGPUCombineTensorSelectAndIf);
   ADD_PASS_WRAPPER_0("add_optimize_accumulator_init",
                      createTritonGPUOptimizeAccumulatorInit);
+  ADD_PASS_OPTION_WRAPPER_1("add_loop_scheduling",
+                            createTritonGPULoopScheduling, int);
+  ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
+                     createTritonGPUCoalesceAsyncCopy);
 }
 
 void init_triton_passes_convert(py::module &&m) {

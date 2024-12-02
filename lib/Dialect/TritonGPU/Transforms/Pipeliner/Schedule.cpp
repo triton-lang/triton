@@ -90,3 +90,42 @@ void tt::CoarseSchedule::dump() {
     }
   }
 }
+
+// Set <stage, cluster> based on CoarseSchedule.
+void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
+  for (auto [op, stage, cluster] : getOpsInOrder(forOp)) {
+    tt::setStageCluster(op, stage, *cluster);
+  }
+}
+
+// Create a CoarseSchedule based on forOp's <stage, cluster>.
+void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
+  auto [minClusterId, maxClusterId] = tt::getMinMaxCluster(forOp);
+
+  DenseMap<int, tt::CoarseSchedule::Cluster> clustersMap;
+  for (int i = minClusterId; i < maxClusterId + 1; i++) {
+    clustersMap.insert({i, clusters.newAtBack()});
+  }
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
+      continue;
+    auto [stage, clusterId] = tt::getStageCluster(&op);
+    insert(&op, stage, clustersMap[clusterId]);
+  }
+}
+
+// Add dependencies of anchor ops to the coarse schedule. Schedule them to
+// the same stage and ordering cluster as the anchor op.
+void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule,
+                              int numStages) {
+  SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
+      opsInOrder = schedule.getOpsInOrder(forOp);
+  // Schedule dependencies stage by stage.
+  for (int stage = 0; stage < numStages; stage++) {
+    for (auto [op, stage_, cluster] : opsInOrder) {
+      if (stage_ != stage)
+        continue;
+      schedule.insertDepsOfOp(op, stage, cluster, false);
+    }
+  }
+}

@@ -612,11 +612,17 @@ float atomicMin(float* addr, float val) {
 #if defined(__AMDGCN_UNSAFE_FP_ATOMICS__)
   return unsafeAtomicMin(addr, val);
 #else
+  typedef union u_hold {
+    float a;
+    unsigned int b;
+  } u_hold_t;
+  u_hold_t u{val};
+  bool neg_zero = 0x80000000U == u.b;
   #if __has_builtin(__hip_atomic_load) && \
       __has_builtin(__hip_atomic_compare_exchange_strong)
   float value = __hip_atomic_load(addr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
   bool done = false;
-  while (!done && value > val) {
+  while (!done && (value > val || (neg_zero && value == 0.0f))) {
     done = __hip_atomic_compare_exchange_strong(addr, &value, val,
                __ATOMIC_RELAXED, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
   }
@@ -625,7 +631,7 @@ float atomicMin(float* addr, float val) {
   unsigned int *uaddr = (unsigned int *)addr;
   unsigned int value = __atomic_load_n(uaddr, __ATOMIC_RELAXED);
   bool done = false;
-  while (!done && __uint_as_float(value) > val) {
+  while (!done && (__uint_as_float(value) > val || (neg_zero && __uint_as_float(value) == 0.0f))) {
     done = __atomic_compare_exchange_n(uaddr, &value, __float_as_uint(val), false,
                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
   }
@@ -658,11 +664,17 @@ double atomicMin(double* addr, double val) {
 #if defined(__AMDGCN_UNSAFE_FP_ATOMICS__)
   return unsafeAtomicMin(addr, val);
 #else
+  typedef union u_hold {
+    double a;
+    unsigned long long b;
+  } u_hold_t;
+  u_hold_t u{val};
+  bool neg_zero = 0x8000000000000000ULL == u.b;
   #if __has_builtin(__hip_atomic_load) && \
       __has_builtin(__hip_atomic_compare_exchange_strong)
   double value = __hip_atomic_load(addr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
   bool done = false;
-  while (!done && value > val) {
+  while (!done && (value > val || (neg_zero && value == 0.0)))  {
     done = __hip_atomic_compare_exchange_strong(addr, &value, val,
                __ATOMIC_RELAXED, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
   }
@@ -671,7 +683,8 @@ double atomicMin(double* addr, double val) {
   unsigned long long *uaddr = (unsigned long long *)addr;
   unsigned long long value = __atomic_load_n(uaddr, __ATOMIC_RELAXED);
   bool done = false;
-  while (!done && __longlong_as_double(value) > val) {
+  while (!done &&
+         (__longlong_as_double(value) > val || (neg_zero && __longlong_as_double(value) == 0.0))) {
     done = __atomic_compare_exchange_n(uaddr, &value, __double_as_longlong(val), false,
                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
   }
@@ -856,11 +869,17 @@ float atomicMax(float* addr, float val) {
 #if defined(__AMDGCN_UNSAFE_FP_ATOMICS__)
   return unsafeAtomicMax(addr, val);
 #else
+  typedef union u_hold {
+    float a;
+    unsigned int b;
+  } u_hold_t;
+  u_hold_t u{val};
+  bool neg_zero = 0x80000000U == u.b;
   #if __has_builtin(__hip_atomic_load) && \
       __has_builtin(__hip_atomic_compare_exchange_strong)
   float value = __hip_atomic_load(addr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
   bool done = false;
-  while (!done && value < val) {
+  while (!done && (value < val || (neg_zero && value == 0.0f))) {
     done = __hip_atomic_compare_exchange_strong(addr, &value, val,
                __ATOMIC_RELAXED, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
   }
@@ -869,7 +888,7 @@ float atomicMax(float* addr, float val) {
   unsigned int *uaddr = (unsigned int *)addr;
   unsigned int value = __atomic_load_n(uaddr, __ATOMIC_RELAXED);
   bool done = false;
-  while (!done && __uint_as_float(value) < val) {
+  while (!done && (__uint_as_float(value) < val || (neg_zero && __uint_as_float(value) == 0.0f))) {
     done = __atomic_compare_exchange_n(uaddr, &value, __float_as_uint(val), false,
                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
   }
@@ -902,11 +921,17 @@ double atomicMax(double* addr, double val) {
 #if defined(__AMDGCN_UNSAFE_FP_ATOMICS__)
   return unsafeAtomicMax(addr, val);
 #else
+  typedef union u_hold {
+    double a;
+    unsigned long long b;
+  } u_hold_t;
+  u_hold_t u{val};
+  bool neg_zero = 0x8000000000000000ULL == u.b;
   #if __has_builtin(__hip_atomic_load) && \
       __has_builtin(__hip_atomic_compare_exchange_strong)
   double value = __hip_atomic_load(addr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
   bool done = false;
-  while (!done && value < val) {
+  while (!done && (value < val || (neg_zero && value == 0.0))) {
     done = __hip_atomic_compare_exchange_strong(addr, &value, val,
                __ATOMIC_RELAXED, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
   }
@@ -915,7 +940,8 @@ double atomicMax(double* addr, double val) {
   unsigned long long *uaddr = (unsigned long long *)addr;
   unsigned long long value = __atomic_load_n(uaddr, __ATOMIC_RELAXED);
   bool done = false;
-  while (!done && __longlong_as_double(value) < val) {
+  while (!done &&
+         (__longlong_as_double(value) < val || (neg_zero && __longlong_as_double(value) == 0.0))) {
     done = __atomic_compare_exchange_n(uaddr, &value, __double_as_longlong(val), false,
                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
   }
@@ -977,7 +1003,7 @@ unsigned int atomicDec(unsigned int* address, unsigned int val)
 #else
   return __builtin_amdgcn_atomic_dec32(address, val, __ATOMIC_RELAXED, "agent");
 #endif // __gfx941__
-
+    
 }
 
 __device__

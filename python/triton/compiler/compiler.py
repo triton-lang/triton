@@ -25,19 +25,13 @@ import sysconfig
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
 # - (attributes \{[\S\s]+\})? : optionally match attributes enclosed in braces and capture it as group 3
-mlir_prototype_pattern = r"^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: [\S\s]+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*(attributes \{[\S\s]+\})?\s+\{\s*$"
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
-    "ttir": mlir_prototype_pattern,
-    "ttgir": mlir_prototype_pattern,
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<)]+|<[^>]+>)+(?: {[^}]+})?),?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
-    "ttir": mlir_arg_type_pattern,
-    "ttgir": mlir_arg_type_pattern,
     "ptx": ptx_arg_type_pattern,
 }
 
@@ -53,16 +47,6 @@ def convert_type_repr(x):
     if match is not None:
         return '*' + convert_type_repr(match.group(1))
     return x
-
-
-def _get_num_warps_from_ir_str(src: str):
-    ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
-    # TODO(jlebar): Using a regex to get num-warps is a hack, and will break if
-    # e.g. someone has an instruction (not module) attribute named "num-warps".
-    num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
-    assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
-    num_warps = int(num_warps_matches[0])
-    return num_warps
 
 
 class ASTSource:
@@ -107,28 +91,42 @@ class ASTSource:
 
 class IRSource:
 
-    def __init__(self, path):
+    def __init__(self, path, context, backend):
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
-        match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
-        self.name = match.group(1)
-        signature = match.group(2)
-        types = re.findall(arg_type_pattern[self.ext], signature)
-        self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
+        ir.load_dialects(context)
+        backend.load_dialects(context)
+
+        # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
+        # TODO - replace with a proper parser
+        if self.ext == "ptx":
+            match = re.search(prototype_pattern[self.ext], self.src, re.MULTILINE)
+            self.name = match.group(1)
+            signature = match.group(2)
+            types = re.findall(arg_type_pattern[self.ext], signature)
+            self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
+        else:
+            self.module = ir.parse_mlir_module(self.path, context)
+            fn_name = self.module.get_entry_func_name()
+            self.name = "@" + fn_name
+            funcOp = self.module.get_function(fn_name)
+            func_ty = self.module.get_function_signature(funcOp)
+            self.signature = {k: ty for k, ty in enumerate(func_ty)}
 
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
-        module = ir.parse_mlir_module(self.path, context)
-        module.context = context
-        return module
+        self.module.context = context
+        return self.module
 
     def parse_options(self):
         if self.ext == "ttgir":
-            return {'num_warps': _get_num_warps_from_ir_str(self.src)}
+            num_warps = self.module.get_int_attr("ttg.num-warps")
+            assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
+            return {'num_warps': num_warps}
         return dict()
 
 
@@ -153,7 +151,7 @@ def triton_key():
     # backend
     libtriton_hash = hashlib.sha256()
     ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
-    with open(os.path.join(TRITON_PATH, f"_C/libtriton.{ext}"), "rb") as f:
+    with open(os.path.join(TRITON_PATH, "_C", f"libtriton.{ext}"), "rb") as f:
         while True:
             chunk = f.read(1024**2)
             if not chunk:
@@ -225,7 +223,9 @@ def compile(src, target=None, options=None):
     # create backend
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
-        src = IRSource(src)
+        context = ir.context()
+        src = IRSource(src, context, backend)
+
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
@@ -266,9 +266,14 @@ def compile(src, target=None, options=None):
     # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
     if ir_source:
         first_stage += 1
-    context = ir.context()
-    ir.load_dialects(context)
-    backend.load_dialects(context)
+
+    # For IRSource, we have already grabbed the context + called both
+    # ir.load_dialects and backend.load_dialects.
+    if not isinstance(src, IRSource):
+        context = ir.context()
+        ir.load_dialects(context)
+        backend.load_dialects(context)
+
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
     try:

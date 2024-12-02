@@ -21,7 +21,7 @@ class TensorHandle:
         '''
             data: numpy array
             dtype: triton type, either pointer_type or scalar_type.
-            we don't store block_type here because the shape information is already availale in the data field
+            we don't store block_type here because the shape information is already available in the data field
             attr: a dictionary of attributes
         '''
         self.data = data
@@ -46,27 +46,26 @@ class TensorHandle:
 
 class BlockPointerHandle:
 
-    def __init__(self, base, shape, strides, offsets, tensor_shape, order):
+    def __init__(self, base, shape, strides, offsets, block_shape, order):
         self.base = base
         self.shape = shape
         self.strides = strides
         self.offsets = offsets
-        self.tensor_shape = tensor_shape
+        self.block_shape = block_shape
         self.order = order
 
     def materialize_pointers(self, boundary_check):
         dtype_tt = self.base.get_element_ty()
         n_bytes = dtype_tt.primitive_bitwidth // 8
-        tensor_shape = self.tensor_shape
-        ptrs = np.broadcast_to(self.base.data, self.tensor_shape)
-        masks = np.ones(self.tensor_shape, dtype=bool)
-        for dim in range(len(tensor_shape)):
-            bcast_dims = [1] * len(tensor_shape)
-            bcast_dims[dim] = tensor_shape[dim]
-            off = (self.offsets[dim].data + np.arange(tensor_shape[dim])).reshape(bcast_dims)
+        ptrs = np.broadcast_to(self.base.data, self.block_shape)
+        masks = np.ones(self.block_shape, dtype=bool)
+        for dim in range(len(self.block_shape)):
+            bcast_dims = [1] * len(self.block_shape)
+            bcast_dims[dim] = self.block_shape[dim]
+            off = (self.offsets[dim].data + np.arange(self.block_shape[dim])).reshape(bcast_dims)
             ptrs = ptrs + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
             if dim in boundary_check:
-                masks = np.logical_and(masks, off < self.shape[dim].data)
+                masks = masks & (off < self.shape[dim].data) & (off >= 0)
         ptrs = TensorHandle(ptrs, self.base.dtype.scalar)
         return ptrs, masks
 
@@ -419,7 +418,7 @@ class InterpreterBuilder:
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_fdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
-    create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
+    create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
     create_fsub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_precise_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
@@ -655,17 +654,17 @@ class InterpreterBuilder:
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
 
-    def create_make_block_ptr(self, base, shape, strides, offsets, tensor_shape, order):
+    def create_make_block_ptr(self, base, shape, strides, offsets, block_shape, order):
         # Create new offsets to avoid modifying the original
         new_offsets = [offset.clone() for offset in offsets]
-        return BlockPointerHandle(base, shape, strides, new_offsets, tensor_shape, order)
+        return BlockPointerHandle(base, shape, strides, new_offsets, block_shape, order)
 
     def create_advance(self, ptr, offsets):
         if len(ptr.offsets) != len(offsets):
             raise ValueError("len(ptr.offsets) != len(offsets)")
         # Create new offsets to avoid modifying the original
         new_offsets = [offset.clone() for offset in ptr.offsets]
-        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.tensor_shape, ptr.order)
+        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.block_shape, ptr.order)
         for i in range(len(offsets)):
             ret.offsets[i].data += offsets[i].data
         return ret
@@ -728,7 +727,7 @@ class ReduceScanOpIneterface:
 
     def to_tensor(self, ret, dtype):
         if hasattr(ret, "shape") and ret.shape:
-            ret_type = tl.block_type(dtype, ret.shape)
+            ret_type = tl.block_type(dtype, list(ret.shape))
         else:
             ret = np.array([ret]).astype(_get_np_dtype(dtype))
             ret_type = dtype
@@ -1034,9 +1033,6 @@ def _implicit_cvt(arg):
 
 interpreter_builder = InterpreterBuilder()
 
-# These keywords are not supported by the interpreter
-RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_fp_fusion", "grid", "maxnreg"]
-
 
 class GridExecutor:
 
@@ -1077,10 +1073,13 @@ class GridExecutor:
                 kwarg_dev.data.copy_(kwarg_hst.to(kwarg_dev.device).data)
 
     def __call__(self, *args_dev, **kwargs):
-        # removes reserved keywords from kwargs
-        kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
         if kwargs.pop("warmup", False):
             return
+        # Removes not used reserved keywords from kwargs
+        # Triton doesn't support keyword-only, variable positional or variable keyword arguments
+        # It's safe to inspect only positional or keyword arguments (i.e., argspec.args)
+        argspec = inspect.getfullargspec(self.fn)
+        kwargs = {k: v for k, v in kwargs.items() if k in argspec.args}
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # remaps core language functions to interpreted ones

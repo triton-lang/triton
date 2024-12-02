@@ -69,18 +69,25 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   }
 
   unsigned threadOffset = 1;
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto threadsPerWarp = getThreadsPerWarp(parentLayout);
-    threadOffset = threadsPerWarp[sliceLayout.getDim()];
-  } else {
-    auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-    auto order = getThreadOrder(srcLayout);
-    for (unsigned i = 0; i < order.size(); i++) {
-      if (order[i] == axis)
-        break;
-      threadOffset *= threadsPerWarp[order[i]];
-    }
+  SmallVector<int> dimsRemoved;
+  while (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
+    dimsRemoved.push_back(sliceLayout.getDim());
+    srcLayout = sliceLayout.getParent();
+  }
+  // In case of slice layout we want to know the axis dimension relative to the
+  // most inner parent layout. `adjustedAxis` is the matching axis dim in the
+  // parent layout.
+  int adjustedAxis = axis;
+  for (auto dim : dimsRemoved) {
+    if (dim <= adjustedAxis)
+      adjustedAxis++;
+  }
+  auto threadsPerWarp = getThreadsPerWarp(srcLayout);
+  auto order = getThreadOrder(srcLayout);
+  for (unsigned i = 0; i < order.size(); i++) {
+    if (order[i] == adjustedAxis)
+      break;
+    threadOffset *= threadsPerWarp[order[i]];
   }
   return threadOffset;
 }
@@ -401,6 +408,17 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
+GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
+    : gatherOp(gatherOp) {}
+
+unsigned GatherLoweringHelper::getScratchSizeInBytes() {
+  // For now, lower the gather op by writing the source tensor to shared memory.
+  // TODO(jeff): Leverage locality to avoid using scratch space when possible.
+  RankedTensorType srcType = gatherOp.getSrc().getType();
+  return product(srcType.getShape()) *
+         ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
+}
+
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   if (shape.empty())
     return 0;
@@ -526,7 +544,8 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy = cast<TensorOrMemDesc>(value.getType()).getElementType();
+  auto elemTy =
+      cast<triton::gpu::TensorOrMemDesc>(value.getType()).getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
@@ -620,7 +639,8 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&
              !cvtNeedsSharedMemory(parentTy, srcTy) &&
-             (elementTypeSize == 16 || elementTypeSize == 8);
+             (elementTypeSize == 16 || elementTypeSize == 8) &&
+             dotOperandLayout.getKWidth() == 32 / elementTypeSize;
   return ans;
 }
 

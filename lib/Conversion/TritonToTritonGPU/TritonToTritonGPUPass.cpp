@@ -2,12 +2,9 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -59,15 +56,10 @@ public:
     Type retType = getTypeConverter()->convertType(op.getType());
     auto retShapedType = cast<ShapedType>(retType);
     auto value = dyn_cast<DenseElementsAttr>(adaptor.getValue());
-    if (dyn_cast<RankedTensorType>(retShapedType)) {
-      assert(value);
-      if (value.getElementType().isInteger(1) && value.isSplat())
-        // Workaround until https://reviews.llvm.org/D133743 is included.
-        value =
-            DenseElementsAttr::get(retShapedType, value.getSplatValue<bool>());
-      else
-        // This is a hack. We just want to add encoding
-        value = value.reshape(retShapedType);
+    if (isa<RankedTensorType>(retShapedType)) {
+      assert(value && "expected a dense elements attribute");
+      // This is a hack. We just want to add encoding.
+      value = value.reshape(retShapedType);
     }
     addNamedAttrs(rewriter.replaceOpWithNewOp<arith::ConstantOp>(
                       op, retShapedType, value),
@@ -550,6 +542,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
       TritonTransPattern, TritonDotPattern, GenericOpPattern<triton::LoadOp>,
       GenericOpPattern<triton::StoreOp>, GenericOpPattern<triton::HistogramOp>,
+      GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,

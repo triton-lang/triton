@@ -6,22 +6,7 @@ import triton
 import triton.language as tl
 import triton.tools.experimental_descriptor
 
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hopper():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
-
-
-def is_hip_mi200():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx90a'
+from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_mi200
 
 
 def check_capabilities():
@@ -175,17 +160,17 @@ def mxfp_to_bf16_kernel(
             x_bf16 = x_f8.to(tl.bfloat16)
     else:
         # e2m1
-        em0 = x & 0x70
-        em1 = x & 0x7
-        x0 = (em0.to(tl.uint16) << 2) | ((x & 0x80).to(tl.uint16) << 8)
-        x1 = (em1.to(tl.uint16) << (2 + 4)) | ((x & 0x8).to(tl.uint16) << (8 + 4))
+        em0 = x & 0x7
+        em1 = x & 0x70
+        x0 = (em0.to(tl.uint16) << 2 + 4) | ((x & 0x8).to(tl.uint16) << 8 + 4)
+        x1 = (em1.to(tl.uint16) << (2)) | ((x & 0x80).to(tl.uint16) << (8))
         # Three cases:
         # 1) x is normal and non-zero: Correct bias
-        x0 = tl.where((em0 & 0x60) != 0, x0 + ((127 - 1) << 7), x0)
-        x1 = tl.where((em1 & 0x6) != 0, x1 + ((127 - 1) << 7), x1)
+        x0 = tl.where((em0 & 0x6) != 0, x0 + ((127 - 1) << 7), x0)
+        x1 = tl.where((em1 & 0x60) != 0, x1 + ((127 - 1) << 7), x1)
         # 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in bf16
-        x0 = tl.where(em0 == 0x10, 16128 | (x0 & 0x8000), x0)
-        x1 = tl.where(em1 == 0x1, 16128 | (x1 & 0x8000), x1)
+        x0 = tl.where(em0 == 0x1, 16128 | (x0 & 0x8000), x0)
+        x1 = tl.where(em1 == 0x10, 16128 | (x1 & 0x8000), x1)
         # 3) x is zero, do nothing
         x_bf16 = tl.interleave(x0, x1).to(tl.bfloat16, bitcast=True)
     # Multiplication preserves infs and NaNs in x_bf16
@@ -229,8 +214,8 @@ def dot_scale_ref(x, scale, y, type_x, type_y):
 @pytest.mark.parametrize("scale", [True, False])
 def test_pipeline_matmul(scale, device):
     check_capabilities()
-    if scale and not is_cuda():
-        pytest.skip("NYI: scale_dot just implemented in CUDA")
+    if scale and not (is_cuda() or is_hip_cdna()):
+        pytest.skip("NYI: scale_dot just implemented in CUDA/HIP")
     M, N, K = 512, 512, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
     NUM_STAGES = 4
@@ -292,26 +277,26 @@ def test_pipeline_matmul(scale, device):
     if is_cuda():
         ttgir = handler.asm["ttgir"]
         if use_tma:
-            assert ttgir.count("triton_nvidia_gpu.async_tma_copy_global_to_local") != 0, "async tma copy not found"
+            assert ttgir.count("ttng.async_tma_copy_global_to_local") != 0, "async tma copy not found"
             assert ttgir.count(f"num = {NUM_STAGES} : i32") == 0, "num_stages not match"
             # a_tma, b_tma, output_tma, barriar
-            assert ttgir.count("triton_gpu.local_alloc") == 4, "alloc number not match"
-            assert ttgir.count("triton_nvidia_gpu.barrier_expect") != 0, "barrier_expect not found"
-            assert ttgir.count("triton_nvidia_gpu.wait_barrier") != 0, "wait_barrier not found"
-            assert ttgir.count("triton_nvidia_gpu.warp_group_dot") != 0, "warp_group_dot not found"
+            assert ttgir.count("ttg.local_alloc") == 4, "alloc number not match"
+            assert ttgir.count("ttng.barrier_expect") != 0, "barrier_expect not found"
+            assert ttgir.count("ttng.wait_barrier") != 0, "wait_barrier not found"
+            assert ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
         else:
             # 1. check async
-            assert ttgir.count("triton_gpu.async_copy_global_to_local") != 0, "async copy not found"
+            assert ttgir.count("ttg.async_copy_global_to_local") != 0, "async copy not found"
             # 2. check number of stages
             assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
             # 3. check alloc
-            assert ttgir.count("triton_gpu.local_alloc") == 2, "alloc number not match"
+            assert ttgir.count("ttg.local_alloc") == 2, "alloc number not match"
             # 4. check dot
             cc = torch.cuda.get_device_capability()
             if cc[0] >= 9:
-                ttgir.count("triton_nvidia_gpu.warp_group_dot") != 0, "warp_group_dot not found"
+                ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
             else:
-                ttgir.count("triton_gpu.dot") != 0, "dot not found"
+                ttgir.count("ttg.dot") != 0, "dot not found"
 
 
 def test_pipeline_vecadd(device):
@@ -330,11 +315,11 @@ def test_pipeline_vecadd(device):
     if is_cuda():
         ttgir = handler.asm["ttgir"]
         # 1. check async
-        assert ttgir.count("triton_gpu.async_copy_global_to_local") != 0, "async copy not found"
+        assert ttgir.count("ttg.async_copy_global_to_local") != 0, "async copy not found"
         # 2. check number of stages
         assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
         # 3. check alloc
-        assert ttgir.count("triton_gpu.local_alloc") == 2, "alloc number not match"
+        assert ttgir.count("ttg.local_alloc") == 2, "alloc number not match"
 
 
 @pytest.mark.parametrize("ROW_COUNT", [0, 1, 2, 3])
