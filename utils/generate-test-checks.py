@@ -19,14 +19,6 @@ Example usage:
     $ mlir-opt foo.mlir -transformation | generate-test-checks.py --source foo.mlir -i
     $ mlir-opt foo.mlir -transformation | generate-test-checks.py --source foo.mlir -i --source_delim_regex='gpu.func @'
 
-To regenerate this test case ``test/TritonGPU/samples/descriptor-matmul-pipeline.mlir``, run the command:
-
-.. code-block:: shell
-
-    $ triton-opt test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in -tritongpu-loop-scheduling -tritongpu-pipeline -canonicalize | \
-    utils/generate-test-checks.py --source test/TritonGPU/samples/descriptor-matmul-pipeline.mlir.in --source_delim_regex="module" \
-    -o test/TritonGPU/samples/descriptor-matmul-pipeline.mlir
-
 The script will heuristically generate CHECK/CHECK-LABEL commands for each line
 within the file. By default this script will also try to insert string
 substitution blocks for all SSA value names. If ``--source file`` is specified, the
