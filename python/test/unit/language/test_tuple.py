@@ -74,7 +74,7 @@ def _tuple_fn0(Ptr, cst2: tl.constexpr, tuple1):
 # test serialization/deserialization of tuple arguments in
 # the frontend.
 @triton.jit
-def _tuple_serdes(Ptr, N1, tuple1, cst1: tl.constexpr, val1, tuple2):
+def _tuple_serialize(Ptr, N1, tuple1, cst1: tl.constexpr, val1, tuple2):
     tl.static_assert(N1 is None)
     tl.static_assert(tuple1[1][1] is None)
     tl.store(Ptr + 0, tl.load(tuple1[0]))
@@ -84,18 +84,12 @@ def _tuple_serdes(Ptr, N1, tuple1, cst1: tl.constexpr, val1, tuple2):
     tl.store(Ptr + 4, tl.load(tuple2[0]))
     _tuple_fn0(Ptr, 15, (-1, tuple1))
 
-def test_serdes(device="cuda"):
+def test_serialize(device="cuda"):
     x0 = torch.tensor([8], dtype=torch.int32, device=device)
     x1 = torch.tensor([12], dtype=torch.int32, device=device)
     y0 = torch.tensor([10], dtype=torch.int32, device=device)
     z = torch.empty((10,), dtype=torch.int32, device=device)
     # we want to check that JIT specialization propagates to tuples:
-    _tuple_serdes[(1,)](z, None, (x0, (1, None, x1)), 20, 1, (y0,))
+    _tuple_serialize[(1,)](z, None, (x0, (1, None, x1)), 20, 1, (y0,))
     ref = torch.tensor([8, 1, 12, 21, 10,15, -1, 8, 1, 12], device=device)
     assert torch.equal(z, ref)
-    
-
-# function call (tuple argument)
-# function call (tuple return value)
-# __getitem__ and __setitem__
-# assignment (into a tuple, from a tuple)
