@@ -416,7 +416,7 @@ jobs:
           #TODO: find a cleaner way to do these Rocm/ASAN paths
           export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
           export LD_LIBRARY_PATH=/opt/rocm-6.2.2/lib/llvm/lib/clang/18/lib/linux/:/opt/rocm-6.2.2/lib/asan/:$LD_LIBRARY_PATH
-          export LD_LIBRARY_PATH=$(find usr -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find /usr -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
           ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0 LD_PRELOAD=/opt/rocm-6.2.2/lib/llvm/lib/clang/18/lib/linux/libclang_rt.asan-x86_64.so:/opt/rocm-6.2.2/lib/asan/libamdhip64.so python3 -m pytest -s test_address_sanitizer.py
       - name: Run regression tests
         run: |
