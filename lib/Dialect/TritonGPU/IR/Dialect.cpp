@@ -1913,8 +1913,8 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "version = " << getVersion() << ", isTranspose"
-          << getIsTransposed() << ", warpsPerCTA = ["
+          << "version = " << getVersion()
+          << ", isTranspose = " << getIsTransposed() << ", warpsPerCTA = ["
           << ArrayRef(getWarpsPerCTA()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());

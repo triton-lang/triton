@@ -1499,7 +1499,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v2_2x4Warps) {
                          {S("dim0"), S("dim1")}));
   EXPECT_EQ(
       toLinearLayout({64, 128}, layout),
-      LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}, {0, 64}}},
+      LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {0, 64}, {32, 0}}},
                     {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
                     {S("warp"), {{0, 16}, {0, 32}, {16, 0}}},
                     {S("block"), {}}},
@@ -1532,11 +1532,11 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v2_2x2x2Warps) {
             {{0, 1, 0},
              {0, 2, 0},
              {0, 4, 0},
-             {0, 32, 0},
              {0, 0, 32},
+             {0, 32, 0},
              {2, 0, 0}}},
            {S("lane"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}, {0, 0, 8}, {0, 8, 0}}},
-           {S("warp"), {{0, 16, 0}, {0, 0, 16}, {1, 0, 0}}},
+           {S("warp"), {{0, 0, 16}, {0, 16, 0}, {1, 0, 0}}},
            {S("block"), {}}},
           {S("dim0"), S("dim1"), S("dim2")}));
 }
@@ -1545,27 +1545,27 @@ TEST_F(LinearLayoutConversionsTest, TWMMA_v2_2x4Warps) {
   auto layout = wmma(/*warps=*/{2, 4}, /*version=*/2, /*transposed=*/true);
 
   EXPECT_EQ(toLinearLayout({16, 16}, layout),
-            LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
-                          {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
+            LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
+                          {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
                           {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
   EXPECT_EQ(toLinearLayout({32, 16}, layout),
-            LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
-                          {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
+            LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
+                          {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
                           {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
   EXPECT_EQ(toLinearLayout({16, 32}, layout),
-            LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
-                          {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
+            LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
+                          {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
                           {S("warp"), {{0, 16}, {0, 0}, {0, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
   EXPECT_EQ(
       toLinearLayout({64, 128}, layout),
-      LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}, {0, 64}}},
-                    {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
+      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 64}, {32, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
                     {S("warp"), {{0, 16}, {0, 32}, {16, 0}}},
                     {S("block"), {}}},
                    {S("dim0"), S("dim1")}));
@@ -1577,16 +1577,16 @@ TEST_F(LinearLayoutConversionsTest, TWMMA_v2_2x2x2Warps) {
   EXPECT_EQ(
       toLinearLayout({1, 16, 16}, layout),
       LinearLayout(
-          {{S("register"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
-           {S("lane"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}, {0, 0, 8}, {0, 8, 0}}},
+          {{S("register"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}}},
+           {S("lane"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}, {0, 8, 0}, {0, 0, 8}}},
            {S("warp"), {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}},
            {S("block"), {}}},
           {S("dim0"), S("dim1"), S("dim2")}));
   EXPECT_EQ(
       toLinearLayout({2, 16, 16}, layout),
       LinearLayout(
-          {{S("register"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
-           {S("lane"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}, {0, 0, 8}, {0, 8, 0}}},
+          {{S("register"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}}},
+           {S("lane"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}, {0, 8, 0}, {0, 0, 8}}},
            {S("warp"), {{0, 0, 0}, {0, 0, 0}, {1, 0, 0}}},
            {S("block"), {}}},
           {S("dim0"), S("dim1"), S("dim2")}));
@@ -1594,14 +1594,14 @@ TEST_F(LinearLayoutConversionsTest, TWMMA_v2_2x2x2Warps) {
       toLinearLayout({4, 64, 64}, layout),
       LinearLayout(
           {{S("register"),
-            {{0, 1, 0},
-             {0, 2, 0},
-             {0, 4, 0},
-             {0, 32, 0},
+            {{0, 0, 1},
+             {0, 0, 2},
+             {0, 0, 4},
              {0, 0, 32},
+             {0, 32, 0},
              {2, 0, 0}}},
-           {S("lane"), {{0, 0, 1}, {0, 0, 2}, {0, 0, 4}, {0, 0, 8}, {0, 8, 0}}},
-           {S("warp"), {{0, 16, 0}, {0, 0, 16}, {1, 0, 0}}},
+           {S("lane"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}, {0, 8, 0}, {0, 0, 8}}},
+           {S("warp"), {{0, 0, 16}, {0, 16, 0}, {1, 0, 0}}},
            {S("block"), {}}},
           {S("dim0"), S("dim1"), S("dim2")}));
 }
