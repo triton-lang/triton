@@ -118,7 +118,7 @@ class CudaUtils(object):
 
 
 def ty_to_cpp(ty):
-    if ty[0] == '*':
+    if ty[0] == '*' or ty == "none":
         return "CUdeviceptr"
     return {
         "i1": "int32_t",
@@ -140,25 +140,6 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def _serialize_type(type):
-    if type[0] == '[':
-        return [] if type == "[]" else type[1:-1].split(',')
-    return [type]
-
-
-def _serialize_signature(signature):
-    ret = dict()
-    map = dict()
-    i = 0
-    for _, type in signature.items():
-        types = _serialize_type(type)
-        ret.update({i + j: ty for j, ty in enumerate(types)})
-        for ii in range(len(types)):
-            map[i + ii] = _
-        i += len(types)
-    return ret, map
-
-
 def make_launcher(constants, signature, ids):
 
     def _extracted_type(ty):
@@ -175,6 +156,8 @@ def make_launcher(constants, signature, ids):
         return ty_to_cpp(ty)
 
     def format_of(ty):
+        if ty == "CUdeviceptr":
+          return "O"
         if ty[0] == "[":
             if ty == "[]":
                 return "()"

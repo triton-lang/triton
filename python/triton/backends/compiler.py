@@ -116,7 +116,7 @@ class AttrsDescriptor:
         # Equal to 1 property
         equal_to_1 = []
         for param, arg in zip(params, values):
-            if not AttrsDescriptor.is_equal_to_1(arg) or param.do_not_specialize:
+            if param.do_not_specialize:
                 continue
             paths = find_paths_if(arg, AttrsDescriptor.is_equal_to_1)
             equal_to_1 += [(param.num,) + x for x in paths]
@@ -125,7 +125,7 @@ class AttrsDescriptor:
         # Equal to None property
         equal_to_none = []
         for param, arg in zip(params, values):
-            if arg is not None or param.do_not_specialize:
+            if param.do_not_specialize:
                 continue
             paths = find_paths_if(arg, lambda v: v is None)
             equal_to_none += [(param.num,) + x for x in paths]

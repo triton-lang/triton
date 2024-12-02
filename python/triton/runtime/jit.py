@@ -609,7 +609,8 @@ class JITFunction(KernelInterface[T]):
             # and None arguments, resulting in a downstream mismatch:
             sigkeys = [param.name for param in self.params]
             sigvals = sig_and_spec[:len(sigkeys)]
-            signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
+            signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
+            # signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
             constants = {
