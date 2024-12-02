@@ -567,6 +567,7 @@ def test_experimetal_descriptor_load_4d(inner_size):
     assert torch.equal(x[2:4, 2:4, :, :], z_tri)
 
 
+@requires_tma
 def test_3d_tma_2d_load():
     B, M, N, K, BLOCK_M, BLOCK_N = 8, 64, 64, 64, 32, 32
 
