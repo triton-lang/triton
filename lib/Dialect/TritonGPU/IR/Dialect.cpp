@@ -3353,6 +3353,9 @@ LogicalResult MemDescSubviewOp::verify() {
              << i;
     }
   }
+  if (srcTy.getRank() == 2 && dstTy.getRank() < 2) {
+    return emitError("cannot rank-reduce a 2D tensor to a 1D tensor");
+  }
 
   auto srcEnc = srcTy.getEncoding();
   auto dstEnc = dstTy.getEncoding();

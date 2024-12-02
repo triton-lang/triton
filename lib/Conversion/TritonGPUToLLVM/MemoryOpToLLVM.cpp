@@ -25,11 +25,9 @@ void lowerDistributedToShared(
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
-  auto smemBase = smemObj.getBase();
-  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
-                           loc, rewriter, targetInfo, llvmOpCount);
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
+                           targetInfo, llvmOpCount);
 }
 
 struct GlobalScratchAllocOpConversion

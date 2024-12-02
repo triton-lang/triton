@@ -391,9 +391,7 @@ struct MemDescSubviewOpConversion
     size_t destRank = op.getResult().getType().getRank();
     SmallVector<Value> offsetVals;
     SmallVector<Value> strides;
-    // Don't reduce rank if src rank is <= 2 because we mostly use shared memory
-    // for dot ops that requires 2D tensors
-    int rankReduced = srcTy.getRank() > 2 ? srcTy.getRank() - destRank : 0;
+    int rankReduced = srcTy.getRank() - destRank;
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
       strides.push_back(smemObj.strides[i]);
       offsetVals.push_back(add(opOffsetVals[i], smemObj.offsets[i]));
