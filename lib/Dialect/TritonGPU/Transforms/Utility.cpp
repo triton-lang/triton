@@ -1164,8 +1164,8 @@ getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
   StringAttr kBlock = StringAttr::get(ctx, ("block"));
   int rank = shape.size();
 
-  std::optional<LinearLayout> regLayout =
-      triton::gpu::toLinearLayout(shape, srcEnc, std::nullopt, inThreadTranspose);
+  std::optional<LinearLayout> regLayout = triton::gpu::toLinearLayout(
+      shape, srcEnc, std::nullopt, inThreadTranspose);
   std::optional<LinearLayout> sharedLayout =
       triton::gpu::toLinearLayout(shape, dstEnc, elemBitWidth);
   if (!regLayout.has_value() || !sharedLayout.has_value()) {
