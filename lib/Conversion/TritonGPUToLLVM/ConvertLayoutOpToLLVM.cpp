@@ -380,8 +380,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr,
-                AMDWmmaEncodingAttr>(dotOperand.getParent())) {
+        if (isa<MmaEncodingTrait>(dotOperand.getParent())) {
           return !useLegacyMMAConversion;
         }
         return false;
