@@ -288,11 +288,6 @@ jobs:
           python3 -m pytest -s hopper/test_flashattention.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
           python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
-          #TODO: find a cleaner way to do these Rocm/ASAN paths
-          export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
-          export LD_LIBRARY_PATH=/opt/rocm-6.2.2/lib/llvm/lib/clang/18/lib/linux/:/opt/rocm-6.2.2/lib/asan/:$LD_LIBRARY_PATH
-          export LD_LIBRARY_PATH=$(find usr -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
-          ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0 LD_PRELOAD=/opt/rocm-6.2.2/lib/llvm/lib/clang/18/lib/linux/libclang_rt.asan-x86_64.so:/opt/rocm-6.2.2/lib/asan/libamdhip64.so python3 -m pytest -s test_address_sanitizer.py
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
         env:
@@ -418,7 +413,11 @@ jobs:
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
-
+          #TODO: find a cleaner way to do these Rocm/ASAN paths
+          export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
+          export LD_LIBRARY_PATH=/opt/rocm-6.2.2/lib/llvm/lib/clang/18/lib/linux/:/opt/rocm-6.2.2/lib/asan/:$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find usr -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
+          ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0 LD_PRELOAD=/opt/rocm-6.2.2/lib/llvm/lib/clang/18/lib/linux/libclang_rt.asan-x86_64.so:/opt/rocm-6.2.2/lib/asan/libamdhip64.so python3 -m pytest -s test_address_sanitizer.py
       - name: Run regression tests
         run: |
           # Reenable test_functional_regression.py once it's fixed
