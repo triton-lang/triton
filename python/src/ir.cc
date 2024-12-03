@@ -384,6 +384,7 @@ void init_triton_ir(py::module &&m) {
   py::class_<Attribute>(m, "attribute", py::module_local());
   py::class_<IntegerAttr, Attribute>(m, "integer_attr", py::module_local());
   py::class_<BoolAttr, Attribute>(m, "bool_attr", py::module_local());
+  py::class_<StringAttr, Attribute>(m, "string_attr", py::module_local());
 
   // Ops
   py::class_<OpState>(m, "OpState", py::module_local())
@@ -682,6 +683,10 @@ void init_triton_ir(py::module &&m) {
       .def("get_int32_attr",
            [](TritonOpBuilder &self, int32_t value) {
              return self.getBuilder().getI32IntegerAttr(value);
+           })
+      .def("get_string_attr",
+           [](TritonOpBuilder &self, const std::string &value) {
+             return self.getBuilder().getStringAttr(value);
            })
       // Use arith.ConstantOp to create constants
       // Constants

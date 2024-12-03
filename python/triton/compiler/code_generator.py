@@ -929,6 +929,7 @@ class CodeGenerator(ast.NodeVisitor):
             return
         num_stages = None
         loop_unroll_factor = None
+        loop_schedule = None
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -939,6 +940,7 @@ class CodeGenerator(ast.NodeVisitor):
             step = iterator.step
             num_stages = iterator.num_stages
             loop_unroll_factor = iterator.loop_unroll_factor
+            loop_schedule = iterator.loop_schedule
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -1013,6 +1015,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
             if loop_unroll_factor is not None:
                 for_op.set_attr("tt.loop_unroll_factor", self.builder.get_int32_attr(loop_unroll_factor))
+            if loop_schedule is not None:
+                for_op.set_attr("tt.loop_schedule", self.builder.get_string_attr(loop_schedule.value))
 
             self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)

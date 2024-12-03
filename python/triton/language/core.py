@@ -2731,7 +2731,7 @@ class range:
 
         @triton.jit
         def kernel(...):
-            for i in tl.range(10, num_stages=3):
+            for i in tl.range(10, num_stages=3, loop_schedule="Default"):
                 ...
     :note: This is a special iterator used to implement similar semantics to Python's :code:`range` in the context of
         :code:`triton.jit` functions. In addition, it allows user to pass extra attributes to the compiler.
@@ -2748,9 +2748,10 @@ class range:
     :param loop_unroll_factor: Tells the Triton IR level loop unroller how many
         times to unroll a for loop that this range is used with. Less than 2 for
         this value implies no unrolling.
+    :param loop_schedule: specify a scheduling policy for the loop.
     """
 
-    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None):
+    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None, loop_schedule=None):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2763,6 +2764,7 @@ class range:
             self.end = arg2
         self.num_stages = num_stages
         self.loop_unroll_factor = loop_unroll_factor
+        self.loop_schedule = loop_schedule
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
