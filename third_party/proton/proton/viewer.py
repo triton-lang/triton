@@ -28,8 +28,37 @@ def match_available_metrics(metrics, raw_metrics):
     return ret
 
 
+def remove_metadata(database: json):
+    # Find all frames with the name COMPUTE_METADATA_SCOPE_NAME, remove them and their children
+    # Then go up from the metadata node and remove the parent if all its children were
+    # metadata nodes
+    def remove_metadata_helper(node):
+        if "frame" not in node:
+            return node
+        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME:
+            return None
+        children = node.get("children", [])
+        new_children = []
+        for child in children:
+            new_child = remove_metadata_helper(child)
+            if new_child is not None:
+                new_children.append(new_child)
+        if len(new_children) > 0 or len(children) == 0:
+            node["children"] = new_children
+            return node
+        return None
+
+    new_database = []
+    for node in database:
+        new_node = remove_metadata_helper(node)
+        if new_node is not None:
+            new_database.append(new_node)
+    return new_database
+
+
 def get_raw_metrics(file):
     database = json.load(file)
+    database = remove_metadata(database)
     device_info = database.pop(1)
     gf = ht.GraphFrame.from_literal(database)
     return gf, gf.show_metric_columns(), device_info
@@ -180,9 +209,6 @@ WHERE p."name" =~ "{exclude}"
 """
         query = NegationQuery(inclusion_query)
         gf = gf.filter(query, squash=True)
-    # filter out metadata computation
-    query = [{"name": f"^(?!{COMPUTE_METADATA_SCOPE_NAME}).*"}]
-    gf = gf.filter(query, squash=True)
     if threshold:
         query = ["*", {metric: f">= {threshold}"}]
         gf = gf.filter(query, squash=True)
@@ -278,7 +304,7 @@ proton-viewer -i ".*test.*" path/to/file.json
         type=str,
         default=None,
         help="""Exclude frames that match the given regular expression and their children.
-For example, the following command will exclude all paths starting from "test":
+For example, the following command will exclude all paths starting from frames that contains "test":
 ```
 proton-viewer -e ".*test.*" path/to/file.json
 ```

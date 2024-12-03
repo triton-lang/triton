@@ -149,6 +149,11 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           distance++;
         }
         for (Value operand : op->getOperands()) {
+          if (op->hasTrait<OpTrait::DotLike>()) {
+            // Heuristic: only pipeline A and B operands of the dot op.
+            if (operand == op->getOperand(2))
+              continue;
+          }
           Value v = operand;
           Operation *defOp = v.getDefiningOp();
           if (defOp && defOp->getBlock() == op->getBlock()) {

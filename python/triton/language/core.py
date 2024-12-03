@@ -1098,6 +1098,9 @@ class tensor(_value):
     def associative_scan(self, axis, combine_fn, reverse=False) -> tensor:
         ...
 
+    def gather(self, indices, axis) -> tensor:
+        ...
+
     def histogram(self, num_bins) -> tensor:
         ...
 
@@ -1647,16 +1650,16 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     lhs and rhs use microscaling formats described here:
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
     :param lhs: The first tensor to be multiplied.
-    :type lhs: 2D tensor representing fp4 or fp8 elements packed into uint8 for fp4 inputs, or in uint8 or the corresponding fp8 type for fp8 inputs.
+    :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param lhs_scale: Scale factor for lhs tensor.
     :type lhs_scale: e8m0 type represented as an uint8 tensor.
-    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`}.
+    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
     :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
-    :type rhs: 2D tensor representing fp8 or bf16 elements in uint8 or the corresponding fp8 type for fp8 inputs or bf16 for bf16 inputs.
+    :type rhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param rhs_scale: Scale factor for rhs tensor.
     :type rhs_scale: e8m0 type represented as an uint8 tensor.
-    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
+    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     """
@@ -2345,6 +2348,23 @@ def histogram(input, num_bins, _builder=None, _generator=None):
     """
     num_bins = _constexpr_to_value(num_bins)
     return semantic.histogram(input, num_bins, _builder)
+
+
+@_tensor_member_fn
+@builtin
+def gather(src, index, axis, _builder=None):
+    """Gather from a tensor along a given dimension.
+
+    :param src: the source tensor
+    :type src: Tensor
+    :param index: the index tensor
+    :type index: Tensor
+    :param axis: the dimension to gather along
+    :type axis: int
+
+    """
+    axis = _constexpr_to_value(axis)
+    return semantic.gather(src, index, axis, _builder)
 
 
 # -----------------------

@@ -33,39 +33,37 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace SharedToDotOperandWMMA {
 
-/**
- * @brief Following functions maps particular load of wmma dot operand to
- * element indexes(row, col). For each WMMA generation separate function is
- * used.
- *
- * Whole tensor is broken into "blocks" of warps along "non-K" axis.
- * One block could be processed by multiple warps.
- * One warp works on a piece of tensor size elemsPerInstr[0] x K.
- * Each of these pieces is broken into "tiles" of size elemsPerInstr[0] x
- * elemsPerInstr[1].
- *
- * Total offset of element is a sum of following values:
- * 1. Offset of warp block in tensor
- * 2. Offset of warp inside one warp block
- * 3. Offset of tile in one warp
- * 4. Offset of one lane data in a tile
- * 5. Offset of particular element of tensor processed by one lane
- *
- * This function computes these offsets for axes independently
- *
- * @param rewriter
- * @param loc
- * @param elemsPerInstr operand tile shape consumed by one WMMA instruction
- * @param warpId id component of 2d warp grid along non-K axis
- * @param laneId lane id in warp [0..63]
- * @param numOfElems number of elements accessed by thread per repetition
- * @param reps number of instructions repetition to fully cover dot operand
- * @param smemStrides strides in LDS tensor
- * @param loadVecSize number of elements loaded by one operation
- * @param iNonKDim non-K dimension of dot operand
- * @return vector (i-th element corresponds to i-th load instruction) of
- * 2-element vectors(tensor row and col).
- */
+/// Following functions maps particular load of wmma dot operand to
+/// element indexes(row, col). For each WMMA generation separate function is
+/// used.
+///
+/// Whole tensor is broken into "blocks" of warps along "non-K" axis.
+/// One block could be processed by multiple warps.
+/// One warp works on a piece of tensor size elemsPerInstr[0] x K.
+/// Each of these pieces is broken into "tiles" of size elemsPerInstr[0] x
+/// elemsPerInstr[1].
+///
+/// Total offset of element is a sum of following values:
+/// 1. Offset of warp block in tensor
+/// 2. Offset of warp inside one warp block
+/// 3. Offset of tile in one warp
+/// 4. Offset of one lane data in a tile
+/// 5. Offset of particular element of tensor processed by one lane
+///
+/// This function computes these offsets for axes independently
+///
+/// \param rewriter
+/// \param loc
+/// \param elemsPerInstr operand tile shape consumed by one WMMA instruction
+/// \param warpId id component of 2d warp grid along non-K axis
+/// \param laneId lane id in warp [0..63]
+/// \param numOfElems number of elements accessed by thread per repetition
+/// \param reps number of instructions repetition to fully cover dot operand
+/// \param smemStrides strides in LDS tensor
+/// \param loadVecSize number of elements loaded by one operation
+/// \param iNonKDim non-K dimension of dot operand
+/// \returns vector (i-th element corresponds to i-th load instruction) of
+/// 2-element vectors(tensor row and col).
 llvm::SmallVector<llvm::SmallVector<Value>>
 computeTensorElemMappingInBlockWmma1(
     ConversionPatternRewriter &rewriter, Location loc,
@@ -152,7 +150,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   assert(wmmaLayout.getMNKDimPerInstr()[nonKDimIdx] == 16);
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
 
-  auto aTensorTy = cast<MemDescType>(tensor.getType());
+  auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();

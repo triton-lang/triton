@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 
 namespace mlir {
@@ -159,8 +160,8 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 }
 
 bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, Value shmemBase,
+    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
+    Type elemLlvmTy, std::optional<int32_t> maxVecElems, Value shmemBase,
     ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
@@ -174,41 +175,17 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
 
-  std::optional<LinearLayout> regLayout =
-      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
-  std::optional<LinearLayout> sharedLayout = triton::gpu::toLinearLayout(
-      shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
-  if (!regLayout.has_value() || !sharedLayout.has_value()) {
+  auto regToSharedLayout = getRegToSharedLayout(
+      ctx, shape, registerTy.getEncoding(), sharedTy.getEncoding(),
+      elemLlvmTy.getIntOrFloatBitWidth());
+  if (!regToSharedLayout.has_value())
     return false;
-  }
-  auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
-
-  // sharedLayout's in-dims are currently (offset, block).  Reshape to
-  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
-  // shmem strides.  (The offsetX's appear in minor-to-major order.)
-  auto sharedLegacy =
-      cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
-  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
-  for (int i = 0; i < rank; i++) {
-    int dim = sharedOrder[i];
-    int64_t size = std::max(
-        int64_t{1},
-        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
-    multiDimSharedSize.push_back(
-        {str_attr("offset" + std::to_string(dim)), size});
-  }
-  multiDimSharedSize.push_back({kBlock, sharedLayout->getInDimSize(kBlock)});
-  sharedLayout = sharedLayout->reshapeIns(multiDimSharedSize);
-
-  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
-  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
-  LinearLayout regToSharedLayout = regLayout->invertAndCompose(*sharedLayout);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
-  for (int inBlock = 1; inBlock < regToSharedLayout.getInDimSize(kBlock);
+  for (int inBlock = 1; inBlock < regToSharedLayout->getInDimSize(kBlock);
        inBlock *= 2) {
-    auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
+    auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout->apply(
         {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}})));
     // offsetX1, ..., offsetXN must all be 0.
     if (!llvm::all_of(ArrayRef(idx).drop_back(1),
@@ -234,15 +211,15 @@ bool emitTransferBetweenRegistersAndShared(
   // which have known strides.  This would allow us to vectorize across multiple
   // shmem out dimensions where possible.
   const int vecElems =
-      std::min(regToSharedLayout.getNumConsecutiveInOut(),
+      std::min(regToSharedLayout->getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
   Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(regToSharedLayout.getInDimSize(kLane));
+  Value threadsPerWarp = i32_val(regToSharedLayout->getInDimSize(kLane));
   Value laneId = urem(threadId, threadsPerWarp);
   Value warpId = udiv(threadId, threadsPerWarp);
 
-  int numElems = regToSharedLayout.getInDimSize(kRegister);
+  int numElems = regToSharedLayout->getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
   auto ptrTy = shmemBase.getType();
   Value zero = i32_val(0);
@@ -253,7 +230,7 @@ bool emitTransferBetweenRegistersAndShared(
     // we drop_end to drop block, which we know from above will be 0.
     auto multiDimShmemOffset =
         llvm::to_vector(llvm::drop_end(llvm::make_second_range(
-            applyLinearLayout(loc, rewriter, regToSharedLayout,
+            applyLinearLayout(loc, rewriter, *regToSharedLayout,
                               {{kRegister, i32_val(i * vecElems)},
                                {kLane, laneId},
                                {kWarp, warpId},
@@ -261,6 +238,7 @@ bool emitTransferBetweenRegistersAndShared(
 
     // Reorder strides according to `order`.  This way they match the
     // multi-dimensional offsets in regToSharedLayout.
+    auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
     Value shmemOffset = dot(rewriter, loc, multiDimShmemOffset,
                             applyPermutation(shmemStrides, sharedOrder));
     auto vecAddr = gep(ptrTy, elemLlvmTy, shmemBase, shmemOffset);
@@ -272,7 +250,8 @@ bool emitTransferBetweenRegistersAndShared(
 }
 
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           MemDescType srcTy, Type elemLlvmTy,
+                                           triton::gpu::MemDescType srcTy,
+                                           Type elemLlvmTy,
                                            SharedMemoryObject smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target) {
@@ -295,10 +274,11 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
   return ret;
 }
 
-void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
-                              Type elemLlvmTy, ArrayRef<Value> srcVals,
-                              Value smemBase, ArrayRef<Value> dstStrides,
-                              Location loc, RewriterBase &rewriter,
+void storeDistributedToShared(triton::gpu::MemDescType dstTy,
+                              RankedTensorType srcTy, Type elemLlvmTy,
+                              ArrayRef<Value> srcVals, Value smemBase,
+                              ArrayRef<Value> dstStrides, Location loc,
+                              RewriterBase &rewriter,
                               const TargetInfoBase &target,
                               std::pair<size_t, Type> *const llvmOpCount) {
   bool success = emitTransferBetweenRegistersAndShared(
@@ -752,26 +732,26 @@ SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> values) {
   SmallVector<Value> results;
   for (auto v : values) {
-    auto em0 = and_(v, i8_val(0x70));
-    auto em1 = and_(v, i8_val(0x7));
-    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(2)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
-    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(6)),
+    auto em0 = and_(v, i8_val(0x7));
+    auto em1 = and_(v, i8_val(0x70));
+    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(6)),
                    shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
+    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(2)),
+                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
 
     // Three cases:
     // 1) x is normal and non-zero: Correct bias
-    v0 = select(icmp_ne(and_(em0, i8_val(0x60)), i8_val(0)),
+    v0 = select(icmp_ne(and_(em0, i8_val(0x6)), i8_val(0)),
                 add(v0, i16_val((127 - 1) << 7)), v0);
-    v1 = select(icmp_ne(and_(em1, i8_val(0x6)), i8_val(0)),
+    v1 = select(icmp_ne(and_(em1, i8_val(0x60)), i8_val(0)),
                 add(v1, i16_val((127 - 1) << 7)), v1);
 
     // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
     // bf16
-    v0 = bitcast(select(icmp_eq(em0, i8_val(0x10)),
+    v0 = bitcast(select(icmp_eq(em0, i8_val(0x1)),
                         or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0),
                  bf16_ty);
-    v1 = bitcast(select(icmp_eq(em1, i8_val(0x1)),
+    v1 = bitcast(select(icmp_eq(em1, i8_val(0x10)),
                         or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1),
                  bf16_ty);
     // 3) x is zero, nothing to do

@@ -224,4 +224,16 @@ def TritonGPULoopScheduling: Pass<"tritongpu-loop-scheduling", "mlir::ModuleOp">
            "number of pipeline stages">
   ];
 }
+
+def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::ModuleOp"> {
+  let summary = "Improve coalescing for async global to local copies";
+
+  let description = "For AsyncCopyGlobalToLocal ops where the shared encoding's vec is less than "
+                    "the blocked encoding's sizePerThread, this pass improves coalescing by clipping the "
+                    "sizePerThread value";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 #endif

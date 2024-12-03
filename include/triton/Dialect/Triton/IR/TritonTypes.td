@@ -92,54 +92,6 @@ def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
 // Any Type in Triton IR
 def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
 
-// Memory descriptor type.
-def TT_MemDescType : TritonTypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
-    let summary = "memory descriptor type (`::mlir::triton::MemDescType`) in Triton IR type system";
-
-    let description = [{
-        Memory descriptor contains a base pointer (scalar) and a descriptor of the memory.
-        If mutable memory is false that means the memory is constant and can only be allocated and stored once.
-        A constant memory allocation is different than a tensor as it can have multiple views and the descriptor
-        can be changed without changing the underlying memory.
-    }];
-
-  let parameters = (ins
-    ArrayRefParameter<"int64_t">:$shape,
-    "Type":$elementType,
-    "Attribute":$encoding,
-    "Attribute":$memorySpace,
-    "bool":$mutable_memory
-  );
-  let extraClassDeclaration = [{
-    MemDescType cloneWith(std::optional<ArrayRef<int64_t>> shape,
-                          Type elementType) const {
-        return MemDescType::get(shape.value_or(getShape()), elementType, getEncoding(), getMemorySpace(), getMutableMemory());
-    }
-
-    bool hasRank() const { return true; }
-  }];
-  let builders = [
-        TypeBuilderWithInferredContext<(ins
-            "llvm::ArrayRef<int64_t>":$shape,
-            "Type":$elementType,
-            "Attribute":$encoding,
-            "Attribute":$memorySpace
-        ), [{
-            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, /*mutableMemory=*/false);
-        }]>,
-        TypeBuilderWithInferredContext<(ins
-            "llvm::ArrayRef<int64_t>":$shape,
-            "Type":$elementType,
-            "Attribute":$encoding,
-            "Attribute":$memorySpace,
-            "bool":$mutableMemory
-        ), [{
-            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, mutableMemory);
-        }]>
-    ];
-  let hasCustomAssemblyFormat = 1;
-}
-
 // Result type of ExperimentalMakeTensorDescriptor
 def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
   let summary = "Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system";
