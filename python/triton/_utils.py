@@ -1,5 +1,4 @@
 from typing import Tuple, List, Any
-from collections.abc import Iterable
 
 # Poor man's PyTree
 
@@ -22,7 +21,8 @@ def list_list_unflatten(spec: List[int], flat: List[Any]) -> List[List[Any]]:
     return ret
 
 def find_paths_if(iterable, pred):
-    is_iterable = lambda x: isinstance(x, Iterable) and not hasattr(iterable, "data_ptr")
+    from .language import core
+    is_iterable = lambda x: isinstance(x, (list, tuple, core.tuple, core.tuple_type))
     ret = dict()
     def _impl(current, path):
         path = (path[0], ) if len(path) == 1 else tuple(path)

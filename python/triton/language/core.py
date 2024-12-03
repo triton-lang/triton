@@ -265,6 +265,9 @@ class constexpr:
     def __not__(self):
         return constexpr(not self.value)
 
+    def __iter__(self):
+        return iter(self.value)
+
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
