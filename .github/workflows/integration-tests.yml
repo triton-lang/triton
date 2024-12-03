@@ -429,7 +429,7 @@ jobs:
           #pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           #TRITON_LLVM_DEBUG_ONLY="tritonamdgpu-in-thread-transpose" TRITON_PRINT_AUTOTUNING=1 python python/tutorials/06-fused-attention.py
           gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/tutorials/06-fused-attention.py" -ex "backtrace" -ex "set confirm off" -ex "q" > tmp.txt 2>&1
-          #cat tmp.txt
+          cat tmp.txt
           #pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice.py
           #cd python/test/unit
           #pytest --capture=tee-sys -rfs -n 16 language runtime \
