@@ -41,3 +41,26 @@ def find_paths_if(iterable, pred):
     else:
         ret = dict()
     return ret
+
+def parse_list_string(s):
+    s = s.strip()
+    if s.startswith('[') and s.endswith(']'):
+        s = s[1:-1]
+    result = []
+    current = ''
+    depth = 0
+    for c in s:
+        if c == '[':
+            depth += 1
+            current += c
+        elif c == ']':
+            depth -= 1
+            current += c
+        elif c == ',' and depth == 0:
+            result.append(current.strip())
+            current = ''
+        else:
+            current += c
+    if current.strip():
+        result.append(current.strip())
+    return result

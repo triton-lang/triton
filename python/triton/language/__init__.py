@@ -1,6 +1,7 @@
 """isort:skip_file"""
 # Import order is significant here.
 
+from .._utils import parse_list_string
 from . import math
 from . import extra
 from .standard import (
@@ -262,32 +263,6 @@ __all__ = [
     "zeros",
     "zeros_like",
 ]
-
-
-def parse_list_string(s):
-    s = s.strip()
-    if s.startswith('[') and s.endswith(']'):
-        s = s[1:-1]
-    result = []
-    current = ''
-    depth = 0
-    for c in s:
-        if c == '[':
-            depth += 1
-            current += c
-        elif c == ']':
-            depth -= 1
-            current += c
-        elif c == ',' and depth == 0:
-            result.append(current.strip())
-            current = ''
-        else:
-            current += c
-    if current.strip():
-        result.append(current.strip())
-    return result
-
-
 
 def str_to_ty(name):
     if name == "none":

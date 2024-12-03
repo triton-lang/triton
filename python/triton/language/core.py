@@ -38,14 +38,6 @@ def builtin(fn: T) -> T:
     return wrapper
 
 
-def _flatten_list(lst):
-    for item in lst:
-        if isinstance(item, (list, tuple_type, tuple)):
-            yield from _flatten_list(item)
-        else:
-            yield item
-
-
 def _tensor_member_fn(fn: T) -> T:
     """Decorator that adds this free function as a member fn on class tensor.
 
@@ -312,7 +304,6 @@ class dtype:
     def __init__(self, name):
         name = _unwrap_if_constexpr(name)
         self.name = name
-        self.num_composite_types = 1
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
@@ -578,7 +569,6 @@ class pointer_type(dtype):
         self.element_ty = element_ty
         self.address_space = address_space
         self.const = const
-        self.num_composite_types = 1
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
@@ -620,7 +610,6 @@ class block_type(dtype):
 
     def __init__(self, element_ty: dtype, shape: List):
         self.element_ty = element_ty
-        self.num_composite_types = 1
 
         # Note that block_type's shape is a list of int
         # while tensor's shape is a list of constexpr.
@@ -667,7 +656,6 @@ class tuple_type(dtype):
     def __init__(self, types):
         self.types = types
         self.name = f"[{','.join(map(str, self.types))}]"
-        self.num_composite_types = len(self.types)
 
     def __str__(self):
         return self.name
@@ -791,9 +779,6 @@ class tensor(_value):
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
         self.shape = tuple([constexpr(s) for s in self.shape])
-
-    def serialize(self):
-        return [self.handle]
 
     def _flatten_ir(self):
         return [self.handle]
@@ -1190,9 +1175,6 @@ class tuple:
                 return dtype
             return x.type
         return tuple_type([get_type(x) for x in self.values])
-
-    def serialize(self):
-        return list(_flatten_list([x.serialize() for x in self.values]))
 
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):

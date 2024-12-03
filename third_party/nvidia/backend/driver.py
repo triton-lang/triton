@@ -10,35 +10,12 @@ from triton.runtime.cache import get_cache_manager
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+from triton._utils import parse_list_string
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
-
-
-def parse_list_string(s):
-    s = s.strip()
-    if s.startswith('[') and s.endswith(']'):
-        s = s[1:-1]
-    result = []
-    current = ''
-    depth = 0
-    for c in s:
-        if c == '[':
-            depth += 1
-            current += c
-        elif c == ']':
-            depth -= 1
-            current += c
-        elif c == ',' and depth == 0:
-            result.append(current.strip())
-            current = ''
-        else:
-            current += c
-    if current.strip():
-        result.append(current.strip())
-    return result
 
 @functools.lru_cache()
 def libcuda_dirs():
