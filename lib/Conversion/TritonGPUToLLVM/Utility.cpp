@@ -321,13 +321,20 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
     unsigned int numElemsPerIter = product<unsigned>(sizePerThread);
     unsigned int colIndex = 0;
     unsigned int innerVecSize = sizePerThread[order[0]];
+    LDBG("innerVecSize           = " << innerVecSize);
+    LDBG("srcVals.size()         = " << srcVals.size());
     perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
       Value vec = undef(vecTy);
       auto startPos = colIndex / innerVecSize *
                           numElemsPerIter +    // start pos of different iter
                       colIndex % innerVecSize; // start pos of single iter
+      LDBG("colIndex               = " << colIndex);
+      LDBG("startPos               = " << startPos);
+      LDBG("vecTy.getNumElements() = " << vecTy.getNumElements());
       for (int i = 0; i < vecTy.getNumElements(); i++) {
         auto idx = startPos + i * innerVecSize; // iterate within a vector
+        LDBG("  i = " << i);
+        LDBG("  idx = " << idx);
         vec = insert_element(vec, srcVals[idx], i32_val(i));
       }
       colIndex++;

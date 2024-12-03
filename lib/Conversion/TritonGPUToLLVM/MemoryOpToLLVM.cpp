@@ -27,12 +27,19 @@ void lowerDistributedToShared(
   // only set crossGrain if it is blocked->shared. This is not a problem for
   // NV path because for non-KContig tensor their blocked and shared layout
   // still have the same order.
+  auto blocked1 = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+  auto shared = dyn_cast<SharedEncodingAttr>(dstTy.getEncoding());
+  LDBG("convert from blocked: " << blocked1);
+  LDBG("convert to   shared : " << shared);
+
   if (auto blocked = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding())) {
     auto rank = blocked.getOrder().size();
     auto inOrd = blocked.getOrder();
     // it has to be 2D and blocked's and shared's order mismatch
     crossGrain = (rank == 2) && (inOrd[0] != outOrd[0]);
   }
+
+  LDBG("crossGrain ?          " << crossGrain);
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto smemBase = smemObj.getBase();
