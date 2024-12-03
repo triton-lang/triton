@@ -7,24 +7,9 @@ from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 from types import ModuleType
+from .._utils import find_paths_if
 
-def find_paths_if(iterable, pred):
-    is_iterable = lambda x: isinstance(x, (list, tuple))
-    ret = []
-    def _impl(current, path):
-        if pred(current):
-            if len(path) == 1:
-                ret.append((path[0],))
-            else:
-                ret.append(tuple(path))
-        elif is_iterable(current):
-            for idx, item in enumerate(current):
-                _impl(item, path + [idx])
-    if is_iterable(iterable):
-        _impl(iterable, [])
-    else:
-        ret = [tuple()] if pred(iterable) else []
-    return ret
+
 # Table that associates strings to AttrsDescriptor (sub)classes.
 # In this way we can dynamically select the correct class
 # constructor
@@ -105,11 +90,10 @@ class AttrsDescriptor:
         # Divisibility property
         divisibility_16 = []
         for param, arg in zip(params, values):
-            if not AttrsDescriptor.is_divisible_by_16(arg) or \
-               param.do_not_specialize or \
+            if param.do_not_specialize or \
                param.do_not_specialize_on_alignment:
                 continue
-            paths = find_paths_if(arg, AttrsDescriptor.is_divisible_by_16)
+            paths = find_paths_if(arg, lambda path, val: val % 16 == 0)
             divisibility_16 += [(param.num,) + x for x in paths]
         self.arg_properties["tt.divisibility"] = divisibility_16
 
@@ -118,7 +102,7 @@ class AttrsDescriptor:
         for param, arg in zip(params, values):
             if param.do_not_specialize:
                 continue
-            paths = find_paths_if(arg, AttrsDescriptor.is_equal_to_1)
+            paths = find_paths_if(arg, lambda path, val: val == 1)
             equal_to_1 += [(param.num,) + x for x in paths]
         self.arg_properties["tt.equal_to"] = equal_to_1
 
@@ -127,7 +111,7 @@ class AttrsDescriptor:
         for param, arg in zip(params, values):
             if param.do_not_specialize:
                 continue
-            paths = find_paths_if(arg, lambda v: v is None)
+            paths = find_paths_if(arg, lambda path, val: val is None)
             equal_to_none += [(param.num,) + x for x in paths]
         self.equal_to_none = equal_to_none
             

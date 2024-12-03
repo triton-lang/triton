@@ -17,6 +17,7 @@ from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedL
 from types import ModuleType
 from triton._utils import list_list_flatten, list_list_unflatten
 from functools import reduce
+from .._utils import find_paths_if
 
 
 def mangle_ty(ty):
@@ -1300,27 +1301,6 @@ def kernel_suffix(signature, specialization):
         if (i,) in specialization.divisibility_16:
             suffix += 'd'
     return suffix
-
-
-def find_paths_if(iterable, pred):
-    is_iterable = lambda x: isinstance(x, (list, tuple, language.tuple, language.tuple_type))
-    ret = dict()
-    def _impl(current, path):
-        path = (path[0], ) if len(path) == 1 else tuple(path)
-        if is_iterable(current):
-            for idx, item in enumerate(current):
-                _impl(item, path + (idx,))
-        elif pred(path, current):
-            if len(path) == 1:
-                ret[(path[0],)] = current
-            else:
-                ret[tuple(path)] = current
-    if is_iterable(iterable):
-        _impl(iterable, [])
-    else:
-        ret = dict()
-    return ret
-
 
 class ASTFunction:
     

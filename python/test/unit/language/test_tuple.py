@@ -65,11 +65,12 @@ def test_assign(device="cuda"):
 
 @triton.jit
 def _tuple_fn0(Ptr, cst2: tl.constexpr, tuple1):
+    tl.static_assert(tuple1[1] is None)
     tl.store(Ptr + 5, cst2)
     tl.store(Ptr + 6, tuple1[0])
-    tl.store(Ptr + 7, tl.load(tuple1[1][0]))
-    tl.store(Ptr + 8, tuple1[1][1][0])
-    tl.store(Ptr + 9, tl.load(tuple1[1][1][2]))
+    tl.store(Ptr + 7, tl.load(tuple1[2][0]))
+    tl.store(Ptr + 8, tuple1[2][1][0])
+    tl.store(Ptr + 9, tl.load(tuple1[2][1][2]))
 
 # test serialization/deserialization of tuple arguments in
 # the frontend.
@@ -82,7 +83,7 @@ def _tuple_serialize(Ptr, N1, tuple1, cst1: tl.constexpr, val1, tuple2):
     tl.store(Ptr + 2, tl.load(tuple1[1][2]))
     tl.store(Ptr + 3, cst1 + val1)
     tl.store(Ptr + 4, tl.load(tuple2[0]))
-    _tuple_fn0(Ptr, 15, (-1, tuple1))
+    _tuple_fn0(Ptr, 15, (-1, None, tuple1))
 
 def test_serialize(device="cuda"):
     x0 = torch.tensor([8], dtype=torch.int32, device=device)
