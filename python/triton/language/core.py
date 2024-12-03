@@ -1736,7 +1736,7 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
 
 @builtin
-def atomic_load(pointer, mask=None, other=None, sem="", scope="", cache_modifier="", eviction_policy="", volatile=False,
+def atomic_load(pointer, sem, scope, mask=None, other=None, cache_modifier="", eviction_policy="", volatile=False,
                 _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
@@ -1766,7 +1766,7 @@ def atomic_load(pointer, mask=None, other=None, sem="", scope="", cache_modifier
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
-    return semantic.atomic_load(pointer, mask, other, sem, scope, cache_modifier, eviction_policy, volatile, _builder)
+    return semantic.atomic_load(pointer, sem, scope, mask, other, cache_modifier, eviction_policy, volatile, _builder)
 
 
 @builtin
@@ -1856,7 +1856,7 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
 
 @_tensor_member_fn
 @builtin
-def atomic_store(pointer, value, mask=None, sem="", scope="", cache_modifier="", eviction_policy="", _builder=None):
+def atomic_store(pointer, value, sem, scope, mask=None, cache_modifier="", eviction_policy="", _builder=None):
     """
     Atomic store data into memory locations defined by `pointer`.
 
@@ -1881,7 +1881,7 @@ def atomic_store(pointer, value, mask=None, sem="", scope="", cache_modifier="",
         mask = semantic.to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
-    return semantic.atomic_store(pointer, value, mask, sem, scope, cache_modifier, eviction_policy, _builder)
+    return semantic.atomic_store(pointer, value, sem, scope, mask, cache_modifier, eviction_policy, _builder)
 
 
 @builtin

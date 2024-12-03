@@ -1459,37 +1459,38 @@ void init_triton_ir(py::module &&m) {
                                              sem, scope);
            })
       .def("create_atomic_load",
-           [](TritonOpBuilder &self, Value &ptrs,
-              std::optional<MemSemantic> sem, std::optional<MemSyncScope> scope,
-              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
-              bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptrs, sem, scope, cacheModifier,
-                                        evictionPolicy, isVolatile);
+           [](TritonOpBuilder &self, Value &ptrs, MemSemantic sem,
+              MemSyncScope scope, CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
+             Value mask = {};
+             Value other = {};
+             return self.create<AtomicLoadOp>(ptrs, sem, scope, mask, other,
+                                              cacheModifier, evictionPolicy,
+                                              isVolatile);
            })
       .def("create_atomic_store",
-           [](TritonOpBuilder &self, Value &ptrs, Value &value,
-              std::optional<MemSemantic> sem, std::optional<MemSyncScope> scope,
-              CacheModifier cacheModifier,
+           [](TritonOpBuilder &self, Value &ptrs, Value &value, MemSemantic sem,
+              MemSyncScope scope, CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptrs, value, sem, scope, cacheModifier,
-                                  evictionPolicy);
+             Value mask = {};
+             self.create<AtomicStoreOp>(ptrs, value, sem, scope, mask,
+                                        cacheModifier, evictionPolicy);
            })
       .def("create_masked_atomic_load",
            [](TritonOpBuilder &self, Value &ptrs, Value &mask,
-              std::optional<Value> &other, std::optional<MemSemantic> sem,
-              std::optional<MemSyncScope> scope, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptrs, mask, other.value_or(Value()),
-                                        sem, scope, cacheModifier,
-                                        evictionPolicy, isVolatile);
+              std::optional<Value> &other, MemSemantic sem, MemSyncScope scope,
+              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
+              bool isVolatile) -> Value {
+             return self.create<AtomicLoadOp>(
+                 ptrs, sem, scope, mask, other.value_or(Value()), cacheModifier,
+                 evictionPolicy, isVolatile);
            })
       .def("create_masked_atomic_store",
-           [](TritonOpBuilder &self, Value &ptrs, Value &val, Value &mask,
-              std::optional<MemSemantic> sem, std::optional<MemSyncScope> scope,
-              CacheModifier cacheModifier,
+           [](TritonOpBuilder &self, Value &ptrs, Value &value, Value &mask,
+              MemSemantic sem, MemSyncScope scope, CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptrs, val, mask, sem, scope, cacheModifier,
-                                  evictionPolicy);
+             self.create<AtomicStoreOp>(ptrs, value, sem, scope, mask,
+                                        cacheModifier, evictionPolicy);
            })
       // External
       .def("create_extern_elementwise",
