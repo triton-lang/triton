@@ -27,7 +27,6 @@
 
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
@@ -182,15 +181,14 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
   int warpsPerBatch =
       rank == 3 ? std::min<unsigned>(shape[0], warpsPerCTA[0]) : 1;
-  Value waveIdInBatch = urem(linearWaveId, i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
-  Value spatialWarpId = AMD::getWarpIdInBlock(
-      rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
-      shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(wmmaLayout));
+  auto [waveIdInBatch, spatialWarpId] = AMD::getWarpIdsInBlock(
+      rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0], shape,
+      nonKDimIdx, wmmaLayout.getWarpOrder());
   if (opIdx == 0) {
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
