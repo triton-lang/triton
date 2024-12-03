@@ -882,6 +882,10 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   assertDimsEqualIgnoringOrder(outDims, outer.getOutDimNames());
   const auto &B = *this;
   const auto A = outer.transposeOuts(outDims);
+  for (auto dim : outDims) {
+    assert(A.getOutDimSize(dim) == B.getOutDimSize(dim) &&
+           "Convert layout does not change the shape of a tensor");
+  }
 
   // We'll write A^{-1} to mean the inverse or the pseudo-inverse of A
   // We are computing A^{-1}B so from must be surjective so that
