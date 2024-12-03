@@ -5328,10 +5328,12 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
     layouts = f"""
     #src = {src_layout}
     #dst = {dst_layout}
+    #smem = #ttg.shared_memory
     """ if interm_layout is None else f"""
     #src = {src_layout}
     #interm = {interm_layout}
     #dst = {dst_layout}
+    #smem = #ttg.shared_memory
     """
 
     conversion = f"""
