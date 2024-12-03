@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=40.8.0", "wheel", "cmake>=3.18", "ninja>=1.11.1"]
+requires = ["setuptools>=65.6.1", "wheel", "cmake>=3.18", "ninja>=1.11.1"]
 
 [tool.yapf]
 based_on_style = "pep8"

@@ -236,7 +236,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit
+          python3 -m pip install cython setuptools>=65.6.1 wheel cmake==3.24 ninja lit
       - name: Install Triton
         env:
           CUDA_HOME: "/usr/local/cuda"
@@ -569,7 +569,7 @@ jobs:
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit pybind11
+          python3 -m pip install cython setuptools>=65.6.1 wheel cmake==3.24 ninja lit pybind11
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_O1: "true"
