@@ -283,6 +283,12 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
                               std::pair<size_t, Type> *const llvmOpCount) {
   bool success;
   std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback;
+  auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+  auto sizePerThread = blockedEncoding.getSizePerThread();
+  auto order = blockedEncoding.getOrder();
+  unsigned int numElemsPerIter = product<unsigned>(sizePerThread);
+  unsigned int colIndex = 0;
+  unsigned int innerVecSize = sizePerThread[order[0]];
   if (!crossGrain) {
     // callback for every situation except the non-KContig dotOperand
     // blocked->shared on AMD platform
@@ -315,25 +321,19 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
     // numElemsPerIter: 4 x 8 = 32
     // colIndex: initialized as 0, increment to 8 every time callback is called
     // innerVecSize: 8, since it is the vector size of inner dimension
-    auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
-    auto sizePerThread = blockedEncoding.getSizePerThread();
-    auto order = blockedEncoding.getOrder();
-    unsigned int numElemsPerIter = product<unsigned>(sizePerThread);
-    unsigned int colIndex = 0;
-    unsigned int innerVecSize = sizePerThread[order[0]];
-    LDBG("innerVecSize           = " << innerVecSize);
-    LDBG("srcVals.size()         = " << srcVals.size());
+    // LDBG("innerVecSize           = " << innerVecSize);
+    // LDBG("srcVals.size()         = " << srcVals.size());
     perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
       Value vec = undef(vecTy);
       auto startPos = colIndex / innerVecSize *
                           numElemsPerIter +    // start pos of different iter
                       colIndex % innerVecSize; // start pos of single iter
-      LDBG("colIndex               = " << colIndex);
-      LDBG("startPos               = " << startPos);
-      LDBG("vecTy.getNumElements() = " << vecTy.getNumElements());
+      // LDBG("colIndex               = " << colIndex);
+      // LDBG("startPos               = " << startPos);
+      // LDBG("vecTy.getNumElements() = " << vecTy.getNumElements());
       for (int i = 0; i < vecTy.getNumElements(); i++) {
         auto idx = startPos + i * innerVecSize; // iterate within a vector
-        LDBG("  i = " << i);
+        // LDBG("  i = " << i);
         LDBG("  idx = " << idx);
         vec = insert_element(vec, srcVals[idx], i32_val(i));
       }
