@@ -51,6 +51,11 @@ void convertLayout(Attribute encoding, Operation *op) {
   Operation *newOp = builder.create(op->getLoc(), op->getName().getIdentifier(),
                                     newArgs, newTypes, op->getAttrs());
 
+  auto loadOp = dyn_cast<tt::LoadOp>(op);
+  auto newLoadOp = dyn_cast<tt::LoadOp>(newOp);
+  LDBG("src of convertLayout: " << loadOp);
+  LDBG("newOp: " << newLoadOp);
+
   // Cast the results back to the original layout
   for (size_t i = 0; i < op->getNumResults(); i++) {
     Value newResult = newOp->getResult(i);
