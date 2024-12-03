@@ -24,6 +24,8 @@ import triton
 import triton.language as tl
 
 DEVICE = triton.runtime.driver.active.get_current_target().backend
+# when using hip devices, the device string in pytorch is "cuda"
+PYTORCH_DEVICE = "cuda" if DEVICE == "hip" else DEVICE
 
 
 @triton.jit
@@ -83,8 +85,8 @@ def add(x: torch.Tensor, y: torch.Tensor):
 
 torch.manual_seed(0)
 size = 98432
-x = torch.rand(size, device=DEVICE)
-y = torch.rand(size, device=DEVICE)
+x = torch.rand(size, device=PYTORCH_DEVICE)
+y = torch.rand(size, device=PYTORCH_DEVICE)
 output_torch = x + y
 output_triton = add(x, y)
 print(output_torch)
@@ -118,8 +120,8 @@ print(f'The maximum difference between torch and triton is '
         args={},  # Values for function arguments not in `x_names` and `y_name`.
     ))
 def benchmark(size, provider):
-    x = torch.rand(size, device=DEVICE, dtype=torch.float32)
-    y = torch.rand(size, device=DEVICE, dtype=torch.float32)
+    x = torch.rand(size, device=PYTORCH_DEVICE, dtype=torch.float32)
+    y = torch.rand(size, device=PYTORCH_DEVICE, dtype=torch.float32)
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y, quantiles=quantiles)

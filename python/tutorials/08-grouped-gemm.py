@@ -32,6 +32,8 @@ import triton
 import triton.language as tl
 
 DEVICE = triton.runtime.driver.active.get_current_target().backend
+# when using hip devices, the device string in pytorch is "cuda"
+PYTORCH_DEVICE = "cuda" if DEVICE == "hip" else DEVICE
 
 
 @triton.autotune(
@@ -158,7 +160,7 @@ def group_gemm_fn(group_A, group_B):
         assert A.shape[1] == B.shape[0]
         M, K = A.shape
         K, N = B.shape
-        C = torch.empty((M, N), device=DEVICE, dtype=A.dtype)
+        C = torch.empty((M, N), device=PYTORCH_DEVICE, dtype=A.dtype)
         group_C.append(C)
         A_addrs.append(A.data_ptr())
         B_addrs.append(B.data_ptr())
@@ -167,11 +169,11 @@ def group_gemm_fn(group_A, group_B):
         g_lds += [A.stride(0), B.stride(0), C.stride(0)]
 
     # note these are device tensors
-    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE)
-    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE)
-    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE)
-    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=DEVICE)
-    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=DEVICE)
+    d_a_ptrs = torch.tensor(A_addrs, device=PYTORCH_DEVICE)
+    d_b_ptrs = torch.tensor(B_addrs, device=PYTORCH_DEVICE)
+    d_c_ptrs = torch.tensor(C_addrs, device=PYTORCH_DEVICE)
+    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=PYTORCH_DEVICE)
+    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=PYTORCH_DEVICE)
     # we use a fixed number of CTA, and it's auto-tunable
     grid = lambda META: (META['NUM_SM'], )
     grouped_matmul_kernel[grid](
@@ -198,8 +200,8 @@ for i in range(group_size):
     M = group_m[i]
     N = group_n[i]
     K = group_k[i]
-    A = torch.rand((M, K), device=DEVICE, dtype=torch.float16)
-    B = torch.rand((K, N), device=DEVICE, dtype=torch.float16)
+    A = torch.rand((M, K), device=PYTORCH_DEVICE, dtype=torch.float16)
+    B = torch.rand((K, N), device=PYTORCH_DEVICE, dtype=torch.float16)
     group_A.append(A)
     group_B.append(B)
 
@@ -256,9 +258,9 @@ def benchmark(N, provider):
     g_lds = []
     group_C = []
     for i in range(group_size):
-        A = torch.rand((N, N), device=DEVICE, dtype=torch.float16)
-        B = torch.rand((N, N), device=DEVICE, dtype=torch.float16)
-        C = torch.empty((N, N), device=DEVICE, dtype=torch.float16)
+        A = torch.rand((N, N), device=PYTORCH_DEVICE, dtype=torch.float16)
+        B = torch.rand((N, N), device=PYTORCH_DEVICE, dtype=torch.float16)
+        C = torch.empty((N, N), device=PYTORCH_DEVICE, dtype=torch.float16)
         group_A.append(A)
         group_B.append(B)
         group_C.append(C)
@@ -268,11 +270,11 @@ def benchmark(N, provider):
         g_sizes += [N, N, N]
         g_lds += [N, N, N]
 
-    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE)
-    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE)
-    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE)
-    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=DEVICE)
-    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=DEVICE)
+    d_a_ptrs = torch.tensor(A_addrs, device=PYTORCH_DEVICE)
+    d_b_ptrs = torch.tensor(B_addrs, device=PYTORCH_DEVICE)
+    d_c_ptrs = torch.tensor(C_addrs, device=PYTORCH_DEVICE)
+    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=PYTORCH_DEVICE)
+    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=PYTORCH_DEVICE)
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
