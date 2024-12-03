@@ -178,7 +178,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   include_directories(${PYTHON_SRC_PATH})
 
   # Python Interpreter is used to run lit tests
-  find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
   find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
   if (DEFINED TRITON_PLUGIN_DIRS)
