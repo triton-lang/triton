@@ -525,9 +525,7 @@ std::optional<LinearLayout>
 BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   assert(shape.size() == getOrder().size());
 
-  int rank = shape.size();
   MLIRContext *ctx = getContext();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
   const auto &order = getOrder();
   LinearLayout ctaLayout =
