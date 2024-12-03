@@ -648,7 +648,6 @@ class JITFunction(KernelInterface[T]):
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
-            # print(non_constexpr_vals[0].data_ptr(), non_constexpr_vals[1], non_constexpr_vals[2], non_constexpr_vals[3].data_ptr(), non_constexpr_vals[4].data_ptr(), non_constexpr_vals[5], non_constexpr_vals[6], non_constexpr_vals[7], non_constexpr_vals[8].data_ptr())
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook, *non_constexpr_vals)
         return kernel
