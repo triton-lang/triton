@@ -226,7 +226,9 @@ Value getSmemVecAddr(triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
   // Reorder strides according to `order`.  This way they match the
   // multi-dimensional offsets in regToSharedLayout.
   auto ptrTy = smemBase.getType();
-  return gep(ptrTy, elemLlvmTy, smemBase, smemOffset);
+  auto vecAddr = gep(ptrTy, elemLlvmTy, smemBase, smemOffset);
+  vecAddr.setInbounds(true);
+  return vecAddr;
 }
 
 } // namespace
@@ -321,7 +323,6 @@ bool emitTransferBetweenRegistersAndShared(
     auto vecAddr = getSmemVecAddr(
         sharedTy, elemLlvmTy, loc, rewriter, *regLayout, *regToSharedLayout,
         invertAllocSharedLayout, i32_val(i), laneId, warpId, smemObj);
-    vecAddr.setInbounds(true);
 
     perVectorCallback(vecTy, vecAddr);
   }
