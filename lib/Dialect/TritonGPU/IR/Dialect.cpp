@@ -2459,6 +2459,7 @@ public:
   using OpAsmDialectInterface::OpAsmDialectInterface;
 
   AliasResult getAlias(Attribute attr, raw_ostream &os) const override {
+    // Encoding attributes
     if (auto mmaAttr = mlir::dyn_cast<MmaEncodingTrait>(attr)) {
       os << "mma";
       return AliasResult::FinalAlias;
@@ -2475,6 +2476,11 @@ public:
       os << "slice";
       return AliasResult::FinalAlias;
     } */
+    // Memory space attributes
+    if (auto smem = mlir::dyn_cast<SharedMemorySpaceAttr>(attr)) {
+      os << "smem";
+      return AliasResult::FinalAlias;
+    }
     return OpAsmDialectInterface::getAlias(attr, os);
   }
 };
