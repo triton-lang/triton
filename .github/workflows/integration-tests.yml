@@ -275,6 +275,8 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
+          gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose language/test_core.py::test_dot[1-16-16-16-4-False-False-chain-dot-ieee-float32-float32-1]" -ex "backtrace" -ex "set confirm off" -ex "q" > test_dot.txt 2>&1
+          gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose language/test_core.py::test_local_load_store[dist_layout2-shared_layout0-8-16-32]" -ex "backtrace" -ex "set confirm off" -ex "q" > test_local_load_store.txt 2>&1
           python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
            language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
            runtime/test_autotuner.py::test_kwargs[False]\
