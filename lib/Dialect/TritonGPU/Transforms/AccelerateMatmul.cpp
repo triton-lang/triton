@@ -44,8 +44,8 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
   return 0;
 }
 
-SmallVector<unsigned> warpsPerTileV2(DotOp dotOp, const ArrayRef<int64_t> shape,
-                                     int numWarps) {
+SmallVector<unsigned>
+warpsPerTileV2(Operation *dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   auto rank = shape.size();
   // Early exit for batched matmul
   if (rank == 3)
@@ -58,9 +58,8 @@ SmallVector<unsigned> warpsPerTileV2(DotOp dotOp, const ArrayRef<int64_t> shape,
   auto slices = multiRootGetSlice(dotOp, {filter}, {filter});
   bool hasChainedDot = false;
   for (Operation *op : slices) {
-    if (isa<DotOp>(op) && (op != dotOp)) {
-      auto chainedDot = cast<DotOp>(op);
-      auto resTy = chainedDot.getResult().getType();
+    if (op->hasTrait<OpTrait::DotLike>() && op != dotOp) {
+      auto resTy = cast<RankedTensorType>(op->getResult(0).getType());
       if (resTy.getRank() != rank) {
         continue;
       }
@@ -109,14 +108,14 @@ SmallVector<unsigned> warpsPerTileV2(DotOp dotOp, const ArrayRef<int64_t> shape,
 }
 
 SmallVector<unsigned, 2>
-warpsPerTileV3(DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
+warpsPerTileV3(Operation *dotOp, const ArrayRef<int64_t> shape, int numWarps,
                const SmallVector<unsigned, 3> &instrShape) {
   SetVector<Operation *> slices;
-  mlir::getForwardSlice(dotOp.getResult(), &slices);
+  mlir::getForwardSlice(dotOp->getResult(0), &slices);
   // Contains a chained dot. We prefer to assign warps to one axis
   // to facilitate use cases like flash attention, allowing reductions within
   // the same warp.
-  if (llvm::find_if(slices, [](Operation *op) {
+  if (llvm::find_if(slices, [&](Operation *op) {
         return op->hasTrait<OpTrait::DotLike>();
       }) != slices.end())
     return {(unsigned)numWarps, 1};
@@ -171,7 +170,7 @@ static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
 }
 
 SmallVector<unsigned, 3>
-getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
+getWarpsPerTile(Operation *dotOp, const ArrayRef<int64_t> shape, int version,
                 int numWarps, const SmallVector<unsigned, 3> &instrShape) {
   switch (version) {
   case 2:
