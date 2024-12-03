@@ -334,7 +334,7 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
       for (int i = 0; i < vecTy.getNumElements(); i++) {
         auto idx = startPos + i * innerVecSize; // iterate within a vector
         // LDBG("  i = " << i);
-        LDBG("  idx = " << idx);
+        // LDBG("  idx = " << idx);
         vec = insert_element(vec, srcVals[idx], i32_val(i));
       }
       colIndex++;
