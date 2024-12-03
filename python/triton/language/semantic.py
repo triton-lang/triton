@@ -1134,7 +1134,7 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
         return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
 
 
-def atomic_load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], sem: str, scope: str,
+def atomic_load(ptr: tl.tensor, sem: str, scope: str, mask: Optional[tl.tensor], other: Optional[tl.tensor],
                 cache_modifier: str, eviction_policy: str, is_volatile: bool, builder: ir.builder) -> tl.tensor:
     # Cache and eviction
     cache = _str_to_load_cache_modifier(cache_modifier)
@@ -1345,7 +1345,7 @@ def store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], boundary_ch
         return _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder)
 
 
-def atomic_store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], sem: str, scope: str, cache_modifier: str,
+def atomic_store(ptr: tl.tensor, val: tl.tensor, sem: str, scope: str, mask: Optional[tl.tensor], cache_modifier: str,
                  eviction_policy: str, builder: ir.builder) -> tl.tensor:
     # Cache and eviction options
     cache = _str_to_store_cache_modifier(cache_modifier)
