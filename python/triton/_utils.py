@@ -36,6 +36,8 @@ def find_paths_if(iterable, pred):
                 ret[tuple(path)] = current
     if is_iterable(iterable):
         _impl(iterable, [])
+    elif pred(list(), iterable):
+        ret = {tuple(): iterable}
     else:
         ret = dict()
     return ret

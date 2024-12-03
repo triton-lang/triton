@@ -93,7 +93,7 @@ class AttrsDescriptor:
             if param.do_not_specialize or \
                param.do_not_specialize_on_alignment:
                 continue
-            paths = find_paths_if(arg, lambda path, val: val % 16 == 0)
+            paths = find_paths_if(arg, lambda path, val: AttrsDescriptor.is_divisible_by_16(val))
             divisibility_16 += [(param.num,) + x for x in paths]
         self.arg_properties["tt.divisibility"] = divisibility_16
 
@@ -102,7 +102,7 @@ class AttrsDescriptor:
         for param, arg in zip(params, values):
             if param.do_not_specialize:
                 continue
-            paths = find_paths_if(arg, lambda path, val: val == 1)
+            paths = find_paths_if(arg, lambda path, val: AttrsDescriptor.is_equal_to_1(val))
             equal_to_1 += [(param.num,) + x for x in paths]
         self.arg_properties["tt.equal_to"] = equal_to_1
 
@@ -114,6 +114,7 @@ class AttrsDescriptor:
             paths = find_paths_if(arg, lambda path, val: val is None)
             equal_to_none += [(param.num,) + x for x in paths]
         self.equal_to_none = equal_to_none
+
             
     def _add_backend_properties(self, params=None, values=None):
         """ This method is for different subclasses to implement their own compile-time properties """
