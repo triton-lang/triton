@@ -5405,6 +5405,7 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
     layouts = f"""
     #dist = {dist_layout}
     #shared = {shared_layout}
+    #smem = #ttg.shared_memory
     """
     ir = layouts + f"""
   module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
