@@ -7,7 +7,9 @@ add_triton_library(TritonAnalysis
 
   DEPENDS
   TritonTableGen
+  TritonGPUTableGen
   TritonGPUAttrDefsIncGen
+  TritonGPUTypeInterfacesIncGen
 
   LINK_LIBS PUBLIC
   MLIRAnalysis

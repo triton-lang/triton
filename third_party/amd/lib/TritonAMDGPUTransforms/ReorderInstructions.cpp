@@ -205,8 +205,8 @@ static void moveDownCoversion(triton::FuncOp funcOp) {
 
 // Move transpositions just after their definition.
 static void moveUpTranspose(triton::FuncOp funcOp) {
-  SmallVector<triton::TransOp> transOps;
-  funcOp.walk([&](triton::TransOp op) { transOps.push_back(op); });
+  SmallVector<triton::TransposeOpInterface> transOps;
+  funcOp.walk([&](triton::TransposeOpInterface op) { transOps.push_back(op); });
 
   for (auto op : transOps)
     if (Operation *argOp = op.getSrc().getDefiningOp())
@@ -227,6 +227,7 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
     // Gather use-def chain in block.
     Block *block = op->getBlock();
     bool leadsToLoad = false;
+    bool dontReorder = false;
     SetVector<Operation *> backwardSet;
 
     BackwardSliceOptions options;
@@ -236,6 +237,13 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
       Block *defBlock = defOp->getBlock();
       if (!block->findAncestorOpInBlock(*defOp))
         return false;
+      // Don't hoist control flow as we don't track backtraces of ops within
+      // their regions.
+      if (isa<scf::IfOp, scf::ForOp, scf::WhileOp>(defOp)) {
+        dontReorder = true;
+        return false;
+      }
+
       // Check for a `load` dependent path.
       leadsToLoad |= isa<triton::LoadOp>(defOp);
       // Only move ops residing in the same block.
@@ -244,6 +252,9 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
     mlir::getBackwardSlice(op, &backwardSet, options);
     backwardSet.insert(op);
 
+    // If we found ops in the slice we don't want to hoist.
+    if (dontReorder)
+      continue;
     // Don't move a local_store if its source is a load from
     // the same iteration.
     if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
@@ -269,48 +280,48 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
   }
 }
 
-/**
- * Sched-load optimization for matmul kernels with large tile sizes
- * The basic idea of sched-load optimization is to sink the 2nd tt.load
- * after local_load so that global_load instructions can be interleaved with
- * mfma's. This can help hide the issue latency of global_load instructions
- * and improve performance on MI300X.
- *
- * It's assumed that the IR before this optimization has the following
- * structure:
- * ```mlir
- * scf.for ..
- * {
- *   tileA = tt.load a_ptr
- *   tileB = tt.load b_ptr
- *   opA = local_load bufferA
- *   opB = local_load bufferB
- *   res = tt.dot opA, opB
- *   local_store tileA, bufferA
- *   local_store tileB, bufferB
- * }
- * ```
- * After this optimization, the IR is transformed to
- * ```mlir
- * scf.for ..
- * {
- *   tileA = tt.load a_ptr
- *   opA = local_load bufferA
- *   opB = local_load bufferB
- *   tileB = tt.load b_ptr  <-- 2nd tt.load is sinked here
- *   res = tt.dot opA, opB
- *   local_store tileA, bufferA
- *   local_store tileB, bufferB
- * }
- * ```
- * For now, we don't have a perfect hueristic about when should this
- * optimization be applied. Therefore, we implement a simple hueristic that
- * this is applied when the tile size of A and B are large enough, i.e.
- * nonKDim >= 128  and kDim >= 64. And also this is only applied for typical
- * matmul kernels, i.e. only two tt.load's and one dotOp inside the loop. We
- * are experimenting how to better control instruction scheduling and enable
- * such optimizations.
- */
+//===-------------------------------------------------------------------===//
+// Sched-load optimization for matmul kernels with large tile sizes
+// The basic idea of sched-load optimization is to sink the 2nd tt.load
+// after local_load so that global_load instructions can be interleaved with
+// mfma's. This can help hide the issue latency of global_load instructions
+// and improve performance on MI300X.
+//
+// It's assumed that the IR before this optimization has the following
+// structure:
+// ```mlir
+// scf.for ..
+// {
+//   tileA = tt.load a_ptr
+//   tileB = tt.load b_ptr
+//   opA = local_load bufferA
+//   opB = local_load bufferB
+//   res = tt.dot opA, opB
+//   local_store tileA, bufferA
+//   local_store tileB, bufferB
+// }
+// ```
+// After this optimization, the IR is transformed to
+// ```mlir
+// scf.for ..
+// {
+//   tileA = tt.load a_ptr
+//   opA = local_load bufferA
+//   opB = local_load bufferB
+//   tileB = tt.load b_ptr  <-- 2nd tt.load is sinked here
+//   res = tt.dot opA, opB
+//   local_store tileA, bufferA
+//   local_store tileB, bufferB
+// }
+// ```
+// For now, we don't have a perfect hueristic about when should this
+// optimization be applied. Therefore, we implement a simple hueristic that
+// this is applied when the tile size of A and B are large enough, i.e.
+// nonKDim >= 128  and kDim >= 64. And also this is only applied for typical
+// matmul kernels, i.e. only two tt.load's and one dotOp inside the loop. We
+// are experimenting how to better control instruction scheduling and enable
+// such optimizations.
+//===-------------------------------------------------------------------===//
 static void sinkSecondLoad(triton::FuncOp funcOp) {
   funcOp.walk([&](scf::ForOp forOp) -> void {
     SetVector<triton::LoadOp> loadOps;

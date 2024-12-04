@@ -2,10 +2,6 @@
   <img src="https://lh5.googleusercontent.com/wzQKEsTFkrgNQO9JjhGH5wFvslJr1saLtLaJ_a6Fp_gNENpvt3VG7BmztwngU9hFJaU4CPwGiw1opQtDvTkLrxWRbO_a12Q-pdESWHgtmheIHcPbOL5ZMC4TSiJVe5ty1w=w3517" alt="Triton logo">
 </div>
 
-The Triton Conference is happening again on September 17th, 2024 in Fremont (CA)!
-
-If you are interested in attending, please fill up [this form](https://docs.google.com/forms/d/e/1FAIpQLSecHC1lkalcm0h3JDUbspekDX5bmBvMxgVTLaK3e-61bzDDbg/viewform).
-
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
@@ -215,6 +211,25 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
 - `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
+- `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final ptx.
+- `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and ptx when `TRITON_KERNEL_DUMP` is set to 1.
+- `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/ptx at the beginning of each compilation stage.
+- `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx files when `TRITON_KERNEL_OVERRIDE` is set to 1.
+
+**Kernel Override Steps**
+
+```bash
+export TRITON_ALWAYS_COMPILE=1
+export TRITON_KERNEL_DUMP=1
+export TRITON_DUMP_DIR=<dump_dir>
+export TRITON_KERNEL_OVERRIDE=1
+export TRITON_OVERRIDE_DIR=<override_dir>
+# Step 1: Run the kernel once to dump kernel's IRs and ptx in $TRITON_DUMP_DIR
+# Step 2: Copy $TRITON_DUMP_DIR/<kernel_hash> to $TRITON_OVERRIDE_DIR
+# Step 3: Delete the stages that you do not want to override and modify the stage you do want to override
+# Step 4: Run the kernel again to see the overridden result
+```
+
 
 # Changelog
 

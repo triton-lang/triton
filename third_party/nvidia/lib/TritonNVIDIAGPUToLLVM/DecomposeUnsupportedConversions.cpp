@@ -50,7 +50,7 @@ public:
                                          blockEncoding);
     Value load =
         rewriter.create<LocalLoadOp>(op.getLoc(), tmpType, op.getSrc());
-    auto newSharedDescTy = triton::MemDescType::get(
+    auto newSharedDescTy = MemDescType::get(
         type.getShape(), type.getElementType(),
         triton::gpu::SharedEncodingAttr::get(
             op.getContext(), dstDotOp, type.getShape(),
@@ -74,15 +74,7 @@ struct DecomposeUnsupportedConversions
     // Remove the decomposeTensorCoreToDotLayoutConversion class entirely after
     // we have enabled the new layout conversion for all the cases.
     auto nvidiaShortCutFn = [&](RankedTensorType srcTy,
-                                RankedTensorType dstTy) {
-      auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
-      // Supported mma to dot conversion
-      if (nvidiaMma && nvidiaMma.isAmpere())
-        return true;
-      // No need to decompose if shared memory is not needed
-      return matchMmaV3AndDotOperandLayout(srcTy, dstTy) ||
-             cvtReordersRegisters(srcTy, dstTy);
-    };
+                                RankedTensorType dstTy) { return true; };
     ModuleOp mod = getOperation();
     triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
     triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
