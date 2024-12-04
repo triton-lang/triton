@@ -126,5 +126,3 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, w_dtype, x_dtype, out_dtype):
         BLOCK_K=block_k)
 
     torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
-
-
