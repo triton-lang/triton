@@ -141,8 +141,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   {
     llvm::raw_string_ostream stream(result);
     llvm::buffer_ostream pstream(stream);
-    for (llvm::Function &f : module.functions())
-      f.addFnAttr(llvm::Attribute::AlwaysInline);
     llvm::legacy::PassManager pass;
     // emit
     auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile

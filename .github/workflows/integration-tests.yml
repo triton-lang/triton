@@ -21,10 +21,12 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 permissions: read-all
 env:
+  TRITON_BUILD_WITH_CCACHE: "true"
   TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
   PROTON_SKIP_PC_SAMPLING_TEST: 1
+  CCACHE_COMPRESS: "true"
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
@@ -37,6 +39,11 @@ jobs:
       - name: Decide pre-submit integration test enablement
         # Always enable integration tests for pre-submit pull requests.
         if: github.event_name == 'pull_request'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+      - name: Decide manual trigger integration test enablement
+        # Always enable integration tests when manually triggered
+        if: github.event_name == 'workflow_dispatch'
         run: |
           echo "enable_integration=true" >> $GITHUB_ENV
       - name: Checkout post-submit commits
@@ -154,6 +161,8 @@ jobs:
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-CUDA)}}
+    env:
+      RUNNER_TYPE: ${{ matrix.runner[0] }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -199,37 +208,45 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
-        if: github.event_name != 'push'
+        id: restore-build-cache
+        if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.triton/cache
-            ~/.cache/ccache
+            ~/.ccache
           # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          restore-keys: |
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directory
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+      - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
       - name: Install pip dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-forked pytest-xdist lit
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit
       - name: Install Triton
         env:
-          TRITON_BUILD_WITH_CCACHE: "true"
           CUDA_HOME: "/usr/local/cuda"
         run: |
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install '.[tests]'
+          ccache --zero-stats
+          python3 -m pip install -v '.[tests]'
+      - name: CCache Stats
+        run: ccache --print-stats
       - name: Run lit tests
         run: |
           cd python
@@ -278,6 +295,13 @@ jobs:
           cd third_party/proton/test
           python3 -m pytest -s .
           cd ..
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
@@ -287,28 +311,23 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
-          path: ~/.triton/cache ~/.cache/ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directories
-        run: |
-          mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
-
-          mkdir -p ~/.cache/ccache
-          ls -alh ~/.cache/ccache
-          du -sh ~/.cache/ccache
+          path: |
+            ~/.triton/cache
+            ~/.ccache
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
   Integration-Tests-AMD:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-HIP != ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      RUNNER_TYPE: ${{ matrix.runner[1] }}
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
     name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
     container:
-      image: rocm/pytorch:rocm6.1_ubuntu22.04_py3.10_pytorch_2.4
+      image: rocmshared/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
@@ -355,40 +374,46 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
-        if: github.event_name != 'push'
+        id: restore-build-cache
+        if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.triton/cache
-            ~/.cache/ccache
+            ~/.ccache
           # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          restore-keys: |
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directory
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+      - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
-      - name: Update PATH
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Update compiler to clang
         run: |
-          echo "/opt/rocm/llvm/bin" >> $GITHUB_PATH
-      - name: Install pip dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install lit
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
       - name: Install Triton
         id: amd-install-triton
         run: |
           echo "PATH is '$PATH'"
-          pip uninstall -y triton
+          pip uninstall -y triton pytorch-triton-rocm
           cd python
+          ccache --zero-stats
           pip install -v -e '.[tests]'
       - name: Clean up after an unsuccessful build
         if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
         run: |
           rm -rf ~/.triton
+      - name: CCache Stats
+        run: ccache --print-stats
       - name: Run lit tests
         run: |
           cd python
@@ -404,6 +429,7 @@ jobs:
             echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
+          pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 16 language runtime \
                  --ignore=language/test_line_info.py \
@@ -436,6 +462,13 @@ jobs:
           cd python
           cd "build/$(ls build | grep -i cmake)"
           ctest -j32
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
@@ -445,17 +478,10 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
-          path: ~/.triton/cache ~/.cache/ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directories
-        run: |
-          mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
-
-          mkdir -p ~/.cache/ccache
-          ls -alh ~/.cache/ccache
-          du -sh ~/.cache/ccache
+          path: |
+            ~/.triton/cache
+            ~/.ccache
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Clean up caches
         run: |
           rm -rf ~/.triton/cache
@@ -463,10 +489,12 @@ jobs:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-MACOS)}}
+    env:
+      RUNNER_TYPE: ${{ matrix.runner[0] }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -475,7 +503,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache llvm@19 lld
+          brew install ccache llvm@19 lld coreutils
       - name: Compute cache keys
         id: cache-key
         run: |
@@ -516,22 +544,28 @@ jobs:
         # "restore" step.  This is to prevent the caches from accumulating stale
         # files over time.
         name: Restore cache of ccache and Triton compilation artifacts
-        if: github.event_name != 'push'
+        id: restore-build-cache
+        if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.triton/cache
-            ~/.cache/ccache
+            ~/.ccache
           # Restore the most recent cache entry.
-          restore-keys: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+          restore-keys: |
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-
+            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-
           # We expect this cache key never to hit and for us to fall back
           # unconditionally to the restore-key, so it doesn't actually matter
           # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directory
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+      - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
-          ls -alh ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -541,10 +575,9 @@ jobs:
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit pybind11
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit pybind11
       - name: Install Triton
         env:
-          TRITON_BUILD_WITH_CCACHE: "true"
           TRITON_BUILD_WITH_O1: "true"
           # macos-latest has 3 vcpus and 7GB DRAM, to save memory we limit the number of jobs to 3
           # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
@@ -553,7 +586,17 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           cd python
-          python3 -m pip install --no-build-isolation .
+          ccache --zero-stats
+          python3 -m pip install -v --no-build-isolation .
+      - name: CCache Stats
+        run: ccache --print-stats
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
       - # If we're on branch `main`, save the ccache Triton compilation artifacts
         # to the cache so they can be used by other (non-main) CI runs.
         #
@@ -563,14 +606,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
-          path: ~/.triton/cache ~/.cache/ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ runner.name }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
-      - name: Inspect cache directories
-        run: |
-          mkdir -p ~/.triton
-          ls -alh ~/.triton
-          du -sh ~/.triton/**
-
-          mkdir -p ~/.cache/ccache
-          ls -alh ~/.cache/ccache
-          du -sh ~/.cache/ccache
+          path: |
+            ~/.triton/cache
+            ~/.ccache
+          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}

@@ -199,6 +199,11 @@ OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
     return getResult();
   }
 
+  // Eliminate splat constant transpose ops.
+  if (auto attr =
+          llvm::dyn_cast_if_present<SplatElementsAttr>(adaptor.getSrc()))
+    return attr.reshape(getType());
+
   return {};
 }
 
@@ -207,7 +212,7 @@ LogicalResult TransOp::inferReturnTypes(
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
-  auto argTy = cast<TensorOrMemDesc>(operands[0].getType());
+  auto argTy = cast<RankedTensorType>(operands[0].getType());
   auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
@@ -223,35 +228,8 @@ LogicalResult TransOp::inferReturnTypes(
       return failure();
     }
   }
-  if (auto memDescTy = dyn_cast<MemDescType>(argTy)) {
-    inferredReturnTypes.push_back(MemDescType::get(
-        retShape, retEltTy, retEncoding, memDescTy.getMemorySpace(),
-        memDescTy.getMutableMemory()));
-  } else {
-    inferredReturnTypes.push_back(
-        RankedTensorType::get(retShape, retEltTy, retEncoding));
-  }
-  return success();
-}
-
-LogicalResult TransOp::verify() {
-  // Check that the op's `order` attribute is a permutation of the right length.
-  auto srcTy = getSrc().getType();
-
-  ArrayRef<int32_t> order = getOrder();
-  if (order.size() != srcTy.getRank()) {
-    return emitError("order must have the same size as the rank of the "
-                     "operand and result");
-  }
-
-  SmallVector<int32_t, 8> sortedOrder(order);
-  llvm::sort(sortedOrder);
-  for (int32_t i = 0; i < sortedOrder.size(); i++) {
-    if (sortedOrder[i] != i) {
-      return emitError("order must be a permutation of [0, ..., rank - 1]");
-    }
-  }
-
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(retShape, retEltTy, retEncoding));
   return success();
 }
 
@@ -266,8 +244,8 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
-  auto bEnc = cast<TensorOrMemDesc>(operands[1].getType()).getEncoding();
+  auto aEnc = cast<RankedTensorType>(operands[0].getType()).getEncoding();
+  auto bEnc = cast<RankedTensorType>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc && retEnc);
@@ -1093,6 +1071,54 @@ Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
   if (getPure())
     return Speculation::Speculatable;
   return Speculation::NotSpeculatable;
+}
+
+// -- GatherOp --
+LogicalResult GatherOp::verify() {
+  RankedTensorType indicesTy = getIndices().getType();
+  RankedTensorType srcTy = getSrc().getType();
+  RankedTensorType resTy = getResult().getType();
+
+  if (indicesTy.getShape() != resTy.getShape()) {
+    return emitOpError("indices and output shapes must match");
+  }
+  if (indicesTy.getEncoding() != resTy.getEncoding()) {
+    return emitOpError("indices and output encodings must match");
+  }
+  if (srcTy.getElementType() != resTy.getElementType()) {
+    return emitOpError("input and output element types must match");
+  }
+  if (srcTy.getRank() != indicesTy.getRank()) {
+    return emitOpError("input and indices ranks must match");
+  }
+  if (getAxis() >= srcTy.getRank()) {
+    return emitOpError("gather dimension must be less than the input rank");
+  }
+  for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
+    if (dim == getAxis())
+      continue;
+    if (indicesTy.getShape()[dim] != srcTy.getShape()[dim]) {
+      return emitOpError("indices dimension ")
+             << dim << " must match the corresponding input dimension";
+    }
+  }
+
+  return success();
+}
+
+LogicalResult GatherOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  GatherOpAdaptor adaptor(operands, attributes, properties, regions);
+  auto indicesType = cast<RankedTensorType>(adaptor.getIndices().getType());
+  auto srcType = cast<RankedTensorType>(adaptor.getSrc().getType());
+
+  // Shape and encoding of the indices with the element type of the src.
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(indicesType.getShape(), srcType.getElementType(),
+                            indicesType.getEncoding()));
+  return success();
 }
 
 // -- ExperimentalTensormapCreateOp --

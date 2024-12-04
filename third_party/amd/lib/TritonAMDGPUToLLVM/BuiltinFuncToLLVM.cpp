@@ -6,12 +6,10 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTBUILTINFUNCTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 using namespace mlir;
 
@@ -101,12 +99,10 @@ private:
     rewriter.setInsertionPointToEnd(currentBlock);
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, afterStore);
     rewriter.setInsertionPointToStart(trueBlock);
-    /*
-                  | vialatile | non-tmp | gcn instr gfx94
-    LLVM::StoreOp | 0         | 0       | (cg) global store
-                  | 0         | 1       | (cs) global store nt
-                  | 1         | 0/1     | (wt) global store sc0 sc1
-    */
+    //               | vialatile | non-tmp | gcn instr gfx94
+    // LLVM::StoreOp | 0         | 0       | (cg) global store
+    //               | 0         | 1       | (cs) global store nt
+    //               | 1         | 0/1     | (wt) global store sc0 sc1
     bool vialatileFlag = isPredicatedStoreWT(callOp);
     bool nonTmpFlag = isPredicatedStoreCS(callOp);
     auto storeOp = rewriter.create<LLVM::StoreOp>(
@@ -138,12 +134,10 @@ private:
     rewriter.setInsertionPointToEnd(currentBlock);
     rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
     rewriter.setInsertionPointToStart(trueBlock);
-    /*
-                 | vialatile | non-tmp | gcn instr gfx94
-    LLVM::LoadOp | 0         | 0       | (ca) global load
-                 | 0/1       | 1       | (cg) global load nt
-                 | 1         | 0       | (cv) flat load sc0 sc1
-    */
+    //              | vialatile | non-tmp | gcn instr gfx94
+    // LLVM::LoadOp | 0         | 0       | (ca) global load
+    //              | 0/1       | 1       | (cg) global load nt
+    //              | 1         | 0       | (cv) flat load sc0 sc1
     bool vialatileFlag = isPredicatedLoadCV(callOp);
     bool nonTmpFlag = isPredicatedLoadCG(callOp);
     auto loadOp = rewriter.create<LLVM::LoadOp>(
@@ -242,15 +236,13 @@ struct ConvertBuiltinFuncToLLVM
   }
 };
 
-} // anonymous namespace
+} // namespace
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertBuiltinFuncToLLVMPass(bool ftz) {
   return std::make_unique<ConvertBuiltinFuncToLLVM>(ftz);
 }
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
