@@ -41,9 +41,9 @@ public:
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd), instrShape);
   }
 
-  DotOperandEncodingAttr dotMMAv2(int idx, int kWidth, ArrayRef<unsigned> warps,
-                                  ArrayRef<unsigned> order) {
-    auto mmaLayout = mma(2, 0, {16, 8}, warps, {1, 1}, {1, 1}, order);
+  DotOperandEncodingAttr dotMMAv2(int idx, int kWidth,
+                                  ArrayRef<unsigned> warps) {
+    auto mmaLayout = mma(2, 0, {16, 8}, warps, {1, 1}, {1, 1}, {1, 0});
     return DotOperandEncodingAttr::get(&ctx, idx, mmaLayout, /*kWidth=*/kWidth);
   }
 
@@ -301,6 +301,19 @@ TEST_F(LinearLayoutConversionsTest, Blocked4D) {
                     {S("dim0"), S("dim1"), S("dim2"), S("dim3")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, MMAv2_16x16) {
+  EXPECT_EQ(toLinearLayout({16, 16},
+                           mma(2, 0, {16, 8}, {1, 1}, {1, 1}, {1, 1}, {0, 1})),
+            LinearLayout(
+                {
+                    {S("register"), {{0, 1}, {8, 0}, {0, 8}}},
+                    {S("lane"), {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}},
+                    {S("warp"), {}},
+                    {S("block"), {}},
+                },
+                {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, MMAv2_32x32) {
   EXPECT_EQ(toLinearLayout({32, 32},
                            mma(2, 0, {16, 8}, {1, 1}, {1, 1}, {1, 1}, {0, 1})),
@@ -502,7 +515,7 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_4x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, DotMMAv2_tile_kwidth8) {
-  EXPECT_EQ(toLinearLayout({16, 64}, dotMMAv2(0, 8, {1, 1}, {1, 0})),
+  EXPECT_EQ(toLinearLayout({16, 64}, dotMMAv2(0, 8, {1, 1})),
             LinearLayout(
                 {
                     {S("register"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {0, 32}}},
@@ -511,7 +524,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_tile_kwidth8) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({64, 8}, dotMMAv2(1, 8, {1, 1}, {1, 0})),
+  EXPECT_EQ(toLinearLayout({64, 8}, dotMMAv2(1, 8, {1, 1})),
             LinearLayout(
                 {
                     {S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}}},
@@ -524,7 +537,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_tile_kwidth8) {
 
 TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
   EXPECT_EQ(
-      toLinearLayout({128, 128}, dotMMAv2(0, 8, {4, 1}, {1, 0})),
+      toLinearLayout({128, 128}, dotMMAv2(0, 8, {4, 1})),
       LinearLayout(
           {
               {S("register"),
@@ -534,7 +547,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
               {S("block"), {}},
           },
           {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({128, 64}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
+  EXPECT_EQ(toLinearLayout({128, 64}, dotMMAv2(1, 8, {4, 1})),
             LinearLayout(
                 {
                     {S("register"),
@@ -554,7 +567,7 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_large_warp4_kwidth8) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({64, 128}, dotMMAv2(1, 8, {4, 1}, {1, 0})),
+  EXPECT_EQ(toLinearLayout({64, 128}, dotMMAv2(1, 8, {4, 1})),
             LinearLayout(
                 {
                     {S("register"),
