@@ -421,10 +421,12 @@ jobs:
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           #TRITON_LLVM_DEBUG_ONLY="tritonamdgpu-in-thread-transpose,ttgpu_to_llvm" python python/tutorials/06-fused-attention.py
           #python python/tutorials/06-fused-attention.py
-          gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_dot[1-16-16-16-4-False-False-chain-dot-ieee-float32-float32-1]" -ex "backtrace" -ex "set confirm off" -ex "q" > test_dot.txt 2>&1
-          cat test_dot.txt
-          gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_local_load_store[dist_layout2-shared_layout0-8-16-32]" -ex "backtrace" -ex "set confirm off" -ex "q" > test_local_load_store.txt 2>&1
-          cat test_local_load_store.txt
+          # gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_dot[1-16-16-16-4-False-False-chain-dot-ieee-float32-float32-1]" -ex "backtrace" -ex "set confirm off" -ex "q" > test_dot.txt 2>&1
+          TRITON_LLVM_DEBUG_ONLY="tritonamdgpu-in-thread-transpose, ttgpu_to_llvm" pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_dot[1-16-16-16-4-False-False-chain-dot-ieee-float32-float32-1]
+          # cat test_dot.txt
+          # gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_local_load_store[dist_layout2-shared_layout0-8-16-32]" -ex "backtrace" -ex "set confirm off" -ex "q" > test_local_load_store.txt 2>&1
+          TRITON_LLVM_DEBUG_ONLY="tritonamdgpu-in-thread-transpose, ttgpu_to_llvm" pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_local_load_store[dist_layout2-shared_layout0-8-16-32]
+          # cat test_local_load_store.txt
           #gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/tutorials/06-fused-attention.py" -ex "backtrace" -ex "set confirm off" -ex "q" > tmp.txt 2>&1
           #cat tmp.txt
           # pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice.py

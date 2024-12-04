@@ -260,6 +260,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         pm.run(mod)
+        print(mod.dump())
         return mod
 
     @staticmethod
