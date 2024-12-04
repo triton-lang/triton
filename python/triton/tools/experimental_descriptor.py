@@ -9,15 +9,21 @@ class TmaDescKernelParam:
     def __init__(self, ptr, dims, block_dims, element_size):
         self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
         assert len(dims) == len(block_dims)
-        assert 1 <= len(dims) <= 2
+        assert 1 <= len(dims) <= 5
         assert self.desc.data_ptr() % 64 == 0
 
         if len(dims) == 1:
-            triton.runtime.driver.active.utils.fill_1d_tma_descriptor(ptr, dims[0], block_dims[0], element_size,
-                                                                      self.desc.data_ptr())
+            fill_desc_func = triton.runtime.driver.active.utils.fill_1d_tma_descriptor
+        elif len(dims) == 2:
+            fill_desc_func = triton.runtime.driver.active.utils.fill_2d_tma_descriptor
+        elif len(dims) == 3:
+            fill_desc_func = triton.runtime.driver.active.utils.fill_3d_tma_descriptor
+        elif len(dims) == 4:
+            fill_desc_func = triton.runtime.driver.active.utils.fill_4d_tma_descriptor
         else:
-            triton.runtime.driver.active.utils.fill_2d_tma_descriptor(ptr, dims[0], dims[1], block_dims[0],
-                                                                      block_dims[1], element_size, self.desc.data_ptr())
+            fill_desc_func = triton.runtime.driver.active.utils.fill_5d_tma_descriptor
+
+        fill_desc_func(ptr, *dims, *block_dims, element_size, self.desc.data_ptr())
 
     # Return a CUtensorMap* pointer in host memory
     def tma_desc_cpu_ptr(self):
