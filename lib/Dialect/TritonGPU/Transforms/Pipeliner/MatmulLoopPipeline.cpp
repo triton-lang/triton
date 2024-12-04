@@ -144,7 +144,8 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
       triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
   ttg::MemDescType subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
+      /*allocShape=*/allocTy.getAllocShape());
   auto view = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stage, clusterId, subviewTy, alloc, copyOffsets);
   Operation *copy = builder.createWithStage<ttg::AsyncCopyGlobalToLocalOp>(
@@ -232,7 +233,8 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
   copyOffsets[0] = insertIdx;
   ttg::MemDescType subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
+      /*allocShape=*/allocTy.getAllocShape());
   auto view = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stage, clusterId, subviewTy, alloc, copyOffsets);
 
@@ -526,7 +528,7 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
   bufferShape.insert(bufferShape.begin(), distance);
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
                                            sharedEnc, sharedMemorySpace,
-                                           /*mutableMemory*/ true);
+                                           /*mutableMemory=*/true);
   Value alloc =
       builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType, Value());
   return alloc;
@@ -544,12 +546,13 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
                               /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding =
       ttg::SharedEncodingAttr::get(context, 1, 1, 1, {0}, barrierCTALayout);
-  Type barrierMemDescType = ttg::MemDescType::get(
+  auto barrierMemDescType = ttg::MemDescType::get(
       {distance}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
-  Type singleBarrierMemDescType =
-      ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
-                            sharedMemorySpace, /*mutableMemory=*/true);
+  Type singleBarrierMemDescType = ttg::MemDescType::get(
+      {1}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
+      /*mutableMemory=*/true,
+      /*allocShape=*/barrierMemDescType.getAllocShape());
   Value barrierAlloc =
       builder.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
   for (unsigned i = 0; i < distance; i++) {
@@ -650,11 +653,11 @@ static void createTMABarrierAndWait(
     OpBuilderWithStage builder(forOp);
     Attribute sharedMemorySpace =
         ttg::SharedMemorySpaceAttr::get(builder.getContext());
+    auto allocTy = cast<ttg::MemDescType>(barrierAlloc.getType());
     ttg::MemDescType barrierTy = ttg::MemDescType::get(
-        {1}, builder.getI64Type(),
-        cast<ttg::MemDescType>(barrierAlloc.getType()).getEncoding(),
-        sharedMemorySpace,
-        /*mutableMemory=*/true);
+        {1}, builder.getI64Type(), allocTy.getEncoding(), sharedMemorySpace,
+        /*mutableMemory=*/true,
+        /*allocShape=*/allocTy.getAllocShape());
     builder.setInsertionPoint(group[0]->loadOp);
     Value barrier = builder.createWithStage<ttg::MemDescSubviewOp>(
         loc, stage, cluster, barrierTy, barrierAlloc,
@@ -835,14 +838,14 @@ static void invalidateBarriers(OpBuilder &builder,
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(builder.getContext());
   for (Value barrier : barriers) {
-    int numBarriers = cast<ttg::MemDescType>(barrier.getType()).getShape()[0];
+    auto allocTy = cast<ttg::MemDescType>(barrier.getType());
+    int numBarriers = allocTy.getShape()[0];
     for (int i = 0; i < numBarriers; i++) {
       Value idx = builder.create<arith::ConstantIntOp>(barrier.getLoc(), i, 32);
       ttg::MemDescType barrierTy = ttg::MemDescType::get(
-          {1}, builder.getI64Type(),
-          cast<ttg::MemDescType>(barrier.getType()).getEncoding(),
-          sharedMemorySpace,
-          /*mutableMemory=*/true);
+          {1}, builder.getI64Type(), allocTy.getEncoding(), sharedMemorySpace,
+          /*mutableMemory=*/true,
+          /*allocShape=*/allocTy.getShape());
       Value barrierView = builder.create<ttg::MemDescSubviewOp>(
           barrier.getLoc(), barrierTy, barrier, idx);
       builder.create<ttng::InvalBarrierOp>(barrier.getLoc(), barrierView);
