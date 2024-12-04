@@ -1,3 +1,43 @@
+# streamk gemm script v0.3
+
+### features added:
+
+- new persistent gemm kernel
+- gemm benchmark tool using nearest neighbour approach.
+
+### benchmark commandline
+
+```
+ python gemm_benchmark.py
+```
+
+# streamk gemm script v0.2
+
+### features added:
+
+- new streamk tuning script to reduce compiling and profiling time
+
+- use load/store cache modifier to reimplement spinning lock
+
+- add CI test for streamk-kernel
+
+### potential issues:
+
+- there may be hanging issue when use random grid sizes
+- large register spills when using tile size 256x256x64
+
+### tuning command
+
+```
+python tune_streamk.py --gemm_size_file input_nn_size.yaml --ngpus 8 --jobs 24
+```
+
+### calculate occ
+
+```
+../tools/occ.sh "python tune_streamk.py --gemm_size_file single_item.yaml --compare_wo_tuning"
+```
+
 # streamk gemm script v0.1
 
 The plan is to use this version as the base version for the future triton streamk gemm development.
