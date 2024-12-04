@@ -128,8 +128,6 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, w_dtype, x_dtype, out_dtype):
     torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
 
 
-
-
 @triton.jit
 def matmul_kernel_16bx8b(lhs_ptr,  # (M, K)
                          rhs_ptr,  # (K, N)
