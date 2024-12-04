@@ -413,6 +413,10 @@ jobs:
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+      - name: Run asan tests on HIP
+        run: |
+          cd python/test/unitt
+          python address_sanitizer_helper.py > /dev/null 2>&1
           #TODO: find a cleaner way to do these Rocm/ASAN paths
           export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
           export LD_LIBRARY_PATH=/opt/rocm-6.2.2/lib/llvm/lib/clang/18/lib/linux/:/opt/rocm-6.2.2/lib/asan/:$LD_LIBRARY_PATH
