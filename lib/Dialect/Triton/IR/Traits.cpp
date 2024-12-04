@@ -5,11 +5,9 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
-namespace ttg = mlir::triton::gpu;
 
 static LogicalResult verifySameEncoding(Type typeA, Type typeB,
                                         bool allowTensorPointerType) {
@@ -118,53 +116,12 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
     if (!layout)
       return success();
 
-    if (isa<ttg::SharedEncodingAttr>(layout))
-      return makeErr() << "Shared layout is not allowed on tensor type.";
-    // TODO(jlebar): Currently this only checks blocked layouts, but other
-    // layouts also have invariants!
-
-    // TODO(jlebar): Handle the case when the encoding is nested within tt.ptr.
-    if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-      // A different verifier should have checked that the layout itself is
-      // valid, including that threads-per-warp has the same rank as
-      // warps-per-block etc.
-      auto layoutRank = blocked.getThreadsPerWarp().size();
-      if (layoutRank != rankedTy.getRank()) {
-        return makeErr() << layout << ".\nLayout has rank " << layoutRank
-                         << ", but the tensor it's attached to has rank "
-                         << rankedTy.getRank() << ".";
-      }
-
-      int moduleThreadsPerWarp =
-          ttg::TritonGPUDialect::getThreadsPerWarp(module);
-      int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
-      if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
-        return makeErr() << layout << ".\nLayout has a total of "
-                         << layoutThreadsPerWarp
-                         << " threads per warp, but the module specifies "
-                         << moduleThreadsPerWarp << " threads per warp.";
-      }
-
-      int moduleWarpsPerCTA = ttg::TritonGPUDialect::getNumWarps(module);
-      int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
-      if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
-        return makeErr() << layout << ".\nLayout has a total of "
-                         << layoutWarpsPerCTA
-                         << " warps per CTA, but the module specifies "
-                         << moduleWarpsPerCTA << " warps per CTA.";
-      }
-
-      if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
-        int moduleCTAsPerCGA = ttg::TritonGPUDialect::getNumCTAs(module);
-        int64_t layoutCTAsPerCGA =
-            product(blocked.getCTALayout().getCTAsPerCGA());
-        if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
-          return makeErr() << layout << ".\nLayout has a total of "
-                           << layoutCTAsPerCGA
-                           << " CTAs per CGA, but the module specifies "
-                           << moduleCTAsPerCGA << " CTAs per CGA.";
-        }
-      }
+    Dialect &dialect = layout.getDialect();
+    auto verifyLayoutInterface =
+        dyn_cast<mlir::triton::DialectVerifyTensorLayoutInterface>(&dialect);
+    if (verifyLayoutInterface) {
+      return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, module,
+                                                       makeErr);
     }
 
     return success();
