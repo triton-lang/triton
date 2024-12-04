@@ -19,6 +19,15 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
+def _is_apple_clang():
+    if platform.system() != "Darwin":
+        return False
+    res = subprocess.run(["clang", "--version"], capture_output=True, text=True)
+    if res.returncode != 0:
+        return False
+    return "Apple clang" in res.stdout
+
+
 def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     system = platform.system()
@@ -64,7 +73,20 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     if src.endswith(".cpp") or src.endswith(".cc"):
         cc_cmd += ["-std=c++17"]
         if not os.environ.get("TRITON_DISABLE_OPENMP", None):
-            cc_cmd += ["-fopenmp"]
+            libomp_path = os.environ.get("TRITON_LOCAL_LIBOMP_PATH", None)
+            if _is_apple_clang():
+                if libomp_path:
+                    cc_cmd += ["-Xclang"]
+                    cc_cmd += ["-fopenmp"]
+                    cc_cmd += [f"-I{libomp_path}/include"]
+                    cc_cmd += [f"-L{libomp_path}/lib"]
+                    cc_cmd += ["-lomp"]
+                else:
+                    print("Warning: TRITON_LOCAL_LIBOMP_PATH is not set for Apple clang. OpenMP is disabled.")
+            else:
+                cc_cmd += ["-fopenmp"]
+                if libomp_path:
+                    print("Info: Ignoring TRITON_LOCAL_LIBOMP_PATH for non-Apple clang compiler")
     if src.endswith(".s"):
         # This is required to properly parse .file directives
         cc_cmd += ["-g"]
