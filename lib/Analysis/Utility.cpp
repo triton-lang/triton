@@ -536,7 +536,7 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (blockedLayout == nullptr || dotOperandLayout == nullptr)
@@ -605,22 +605,6 @@ bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   return matrixDimsCompatible && bDimCompatible;
 }
 
-bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
-    return false;
-  // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
-  // improved. In addition, we can enable this shortcut for regular MFMA
-  // layout when opIdx == 1.
-  return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
-         dotOperandLayout.getKWidth() == getContigPerThread(mfmaLayout)[1] &&
-         dotOperandLayout.getParent() == mfmaLayout &&
-         (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
-         (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
-}
-
 // For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
@@ -655,8 +639,46 @@ std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
       toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
   if (!(srcLayout.has_value() && dstLayout.has_value()))
     return std::nullopt;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  auto numSrcRegs = srcLayout->getInDimSize(kRegister);
+  auto numDstRegs = dstLayout->getInDimSize(kRegister);
+  // The `invertAndCompose` function will generate a layout that is injective
+  // by assigning new output dimensions to free variables.  For instance,
+  // consider a scenario where `srcLayout` has a free variable in the lane
+  // dimension, while `dstLayout` has two free variables in the lane
+  // dimension and also a larger number of registers.
+  // The injective form of `srcLayout` will add only a single additional row
+  // to the transformation matrix, whereas the injective form of `dstLayout`
+  // will add two additional rows.  This discrepancy causes misleading results
+  // because the matrices end up with a different number of rows.
+  //
+  // Take `dstLayout ⋅ srcLayout^-1` as an example:
+  //
+  //   - `injective(dstLayout)`: [n, m] → [n + 2, m]
+  //   - `injective(srcLayout)`: [n, m] → [n + 1, m]
+  //   - `injective(srcLayout)^-1`: [n + 1, m] → [m, n + 1]
+  //   - `injective(dstLayout) ⋅ injective(srcLayout)^-1`: [n + 2, m] ⋅ [m, n +
+  //   1] → [n + 2, n + 1]
+  //
+  // Here, the `(n + 1)`-th row added by `dstLayout` represents the free
+  // variable in registers, and the `(n + 2)`-th row represents the free
+  // variable in lanes.  However, the `(n + 1)`-th row added by `srcLayout`
+  // represents the free variable in lanes.  As a result, the `(n + 1)`-th row
+  // in two layouts do not correspond to the same free variable.
+  //
+  // To address this issue, we pad the free variables in `srcLayout` and
+  // `dstLayout` to ensure they have the same number of registers.  This
+  // guarantees that the resulting matrices have the same number of rows,
+  // ensuring consistency in the composition process.
+  auto numRegs = std::max(numSrcRegs, numDstRegs);
+  auto srcLayoutWithFreeRegs = srcLayout->resize(kRegister, numRegs);
+  auto dstLayoutWithFreeRegs = dstLayout->resize(kRegister, numRegs);
   // comp describes the layout function to create dst from src.
-  LinearLayout comp = dstLayout->invertAndCompose(*srcLayout);
+  LinearLayout comp =
+      dstLayoutWithFreeRegs.invertAndCompose(srcLayoutWithFreeRegs);
   // We try to quotient by the largest subspace first
   auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
   for (auto dim : dims) {
@@ -693,15 +715,14 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut`,
-  // `isBlockedToDotShortcut` and `isMfmaToDotShortcut`) once they're fully
-  // subsumed by the linear-layout checks.
+  // TODO(jlebar): Remove these special cases (`isBlockedToDotShortcut` and
+  // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
+  // checks.
   // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
-         !isMmaToDotShortcut(srcTy, dstTy) &&
-         !isMfmaToDotShortcut(srcTy, dstTy);
+         !matchMmaV3AndDotOperandLayout(srcTy, dstTy);
 }
 
 bool atomicNeedsSharedMemory(Value value) {
@@ -709,20 +730,6 @@ bool atomicNeedsSharedMemory(Value value) {
   if (isa<RankedTensorType>(type) || value.use_empty())
     return false;
   return true;
-}
-
-bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  if (matchMmaV3AndDotOperandLayout(srcTy, dstTy))
-    return true;
-  // dot_op<opIdx=0, parent=#mma> = #mma
-  // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
-  auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  return mmaLayout && dotOperandLayout && mmaLayout.getVersionMajor() == 2 &&
-         mmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getParent() == mmaLayout &&
-         !srcTy.getElementType().isF32();
 }
 
 namespace {

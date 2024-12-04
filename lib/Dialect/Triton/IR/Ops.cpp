@@ -503,6 +503,22 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   return getElementTypesImpl(this->getOperands());
 }
 
+::mlir::Operation *ReduceOp::getSingleCombiner() {
+  if (getNumOperands() != 1 || getNumResults() != 1)
+    return nullptr;
+  Block *block = &(*getCombineOp().begin());
+  Operation *yield = block->getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return nullptr;
+  if (reduceOp->getOperand(0) != block->getArgument(0) ||
+      reduceOp->getOperand(1) != block->getArgument(1))
+    return nullptr;
+
+  return reduceOp;
+}
+
 unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 
 //-- ScanOp --
