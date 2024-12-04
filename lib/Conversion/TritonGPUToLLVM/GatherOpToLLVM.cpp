@@ -213,6 +213,7 @@ void GatherOpConversion::emitWarpLocalGather(
                            {kRegister, i32_val(idxReg)}});
     assert(column.size() == otherDims.size());
 
+    // Combine the computed column with the data-dependent gather index.
     column.emplace_back(kGatherDim, idxVal);
     SmallVector<std::pair<StringAttr, Value>> srcLaneAndReg =
         applyLinearLayout(loc, rewriter, invSrcLayout, column);
