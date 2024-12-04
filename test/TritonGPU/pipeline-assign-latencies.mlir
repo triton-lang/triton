@@ -1,16 +1,16 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-test-pipeline-assign-latencies=num-stages=3 -canonicalize | FileCheck %s
 
-#AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
-#A = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
-#B = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
-#shared = #triton_gpu.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #triton_gpu.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = true}>
-#shared2 = #triton_gpu.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [0, 1], hasLeadingOffset = true}>
-#mma = #triton_gpu.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 32]}>
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+#shared = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = true}>
+#shared1 = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = true}>
+#shared2 = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [0, 1], hasLeadingOffset = true}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 32]}>
 
-module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @default_stages
 tt.func @default_stages(%lb : index, %ub : index, %step : index,
                   %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 32 : i32},
@@ -22,10 +22,10 @@ tt.func @default_stages(%lb : index, %ub : index, %step : index,
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
 
@@ -48,11 +48,11 @@ tt.func @small_load(%lb : index, %ub : index, %step : index,
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}}
     // CHECK-NOT: tt.latency
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
 
@@ -74,12 +74,12 @@ tt.func @load_into_shared(%lb : index, %ub : index, %step : index,
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #mma>) {
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.local_alloc %a_ : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #shared, #triton_gpu.shared_memory>
+    %a = ttg.local_alloc %a_ : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory>
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.local_alloc %b_ : (tensor<32x128xf16, #BL>) -> !tt.memdesc<32x128xf16, #shared1, #triton_gpu.shared_memory>
+    %b = ttg.local_alloc %b_ : (tensor<32x128xf16, #BL>) -> !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory>
 
-    %c = triton_nvidia_gpu.warp_group_dot %a, %b, %prev_c {maxNumImpreciseAcc = 1073741824 : i32} : !tt.memdesc<128x32xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<32x128xf16, #shared1, #triton_gpu.shared_memory> -> tensor<128x128xf32, #mma>
+    %c = ttng.warp_group_dot %a, %b, %prev_c {maxNumImpreciseAcc = 1073741824 : i32} : !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory> -> tensor<128x128xf32, #mma>
 
     %next_a_ptr = tt.addptr %a_ptr, %a_off : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
@@ -99,13 +99,13 @@ tt.func @load_into_shared_incompat_layout(%lb : index, %ub : index, %step : inde
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #mma>) {
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.local_alloc %a_ : (tensor<128x32xf16, #AL>) -> !tt.memdesc<128x32xf16, #shared, #triton_gpu.shared_memory>
+    %a = ttg.local_alloc %a_ : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory>
     // CHECK: tt.load
     // CHECK-NOT: {tt.latency = 2 : i32}
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.local_alloc %b_ : (tensor<32x128xf16, #BL>) -> !tt.memdesc<32x128xf16, #shared2, #triton_gpu.shared_memory>
+    %b = ttg.local_alloc %b_ : (tensor<32x128xf16, #BL>) -> !ttg.memdesc<32x128xf16, #shared2, #ttg.shared_memory>
 
-    %c = triton_nvidia_gpu.warp_group_dot %a, %b, %prev_c {maxNumImpreciseAcc = 1073741824 : i32} : !tt.memdesc<128x32xf16, #shared, #triton_gpu.shared_memory> * !tt.memdesc<32x128xf16, #shared2, #triton_gpu.shared_memory> -> tensor<128x128xf32, #mma>
+    %c = ttng.warp_group_dot %a, %b, %prev_c {maxNumImpreciseAcc = 1073741824 : i32} : !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<32x128xf16, #shared2, #ttg.shared_memory> -> tensor<128x128xf32, #mma>
 
     %next_a_ptr = tt.addptr %a_ptr, %a_off : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
@@ -126,11 +126,11 @@ tt.func @intermediate_use(%lb : index, %ub : index, %step : index,
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
     %b_2 = arith.mulf %b_ , %c2 : tensor<32x128xf16, #BL>
-    %b = triton_gpu.convert_layout %b_2 : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_2 : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
 
@@ -162,10 +162,10 @@ tt.func @indirect_load(%lb : index, %ub : index, %step : index,
     %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<16> : tensor<32x128xi32>, tt.contiguity = dense<32> : tensor<32x128xi32>, tt.constancy = dense<1> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %a_ = tt.load %next_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %b_ = tt.load %next_b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
     scf.yield %next_a_ind_ptr, %next_b_ind_ptr, %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<32x128x!tt.ptr<i32>, #BL>, tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
@@ -190,10 +190,10 @@ tt.func @mixed_loads(%lb : index, %ub : index, %step : index,
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %a_ = tt.load %next_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %b_ = tt.load %next_b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
     scf.yield %next_a_ind_ptr, %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
@@ -212,10 +212,10 @@ tt.func @per_loop_stages(%lb : index, %ub : index, %step : index,
   %loop_cust_stages:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     // CHECK: tt.load {{.*}} {tt.latency = 3 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 3 : i32}
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
 
@@ -227,10 +227,10 @@ tt.func @per_loop_stages(%lb : index, %ub : index, %step : index,
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
 
@@ -262,10 +262,10 @@ tt.func @indirect_load_cust_stages(%lb : index, %ub : index, %step : index,
     %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<16> : tensor<32x128xi32>, tt.contiguity = dense<32> : tensor<32x128xi32>, tt.constancy = dense<1> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %next_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %b_ = tt.load %next_b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
     scf.yield %next_a_ind_ptr, %next_b_ind_ptr, %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<32x128x!tt.ptr<i32>, #BL>, tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
@@ -296,10 +296,10 @@ tt.func @indirect_load_few_stages(%lb : index, %ub : index, %step : index,
     %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<16> : tensor<32x128xi32>, tt.contiguity = dense<32> : tensor<32x128xi32>, tt.constancy = dense<1> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %a_ = tt.load %next_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %b_ = tt.load %next_b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
-    %b = triton_gpu.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_ : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
     scf.yield %next_a_ind_ptr, %next_b_ind_ptr, %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<32x128x!tt.ptr<i32>, #BL>, tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
@@ -316,7 +316,7 @@ tt.func @non_dot_pipeline(%lb : index, %ub : index, %step : index,
   %loop:2 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xf16, #A>) {
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
 
     %c = arith.addf %a, %prev_c : tensor<128x32xf16, #A>
 
@@ -336,7 +336,7 @@ tt.func @no_pipeline(%lb : index, %ub : index, %step : index,
     // CHECK: tt.load
     // CHECK-NOT: tt.latency
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
 
     %c = arith.addf %a, %prev_c : tensor<128x32xf16, #A>
 
@@ -358,11 +358,11 @@ tt.func @intermediate_use_cust_stages(%lb : index, %ub : index, %step : index,
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
-    %a = triton_gpu.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>
     %b_2 = arith.mulf %b_ , %c2 : tensor<32x128xf16, #BL>
-    %b = triton_gpu.convert_layout %b_2 : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
+    %b = ttg.convert_layout %b_2 : tensor<32x128xf16, #BL> -> tensor<32x128xf16, #B>
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
 
