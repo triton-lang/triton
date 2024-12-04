@@ -83,6 +83,15 @@ unsigned getTotalElemsPerThread(Type type) {
   if (type.isIntOrIndexOrFloat() || isa<triton::PointerType>(type))
     return 1;
   auto tensorType = cast<RankedTensorType>(type);
+
+  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(
+      tensorType.getShape(), tensorType.getEncoding());
+  if (ll.has_value()) {
+    MLIRContext *ctx = tensorType.getContext();
+    auto kRegister = StringAttr::get(ctx, "register");
+    return ll->getInDimSize(kRegister);
+  }
+  // fallback to legacy layout interface.
   return getTotalElemsPerThread(tensorType.getEncoding(), tensorType.getShape(),
                                 tensorType.getElementType());
 }
