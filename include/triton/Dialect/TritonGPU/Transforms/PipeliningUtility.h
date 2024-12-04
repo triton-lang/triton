@@ -11,6 +11,9 @@ static const char *kNumStagesAttrName = "tt.num_stages";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 
+bool loopHasDistGreaterThanOne(scf::ForOp forOp);
+bool isOuterLoop(scf::ForOp forOp);
+
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
