@@ -283,32 +283,27 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
                               std::pair<size_t, Type> *const llvmOpCount) {
   bool success;
   std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback;
-  auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
-  auto sizePerThread = blockedEncoding.getSizePerThread();
-  auto order = blockedEncoding.getOrder();
-  unsigned int numElemsPerIter = product<unsigned>(sizePerThread);
-  unsigned int colIndex = 0;
-  unsigned int innerVecSize = sizePerThread[order[0]];
-  if (!crossGrain) {
-    // callback for every situation except the non-KContig dotOperand
-    // blocked->shared on AMD platform
-    perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
-      ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-      srcVals = srcVals.drop_front(vecTy.getNumElements());
+  // callback for every situation except the non-KContig dotOperand
+  // blocked->shared on AMD platform
+  perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
+    ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
+    srcVals = srcVals.drop_front(vecTy.getNumElements());
 
-      Value vec = undef(vecTy);
-      for (int i = 0; i < vals.size(); i++) {
-        vec = insert_element(vec, vals[i], i32_val(i));
-      }
-      store(vec, vecAddr)
-          .setAlignment(vecTy.getNumElements() *
-                        elemLlvmTy.getIntOrFloatBitWidth() / 8);
-      if (llvmOpCount) {
-        ++(llvmOpCount->first);
-        llvmOpCount->second = vecTy;
-      }
-    };
-  } else {
+    Value vec = undef(vecTy);
+    for (int i = 0; i < vals.size(); i++) {
+      vec = insert_element(vec, vals[i], i32_val(i));
+    }
+    store(vec, vecAddr)
+        .setAlignment(vecTy.getNumElements() *
+                      elemLlvmTy.getIntOrFloatBitWidth() / 8);
+    if (llvmOpCount) {
+      ++(llvmOpCount->first);
+      llvmOpCount->second = vecTy;
+    }
+  };
+  auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+  unsigned int colIndex = 0;
+  if (crossGrain && blockedEncoding) {
     // This section is only for inThreadTranspose for AMD path, where we want to
     // transpose during the blocked->shared tranfer.
     // For example, the thread-local register holds a [4, 8] section of matrix,
@@ -323,6 +318,10 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
     // innerVecSize: 8, since it is the vector size of inner dimension
     // LDBG("innerVecSize           = " << innerVecSize);
     // LDBG("srcVals.size()         = " << srcVals.size());
+    auto sizePerThread = blockedEncoding.getSizePerThread();
+    auto order = blockedEncoding.getOrder();
+    unsigned int numElemsPerIter = product<unsigned>(sizePerThread);
+    unsigned int innerVecSize = sizePerThread[order[0]];
     perVectorCallback = [&](VectorType vecTy, Value vecAddr) {
       Value vec = undef(vecTy);
       auto startPos = colIndex / innerVecSize *
