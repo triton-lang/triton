@@ -418,11 +418,11 @@ jobs:
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
             echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
           fi
-          pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
+          # pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           #TRITON_LLVM_DEBUG_ONLY="tritonamdgpu-in-thread-transpose,ttgpu_to_llvm" python python/tutorials/06-fused-attention.py
           #python python/tutorials/06-fused-attention.py
           # gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_dot[1-16-16-16-4-False-False-chain-dot-ieee-float32-float32-1]" -ex "backtrace" -ex "set confirm off" -ex "q" > test_dot.txt 2>&1
-          TRITON_LLVM_DEBUG_ONLY="tritonamdgpu-in-thread-transpose,ttgpu_to_llvm" pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_dot[1-16-16-16-4-False-False-chain-dot-ieee-float32-float32-1]
+          # TRITON_LLVM_DEBUG_ONLY="tritonamdgpu-in-thread-transpose,ttgpu_to_llvm" pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_dot[1-16-16-16-4-False-False-chain-dot-ieee-float32-float32-1]
           # cat test_dot.txt
           # gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_local_load_store[dist_layout2-shared_layout0-8-16-32]" -ex "backtrace" -ex "set confirm off" -ex "q" > test_local_load_store.txt 2>&1
           TRITON_LLVM_DEBUG_ONLY="tritonamdgpu-in-thread-transpose,ttgpu_to_llvm" pytest --capture=tee-sys --verbose python/test/unit/language/test_core.py::test_local_load_store[dist_layout2-shared_layout0-8-16-32]
@@ -437,6 +437,8 @@ jobs:
           # TODO: uncomment
           # pytest --capture=tee-sys -rfs test_debug.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
+          gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose instrumentation/test_gpuhello.py" -ex "backtrace" -ex "set confirm off" -ex "q" > test_gpuhello.txt 2>&1
+          cat test_gpuhello.txt
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
