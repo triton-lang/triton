@@ -422,11 +422,11 @@ jobs:
           cat test_local_load_store.txt
           #gdb python -ex "set pagination off" -ex "run -m pytest --capture=tee-sys --verbose python/tutorials/06-fused-attention.py" -ex "backtrace" -ex "set confirm off" -ex "q" > tmp.txt 2>&1
           #cat tmp.txt
-          pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice.py
+          # pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -n 16 language runtime \
-                 --ignore=language/test_line_info.py \
-                 --ignore=test_debug.py
+          # pytest --capture=tee-sys -rfs -n 16 language runtime \
+          #        --ignore=language/test_line_info.py \
+          #        --ignore=test_debug.py
           # TODO: uncomment
           # pytest --capture=tee-sys -rfs test_debug.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \

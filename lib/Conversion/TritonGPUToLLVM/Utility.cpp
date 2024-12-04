@@ -301,6 +301,7 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
       llvmOpCount->second = vecTy;
     }
   };
+  LDBG("What do you have here: " << srcTy.getEncoding());
   auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
   unsigned int colIndex = 0;
   if (crossGrain && blockedEncoding) {
