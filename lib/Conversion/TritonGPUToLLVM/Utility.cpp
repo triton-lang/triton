@@ -99,6 +99,20 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
+std::tuple<Value, Value, Value> emitHardwareTuple(Location loc,
+                                                  RewriterBase &rewriter,
+                                                  const TargetInfoBase &target,
+                                                  bool withCTAOffset,
+                                                  unsigned threadsPerWarpCst) {
+  Value threadId = getThreadId(rewriter, loc);
+  Value threadsPerWarp = i32_val(threadsPerWarpCst);
+  Value laneId = urem(threadId, threadsPerWarp);
+  Value warpId = udiv(threadId, threadsPerWarp);
+  Value blockId =
+      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
+  return {blockId, warpId, laneId};
+}
+
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset) {
@@ -116,12 +130,8 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(ll->getInDimSize(kLane));
-  Value laneId = urem(threadId, threadsPerWarp);
-  Value warpId = udiv(threadId, threadsPerWarp);
-  Value blockId =
-      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
+  auto [blockId, warpId, laneId] = emitHardwareTuple(
+      loc, rewriter, target, withCTAOffset, ll->getInDimSize(kLane));
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
   // Linear layout function is split in two parts below:
@@ -214,10 +224,9 @@ bool emitTransferBetweenRegistersAndShared(
       std::min(regToSharedLayout->getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(regToSharedLayout->getInDimSize(kLane));
-  Value laneId = urem(threadId, threadsPerWarp);
-  Value warpId = udiv(threadId, threadsPerWarp);
+  auto [blockId, warpId, laneId] =
+      emitHardwareTuple(loc, rewriter, target, /*withCTAOffset=*/false,
+                        regToSharedLayout->getInDimSize(kLane));
 
   int numElems = regToSharedLayout->getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
@@ -625,10 +634,8 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     auto instrShape = mmaLayout.getInstrShape();
     SmallVector<Value> mmaColIdx(2);
     SmallVector<Value> mmaRowIdx(2);
-    Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
-    Value laneId = urem(threadId, warpSize);
-    Value warpId = udiv(threadId, warpSize);
+    auto [blockId, warpId, laneId] = emitHardwareTuple(
+        loc, rewriter, targetInfo, /*withCTAOffset=*/false, 32);
     // TODO: fix the bug in MMAEncodingAttr document
     SmallVector<Value> multiDimWarpId(2);
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
