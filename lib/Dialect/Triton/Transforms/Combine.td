@@ -17,7 +17,7 @@ def CombineDotAddIPattern : Pat<
         [(Constraint<CPred<"isZero($0)">> $c),
          (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 def CombineDotAddFPattern : Pat<
-        (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $inputPrecision, $maxNumImpreciseAcc), $fastmath),
+        (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $inputPrecision, $maxNumImpreciseAcc), $fastmath, $denorm),
         (TT_DotOp $a, $b, $d, $inputPrecision, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c),
          (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc),
@@ -29,7 +29,7 @@ def CombineDotAddIRevPattern : Pat<
         [(Constraint<CPred<"isZero($0)">> $c),
          (Constraint<CPred<"res->hasOneUse()">, "dot result has a single use">)]>;
 def CombineDotAddFRevPattern : Pat<
-        (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $inputPrecision, $maxNumImpreciseAcc), $d, $fastmath),
+        (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $inputPrecision, $maxNumImpreciseAcc), $d, $fastmath, $denorm),
         (TT_DotOp $a, $b, $d, $inputPrecision, $maxNumImpreciseAcc, (location $res)),
         [(Constraint<CPred<"isZero($0)">> $c),
          (Constraint<CPred<"::llvm::cast<::mlir::IntegerAttr>($0).getInt() == 0">> $maxNumImpreciseAcc),
