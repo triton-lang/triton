@@ -124,24 +124,12 @@ void GatherOpConversion::emitGatherInShared(
   rewriter.replaceOp(op, packed);
 }
 
-static LinearLayout
-identityND(ArrayRef<std::pair<StringAttr, int32_t>> dimsAndSizes) {
-  auto ret = LinearLayout::empty();
-  for (auto [dim, size] : dimsAndSizes) {
-    ret *= LinearLayout::identity1D(size, dim, dim);
-  }
-  return ret;
-}
-
 void GatherOpConversion::emitWarpLocalGather(
     GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
   MLIRContext *ctx = op.getContext();
   Location loc = op.getLoc();
   RankedTensorType srcType = op.getSrc().getType();
   RankedTensorType idxType = op.getIndices().getType();
-
-  llvm::errs() << getLayoutStr(srcType, false) << "\n";
-  llvm::errs() << getLayoutStr(idxType, false) << "\n";
 
   // Layout dimension names.
   StringAttr kBlock = str_attr("block");
@@ -183,27 +171,23 @@ void GatherOpConversion::emitWarpLocalGather(
   //   (src_lane, src_reg) = (ll_src^-1)(
   //       ll_idx(black, warp, lane, idx_reg)[otherDims],
   //       idxValues[idx_reg]
-  //   )
+  //   )[{"lane", "register"}]
   //
   // And the mapping will be the correct for each thread.
   //
   // Given `src_reg \in [0, N)`, we just need to emit N index shuffles for each
-  // `idx_reg` (the number of index shuffles is quadratic!) and `arith.select`
+  // `idx_reg` (the number of index shuffles is quadratic!) and `llvm.select`
   // using `src_reg` to get the right one.
 
   // Fully invert the source layout. We know it is invertible because
-  // `isWarpLocal` checked this.
-  SmallVector<std::pair<StringAttr, int32_t>> srcDimsAndSizes;
-  for (auto [i, size] : llvm::enumerate(srcType.getShape())) {
-    srcDimsAndSizes.push_back({str_attr("dim" + Twine(i)), size});
-  }
-  auto srcShapeId = identityND(srcDimsAndSizes);
-  LinearLayout invSrcLayout = srcShapeId.invertAndCompose(srcLayout);
+  // `isWarpLocal` checked this (subpermutation matrix, no broadcasting).
+  LinearLayout invSrcLayout = srcLayout.invert();
 
   // Sanity check: the warp must be invariant to the index because otherwise the
   // gather would need to read across warps!
   assert(invSrcLayout.sublayoutIsZero(kGatherDim, {kBlock, kWarp}) &&
          "expected a warp-local gather");
+  invSrcLayout = invSrcLayout.sublayout(allDims, {kLane, kRegister});
 
   LinearLayout idxColLayout =
       idxLayout.sublayout({kBlock, kWarp, kLane, kRegister}, otherDims);
@@ -213,16 +197,40 @@ void GatherOpConversion::emitWarpLocalGather(
   SmallVector<Value> idxValues =
       unpackLLElements(loc, adaptor.getIndices(), rewriter);
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(srcLayout.getInDimSize(kLane));
-  assert(srcLayout.getInDimSize(kLane) == idxLayout.getInDimSize(kLane));
-  Value laneId = urem(threadId, threadsPerWarp);
-  Value warpId = udiv(threadId, threadsPerWarp);
+  auto [blockId, warpId, laneId] =
+      emitHardwareTuple(loc, rewriter, targetInfo, /*withCTAOffset=*/true,
+                        srcLayout.getInDimSize(kLane));
+
+  unsigned /*N=*/srcRegsPerThread = srcLayout.getInDimSize(kRegister);
+  assert(srcRegsPerThread == srcValues.size());
+  SmallVector<Value> results;
   for (auto [idxReg, idxVal] : llvm::enumerate(idxValues)) {
+    SmallVector<std::pair<StringAttr, Value>> column =
+        applyLinearLayout(loc, rewriter, idxColLayout,
+                          {{kBlock, blockId},
+                           {kWarp, warpId},
+                           {kLane, laneId},
+                           {kRegister, i32_val(idxReg)}});
+    assert(column.size() == otherDims.size());
+
+    column.emplace_back(kGatherDim, idxVal);
+    SmallVector<std::pair<StringAttr, Value>> srcLaneAndReg =
+        applyLinearLayout(loc, rewriter, invSrcLayout, column);
+
+    auto [srcLaneName, srcLane] = srcLaneAndReg.back();
+    auto [srcRegName, srcReg] = srcLaneAndReg.front();
+    assert(srcLaneName == kLane && srcRegName == kRegister);
+
+    assert(!srcValues.empty() && "can't gather from an empty tensor");
+    Value result = undef(srcValues.front().getType());
+    for (unsigned i = 0; i != srcRegsPerThread; ++i) {
+      Value value = targetInfo.shuffleIdx(rewriter, loc, srcValues[i], srcLane);
+      result = select(icmp_eq(i32_val(i), srcReg), value, result);
+    }
+    results.push_back(result);
   }
 
-  SmallVector<Value> tmpResults(idxValues.size(), f32_val(0.0));
-  rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), tmpResults,
+  rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), results,
                                         rewriter, op.getType()));
 }
 

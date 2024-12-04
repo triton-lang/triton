@@ -364,6 +364,15 @@ LinearLayout::LinearLayout(
   return LinearLayout({{inDimName, std::move(powersOf2)}}, {outDimName});
 }
 
+/*static*/ LinearLayout LinearLayout::identityND(
+    ArrayRef<std::pair<StringAttr, int32_t>> dimsAndSizes) {
+  auto ret = LinearLayout::empty();
+  for (auto [dim, size] : dimsAndSizes) {
+    ret *= LinearLayout::identity1D(size, dim, dim);
+  }
+  return ret;
+}
+
 /*static*/ LinearLayout LinearLayout::zeros1D(int32_t size,
                                               StringAttr inDimName,
                                               StringAttr outDimName) {
@@ -916,6 +925,13 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     retOutDims.push_back({dim, outer.getInDimSize(dim)});
   }
   return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
+}
+
+LinearLayout LinearLayout::invert() const {
+  SmallVector<std::pair<StringAttr, int32_t>> dimsAndSizes;
+  llvm::append_range(dimsAndSizes, outDims);
+  auto id = identityND(dimsAndSizes);
+  return id.invertAndCompose(*this);
 }
 
 llvm::MapVector<StringAttr, int32_t>

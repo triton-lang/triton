@@ -342,6 +342,11 @@ public:
   static LinearLayout identity1D(int32_t size, StringAttr inDim,
                                  StringAttr outDim);
 
+  // Creates an ND -> ND layout that's the identity function, i.e.
+  // L(x0, x1, ..., x(N-1)) = (x0, x1, ..., x(N-1)).
+  static LinearLayout
+  identityND(ArrayRef<std::pair<StringAttr, int32_t>> dimsAndSizes);
+
   // Creates a 1D -> 1D layout that maps every input value to 0, i.e. L(x) = 0
   // for x in [0, size).
   static LinearLayout zeros1D(int32_t size, StringAttr inDim,
@@ -672,6 +677,10 @@ public:
   // ambiguity in which offset we choose for a given (lane, warp).  For now we
   // don't place any guarantees on the choices made by this function.
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
+
+  // Inverts or pseudo-inverts this layout. This computes a layout `L^-1` such
+  // that `L.compose(L^-1)` is the identity layout.
+  [[nodiscard]] LinearLayout invert() const;
 
   // For each in-dim, returns a bitmask of the "free variables" in the layout
   // function.
